@@ -81,9 +81,11 @@ Paths are relative to this crate.
   `url_encode`/`url_decode`/`try_url_decode`); signatures in `registry/text.rs`. `mask` reads its replacement arguments from literals
   (the registry rule refuses anything else) and the analyzer writes the omitted ones into the call, as Spark's constructors do (so the
   schema names `mask(s, X, x, n, NULL)`); the same holds for the start of `locate`/`position`. `elt` raises `INVALID_ARRAY_INDEX` only
-  under ANSI; `split_part(.., 0)` raises `INVALID_INDEX_OF_ZERO` for the rows it is evaluated on. `base64` writes MIME lines (Spark's
-  default of `spark.sql.chunkBase64String.enabled`); `encode`/`decode` take Spark's default charsets (`spark.sql.legacy.javaCharsets`
-  and `...codingErrorAction` are not read). A string is always valid UTF-8 here, so the validators only fail on `binary` input.
+  under ANSI; `split_part(.., 0)` raises `INVALID_INDEX_OF_ZERO` for the rows it is evaluated on. `base64` always writes MIME lines
+  (Spark's default of `spark.sql.chunkBase64String.enabled`; the switch is not read); `encode`/`decode` take Spark's default charsets
+  (`spark.sql.legacy.javaCharsets` and `...codingErrorAction` are not read) and report unmappable input. `split_part`/`substring_index`
+  with `Int.MIN` return the algorithm's value where the JVM raises; `initcap`/`mask` classify non-ASCII with the toolchain's Unicode
+  data (pinned by `toolchain_unicode_is_pinned`). A string is always valid UTF-8 here, so the validators only fail on `binary` input.
   Not implemented (`KnownUnsupported`): `format_string`/`printf`, `parse_url`/`try_parse_url`, `sentences`, `split`, `str_to_map`
   (array/map results or a Java formatter), `collate`/`collation`/`collations`, `randstr` (no seeded random source), and the
   `decode(expr, search, result, ...)` form (analysis error `KRISHIV_UNSUPPORTED_FEATURE`).

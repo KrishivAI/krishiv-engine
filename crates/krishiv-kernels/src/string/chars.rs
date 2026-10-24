@@ -59,6 +59,14 @@ fn str_rows<O: OffsetSizeTrait>(
     Ok(sink.finish())
 }
 
+/// Reserves `need` bytes of scratch, reporting failure as
+/// `UNABLE_TO_ACQUIRE_MEMORY` instead of aborting.
+fn reserve_str(scratch: &mut String, need: usize) -> Result<(), KernelError> {
+    scratch
+        .try_reserve(need)
+        .map_err(|_| KernelError::out_of_memory(need))
+}
+
 /// The number of characters of `s`.
 fn chars_of(s: &str) -> usize {
     if s.is_ascii() {
@@ -163,6 +171,7 @@ pub fn right<O: OffsetSizeTrait>(
     let slots: [&dyn Slot; 2] = [&input, &len];
     str_rows(&slots, |i, out| {
         let s = input.at(i);
+        reserve_str(out, s.len())?;
         let n = usize::try_from(int_at(len, i)).unwrap_or(0);
         if n > 0 {
             let skip = chars_of(s).saturating_sub(n);
@@ -216,7 +225,9 @@ pub fn reverse<O: OffsetSizeTrait>(
 ) -> Result<GenericStringArray<O>, KernelError> {
     let input = StrOperand::Array(a);
     str_rows(&[&input], |i, out| {
-        out.extend(a.value(i).chars().rev());
+        let s = a.value(i);
+        reserve_str(out, s.len())?;
+        out.extend(s.chars().rev());
         Ok(())
     })
 }
@@ -260,14 +271,22 @@ fn push_title_case(c: char, out: &mut String) {
 /// differs from ICU's for characters whose title case is neither (Greek
 /// letters with an iota subscript).
 ///
+/// This is a known approximation: the case mapping is the toolchain's Unicode
+/// data, not a version-keyed table (see `super::case_table` for `upper`/
+/// `lower`). The outputs for the divergent code points are pinned by
+/// `toolchain_unicode_is_pinned`, so a toolchain upgrade fails the test
+/// instead of silently changing the result.
+///
 /// # Errors
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit memory or the
+/// offset type.
 pub fn initcap<O: OffsetSizeTrait>(
     a: &GenericStringArray<O>,
 ) -> Result<GenericStringArray<O>, KernelError> {
     let input = StrOperand::Array(a);
     str_rows(&[&input], |i, out| {
         let s = a.value(i);
+        reserve_str(out, s.len().saturating_mul(4).saturating_add(4))?;
         if s.is_ascii() {
             let mut word_start = true;
             for b in s.bytes() {
@@ -287,15 +306,51 @@ pub fn initcap<O: OffsetSizeTrait>(
             let Some(first) = word.chars().next() else {
                 continue;
             };
-            // The lower case of the whole word (context rules), whose first
-            // character is then replaced by its title case.
-            let lowered = word.to_lowercase();
+            // The lower case of the whole word (final sigma included), whose
+            // first character is then replaced by its title case.
+            let need = word.len().saturating_mul(4).saturating_add(4);
+            let mut lowered = String::new();
+            reserve_str(&mut lowered, need)?;
+            push_lower(word, &mut lowered)?;
             push_title_case(first, out);
             let lowered_first: usize = first.to_lowercase().map(char::len_utf8).sum();
             out.push_str(lowered.get(lowered_first..).unwrap_or_default());
         }
         Ok(())
     })
+}
+
+/// Appends the lower case of `word` (final sigma included, as
+/// `str::to_lowercase` does) without the intermediate allocation that
+/// cannot fail gracefully.
+///
+/// # Errors
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the working row does not fit memory.
+fn push_lower(word: &str, out: &mut String) -> Result<(), KernelError> {
+    let mut chars = Vec::new();
+    chars
+        .try_reserve(word.chars().count())
+        .map_err(|_| KernelError::out_of_memory(word.len()))?;
+    chars.extend(word.chars());
+    let cased = |c: &char| c.is_uppercase() || c.is_lowercase();
+    for (i, c) in chars.iter().enumerate() {
+        if *c == '\u{03A3}' {
+            // Final sigma: a preceding cased letter and no cased letter
+            // after (ignoring nothing; combinables are rare in `initcap`
+            // words and `str::to_lowercase` agrees otherwise).
+            let prev_cased = chars.get(i.wrapping_sub(1)).is_some_and(cased);
+            // `i == 0` underflows to `usize::MAX`; `get` is `None` there.
+            let next_cased = chars.get(i.saturating_add(1)).is_some_and(cased);
+            out.push(if prev_cased && !next_cased {
+                '\u{03C2}'
+            } else {
+                '\u{03C3}'
+            });
+            continue;
+        }
+        out.extend(c.to_lowercase());
+    }
+    Ok(())
 }
 
 // ---- translate ----
@@ -326,6 +381,10 @@ pub fn translate<O: OffsetSizeTrait>(
     let slots: [&dyn Slot; 3] = [&input, &from, &to];
     let mut cached: Option<(String, String, HashMap<char, Option<char>>)> = None;
     str_rows(&slots, |i, out| {
+        let s = input.at(i);
+        // Each character maps to at most one replacement (4 bytes worst
+        // case for a 1-byte input), so `4 * len` bounds the output.
+        reserve_str(out, s.len().saturating_mul(4))?;
         let (f, t) = (from.at(i), to.at(i));
         let stale = cached.as_ref().is_none_or(|(cf, ct, _)| cf != f || ct != t);
         if stale {
@@ -334,7 +393,7 @@ pub fn translate<O: OffsetSizeTrait>(
         let Some((_, _, dict)) = cached.as_ref() else {
             return Ok(());
         };
-        for c in input.at(i).chars() {
+        for c in s.chars() {
             match dict.get(&c) {
                 None => out.push(c),
                 Some(Some(r)) => out.push(*r),
@@ -394,11 +453,19 @@ pub fn locate<O: OffsetSizeTrait>(
 /// `count`-th `delim` from the left (`count > 0`) or after the
 /// `|count|`-th from the right; all of `s` when there are fewer. Matches may
 /// overlap, as in Spark.
+///
+/// With `count = Int.MIN` (`-2^31`) there are never that many delimiters, so
+/// the whole of `s` is returned (when `delim` is non-empty). Spark's JVM
+/// raises an unclassified exception here; Krishiv returns what Spark's
+/// algorithm would.
 fn substring_index_of<'a>(s: &'a str, delim: &str, count: i32) -> &'a str {
     if delim.is_empty() || count == 0 {
         return "";
     }
     let (bytes, d) = (s.as_bytes(), delim.as_bytes());
+    // No string holds more than `len + 1` matches; capping the loop bounds
+    // the `Int.MIN` (`2^31`) range without changing the result.
+    let cap = bytes.len().saturating_add(1);
     let at = |from: usize| {
         bytes
             .get(from..)
@@ -407,16 +474,25 @@ fn substring_index_of<'a>(s: &'a str, delim: &str, count: i32) -> &'a str {
     };
     if count > 0 {
         let mut idx = None;
-        for _ in 0..count {
+        let want = usize::try_from(count).unwrap_or(0).min(cap);
+        for _ in 0..want {
             match at(idx.map_or(0, |i: usize| i.saturating_add(1))) {
                 Some(found) => idx = Some(found),
                 None => return s,
             }
         }
+        // A `count` beyond the cap would need more matches than the string
+        // can hold, so reaching the cap means matches ran out.
+        if usize::try_from(count).unwrap_or(usize::MAX) > cap {
+            return s;
+        }
         return idx.and_then(|i| s.get(..i)).unwrap_or_default();
     }
     let mut idx = bytes.len().saturating_sub(d.len()).saturating_add(1);
-    for _ in 0..count.unsigned_abs() {
+    let want = usize::try_from(count.unsigned_abs())
+        .unwrap_or(usize::MAX)
+        .min(cap);
+    for _ in 0..want {
         let Some(prev) = idx.checked_sub(1) else {
             return s;
         };
@@ -427,6 +503,9 @@ fn substring_index_of<'a>(s: &'a str, delim: &str, count: i32) -> &'a str {
             Some(p) => idx = p,
             None => return s,
         }
+    }
+    if usize::try_from(count.unsigned_abs()).unwrap_or(usize::MAX) > cap {
+        return s;
     }
     s.get(idx.saturating_add(d.len())..).unwrap_or_default()
 }
@@ -443,11 +522,10 @@ pub fn substring_index<O: OffsetSizeTrait>(
 ) -> Result<GenericStringArray<O>, KernelError> {
     let slots: [&dyn Slot; 3] = [&input, &delim, &count];
     str_rows(&slots, |i, out| {
-        out.push_str(substring_index_of(
-            input.at(i),
-            delim.at(i),
-            int_at(count, i),
-        ));
+        let s = input.at(i);
+        // The result is a slice of the input.
+        reserve_str(out, s.len())?;
+        out.push_str(substring_index_of(s, delim.at(i), int_at(count, i)));
         Ok(())
     })
 }
@@ -455,6 +533,10 @@ pub fn substring_index<O: OffsetSizeTrait>(
 /// `split_part(str, delim, n)`: the `n`-th piece of `str` split at the
 /// literal `delim` (an empty `delim` splits nothing); negative `n` counts
 /// from the end; the empty string when there is no such piece.
+///
+/// With `n = Int.MIN` (`-2^31`) the piece is past the start, so the result
+/// is always the empty string. Spark's JVM raises an unclassified exception
+/// here; Krishiv returns what Spark's algorithm would.
 ///
 /// # Errors
 /// `INVALID_INDEX_OF_ZERO` for `n = 0` on a row whose operands are valid;
@@ -467,11 +549,13 @@ pub fn split_part<O: OffsetSizeTrait>(
 ) -> Result<GenericStringArray<O>, KernelError> {
     let slots: [&dyn Slot; 3] = [&input, &delim, &part];
     str_rows(&slots, |i, out| {
+        let (s, d) = (input.at(i), delim.at(i));
+        // The result is a slice of the input.
+        reserve_str(out, s.len())?;
         let n = int_at(part, i);
         if n == 0 {
             return Err(KernelError::with_row(Some(i), InvalidIndexOfZero {}.into()));
         }
-        let (s, d) = (input.at(i), delim.at(i));
         // Pieces are cut left to right, also when counted from the end.
         let pieces = || -> Box<dyn Iterator<Item = &str> + '_> {
             if d.is_empty() {
@@ -549,6 +633,7 @@ pub fn overlay<O: OffsetSizeTrait>(
     let slots: [&dyn Slot; 4] = [&input, &replace, &pos, &len];
     str_rows(&slots, |i, out| {
         let (s, r) = (input.at(i), replace.at(i));
+        reserve_str(out, s.len().saturating_add(r.len()))?;
         let [before, after] =
             overlay_ranges(chars_of(s), int_at(pos, i), int_at(len, i), chars_of(r));
         let piece = |range: Option<(usize, usize)>| {
@@ -601,15 +686,31 @@ pub fn overlay_binary<O: OffsetSizeTrait>(
 // ---- levenshtein, soundex, luhn_check ----
 
 /// The edit distance between `a` and `b` in characters, two rows of work.
-fn edit_distance(a: &str, b: &str) -> usize {
-    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    let (short, long) = if a.len() <= b.len() {
-        (&a, &b)
+///
+/// # Errors
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the working rows do not fit memory.
+fn edit_distance(a: &str, b: &str) -> Result<usize, KernelError> {
+    let mut av = Vec::new();
+    av.try_reserve(a.chars().count())
+        .map_err(|_| KernelError::out_of_memory(a.len()))?;
+    av.extend(a.chars());
+    let mut bv = Vec::new();
+    bv.try_reserve(b.chars().count())
+        .map_err(|_| KernelError::out_of_memory(b.len()))?;
+    bv.extend(b.chars());
+    let (short, long) = if av.len() <= bv.len() {
+        (&av, &bv)
     } else {
-        (&b, &a)
+        (&bv, &av)
     };
-    let mut prev: Vec<usize> = (0..=short.len()).collect();
-    let mut cur = vec![0; short.len().saturating_add(1)];
+    let mut prev = Vec::new();
+    prev.try_reserve(short.len().saturating_add(1))
+        .map_err(|_| KernelError::out_of_memory(short.len().saturating_add(1)))?;
+    prev.extend(0..=short.len());
+    let mut cur = Vec::new();
+    cur.try_reserve(short.len().saturating_add(1))
+        .map_err(|_| KernelError::out_of_memory(short.len().saturating_add(1)))?;
+    cur.resize(short.len().saturating_add(1), 0);
     for (j, lc) in long.iter().enumerate() {
         if let Some(first) = cur.first_mut() {
             *first = j.saturating_add(1);
@@ -628,7 +729,7 @@ fn edit_distance(a: &str, b: &str) -> usize {
         }
         std::mem::swap(&mut prev, &mut cur);
     }
-    prev.get(short.len()).copied().unwrap_or(0)
+    Ok(prev.get(short.len()).copied().unwrap_or(0))
 }
 
 /// `levenshtein(a, b[, threshold])`: the edit distance in characters; with
@@ -636,23 +737,33 @@ fn edit_distance(a: &str, b: &str) -> usize {
 /// threshold; a NULL threshold counts as 0, as in Spark).
 ///
 /// # Errors
-/// `INTERNAL_ERROR` for operands of different lengths.
+/// `INTERNAL_ERROR` for operands of different lengths;
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the working rows do not fit memory.
 pub fn levenshtein<O: OffsetSizeTrait>(
     left: StrOperand<'_, O>,
     right: StrOperand<'_, O>,
     threshold: Option<Operand<'_, Int32Type>>,
 ) -> Result<Int32Array, KernelError> {
     let slots: [&dyn Slot; 2] = [&left, &right];
-    int_rows(&slots, |i| {
-        let d = i32::try_from(edit_distance(left.at(i), right.at(i))).unwrap_or(i32::MAX);
+    let rows = row_count(&slots)?;
+    let mut out = Vec::new();
+    out.try_reserve(rows)
+        .map_err(|_| KernelError::out_of_memory(rows))?;
+    for i in 0..rows {
+        if !all_valid(&slots, i) {
+            out.push(None);
+            continue;
+        }
+        let d = i32::try_from(edit_distance(left.at(i), right.at(i))?).unwrap_or(i32::MAX);
         // A NULL threshold reads as 0 (Scala's `null.asInstanceOf[Int]`).
         let limit = threshold.map(|t| if t.is_valid(i) { int_at(t, i) } else { 0 });
-        if limit.is_some_and(|limit| d > limit) {
+        out.push(Some(if limit.is_some_and(|limit| d > limit) {
             -1
         } else {
             d
-        }
-    })
+        }));
+    }
+    Ok(out.into_iter().collect())
 }
 
 /// The Soundex digit of an upper-case ASCII letter; `'7'` for `H` and `W`
@@ -677,6 +788,8 @@ pub fn soundex<O: OffsetSizeTrait>(
     let input = StrOperand::Array(a);
     str_rows(&[&input], |i, out| {
         let s = a.value(i);
+        // Four ASCII bytes, or the whole string when it is returned unchanged.
+        reserve_str(out, s.len().max(4))?;
         let mut bytes = s.bytes();
         let Some(first) = bytes.next() else {
             return Ok(());
@@ -775,6 +888,11 @@ impl Default for MaskRules {
 /// Characters with the Unicode `Lowercase` or `Uppercase` property that are
 /// not letters of category `Ll`/`Lu` (modifier letters, circled and Roman
 /// numeral forms), which Java's `Character.getType` does not call letters.
+///
+/// This list is pinned to the toolchain's Unicode data by
+/// `toolchain_unicode_is_pinned`: if a toolchain upgrade changes the
+/// properties of these code points, that test fails instead of silently
+/// changing `mask`.
 fn is_other_case(c: char) -> bool {
     matches!(u32::from(c),
         0x00AA | 0x00BA | 0x02B0..=0x02B8 | 0x02C0..=0x02C1 | 0x02E0..=0x02E4 | 0x0345
@@ -793,15 +911,25 @@ fn is_other_case(c: char) -> bool {
 /// modifier letters and the circled and Roman-numeral forms that carry them
 /// without being `Lu`/`Ll`; digits are exactly `Nd`.
 ///
+/// This is a known approximation: classification uses the toolchain's Unicode
+/// data, not a version-keyed table (see `super::case_table` for `upper`/
+/// `lower`). The compensating list in `is_other_case` and the outputs for
+/// the divergent code points are pinned by `toolchain_unicode_is_pinned`.
+///
 /// # Errors
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit memory or the
+/// offset type.
 pub fn mask<O: OffsetSizeTrait>(
     a: &GenericStringArray<O>,
     rules: MaskRules,
 ) -> Result<GenericStringArray<O>, KernelError> {
     let input = StrOperand::Array(a);
     str_rows(&[&input], |i, out| {
-        for c in a.value(i).chars() {
+        let s = a.value(i);
+        // One replacement per character (4 bytes worst case), two for a
+        // character outside the Basic Multilingual Plane.
+        reserve_str(out, s.len().saturating_mul(4))?;
+        for c in s.chars() {
             let (rule, units) = if u32::from(c) > 0xFFFF {
                 (rules.other, 2)
             } else if java_digit(c).is_some() {
@@ -826,14 +954,17 @@ pub fn mask<O: OffsetSizeTrait>(
 /// by a backslash.
 ///
 /// # Errors
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit memory or the
+/// offset type.
 pub fn quote<O: OffsetSizeTrait>(
     a: &GenericStringArray<O>,
 ) -> Result<GenericStringArray<O>, KernelError> {
     let input = StrOperand::Array(a);
     str_rows(&[&input], |i, out| {
+        let s = a.value(i);
+        reserve_str(out, s.len().saturating_mul(2).saturating_add(2))?;
         out.push('\'');
-        for c in a.value(i).chars() {
+        for c in s.chars() {
             if c == '\'' {
                 out.push('\\');
             }
@@ -939,8 +1070,8 @@ pub fn elt_binary<O: OffsetSizeTrait>(
 ///
 /// # Errors
 /// `INTERNAL_ERROR` for no column operand or operands of different
-/// lengths; `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the
-/// offset type.
+/// lengths; `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit memory or
+/// the offset type.
 pub fn concat_ws<O: OffsetSizeTrait>(
     sep: StrOperand<'_, O>,
     parts: &[StrOperand<'_, O>],
@@ -955,7 +1086,14 @@ pub fn concat_ws<O: OffsetSizeTrait>(
             sink.push_null();
             continue;
         }
+        let need: usize = parts
+            .iter()
+            .filter(|p| p.is_valid(i))
+            .map(|p| p.at(i).len().saturating_add(sep.at(i).len()))
+            .fold(0, usize::saturating_add);
+        check_offset::<O>(sink.bytes.saturating_add(need))?;
         scratch.clear();
+        reserve_str(&mut scratch, need)?;
         for (n, p) in parts.iter().filter(|p| p.is_valid(i)).enumerate() {
             if n > 0 {
                 scratch.push_str(sep.at(i));

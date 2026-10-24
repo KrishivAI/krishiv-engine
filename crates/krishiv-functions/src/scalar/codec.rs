@@ -3,9 +3,10 @@
 //! `decode` (Spark's default charsets), `to_binary`/`try_to_binary`, the
 //! UTF-8 validators and the URL codecs, on `krishiv_kernels::string`.
 //!
-//! `base64` writes lines of 76 symbols separated by CRLF, as Spark does by
-//! default (`spark.sql.chunkBase64String.enabled`); the legacy charset
-//! switches (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`)
+//! `base64` always writes lines of 76 symbols separated by CRLF, as Spark
+//! does by default (`spark.sql.chunkBase64String.enabled`; the switch is not
+//! read, chunking is always on); the legacy charset switches
+//! (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`)
 //! are not read, so `encode`/`decode` always take Spark's default charsets
 //! and report unmappable input.
 //!

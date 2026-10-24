@@ -7,6 +7,12 @@
 //! validators only have work to do on `BINARY` input; there the bytes are
 //! judged as Spark's `UTF8String` does (the Unicode "maximal subpart"
 //! rules, which `std::str` implements).
+//!
+//! Spark's defaults apply; the switches are not read: `encode`/`decode` take
+//! Spark's seven default charsets (`spark.sql.legacy.javaCharsets` and
+//! `spark.sql.legacy.codingErrorAction` are ignored), and `base64` always
+//! writes MIME chunking (Spark's default of
+//! `spark.sql.chunkBase64String.enabled`).
 
 use arrow_array::{Array, BooleanArray, GenericBinaryArray, GenericStringArray, OffsetSizeTrait};
 use krishiv_common::error::{
@@ -410,7 +416,9 @@ pub fn encode<O: OffsetSizeTrait>(
         let cs = charset_of(i, "encode", name)?;
         scratch.clear();
         if !s.is_empty() {
-            reserve(&mut scratch, s.len().saturating_mul(2))?;
+            // UTF-32 writes 4 bytes per character (plus a 2-byte BOM for
+            // UTF-16), so `4 * len + 2` bounds every charset.
+            reserve(&mut scratch, s.len().saturating_mul(4).saturating_add(2))?;
             encode_into(cs, s, &mut scratch).map_err(|()| malformed(i, "encode", name))?;
         }
         sink.push(&scratch)?;
@@ -481,6 +489,10 @@ pub fn decode<O: OffsetSizeTrait>(
         let (bytes, name) = (input.at(i), charset.at(i));
         let cs = charset_of(i, "decode", name)?;
         scratch.clear();
+        // UTF-16/32 expand at most: 2 bytes decode to up to 3 UTF-8 bytes.
+        scratch
+            .try_reserve(bytes.len().saturating_mul(3).saturating_add(3))
+            .map_err(|_| KernelError::out_of_memory(bytes.len().saturating_mul(3)))?;
         decode_into(cs, bytes, &mut scratch).map_err(|()| malformed(i, "decode", name))?;
         sink.push(&scratch)?;
     }
@@ -605,7 +617,8 @@ pub fn validate_utf8<O: OffsetSizeTrait>(
 /// byte `%XX`.
 ///
 /// # Errors
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit memory or the
+/// offset type.
 pub fn url_encode<O: OffsetSizeTrait>(
     a: &GenericStringArray<O>,
 ) -> Result<GenericStringArray<O>, KernelError> {
@@ -617,8 +630,14 @@ pub fn url_encode<O: OffsetSizeTrait>(
             sink.push_null();
             continue;
         }
+        let s = a.value(i);
+        // Every byte becomes `%XX` (3 bytes) worst case.
+        check_offset::<O>(sink.bytes.saturating_add(s.len().saturating_mul(3)))?;
         scratch.clear();
-        for &b in a.value(i).as_bytes() {
+        scratch
+            .try_reserve(s.len().saturating_mul(3))
+            .map_err(|_| KernelError::out_of_memory(s.len().saturating_mul(3)))?;
+        for &b in s.as_bytes() {
             match b {
                 b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'.' | b'-' | b'*' | b'_' => {
                     scratch.push(char::from(b));
@@ -660,8 +679,8 @@ fn url_escape_byte(hi: char, lo: char) -> Option<u8> {
 /// escape is `CANNOT_DECODE_URL` (NULL with `try_`).
 ///
 /// # Errors
-/// As above; `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the
-/// offset type.
+/// `CANNOT_DECODE_URL` as above; `UNABLE_TO_ACQUIRE_MEMORY` if the result
+/// does not fit memory or the offset type.
 pub fn url_decode<O: OffsetSizeTrait>(
     a: &GenericStringArray<O>,
     try_: bool,
@@ -674,8 +693,15 @@ pub fn url_decode<O: OffsetSizeTrait>(
             sink.push_null();
             continue;
         }
+        let s = a.value(i);
+        check_offset::<O>(sink.bytes.saturating_add(s.len()))?;
         scratch.clear();
-        let mut chars = a.value(i).chars().peekable();
+        scratch
+            .try_reserve(s.len())
+            .map_err(|_| KernelError::out_of_memory(s.len()))?;
+        run.clear();
+        reserve(&mut run, s.len())?;
+        let mut chars = s.chars().peekable();
         let mut ok = true;
         while let Some(c) = chars.next() {
             if c != '%' {

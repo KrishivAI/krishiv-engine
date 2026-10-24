@@ -299,6 +299,10 @@ fn substring_index_counts_overlapping_matches_from_either_end() {
     assert_eq!(case("a日b日c", "日", -1), "c");
     assert_eq!(case("ab", "abc", -1), "ab");
     assert_eq!(case("ab", "x", i32::MIN), "ab");
+    // `Int.MIN` never has that many delimiters, so the whole string comes
+    // back (Spark's JVM raises an unclassified exception here).
+    assert_eq!(case("a.b.c", ".", i32::MIN), "a.b.c");
+    assert_eq!(case("aaa", "a", i32::MIN), "aaa");
     let nulls =
         s::substring_index(StrOperand::Array(&strs(&[None])), lit(Some(".")), int(1)).unwrap();
     assert_eq!(out(&nulls), [None]);
@@ -320,6 +324,10 @@ fn split_part_indexes_from_either_end() {
     assert_eq!(case("a..b", ".", 2).unwrap(), "");
     assert_eq!(case("aaa", "aa", -1).unwrap(), "a");
     assert_eq!(case("x", "y", i32::MIN).unwrap(), "");
+    // `Int.MIN` counts past the start, so there is never such a piece (Spark's
+    // JVM raises an unclassified exception here).
+    assert_eq!(case("a.b.c", ".", i32::MIN).unwrap(), "");
+    assert_eq!(case("a.b.c", "", i32::MIN).unwrap(), "");
     let zero = case("a", ".", 0).unwrap_err();
     assert_eq!(zero.error_class(), ErrorClass::InvalidIndexOfZero);
     assert_eq!(zero.row(), Some(0));
@@ -498,6 +506,73 @@ fn mask_replaces_by_class() {
     );
 }
 
+/// The toolchain's Unicode data is pinned: `initcap` and `mask` classify
+/// with `char::{to_uppercase, to_lowercase, is_uppercase, is_lowercase}`,
+/// so a toolchain upgrade that changes these mappings would silently change
+/// the result. This test fails then instead, signalling the compensating
+/// list and the documented approximation need review.
+#[test]
+fn toolchain_unicode_is_pinned() {
+    // The compensating list is still needed on this toolchain: each sample
+    // carries an Uppercase/Lowercase property without being `Lu`/`Ll`.
+    for c in [
+        '\u{00AA}',
+        '\u{02B0}',
+        '\u{0345}',
+        '\u{1D2C}',
+        '\u{2160}',
+        '\u{2170}',
+        '\u{24B6}',
+        '\u{24D0}',
+        '\u{2C7C}',
+        '\u{A770}',
+        '\u{AB5C}',
+        '\u{1F130}',
+    ] {
+        assert!(
+            c.is_uppercase() || c.is_lowercase(),
+            "U+{:04X} lost its case property; review is_other_case",
+            u32::from(c)
+        );
+    }
+    // Plain `Lu`/`Ll` letters are not in the list: `mask` replaces them.
+    let letters = strs(&[Some("AÉΩДaéωд")]);
+    assert_eq!(
+        out(&s::mask(&letters, MaskRules::default()).unwrap()),
+        [Some("XXXXxxxx")]
+    );
+    // `initcap` on the divergent code points: title case is `to_uppercase`
+    // with the tail lowered, except the digraphs and Georgian, which keep
+    // their form. Greek with an iota subscript differs from ICU here.
+    let words = strs(&[
+        Some("ᾀ"),
+        Some("ß"),
+        Some("ǆ"),
+        Some("ა"),
+        Some("İ"),
+        Some("ﬁ"),
+        Some("ʰ"),
+    ]);
+    assert_eq!(
+        out(&s::initcap(&words).unwrap()),
+        [
+            Some("Ἀι"),
+            Some("Ss"),
+            Some("ǅ"),
+            Some("ა"),
+            Some("İ"),
+            Some("Fi"),
+            Some("ʰ"),
+        ]
+    );
+    // `mask` keeps the divergent forms under the default (`other`) rule.
+    let odd = strs(&[Some("ʰⓐⅣᾀß")]);
+    assert_eq!(
+        out(&s::mask(&odd, MaskRules::default()).unwrap()),
+        [Some("ʰⓐⅣxx")]
+    );
+}
+
 #[test]
 fn quote_elt_concat_ws() {
     let a = strs(&[Some("Spark"), Some("Don't"), Some(""), None]);
@@ -630,6 +705,42 @@ fn unbase64_is_java_mime_decoding() {
             "{bad:?}"
         );
     }
+    // Every `mime_decode` reason is pinned, not just the class.
+    let reason = |text: &str| {
+        s::unbase64(&strs(&[Some(text)]), false)
+            .unwrap_err()
+            .error()
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "reason")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        reason("1"),
+        "Last unit does not have enough valid bits",
+        "single symbol"
+    );
+    assert_eq!(
+        reason("e\u{301}"),
+        "Last unit does not have enough valid bits",
+        "one valid symbol plus skipped"
+    );
+    assert_eq!(
+        reason("="),
+        "Input byte array has wrong 4-byte ending unit",
+        "padding with no data"
+    );
+    assert_eq!(
+        reason("YQ=x"),
+        "Input byte array has wrong 4-byte ending unit",
+        "lone padding before data"
+    );
+    assert_eq!(
+        reason("YQ==YQ"),
+        "Input byte array has incorrect ending byte",
+        "data after padding"
+    );
     let nulls = s::unbase64(&strs(&[None]), true).unwrap();
     assert!(nulls.is_null(0));
 }

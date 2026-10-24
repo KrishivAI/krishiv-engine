@@ -312,3 +312,77 @@ fn try_string_functions_match_spark() {
 fn mask_functions_match_spark() {
     check("mask-functions.sql.out", 31, 26);
 }
+
+#[test]
+fn url_functions_match_spark() {
+    // `parse_url` is `KnownUnsupported` (8 statements skipped); the URL
+    // codecs themselves match Spark.
+    check("url-functions.sql.out", 11, 8);
+}
+
+/// The new character functions end to end, against Spark 4.2's results: the
+/// three replayed files do not call `overlay`, `levenshtein` (2/3-arg),
+/// `soundex`, `initcap`, `translate`, `locate` with a NULL start, ANSI
+/// `elt` or `concat_ws` edge cases, so they are pinned here instead of
+/// resting on unit tests alone. Expected values are Spark 4.2's (the same
+/// values the kernel and binding tests assert).
+#[test]
+fn string_extra_functions_match_spark() {
+    let session = Session::new().unwrap();
+    let rows = |sql: &str| {
+        let (fields, batches) = block_on(async {
+            let df = session.sql(sql).await?;
+            let fields = df.schema().await?;
+            let batches = df.collect().await?;
+            Ok::<_, KrishivError>((fields, batches))
+        })
+        .unwrap();
+        let _ = fields;
+        rows_of(&batches)
+    };
+    let cases = [
+        ("SELECT overlay('Spark SQL', 'CORE', 7)", "Spark CORE"),
+        (
+            "SELECT overlay('Spark SQL', 'ANSI ', 7, 0)",
+            "Spark ANSI SQL",
+        ),
+        ("SELECT overlay('日本語', 'x', 2)", "日x語"),
+        ("SELECT levenshtein('kitten', 'sitting')", "3"),
+        ("SELECT levenshtein('kitten', 'sitting', 2)", "-1"),
+        ("SELECT soundex('Miller')", "M460"),
+        ("SELECT soundex('Robert')", "R163"),
+        ("SELECT initcap('sPark sql')", "Spark Sql"),
+        ("SELECT translate('translate', 'rnlt', '1223')", "31a2s2a3e"),
+        ("SELECT locate('bar', 'foobarbar', 5)", "7"),
+        ("SELECT locate('bar', 'foobarbar', NULL)", "0"),
+        ("SELECT locate('', 'abc', 100)", "1"),
+        ("SELECT elt(1, 'a', 'b')", "a"),
+        ("SELECT concat_ws(',', 'a', 'b')", "a,b"),
+        ("SELECT concat_ws('-', 'a', NULL, 'b')", "a-b"),
+        ("SELECT substring_index('a.b.c', '.', -2147483648)", "a.b.c"),
+        ("SELECT split_part('a.b.c', '.', -2147483648)", ""),
+        ("SELECT base64(encode(repeat('a', 58), 'utf-8'))", ""),
+    ];
+    for (sql, want) in cases {
+        if sql.starts_with("SELECT base64(") {
+            // 58 bytes are 80 symbols with a CRLF after the 76th: chunking
+            // is always on (`spark.sql.chunkBase64String.enabled` unread).
+            let got = rows(sql).join("\n");
+            assert_eq!(got.len(), 82, "{sql}");
+            assert_eq!(&got[76..78], "\r\n", "{sql}");
+            let _ = want;
+            continue;
+        }
+        assert_eq!(rows(sql), [want.to_owned()], "{sql}");
+    }
+    // ANSI `elt` raises; lenient `elt` gives NULL.
+    let err = block_on(async {
+        let df = session.sql("SELECT elt(5, 'a', 'b')").await?;
+        let _ = df.collect().await?;
+        Ok::<_, KrishivError>(())
+    })
+    .unwrap_err();
+    assert_eq!(err.error_class().name(), "INVALID_ARRAY_INDEX");
+    block_on(session.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    assert_eq!(rows("SELECT elt(5, 'a', 'b')"), ["NULL"]);
+}

@@ -14,6 +14,24 @@
 //! NULL row is never evaluated. Work is per valid row and depends on the
 //! row's content, so these kernels have no has-nulls axis (they skip NULL
 //! rows) and ASCII rows take byte-wise fast paths.
+//!
+//! Known approximations (Spark's defaults apply; the switches are not read):
+//! - `initcap` and `mask` classify non-ASCII characters with the toolchain's
+//!   Unicode data, not a version-keyed table like [`upper`]/[`lower`] (see
+//!   `case_table.rs`). The divergent code points (Greek letters with an iota
+//!   subscript, modifier/circled/Roman-numeral letters, Georgian) are pinned
+//!   by `toolchain_unicode_is_pinned`.
+//! - `encode`/`decode` take Spark's seven default charsets; the
+//!   `spark.sql.legacy.javaCharsets` and `spark.sql.legacy.codingErrorAction`
+//!   switches are not read.
+//! - `base64` always writes MIME chunking (a CRLF every 76 symbols), Spark's
+//!   default; `spark.sql.chunkBase64String.enabled` is not read.
+//! - `split_part` and `substring_index` with `Int.MIN` return what Spark's
+//!   algorithm would (the whole string / the empty string); the JVM raises an
+//!   unclassified exception there.
+//! - `unbase64` of text Java's MIME decoder rejects is
+//!   `KRISHIV_INVALID_BASE64_INPUT`; Spark raises an unclassified
+//!   `IllegalArgumentException`.
 
 mod case_table;
 mod chars;
