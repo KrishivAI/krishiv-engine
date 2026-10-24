@@ -246,17 +246,9 @@ def test_functions_and_literals(df: DataFrame) -> None:
     assert dict(df.select(F.lit(None).alias("n"), "id").dtypes) == {"n": "void", "id": "bigint"}
     with pytest.raises(errors.PySparkValueError):
         F.lit(2**70)
-    with pytest.raises(errors.PySparkNotImplementedError):
-        F.expr("a + 1")
-
-
-def test_string_expressions_are_not_implemented_yet(df: DataFrame) -> None:
-    with pytest.raises(errors.PySparkNotImplementedError, match="selectExpr"):
-        df.selectExpr("id + 1")
-    with pytest.raises(errors.PySparkNotImplementedError):
-        df.where("id > 1")
-    with pytest.raises(errors.PySparkNotImplementedError):
-        df.filter("id > 1")
+    assert df.select(F.expr("id + 1").alias("plus"), F.expr("upper(name)")).columns == ["plus", "upper(name)"]
+    with pytest.raises(errors.PySparkTypeError):
+        F.expr(1)  # ty: ignore[invalid-argument-type]
 
 
 def test_session_tables_and_reader(spark: SparkSession, df: DataFrame, tmp_path: Any) -> None:
@@ -270,9 +262,8 @@ def test_session_tables_and_reader(spark: SparkSession, df: DataFrame, tmp_path:
     with pytest.raises(errors.PySparkNotImplementedError):
         spark.sql("SELECT :a", args={"a": 1})
     with pytest.raises(errors.PySparkNotImplementedError):
-        spark.createDataFrame([(1, "a")])
-    with pytest.raises(errors.PySparkNotImplementedError):
         spark.createDataFrame(pa.table({"a": [1]}), schema="a int")
+    assert spark.createDataFrame([(1, "a")], ["x", "y"]).orderBy("x").collect() == [Row(x=1, y="a")]
     with pytest.raises(errors.PySparkTypeError):
         spark.read.load()
     reader = spark.read.format("parquet").option("mergeSchema", True).options(x="y")

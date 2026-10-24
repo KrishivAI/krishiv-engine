@@ -17,6 +17,9 @@ def test_hierarchy_matches_pyspark_4_2() -> None:
     assert issubclass(errors.PySparkNotImplementedError, NotImplementedError)
     assert issubclass(errors.PySparkRuntimeError, RuntimeError)
     assert issubclass(errors.PySparkImportError, ImportError)
+    assert issubclass(errors.PySparkAssertionError, AssertionError)
+    assert issubclass(errors.PySparkIndexError, IndexError)
+    assert issubclass(errors.PySparkKeyError, KeyError)
     for cls in (
         errors.AnalysisException,
         errors.ArithmeticException,
@@ -59,7 +62,9 @@ def test_hierarchy_matches_pyspark_4_2() -> None:
 def test_native_errors_map_by_class_and_sqlstate(error_class: str, sql_state: str | None, expected: type) -> None:
     e = errors._from_native(error_class, sql_state, f"[{error_class}] m", {"p": "v"})
     assert type(e) is expected
-    assert e.getCondition() == e.getErrorClass() == error_class
+    assert e.getCondition() == error_class
+    with pytest.warns(FutureWarning, match="getCondition"):
+        assert e.getErrorClass() == error_class
     assert e.getSqlState() == sql_state
     assert e.getMessage() == str(e) == f"[{error_class}] m"
     assert e.getMessageParameters() == {"p": "v"}
