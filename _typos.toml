@@ -21,6 +21,7 @@ extend-exclude = [
 extend-ignore-re = [
     '"(ECT|IST)"',         # Java's short time-zone IDs (Europe/Paris, Asia/Kolkata)
     'spark\.implicits\._', # Spark's implicit-conversions import
+    '"Bash\([^"]*\)"',     # command patterns in agent permission rules (bundled git options like -nam)
 ]
 
 [default.extend-identifiers]

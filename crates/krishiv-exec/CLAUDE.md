@@ -36,7 +36,8 @@ Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFi
 by several drivers, `operators/sort/sort.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
 partition, evaluates complete partitions), `eval.rs` boundaries, ranking functions, frame aggregates (through the
 aggregate `Accumulator`, one row at a time in Spark's order; decimal `sum`/`avg` exact in `i256`, checked when
-evaluated), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
+evaluated), `frames.rs` (ROWS frames with offsets and frames to the partition's end: segment tree, removable
+cumulative, in-order fold for float/ANSI sums), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
 them back in order; a partition that does not fit is copied to its own file; failed/cancelled steps leave the state
 failed, never a short result), `stream.rs` (a partition evaluated from disk: lead and trailing readers, bounded
 memory), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
