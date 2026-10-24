@@ -42,9 +42,21 @@ def test_fetch_verifies_hash_and_caches(data_dir):
 
     assert cq.fetch_file("clickhouse", fetch, pins, COMMIT) == data.decode()
     assert calls == [f"https://raw.githubusercontent.com/ClickHouse/ClickBench/{COMMIT}/b/q.sql"]
-    assert (data_dir / "clickbench" / "queries" / COMMIT[:12] / "clickhouse.sql").read_bytes() == data
+    assert (data_dir / "cache" / "clickbench-queries" / COMMIT[:12] / "clickhouse.sql").read_bytes() == data
     assert cq.fetch_file("clickhouse", fetch, pins, COMMIT) == data.decode()
     assert len(calls) == 1  # second call served from the cache
+
+
+def test_query_cache_does_not_change_the_dataset_directory(data_dir):
+    """The Krishiv runner registers every entry of the dataset directory, so the cache must live outside it."""
+    dataset = data_dir / "clickbench"
+    dataset.mkdir(parents=True)
+    (dataset / "hits.parquet").write_bytes(b"PAR1")
+    before = sorted(p.name for p in dataset.iterdir())
+    data, pins = _file(["SELECT 1;"])
+    cq.fetch_file("clickhouse", lambda url: data, pins, COMMIT)
+    assert sorted(p.name for p in dataset.iterdir()) == before == ["hits.parquet"]
+    assert not cq.cache_dir(COMMIT).is_relative_to(dataset)
 
 
 def test_failed_cache_write_leaves_no_temp_file(data_dir, monkeypatch):
@@ -56,7 +68,7 @@ def test_failed_cache_write_leaves_no_temp_file(data_dir, monkeypatch):
     monkeypatch.setattr(cq.Path, "replace", boom)
     with pytest.raises(OSError, match="disk full"):
         cq.fetch_file("clickhouse", lambda url: data, pins, COMMIT)
-    assert list((data_dir / "clickbench" / "queries" / COMMIT[:12]).iterdir()) == []
+    assert list(cq.cache_dir(COMMIT).iterdir()) == []
 
 
 def test_fetch_rejects_content_that_does_not_match_the_pin(data_dir):
@@ -68,7 +80,7 @@ def test_fetch_rejects_content_that_does_not_match_the_pin(data_dir):
 
 def test_corrupt_cache_entry_is_fetched_again(data_dir):
     data, pins = _file(["SELECT 1;"])
-    cached = data_dir / "clickbench" / "queries" / COMMIT[:12] / "clickhouse.sql"
+    cached = cq.cache_dir(COMMIT) / "clickhouse.sql"
     cached.parent.mkdir(parents=True)
     cached.write_text("tampered")
     assert cq.fetch_file("clickhouse", lambda url: data, pins, COMMIT) == data.decode()
