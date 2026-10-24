@@ -12,7 +12,7 @@
 //! [`in_dql_scope`] selects the query statements the DQL parser covers.
 //! Excluded are statements that are not queries (DDL, DML, commands) and
 //! queries using syntax that later parser work covers: the pipe operator
-//! `|>` and `COLLATE`; `TRANSFORM` scripts, variant paths and named
+//! `|>`; `TRANSFORM` scripts, variant paths and named
 //! parameters (`:`), `IDENTIFIER(...)`, `TABLE(...)` arguments,
 //! `TABLESAMPLE` and `NEAREST BY`; streaming relations (`STREAM`,
 //! `WATERMARK`, `CHANGES`).
@@ -170,16 +170,9 @@ fn out_of_scope_word(sql: &str, tokens: &[Token], i: usize, depth: i32) -> bool 
     };
     let next = tokens.get(i + 1).map(|t| t.kind);
     let w = word;
-    ([
-        "COLLATE",
-        "TABLESAMPLE",
-        "WATERMARK",
-        "STREAM",
-        "CHANGES",
-        "NEAREST",
-    ]
-    .iter()
-    .any(|k| w(i, k)))
+    (["TABLESAMPLE", "WATERMARK", "STREAM", "CHANGES", "NEAREST"]
+        .iter()
+        .any(|k| w(i, k)))
         || ((w(i, "IDENTIFIER") || (w(i, "TABLE") && i > 0))
             && next == Some(TokenKind::Sym(Sym::LParen)))
         || (w(i, "USING") && next == Some(TokenKind::String))
@@ -203,6 +196,7 @@ mod tests {
             "VALUES 1",
             "SELECT a | b FROM t",
             "SELECT CAST(x AS STRUCT<a: INT>)",
+            "SELECT a COLLATE utf8_lcase FROM t",
         ] {
             assert!(in_dql_scope(sql), "{sql}");
         }
@@ -211,7 +205,6 @@ mod tests {
             "INSERT INTO t VALUES 1",
             "WITH t AS (SELECT 1) INSERT INTO u SELECT * FROM t",
             "FROM t |> SELECT a",
-            "SELECT a COLLATE utf8_lcase FROM t",
             "SELECT v:a FROM t",
             "SELECT * FROM IDENTIFIER('t')",
             "SELECT * FROM f(TABLE(t))",

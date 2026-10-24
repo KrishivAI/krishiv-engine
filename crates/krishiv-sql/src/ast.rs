@@ -246,8 +246,8 @@ pub struct Reset {
     pub span: Span,
 }
 
-/// `CREATE [OR REPLACE] TEMPORARY VIEW name [(columns)] AS query`
-/// (`TEMP` for `TEMPORARY`).
+/// `CREATE [OR REPLACE] TEMPORARY VIEW name [(columns)] [DEFAULT COLLATION
+/// name] AS query` (`TEMP` for `TEMPORARY`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateView {
     /// `OR REPLACE`.
@@ -258,6 +258,8 @@ pub struct CreateView {
     pub name: Ident,
     /// The declared column aliases; empty for none.
     pub columns: Vec<ViewColumn>,
+    /// `DEFAULT COLLATION name`.
+    pub collation: Option<Ident>,
     /// The query.
     pub query: Box<Query>,
     /// Source text, from `CREATE` to the end of the statement.
@@ -1701,6 +1703,8 @@ pub enum ExprKind {
     },
     /// `expr.field`.
     Field(Box<Expr>, Ident),
+    /// `expr COLLATE name`.
+    Collate(Box<Expr>, ObjectName),
     /// `expr[index]`.
     Subscript(Box<Expr>, Box<Expr>),
     /// A unary operator.

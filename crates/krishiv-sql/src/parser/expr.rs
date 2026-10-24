@@ -650,6 +650,8 @@ impl Parser<'_> {
             } else if self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
                 self.bump();
                 ExprKind::Field(boxed(e), self.any_ident()?)
+            } else if self.eat_kw("COLLATE") {
+                ExprKind::Collate(boxed(e), self.table_name()?)
             } else if self.eat_sym(Sym::DoubleColon) {
                 let keyword = self.pos;
                 let (data_type, h) = self.measured(Self::data_type)?;

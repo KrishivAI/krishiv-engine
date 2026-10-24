@@ -704,10 +704,11 @@ impl Checker<'_> {
     fn expr_node(&self, e: &Expr) -> R {
         match &e.kind {
             ExprKind::Literal(l) => self.literal(l, e.span),
-            ExprKind::Field(inner, _) | ExprKind::Unary(_, inner) | ExprKind::Not(inner) => {
-                self.expr(inner)
-            }
-            ExprKind::Nested(inner)
+            ExprKind::Field(inner, _)
+            | ExprKind::Collate(inner, _)
+            | ExprKind::Unary(_, inner)
+            | ExprKind::Not(inner)
+            | ExprKind::Nested(inner)
             | ExprKind::IsNull { expr: inner, .. }
             | ExprKind::IsTruth { expr: inner, .. } => self.expr(inner),
             ExprKind::Subscript(a, b) | ExprKind::Binary(a, _, b) => {

@@ -1657,7 +1657,8 @@ impl<'s> Parser<'s> {
     }
 
     /// `CREATE [OR REPLACE] TEMPORARY VIEW [IF NOT EXISTS] name
-    /// [(column [COMMENT '...'], ...)] AS query` (`TEMP` for `TEMPORARY`),
+    /// [(column [COMMENT '...'], ...)] [DEFAULT COLLATION name] AS query`
+    /// (`TEMP` for `TEMPORARY`),
     /// after the `CREATE [OR REPLACE] TEMPORARY` at `start`. A qualified
     /// name parses and fails with `INVALID_TEMP_OBJ_QUALIFIER`;
     /// `OR REPLACE` with `IF NOT EXISTS` parses and fails with
@@ -1686,6 +1687,12 @@ impl<'s> Parser<'s> {
             self.paren_list(Self::view_column)?
         } else {
             Vec::new()
+        };
+        let collation = if self.kw_at(0, "DEFAULT") && self.kw_at(1, "COLLATION") {
+            self.pos += 2;
+            Some(self.name_part(true)?)
+        } else {
+            None
         };
         self.expect_kw("AS")?;
         let query = Box::new(self.query()?);
@@ -1720,6 +1727,7 @@ impl<'s> Parser<'s> {
             if_not_exists,
             name: first,
             columns,
+            collation,
             query,
             span,
         }))
