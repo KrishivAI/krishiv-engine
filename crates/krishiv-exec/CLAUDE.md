@@ -11,7 +11,7 @@ Batch execution engine: operators, pipelines, morsel scheduling within a node.
 driver (yields, batch-boundary checks, NeedMemory, spill servicing, stall detector) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
 TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
-`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `loom_tests.rs`.
+`testing.rs` test operators (also used by benches) · `output_spill.rs` spill hook of finished breaker output · `loom_model.rs`.
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (pushdowns decided once as an
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
 `filter.rs` · `project.rs` · `limit.rs` · `union.rs` (per-branch `UnionAlign`; UNION ALL fan-in is T074, distinct UNION is the aggregate's) ·
@@ -84,5 +84,5 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-exec --no-tests=pass` · `cargo clippy -p krishiv-exec --all-targets -- -D warnings` ·
-loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release` (use a separate target dir) ·
+loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release loom_model::` (use a separate target dir) ·
 benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators`

@@ -4,7 +4,7 @@ Python (uv) harness that runs query suites against engine adapters and records J
 Datasets and results live **outside the repo** in `$KRISHIV_DATA` (default `~/krishiv-data`):
 
 ```
-$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/
+$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/   memcap/v1/<rows>/
 $KRISHIV_DATA/manifests/*.sha256   (sha256sum -c compatible, relative paths)
 $KRISHIV_DATA/results/*.json       report_<suite>_sf<N>.md
 ```
@@ -61,6 +61,61 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
   and version-pinned like every other engine here, so there is no separate download, checksum or PATH step; the engine is the same ClickHouse release. TPC-DS is not run for ClickHouse (`load_queries` stops with the reason).
 - Adding Flink etc.: subclass `Engine`, register in `adapters/__init__.py`.
 Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (TPC-H ClickHouse only; ClickBench is fetched and adapted in code).
+
+## Memory-capped data engineering (`--suite memcap`)
+Four data-engineering queries over a seeded synthetic star schema, each run in a fresh process under a hard memory cap.
+```bash
+uv run krishiv-datasets memcap --rows 10m 50m 150m     # -> $KRISHIV_DATA/memcap/v1/<rows>/ + manifests/memcap-v1-<rows>.sha256
+uv run krishiv-bench reproduce --suite memcap --rows 150m --cap 4.5g --engines krishiv,duckdb,polars,spark --reps 3
+uv run krishiv-bench reproduce --suite memcap --rows 150m --cap 4.5g --engines krishiv,duckdb --engine-memory 1g   # spill
+uv run krishiv-bench run --engine duckdb --suite memcap --rows 10m --queries q3      # one engine (spark-local is accepted as spark)
+uv run krishiv-bench report --suite memcap --rows 150m                                # -> $KRISHIV_DATA/results/report_memcap_150m.md
+```
+* **Data**: `sales` fact (`--rows` 10m/50m/150m; 5M-row part files, snappy, about 3.2 GB at 150m) and a 50,000-row `products` dimension; about 10 orders per customer.
+  Fixed seed (`20261019`, one RNG stream per 5M-row chunk). `digest.json` in the dataset directory records the seed, the chunking, versions and sha256 content digests of the
+  logical rows (independent of the Parquet encoder); the file digests are in the manifest. A dataset directory is never regenerated in place: a generator change is a new version directory (`v2`).
+* **Queries** (`memcap_queries.py`): `q1_filter_agg` (filter on timestamp and status, group by store and status), `q2_join_agg` (fact-dimension join, group by category and brand),
+  `q3_window_latest` (latest order per customer, `ROW_NUMBER()`), `q4_highcard_agg` (group by customer, about 15M groups at 150m). One SQL text for DuckDB, Krishiv and Spark (Krishiv spells the q1 timestamp literal as a cast to `TIMESTAMP_NTZ`, `sql_for`); Polars runs the same logic as expressions.
+* **Runs**: `systemd-run --user --scope -p MemoryMax=<cap> -p MemorySwapMax=0` around one `memcap_child` process per (engine, query), 8 threads, so the kernel kills the whole tree above the cap.
+  Engine memory settings (`--engine-memory`, default `3g`): DuckDB `memory_limit`, Krishiv `--memory-limit`, Spark `spark.driver.memory`; Polars has none. The result is written as Parquet inside the timed span.
+  A run is `finished`, `killed` (the scope's `oom_kill` counter moved, or SIGKILL with the scope within 5% of the cap), `timeout` or `failed`; only finished runs are timed.
+  Recorded per run: wall time (process start to exit, so it includes imports and session start, and the scope's start), the highest resident set of the tree (sampled every 10 ms from the scope's `memory.stat`:
+  anonymous + mapped file + shared pages), the scope's `memory.peak` (`peak_cgroup_bytes`; what the cap acts on, includes reclaimable page cache), and the peak size of the engine's scratch directory as `spill_bytes`
+  (DuckDB temp directory, Krishiv `krishiv.spill.dir`, Spark local dir; none for Polars). The scope disappears with its last process, so a kill is read from the last poll; the SIGKILL-near-cap rule covers a missed event.
+* **Correctness before timing**: per query every engine first runs once untimed (validation); DuckDB's result is the reference (it runs first, even when it is not a reported engine) and each result is
+  checksummed with DuckDB (row count, integer sums exactly, float sums within 1e-9 relative). An engine whose result differs is never timed on that query (verdict `mismatch`); an engine that could not
+  produce a validated result keeps `unverified` until a later finished run is checked. Then `--reps` repetitions (default 3) with the engine order rotated per repetition.
+* **Output**: `$KRISHIV_DATA/results/<ts>_memcap_<rows>_<cap>_<engine memory>.json` (machine, git, dataset digests, every run, per-engine summary); `report` gives, per query and engine, the median wall time of
+  finished runs, finished n/N, median peak memory (`>cap (killed)` when none finished), spill and the verdict. The newest result per (engine, engine memory) is shown. The run holds `$KRISHIV_DATA/.bench.lock`.
+* Needs systemd user scopes with the memory controller (Linux, cgroup v2), Java 21 for Spark and the `dist` runner for Krishiv (see Adapters). Run 50m/150m on the benchmark server.
+
+### Provenance and licence
+The schema, seed, generator and the four queries are taken from the public MIT-licensed repository `engine-bench` by Firat Celik (https://github.com/firfircelik/engine-bench: `gen_data.py`, `queries.py`),
+adapted here (output layout, content digests, versioned directory, checksums). The licence notice that goes with that use:
+
+```
+MIT License
+
+Copyright (c) 2026 Firat Celik
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash

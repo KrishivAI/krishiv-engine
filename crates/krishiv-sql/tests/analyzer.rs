@@ -21,7 +21,7 @@ use krishiv_plan::analyzer::{
 };
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, Literal, LogicalPlan,
-    PlanNode, ResolvedExpr, SourceId,
+    NullOrdering, PlanNode, ResolvedExpr, SortDirection, SourceId,
 };
 use krishiv_sql::{ParserOptions, parse_and_lower, redact_sql};
 use serde_json::Value;
@@ -31,7 +31,11 @@ fn root() -> &'static Path {
 }
 
 fn goldens() -> Value {
-    let path = root().join("tests/fixtures/spark-4.2.0/analyzer-goldens.json");
+    fixture("analyzer-goldens.json")
+}
+
+fn fixture(name: &str) -> Value {
+    let path = root().join("tests/fixtures/spark-4.2.0").join(name);
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
@@ -382,6 +386,245 @@ fn resolution_corpus_matches_spark() {
     }
 }
 
+/// The columns a `Sort` or `Filter` of `plan` reads that its input does
+/// not output: a plan like that analyzes but cannot be planned.
+fn dangling(plan: &Arc<LogicalPlan>, out: &mut Vec<String>) {
+    fn reads(e: &Arc<Expr>, ids: &mut BTreeSet<AttrId>) {
+        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &e.node {
+            ids.insert(c.id);
+        }
+        e.for_each_child(&mut |k| reads(k, ids));
+    }
+    if let PlanNode::Sort { input, .. } | PlanNode::Filter { input, .. } = &plan.node {
+        let have: BTreeSet<AttrId> = input
+            .resolved_output()
+            .unwrap()
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        let mut used = BTreeSet::new();
+        plan.for_each_expr(&mut |e| reads(e, &mut used));
+        for id in used.difference(&have) {
+            out.push(format!("{id:?} in\n{plan}"));
+        }
+    }
+    plan.for_each_child(&mut |c| dangling(c, out));
+}
+
+/// Every `Sort` of `plan`, in walk order: its keys' direction and null
+/// ordering, and whether it is global (`ORDER BY`) or not (`SORT BY`).
+fn sorts_of(plan: &Arc<LogicalPlan>, out: &mut Vec<(Vec<(SortDirection, NullOrdering)>, bool)>) {
+    fn exprs(e: &Arc<Expr>, out: &mut Vec<(Vec<(SortDirection, NullOrdering)>, bool)>) {
+        if let ExprNode::Subquery { plan, .. } = &e.node {
+            sorts_of(plan, out);
+        }
+        e.for_each_child(&mut |k| exprs(k, out));
+    }
+    if let PlanNode::Sort { order, global, .. } = &plan.node {
+        out.push((
+            order.iter().map(|o| (o.direction, o.nulls)).collect(),
+            *global,
+        ));
+    }
+    plan.for_each_child(&mut |c| sorts_of(c, out));
+    plan.for_each_expr(&mut |e| exprs(e, out));
+}
+
+/// Sort keys of `plan` that are not bound: unresolved, reading an outer
+/// query, or naming no attribute of the sort's input.
+fn unbound_sorts(plan: &Arc<LogicalPlan>, out: &mut Vec<String>) {
+    if let PlanNode::Sort { order, input, .. } = &plan.node {
+        let have: BTreeSet<AttrId> = input
+            .resolved_output()
+            .unwrap()
+            .iter()
+            .map(|c| c.id)
+            .collect();
+        for o in order {
+            if !o.expr.is_resolved() {
+                out.push(format!("unresolved sort key in\n{plan}"));
+            }
+            let mut stack = vec![&o.expr];
+            while let Some(e) = stack.pop() {
+                match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                        if !have.contains(&c.id) {
+                            out.push(format!("unbound sort key {c:?} in\n{plan}"));
+                        }
+                    }
+                    ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
+                        out.push(format!("outer sort key {c:?} in\n{plan}"));
+                    }
+                    ExprNode::Column(_)
+                    | ExprNode::Star(_)
+                    | ExprNode::Function(_)
+                    | ExprNode::Alias { .. } => {
+                        out.push(format!("unresolved sort key in\n{plan}"));
+                    }
+                    _ => {}
+                }
+                e.for_each_child(&mut |k| stack.push(k));
+            }
+        }
+    }
+    plan.for_each_child(&mut |c| unbound_sorts(c, out));
+    plan.for_each_expr(&mut |e| {
+        if let ExprNode::Subquery { plan, .. } = &e.node {
+            unbound_sorts(plan, out);
+        }
+    });
+}
+
+/// The sort keys of the single `Sort` of a resolved plan: the column each
+/// key reads when it is one, else its display.
+fn top_sort_keys(plan: &Arc<LogicalPlan>) -> Vec<(String, SortDirection, NullOrdering)> {
+    let mut stack = vec![Arc::clone(plan)];
+    let mut found = None;
+    while let Some(p) = stack.pop() {
+        if let PlanNode::Sort { order, .. } = &p.node {
+            found = Some(order.clone());
+            break;
+        }
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    let order = found.unwrap();
+    order
+        .iter()
+        .map(|o| (key_name(&o.expr), o.direction, o.nulls))
+        .collect()
+}
+
+fn key_name(e: &Arc<Expr>) -> String {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => c.name.clone(),
+        _ => format!("{e}"),
+    }
+}
+
+/// Constant folding of the arguments that need a constant (`round`'s and
+/// `ceil`'s scale, `date_part`'s field, `LIMIT`), ORDER BY and HAVING over
+/// grouping expressions: Spark's outcome for each statement
+/// (`analyzer-folding-goldens.json`, generated with
+/// `gen_analyzer_goldens.py --section folding`).
+#[test]
+fn folding_and_grouped_ordering_match_spark() {
+    let g = fixture("analyzer-folding-goldens.json");
+    let mut failures = Vec::new();
+    let mut raised = BTreeSet::new();
+    for case in g["corpus"].as_array().unwrap() {
+        let sql = case["sql"].as_str().unwrap();
+        let got = analyze(&g, sql, conf(&case["conf"]));
+        if let Some(diff) = compare(sql, &got, case) {
+            failures.push(format!("{sql} {}: {diff}", case["conf"]));
+        }
+        match &got {
+            Ok(a) => {
+                let mut bad = Vec::new();
+                dangling(a.plan.root(), &mut bad);
+                failures.extend(bad.into_iter().map(|b| format!("{sql}: dangling {b}")));
+                // Grouped ordering keeps the lowered sorts: the same sorts,
+                // keys, directions and null ordering, all bound.
+                let lowered = parse_and_lower(sql, &ParserOptions::default(), SourceId(0))
+                    .expect("a passing case lowers");
+                let mut low = Vec::new();
+                sorts_of(lowered.root(), &mut low);
+                let mut high = Vec::new();
+                sorts_of(a.plan.root(), &mut high);
+                if low.len() != high.len() {
+                    failures.push(format!(
+                        "{sql}: {} lowered sorts, {} resolved",
+                        low.len(),
+                        high.len()
+                    ));
+                } else {
+                    for (i, (l, h)) in low.iter().zip(&high).enumerate() {
+                        if l.0.len() != h.0.len() {
+                            failures.push(format!(
+                                "{sql}: sort {i} has {} keys lowered, {} resolved",
+                                l.0.len(),
+                                h.0.len()
+                            ));
+                        }
+                        if l.0 != h.0 {
+                            failures.push(format!(
+                                "{sql}: sort {i} directions/nulls {l:?} lowered, {h:?} resolved"
+                            ));
+                        }
+                        if l.1 != h.1 {
+                            failures.push(format!(
+                                "{sql}: sort {i} global {} lowered, {} resolved",
+                                l.1, h.1
+                            ));
+                        }
+                    }
+                }
+                let mut unbound = Vec::new();
+                unbound_sorts(a.plan.root(), &mut unbound);
+                failures.extend(unbound.into_iter().map(|b| format!("{sql}: {b}")));
+            }
+            Err(e) => {
+                raised.insert(e.error.error_class().name());
+            }
+        }
+    }
+    // Representative grouped orderings resolve to their grouping or
+    // aggregate attributes, with direction and nulls kept.
+    for (sql, want) in [
+        (
+            "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1",
+            vec![(
+                "m".to_owned(),
+                SortDirection::Ascending,
+                NullOrdering::NullsFirst,
+            )],
+        ),
+        (
+            "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1 DESC, c",
+            vec![
+                (
+                    "m".to_owned(),
+                    SortDirection::Descending,
+                    NullOrdering::NullsLast,
+                ),
+                (
+                    "c".to_owned(),
+                    SortDirection::Ascending,
+                    NullOrdering::NullsFirst,
+                ),
+            ],
+        ),
+        (
+            "SELECT x m, count(*) c FROM g GROUP BY x HAVING count(*) > 3 ORDER BY sum(l)",
+            vec![(
+                "sum(l)".to_owned(),
+                SortDirection::Ascending,
+                NullOrdering::NullsFirst,
+            )],
+        ),
+    ] {
+        let got = analyze(&g, sql, ResolutionConf::default()).expect("representative resolves");
+        assert_eq!(top_sort_keys(got.plan.root()), want, "{sql}");
+    }
+    assert!(
+        failures.is_empty(),
+        "{} failures:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+    for class in [
+        "ARITHMETIC_OVERFLOW",
+        "DIVIDE_BY_ZERO",
+        "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
+        "NON_FOLDABLE_ARGUMENT",
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE",
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL",
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE",
+    ] {
+        assert!(raised.contains(class), "{class} not raised");
+    }
+}
+
 /// SQL text inside a plan resolves through the front end, which keeps it
 /// redacted; its parse errors keep their span and never echo a secret.
 #[test]
@@ -616,4 +859,66 @@ fn window_goldens_resolve_to_a_fixed_point() {
     assert_eq!(pending, ["rows_sliding", "range_offset"]);
     assert_eq!(resolved, 67);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Foldable expressions the analyzer evaluates for typing: casts to string
+/// and date, datetime functions of literals and function-form `concat`.
+/// Spark folds them at analysis time, so a `LIMIT`, a legacy day count and
+/// a `round` scale read them; only what Spark itself calls not foldable (a
+/// column, a nondeterministic call) stays `IS_UNFOLDABLE`.
+#[test]
+fn foldable_limits_day_counts_and_scales_match_spark() {
+    let g = goldens();
+    let ansi = ResolutionConf::default();
+    let legacy = conf(&serde_json::json!({ "spark.sql.ansi.enabled": "false" }));
+    // A `LIMIT` over a foldable expression resolves, whatever the analyzer
+    // evaluates it to (Spark returns rows for both).
+    for sql in [
+        "SELECT * FROM t LIMIT length(CAST(12 AS STRING))",
+        "SELECT * FROM t LIMIT year(DATE'2024-01-01') - 2020",
+        "SELECT * FROM t LIMIT length(concat('a', 'b'))",
+    ] {
+        assert!(
+            analyze(&g, sql, ansi).is_ok(),
+            "{sql}: Spark returns rows, the analyzer must resolve it"
+        );
+    }
+    // A column in a `LIMIT` is what Spark calls not foldable.
+    let err = analyze(&g, "SELECT * FROM t LIMIT a", ansi).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+    // Foldable but beyond what the folder evaluates: Spark folds them, so
+    // they resolve here and the downstream folders read them
+    // (`current_date` is deterministic to Spark, so foldable, but the
+    // folder has no query clock; `md5` is deterministic too, but outside
+    // the folder's pure families).
+    for sql in [
+        "SELECT * FROM t LIMIT year(current_date)",
+        "SELECT * FROM t LIMIT length(md5('a'))",
+    ] {
+        assert!(
+            analyze(&g, sql, ansi).is_ok(),
+            "{sql}: Spark folds it, so it must resolve"
+        );
+    }
+    // The legacy day count reads through a cast to string, shown as the
+    // integer Spark's `StringLiteralCoercion` folds it to.
+    let a = analyze(&g, "SELECT date_add(dt, CAST(1 AS STRING)) FROM n", legacy)
+        .expect("Spark folds the legacy day count");
+    assert_eq!(a.output[0].name, "date_add(dt, 1)");
+    assert_eq!(a.output[0].data_type.simple_string(), "date");
+    // `round` reads its scale through function-form `concat`.
+    let a = analyze(&g, "SELECT round(dc, length(concat('a','b'))) FROM n", ansi)
+        .expect("Spark folds the round scale");
+    assert_eq!(a.output[0].data_type.simple_string(), "decimal(11,2)");
+    // A `concat` argument that needs its own cast folds through it too.
+    let a = analyze(
+        &g,
+        "SELECT round(dc, length(concat('a', CAST(1 AS STRING)))) FROM n",
+        ansi,
+    )
+    .expect("Spark folds the round scale through the cast");
+    assert_eq!(a.output[0].data_type.simple_string(), "decimal(11,2)");
 }

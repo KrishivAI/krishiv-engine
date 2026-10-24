@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Loom models of reserve/release accounting and the cooperative spill
 //! protocol (request, ack, give-up). Bounded for CI:
-//! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release`.
+//! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release loom_model::`.
 
 use std::sync::Arc;
 use std::time::Duration;

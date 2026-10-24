@@ -29,11 +29,6 @@ use serde_json::Value;
 /// `KRISHIV_UNSUPPORTED_FEATURE` until then.
 const PENDING: [&str; 3] = ["rows_sliding", "range_offset", "rows_current_to_end"];
 
-/// Known gaps outside window functions, with the error they give until
-/// fixed: `ntile(1 + 1)` folds in the analyzer now, but execution still
-/// needs an int literal bucket count.
-const GAPS: [(&str, &str); 1] = [("ntile_folded", "KRISHIV_UNSUPPORTED_FEATURE")];
-
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/fixtures/spark-4.2.0/window-goldens.json");
@@ -230,15 +225,6 @@ fn check(s: &Session, tables: &[&str], case: &Value) -> String {
         conf.unset(k).unwrap();
     }
     let id = case["id"].as_str().unwrap();
-    if let Some((_, class)) = GAPS.iter().find(|(g, _)| *g == id) {
-        match result {
-            Err(e) if e.error_class().name() == *class => {}
-            other => {
-                let _ = writeln!(out, "{id}: known gap changed (update GAPS): {other:?}");
-            }
-        }
-        return out;
-    }
     if PENDING.contains(&id) {
         match result {
             Err(e) if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" => {}

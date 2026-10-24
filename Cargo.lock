@@ -1628,6 +1628,7 @@ dependencies = [
  "codspeed-criterion-compat",
  "insta",
  "krishiv-common",
+ "krishiv-functions",
  "krishiv-kernels",
  "krishiv-plan",
  "krishiv-sql",
