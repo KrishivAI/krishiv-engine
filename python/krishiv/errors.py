@@ -30,6 +30,7 @@ _TEMPLATES = {
     "UNSUPPORTED_OPERATION": "<operation> is not supported.",
     "VALUE_NOT_ALLOWED": "Value for `<arg_name>` has to be amongst the following values: <allowed_values>.",
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
+    "WRONG_NUM_COLUMNS": "Function `<func_name>` should take at least <num_cols> columns.",
     "UNSUPPORTED_DATA_TYPE": "Unsupported DataType `<data_type>`.",
     "DIFFERENT_ROWS": "<error_msg>",
     "DIFFERENT_SCHEMA": "Schemas do not match.\n--- actual\n+++ expected\n<error_msg>",
