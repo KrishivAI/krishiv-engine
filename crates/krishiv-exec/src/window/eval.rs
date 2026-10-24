@@ -740,10 +740,8 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
             | WindowFunction::CumeDist => width(&out, rows),
             // The ranks, then the result.
             WindowFunction::PercentRank => rows * 4 + width(&out, rows),
-            // Frames or partitions, counts and positions, picks, gather
-            // indices, and the result.
             WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
-                rows * (8 + 8 + 16 + 16) + width(&out, rows).max(rows * 16)
+                super::frames::offset_cost(f, rows)?
             }
             WindowFunction::Aggregate(a) if f.shape()? == Shape::Frame => {
                 super::frames::cost(a, f, rows)?

@@ -210,16 +210,23 @@ fn tree(
     if n > 0 {
         t.update(&leaves, args, &Weights::Const(1))?;
     }
+    drop(leaves);
     // Parents in ranges whose children are all built: `[lo, hi)` with
-    // `2 * lo >= hi`.
+    // `2 * lo >= hi`, merged a chunk of parents at a time so the copied
+    // states stay within one chunk's scratch.
     let mut hi = n;
     while hi > 1 {
         let lo = hi.div_ceil(2).max(1);
-        let parents: Vec<u32> = (lo..hi).map(id).collect::<Result<_>>()?;
-        for side in 0..2 {
-            let children: Vec<u32> = (lo..hi).map(|k| id(2 * k + side)).collect::<Result<_>>()?;
-            let states = t.state(&children)?;
-            t.merge(&parents, &states)?;
+        for start in (lo..hi).step_by(CHUNK) {
+            let end = start.saturating_add(CHUNK).min(hi);
+            let parents: Vec<u32> = (start..end).map(id).collect::<Result<_>>()?;
+            for side in 0..2 {
+                let children: Vec<u32> = (start..end)
+                    .map(|k| id(2 * k + side))
+                    .collect::<Result<_>>()?;
+                let states = t.state(&children)?;
+                t.merge(&parents, &states)?;
+            }
         }
         hi = lo;
     }
@@ -479,10 +486,42 @@ pub(super) fn cost(a: &AggregateExpr, f: &WindowFunctionPlan, rows: usize) -> Re
     } else {
         let state = accumulator(a, true)?.group_bytes();
         // The tree's nodes and each row's result (an in-order fold needs
-        // the results only), leaf ids, and one chunk of merges or rows.
+        // the results only), the leaf ids (then the result ids), and one
+        // chunk of merges: a chunk of parents while the tree is built, of
+        // frame nodes while it is queried, or of rows in order.
         3 * rows * state + rows * 4 + CHUNK * (8 + 2 * state.max(16))
     };
     Ok(frames + inputs + method + width(&out, rows))
+}
+
+/// The bytes `lag`/`lead`/`nth_value` (function `f`) hold at most over
+/// `rows` rows: the input as views (strings and binaries are copied into
+/// views; other types are slices of the input), the default column too for
+/// `lag`/`lead`, the counting rows, the picks, the frames (`nth_value`),
+/// the gather's locations and indices, and the result.
+pub(super) fn offset_cost(f: &WindowFunctionPlan, rows: usize) -> Result<usize> {
+    let (out, _) = f.output()?;
+    let (data_type, with_default, frames) = match &f.function {
+        WindowFunction::Offset {
+            data_type, default, ..
+        } => (data_type, default.is_some(), 0),
+        WindowFunction::NthValue { data_type, .. } => (data_type, false, rows * 8),
+        other => return Err(internal(format!("{other:?} is not an offset function"))),
+    };
+    let views = |t: &DataType| match t {
+        DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View
+        | DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView => rows * 16 + rows.div_ceil(8),
+        _ => 0,
+    };
+    let sources = views(data_type) * (1 + usize::from(with_default));
+    let counting = (rows + 1) * 4 + rows * 4;
+    let picks = rows * size_of::<(Option<u32>, Option<u32>)>();
+    let gather = rows * size_of::<(usize, usize)>() * 2;
+    Ok(sources + counting + picks + frames + gather + width(&out, rows))
 }
 
 /// Column `c` of each slice, strings and binaries as views (gathering

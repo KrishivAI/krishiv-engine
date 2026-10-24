@@ -1862,6 +1862,148 @@ fn frame_costs_cover_their_outputs() {
     }
 }
 
+/// `lag`/`lead`/`nth_value` reserve their peak: the input copied into
+/// views (strings), the default column's views too, the counting rows, the
+/// picks, the gather's locations and indices, the frames (`nth_value`) and
+/// the result, all alive while the result is gathered.
+#[test]
+fn offset_function_costs_cover_their_scratch() {
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    let lag_s = WindowFunction::Offset {
+        input: 4,
+        offset: -1,
+        default: Some(4),
+        ignore_nulls: false,
+        data_type: DataType::Utf8View,
+    };
+    let nth_s = WindowFunction::NthValue {
+        input: 4,
+        n: 2,
+        ignore_nulls: true,
+        data_type: DataType::Utf8View,
+    };
+    let cases = [
+        (
+            lag_s,
+            rows(FrameBound::Offset(-1), FrameBound::Offset(-1)),
+            true,
+            0,
+        ),
+        (nth_s, WindowFrame::whole(FrameUnits::Rows), false, 8),
+        (
+            nth(3, false),
+            WindowFrame::whole(FrameUnits::Rows),
+            false,
+            8,
+        ),
+    ];
+    for (function, frame, with_default, frames) in cases {
+        let window = plan(vec![(function.clone(), frame)], true);
+        let (b, part, peer) = sorted_unit(10_000, 100);
+        let n = b.num_rows();
+        let slice = super::eval::Slice {
+            batch: b.data(),
+            offset: 0,
+            len: n,
+            part_start: &part,
+            peer_start: &peer,
+        };
+        let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+        // What an array holds of its own: views share the input's value
+        // buffers.
+        let own = |a: &ArrayRef| {
+            let shared: usize = match a.data_type() {
+                DataType::Utf8View => a
+                    .as_string_view()
+                    .data_buffers()
+                    .iter()
+                    .map(arrow_buffer::Buffer::capacity)
+                    .sum(),
+                _ => 0,
+            };
+            Array::get_array_memory_size(a.as_ref()) - shared
+        };
+        let output: usize = out.iter().map(own).sum();
+        let views = match &function {
+            WindowFunction::Offset { .. } | WindowFunction::NthValue { input: 4, .. } => {
+                let v = super::eval::to_view(b.data().column(4)).unwrap();
+                own(&v) * (1 + usize::from(with_default))
+            }
+            _ => 0,
+        };
+        // Counting rows, picks, gather locations and indices, frames.
+        let scratch = n * (8 + 16 + 32 + frames);
+        let held = output + views + scratch;
+        let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
+        let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+        assert!(cost >= held, "{function:?}: reserved {cost} < held {held}");
+    }
+}
+
+/// A segment tree over more rows than a chunk is built a chunk of parents
+/// at a time and still gives each frame's value.
+#[test]
+fn trees_larger_than_a_chunk_match_the_reference() {
+    use AggregateFunction::{Count, Max, Min, Sum};
+    let frame = WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::Offset(-3),
+        upper: FrameBound::Offset(2),
+    };
+    let functions: Vec<(WindowFunction, WindowFrame)> = [Sum, Count, Min, Max]
+        .into_iter()
+        .map(|f| (agg(f, Some(3)), frame))
+        .collect();
+    let n = i64::try_from(2 * super::frames::CHUNK + 777).unwrap();
+    let data: Vec<Row> = (0..n)
+        .map(|i| (Some(0), Some(i), i, (i % 13 != 0).then_some(i % 97 - 40)))
+        .collect();
+    let window = plan(functions, true);
+    let b = batch(&data);
+    let part: Vec<bool> = (0..data.len()).map(|i| i == 0).collect();
+    let peer = vec![true; data.len()];
+    let slice = super::eval::Slice {
+        batch: b.data(),
+        offset: 0,
+        len: data.len(),
+        part_start: &part,
+        peer_start: &peer,
+    };
+    let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+    let got: Vec<String> = data
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let cells: Vec<String> = out.iter().map(|c| cell(c, i)).collect();
+            format!("{}: {}", r.2, cells.join(", "))
+        })
+        .collect();
+    // Each row's frame of non-NULL values, directly (one partition).
+    let want: Vec<String> = (0..data.len())
+        .map(|i| {
+            let lo = i.saturating_sub(3);
+            let hi = (i + 3).min(data.len());
+            let vals: Vec<i64> = data[lo..hi].iter().filter_map(|r| r.3).collect();
+            let show = |v: Option<i64>| v.map_or_else(|| "null".to_owned(), |v| v.to_string());
+            let sum = (!vals.is_empty()).then(|| vals.iter().sum::<i64>());
+            let count = i64::try_from(vals.len()).unwrap();
+            format!(
+                "{}: {}, {}, {}, {}",
+                data[i].2,
+                show(sum),
+                count,
+                show(vals.iter().min().copied()),
+                show(vals.iter().max().copied())
+            )
+        })
+        .collect();
+    assert_eq!(got, want);
+}
+
 /// A frame with offsets over a partition larger than memory is refused
 /// (evaluating it from disk is a later part of P2-T055), never answered
 /// short.
