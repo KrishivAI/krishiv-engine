@@ -8,7 +8,8 @@ PySpark's signatures) and re-exported here; the ones that are not plain calls ar
 
 A name in ``__all__`` is a function with PySpark's signature that builds the registry call; it does not mean the
 engine runs every one end to end. The ranking and window-only functions (``row_number``, ``rank``,
-``dense_rank``, ``cume_dist``, ``percent_rank``, ``ntile``, ``first_value``, ``last_value``) are exported, but
+``dense_rank``, ``cume_dist``, ``percent_rank``, ``ntile``, ``first_value``, ``last_value``, ``lag``, ``lead``,
+``nth_value``) are exported, but
 ``Column`` has no ``over`` yet, so they cannot be used. ``coalesce`` / ``nvl`` with a string literal and
 ``sha2`` over a string fail in the engine's analyzer."""
 

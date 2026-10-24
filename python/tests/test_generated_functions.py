@@ -127,7 +127,7 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 COLUMN_ANNOTATIONS = {"ColumnOrName", "Column", "ColumnOrName | float", "ColumnOrName | int"}
-LITERALS = {"int": 7, "str": "s_x", "bool": True}
+LITERALS = {"int": 7, "str": "s_x", "bool": True, "Any": 3}
 
 
 def _sample(name: str, p: inspect.Parameter) -> tuple[list[Any], list[tuple[str, Any]]]:
@@ -173,6 +173,9 @@ PYSPARK_CALLS = [
     (lambda: F.date_add("d", "n"), ("call", "date_add", (("col", "d"), ("col", "n")))),
     (lambda: F.first("a"), ("call", "first", (("col", "a"), ("lit", False)))),
     (lambda: F.first("a", True), ("call", "first", (("col", "a"), ("lit", True)))),
+    (lambda: F.lag("a"), ("call", "lag", (("col", "a"), ("lit", 1)))),
+    (lambda: F.lead("a", 2, 0), ("call", "lead", (("col", "a"), ("lit", 2), ("lit", 0)))),
+    (lambda: F.nth_value("a", 2), ("call", "nth_value", (("col", "a"), ("lit", 2), ("lit", False)))),
     (lambda: F.first_value("a"), ("call", "first_value", (("col", "a"),))),
     (lambda: F.last_value("a", True), ("call", "last_value", (("col", "a"), ("lit", True)))),
     (lambda: F.lpad("s", 5, "-"), ("call", "lpad", (("col", "s"), ("lit", 5), ("lit", "-")))),

@@ -7,6 +7,8 @@ Each wrapper calls the registry function by name; the registry resolves it when 
 
 from __future__ import annotations
 
+from typing import Any
+
 from krishiv.sql._function_support import (
     ColumnOrName,
     _at_least,
@@ -87,9 +89,11 @@ __all__ = [
     "isnan",
     "isnotnull",
     "isnull",
+    "lag",
     "last",
     "last_value",
     "lcase",
+    "lead",
     "least",
     "length",
     "ln",
@@ -108,6 +112,7 @@ __all__ = [
     "nanvl",
     "negative",
     "now",
+    "nth_value",
     "ntile",
     "nullif",
     "nullifzero",
@@ -500,6 +505,11 @@ def isnull(col: ColumnOrName) -> Column:
     return _call("isnull", _named(col, "col"))
 
 
+def lag(col: ColumnOrName, offset: int = 1, default: Any | None = None) -> Column:
+    """Calls the registry function ``lag``."""
+    return _call("lag", _named(col, "col"), _lit(offset, "offset"), *_opt(_lit, default, "default"))
+
+
 def last(col: ColumnOrName, ignorenulls: bool = False) -> Column:
     """Calls the registry function ``last``."""
     return _call("last", _named(col, "col"), _lit(ignorenulls, "ignorenulls"))
@@ -513,6 +523,11 @@ def last_value(col: ColumnOrName, ignoreNulls: bool | Column | None = None) -> C
 def lcase(str: ColumnOrName) -> Column:
     """Calls the registry function ``lcase``."""
     return _call("lcase", _named(str, "str"))
+
+
+def lead(col: ColumnOrName, offset: int = 1, default: Any | None = None) -> Column:
+    """Calls the registry function ``lead``."""
+    return _call("lead", _named(col, "col"), _lit(offset, "offset"), *_opt(_lit, default, "default"))
 
 
 def least(*cols: ColumnOrName) -> Column:
@@ -604,6 +619,11 @@ def negative(col: ColumnOrName) -> Column:
 def now() -> Column:
     """Calls the registry function ``now``."""
     return _call("now")
+
+
+def nth_value(col: ColumnOrName, offset: int, ignoreNulls: bool = False) -> Column:
+    """Calls the registry function ``nth_value``."""
+    return _call("nth_value", _named(col, "col"), _lit(offset, "offset"), _lit(ignoreNulls, "ignoreNulls"))
 
 
 def ntile(n: int) -> Column:

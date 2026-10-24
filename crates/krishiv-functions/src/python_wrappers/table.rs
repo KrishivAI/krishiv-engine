@@ -171,6 +171,12 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, ignorenulls: bool = False",
         ));
     }
+    for name in ["lag", "lead"] {
+        rows.push(Row::new(
+            name,
+            "col: ColumnOrName, offset: int = 1, default: Any = None",
+        ));
+    }
     for name in ["first_value", "last_value"] {
         rows.push(Row::new(
             name,
@@ -205,6 +211,10 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("greatest", "*cols: ColumnOrName").at_least(2),
         Row::new("least", "*cols: ColumnOrName").at_least(2),
         Row::new("ntile", "n: int"),
+        Row::new(
+            "nth_value",
+            "col: ColumnOrName, offset: int, ignoreNulls: bool = False",
+        ),
         Row::new(
             "nvl2",
             "col1: ColumnOrName, col2: ColumnOrName, col3: ColumnOrName",
