@@ -844,3 +844,174 @@ fn legacy_identifier_clause_takes_only_the_function_syntax() {
         parse_query(sql, &legacy).unwrap();
     }
 }
+
+#[test]
+fn variant_paths() {
+    use ast::VariantPathPartKind as K;
+    let path = |sql: &str| {
+        let ExprKind::VariantGet(_, p) = first_expr(sql).kind else {
+            panic!("{sql}")
+        };
+        p.parts.into_iter().map(|p| p.kind).collect::<Vec<_>>()
+    };
+    let parts = path("SELECT v:a.b[0]['k'][c].d");
+    assert!(matches!(&parts[0], K::Field(i) if i.value == "a"));
+    assert!(matches!(&parts[1], K::Field(i) if i.value == "b"));
+    assert!(matches!(&parts[2], K::Index(i) if i == "0"));
+    assert!(matches!(&parts[3], K::Key(k) if k == "k"));
+    assert!(matches!(&parts[4], K::Name(i) if i.value == "c"));
+    assert!(matches!(&parts[5], K::Field(i) if i.value == "d"));
+    assert!(matches!(&path("SELECT v:['name']")[0], K::Key(_)));
+    assert!(matches!(&path("SELECT v:[3].id")[0], K::Index(_)));
+    assert!(matches!(&path("SELECT v:`field-name`")[0], K::Field(i) if i.quoted));
+    // A cast applies to the whole extraction; extractions chain.
+    let ExprKind::Cast { expr, .. } = first_expr("SELECT v:a.b::DECIMAL(5, 2)").kind else {
+        panic!()
+    };
+    assert!(matches!(expr.kind, ExprKind::VariantGet(..)));
+    let ExprKind::VariantGet(inner, _) = first_expr("SELECT v:a:b").kind else {
+        panic!()
+    };
+    assert!(matches!(inner.kind, ExprKind::VariantGet(..)));
+    let sql = "SELECT v:a, v:b::INT + w:c[1] AS d FROM t";
+    let q = ok(sql);
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!()
+    };
+    assert_eq!(s.projection[1].expr.span.text(sql), "v:b::INT + w:c[1]");
+    for sql in [
+        "SELECT v:*",
+        "SELECT v:",
+        "SELECT v:a.",
+        "SELECT v:[a]",
+        "SELECT v:['a'",
+        "SELECT v:[1.5]",
+        "SELECT v:a[]",
+    ] {
+        assert_eq!(class(sql), "PARSE_SYNTAX_ERROR", "{sql}");
+    }
+    // Colons of struct types are still types.
+    ok("SELECT CAST(x AS STRUCT<a: INT, b:STRING>)");
+    assert!(unsupported("SELECT v:a FROM t").contains("variant paths"));
+}
+
+fn transform_of(sql: &str) -> ast::TransformSelect {
+    let q = ok(sql);
+    match q.body.kind {
+        SetExprKind::Transform(t) => *t,
+        other => panic!("{sql}: {other:?}"),
+    }
+}
+
+#[test]
+fn transform_clauses() {
+    use ast::{TransformKind, TransformOutput as O};
+    let sql = "SELECT TRANSFORM(a, b + 1) USING 'cat' AS (x, y) FROM t WHERE a > 1";
+    let t = transform_of(sql);
+    assert_eq!(
+        (t.kind, t.script.as_str()),
+        (TransformKind::SelectTransform, "cat")
+    );
+    assert_eq!(t.select.projection.len(), 2);
+    assert!(t.select.selection.is_some() && t.select.from.is_some());
+    assert!(matches!(&t.output, Some(O::Names(n)) if n.len() == 2));
+    assert_eq!(t.span.text(sql), sql);
+    let t = transform_of(
+        "SELECT TRANSFORM(a) USING 'cat' AS (x int, y array<string> NOT NULL COMMENT 'c') FROM t",
+    );
+    let Some(O::Columns(columns)) = &t.output else {
+        panic!()
+    };
+    assert!(columns.len() == 2 && columns[1].not_null && columns[1].comment.is_some());
+    let t = transform_of("SELECT TRANSFORM(a) USING 'cat' AS x, y FROM t GROUP BY a HAVING true");
+    assert!(matches!(&t.output, Some(O::Names(n)) if n.len() == 2));
+    assert!(t.select.group_by.is_some() && t.select.having.is_some());
+    let t = transform_of(
+        "SELECT TRANSFORM(a) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' NULL DEFINED AS 'x' \
+         RECORDWRITER 'w' USING 'cat' AS (a) ROW FORMAT DELIMITED LINES TERMINATED BY '\\n' \
+         RECORDREADER 'r' FROM t",
+    );
+    assert!(t.input_format.is_some() && t.output_format.is_some());
+    assert_eq!(
+        (t.record_writer.as_deref(), t.record_reader.as_deref()),
+        (Some("w"), Some("r"))
+    );
+    assert!(
+        transform_of("SELECT TRANSFORM(a) USING 'cat'")
+            .output
+            .is_none()
+    );
+    assert_eq!(
+        transform_of("MAP a, b USING 'cat' AS (a, b) FROM t").kind,
+        TransformKind::Map
+    );
+    assert_eq!(
+        transform_of("REDUCE a USING 'cat' FROM t").kind,
+        TransformKind::Reduce
+    );
+    // After `FROM`, in a body of the statement.
+    let q = ok("FROM t SELECT TRANSFORM(a) USING 'cat' WHERE a > 1 SELECT b");
+    let SetExprKind::FromStatement(f) = q.body.kind else {
+        panic!()
+    };
+    assert!(matches!(f.bodies[0].body.kind, SetExprKind::Transform(_)));
+    assert!(matches!(f.bodies[1].body.kind, SetExprKind::Select(_)));
+    // Without `USING` and friends it is the function `transform`.
+    for sql in [
+        "SELECT TRANSFORM(a) FROM t",
+        "SELECT TRANSFORM(arr, x -> x + 1) FROM t",
+        "SELECT TRANSFORM(a)",
+    ] {
+        ok(sql);
+        assert!(matches!(ok(sql).body.kind, SetExprKind::Select(_)), "{sql}");
+    }
+    assert!(unsupported("SELECT TRANSFORM(a) USING 'cat' FROM t").contains("TRANSFORM"));
+}
+
+#[test]
+fn transform_errors() {
+    for sql in [
+        "SELECT TRANSFORM(b AS c) USING 'cat'",
+        "SELECT TRANSFORM(b c) USING 'cat'",
+        "SELECT TRANSFORM(a) ROW FORMAT DELIMITED FROM t",
+        "SELECT TRANSFORM(a) USING cat",
+        "SELECT TRANSFORM(a) USING 'cat' AS ()",
+        "SELECT TRANSFORM(a) USING 'cat' AS (x, y int)",
+        "SELECT TRANSFORM() USING 'cat'",
+        "SELECT TRANSFORM(a) USING 'cat' QUALIFY true",
+    ] {
+        assert_eq!(class(sql), "PARSE_SYNTAX_ERROR", "{sql}");
+    }
+    for (sql, expected) in [
+        (
+            "SELECT TRANSFORM(DISTINCT a) USING 'cat'",
+            "UNSUPPORTED_FEATURE.TRANSFORM_DISTINCT_ALL",
+        ),
+        (
+            "SELECT TRANSFORM(ALL a) USING 'cat'",
+            "UNSUPPORTED_FEATURE.TRANSFORM_DISTINCT_ALL",
+        ),
+        (
+            "MAP DISTINCT a USING 'cat'",
+            "UNSUPPORTED_FEATURE.TRANSFORM_DISTINCT_ALL",
+        ),
+        (
+            "SELECT TRANSFORM(a) ROW FORMAT SERDE 'x.Y' USING 'cat'",
+            "UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE",
+        ),
+        (
+            "SELECT TRANSFORM(a) USING 'cat' AS (a) ROW FORMAT SERDE 'x.Y'",
+            "UNSUPPORTED_FEATURE.TRANSFORM_NON_HIVE",
+        ),
+        (
+            "SELECT TRANSFORM(a) ROW FORMAT DELIMITED LINES TERMINATED BY '@' USING 'cat'",
+            "_LEGACY_ERROR_TEMP_0064",
+        ),
+        (
+            "SELECT TRANSFORM(a) USING 'cat' AS (a nosuchtype)",
+            "UNSUPPORTED_DATATYPE",
+        ),
+    ] {
+        assert_eq!(class(sql), expected, "{sql}");
+    }
+}

@@ -35,7 +35,8 @@ use crate::ast::{
     SampleType, Select, SelectItem, Set, SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier,
     SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
     TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TableSample,
-    TemporalClause, TemporalKind, TimeZone, Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
+    TemporalClause, TemporalKind, TimeZone, TransformKind, TransformOutput, TransformSelect,
+    Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -3366,8 +3367,8 @@ impl<'s> Parser<'s> {
 
     fn query_primary(&mut self) -> PR<SetExpr> {
         let start = self.start();
-        let kind = if self.kw_at(0, "SELECT") {
-            SetExprKind::Select(Box::new(self.select(start, true)?))
+        let kind = if self.any_kw_at(0, &["SELECT", "MAP", "REDUCE"]) {
+            return self.select_kind(start, true);
         } else if self.kw_at(0, "FROM") {
             return self.query_from_first();
         } else if self.kw_at(0, "VALUES") {
@@ -3410,17 +3411,10 @@ impl<'s> Parser<'s> {
         let start = self.start();
         let from = self.clause_from()?;
         let mut bodies = vec![];
-        while self.kw_at(0, "SELECT") {
+        while self.any_kw_at(0, &["SELECT", "MAP", "REDUCE"]) {
             let body_start = self.start();
-            let select = self.select(body_start, false)?;
-            let span = select.span;
-            let mut q = Self::bare_query(
-                SetExpr {
-                    kind: SetExprKind::Select(Box::new(select)),
-                    span,
-                },
-                body_start,
-            );
+            let body = self.select_kind(body_start, false)?;
+            let mut q = Self::bare_query(body, body_start);
             self.organization(&mut q)?;
             q.span = self.span_from(body_start);
             bodies.push(q);
@@ -3479,8 +3473,40 @@ impl<'s> Parser<'s> {
 
     /// A query specification from `SELECT` on; `with_from` reads a `FROM`
     /// clause (a body of a `FROM ... SELECT` statement has none).
+    /// A `SELECT` body: a query specification, or a `TRANSFORM` when its
+    /// parentheses are followed by what only a transform has.
+    fn select_kind(&mut self, start: usize, with_from: bool) -> PR<SetExpr> {
+        if self.any_kw_at(0, &["MAP", "REDUCE"]) || self.transform_follows() {
+            let t = self.transform_select(start, with_from)?;
+            let span = t.span;
+            return Ok(SetExpr {
+                kind: SetExprKind::Transform(Box::new(t)),
+                span,
+            });
+        }
+        let select = self.select(start, with_from)?;
+        let span = select.span;
+        Ok(SetExpr {
+            kind: SetExprKind::Select(Box::new(select)),
+            span,
+        })
+    }
+
     fn select(&mut self, start: usize, with_from: bool) -> PR<Select> {
         let (hints, quantifier, projection) = self.select_head()?;
+        self.select_tail(start, with_from, (hints, quantifier, projection), true)
+    }
+
+    /// The clauses of a query specification after its select list;
+    /// `qualify` admits `QUALIFY` (a transform has none).
+    fn select_tail(
+        &mut self,
+        start: usize,
+        with_from: bool,
+        head: (Vec<Hint>, Option<SetQuantifier>, Vec<SelectItem>),
+        qualify: bool,
+    ) -> PR<Select> {
+        let (hints, quantifier, projection) = head;
         let from = if with_from && self.kw_at(0, "FROM") {
             Some(self.clause_from()?)
         } else {
@@ -3495,7 +3521,11 @@ impl<'s> Parser<'s> {
         };
         let having = self.opt_clause("HAVING")?;
         let windows = self.window_clause()?;
-        let qualify = self.opt_clause("QUALIFY")?;
+        let qualify = if qualify {
+            self.opt_clause("QUALIFY")?
+        } else {
+            None
+        };
         Ok(Select {
             hints,
             quantifier,
@@ -3509,6 +3539,173 @@ impl<'s> Parser<'s> {
             qualify,
             span: self.span_from(start),
         })
+    }
+
+    /// Whether the `SELECT` here starts a `TRANSFORM`: `TRANSFORM (...)`
+    /// followed by a row format, a record writer or `USING` (else it calls
+    /// the function `transform`).
+    fn transform_follows(&self) -> bool {
+        if !(self.kw_at(0, "SELECT") && self.kw_at(1, "TRANSFORM") && self.sym_at(2, Sym::LParen)) {
+            return false;
+        }
+        let mut depth = 0_usize;
+        for (i, t) in self.toks.iter().enumerate().skip(self.pos + 2) {
+            match t.kind {
+                TokenKind::Sym(Sym::LParen) => depth += 1,
+                TokenKind::Sym(Sym::RParen) => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let n = i + 1 - self.pos;
+                        return self.kw_at(n, "USING")
+                            || self.kw_at(n, "RECORDWRITER")
+                            || self.kw_at(n, "ROW") && self.kw_at(n + 1, "FORMAT");
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// `SELECT TRANSFORM (inputs)`, `MAP inputs` or `REDUCE inputs`, the
+    /// script clauses, and the clauses of a query specification.
+    #[inline(never)]
+    fn transform_select(&mut self, start: usize, with_from: bool) -> PR<TransformSelect> {
+        let (kind, quantifier, inputs) = if self.eat_kw("SELECT") {
+            self.expect_kw("TRANSFORM")?;
+            self.expect_sym(Sym::LParen)?;
+            let quantifier = self.set_quantifier();
+            let inputs = self.comma_sep(Self::expr)?;
+            self.expect_sym(Sym::RParen)?;
+            (TransformKind::SelectTransform, quantifier, inputs)
+        } else {
+            let kind = if self.kw_at(0, "MAP") {
+                TransformKind::Map
+            } else {
+                TransformKind::Reduce
+            };
+            self.bump();
+            let quantifier = self.set_quantifier();
+            (kind, quantifier, self.comma_sep(Self::expr)?)
+        };
+        let input_format = self.opt_script_row_format()?;
+        let record_writer = self.opt_record_class("RECORDWRITER")?;
+        self.expect_kw("USING")?;
+        let script = self.string_after()?;
+        let output = if self.eat_kw("AS") {
+            Some(self.transform_output()?)
+        } else {
+            None
+        };
+        let output_format = self.opt_script_row_format()?;
+        let record_reader = self.opt_record_class("RECORDREADER")?;
+        let projection = inputs
+            .into_iter()
+            .map(|expr| SelectItem {
+                span: expr.span,
+                expr,
+                alias: None,
+            })
+            .collect();
+        let select = self.select_tail(start, with_from, (vec![], None, projection), false)?;
+        Ok(TransformSelect {
+            kind,
+            quantifier,
+            input_format,
+            record_writer,
+            script,
+            output,
+            output_format,
+            record_reader,
+            select,
+            span: self.span_from(start),
+        })
+    }
+
+    fn opt_script_row_format(&mut self) -> PR<Option<RowFormat>> {
+        if self.kw_at(0, "ROW") && self.kw_at(1, "FORMAT") {
+            self.row_format().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// `RECORDWRITER 'class'` or `RECORDREADER 'class'`.
+    fn opt_record_class(&mut self, kw: &str) -> PR<Option<String>> {
+        if self.eat_kw(kw) {
+            self.string_after().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// The `AS` of a transform: names or typed columns, with or without
+    /// parentheses.
+    fn transform_output(&mut self) -> PR<TransformOutput> {
+        let paren = self.eat_sym(Sym::LParen);
+        let mut names = vec![];
+        let mut columns: Vec<StructField> = vec![];
+        loop {
+            let start = self.start();
+            let name = self.name_part(true)?;
+            // A type follows unless the clause ends or goes on.
+            let typed = self.kind(0) == Some(TokenKind::Word)
+                && !(self.kw_at(0, "ROW") && self.kw_at(1, "FORMAT"))
+                && !self.any_kw_at(
+                    0,
+                    &[
+                        "FROM",
+                        "WHERE",
+                        "GROUP",
+                        "HAVING",
+                        "WINDOW",
+                        "LATERAL",
+                        "RECORDREADER",
+                        "UNION",
+                        "EXCEPT",
+                        "MINUS",
+                        "INTERSECT",
+                        "ORDER",
+                        "LIMIT",
+                        "OFFSET",
+                        "CLUSTER",
+                        "DISTRIBUTE",
+                        "SORT",
+                    ],
+                );
+            if typed {
+                let data_type = self.data_type()?;
+                let not_null = self.kw_at(0, "NOT") && self.kw_at(1, "NULL");
+                self.pos += 2 * usize::from(not_null);
+                let comment = if self.eat_kw("COMMENT") {
+                    Some(self.string_after()?)
+                } else {
+                    None
+                };
+                columns.push(StructField {
+                    name,
+                    data_type,
+                    not_null,
+                    comment,
+                    span: self.span_from(start),
+                });
+            } else {
+                names.push(name);
+            }
+            if !self.eat_sym(Sym::Comma) {
+                break;
+            }
+        }
+        if paren {
+            self.expect_sym(Sym::RParen)?;
+        }
+        if names.is_empty() {
+            Ok(TransformOutput::Columns(columns))
+        } else if columns.is_empty() {
+            Ok(TransformOutput::Names(names))
+        } else {
+            self.fail()
+        }
     }
 
     fn opt_clause(&mut self, kw: &str) -> PR<Option<Expr>> {

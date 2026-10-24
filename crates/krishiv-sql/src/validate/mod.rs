@@ -16,6 +16,7 @@
 //! | a string unit in `TIMESTAMPADD` and friends | `INVALID_PARAMETER_VALUE.DATETIME_UNIT` |
 //! | `IN ()` | `INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE` |
 //! | `LIKE ANY ()`, a frame bound that is not a literal | `_LEGACY_ERROR_TEMP_0064` |
+//! | `TRANSFORM`: a quantifier, a SerDe, a line terminator other than `\n` | see [`transform`] |
 //! | pipe operators and result clause combinations | see [`pipe`] |
 //! | `NEAREST BY` joins, `TABLE(...)` arguments | see [`relation`] |
 //! | `TABLESAMPLE` with no method, an out-of-range percentage, `SYSTEM` misuse, byte and column forms | see [`sample`] |
@@ -37,6 +38,7 @@ pub(crate) mod literal;
 mod pipe;
 mod relation;
 mod sample;
+mod transform;
 mod types;
 
 use std::collections::HashSet;
@@ -365,6 +367,7 @@ impl Checker<'_> {
             SetExprKind::Values(v) => self.inline_table(&v.rows, v.alias.as_ref(), v.span),
             SetExprKind::Pipe(p) => self.pipe(p),
             SetExprKind::DynamicTable(d) => self.expr(&d.expr),
+            SetExprKind::Transform(t) => self.transform(t),
             _ => Ok(()),
         }
     }
@@ -748,6 +751,7 @@ impl Checker<'_> {
             ExprKind::Literal(l) => self.literal(l, e.span),
             ExprKind::Field(inner, _)
             | ExprKind::Collate(inner, _)
+            | ExprKind::VariantGet(inner, _)
             | ExprKind::Unary(_, inner)
             | ExprKind::Not(inner)
             | ExprKind::Nested(inner)

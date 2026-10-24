@@ -392,6 +392,7 @@ impl Lowerer {
     fn body(&mut self, body: &SetExpr) -> R<LogicalPlan> {
         Ok(match &body.kind {
             SetExprKind::Pipe(_) => return Err(unsupported("pipe operators", body.span)),
+            SetExprKind::Transform(_) => return Err(unsupported("TRANSFORM", body.span)),
             SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
             SetExprKind::Query(inner) => self.query(inner)?,
             SetExprKind::DynamicTable(_) => return Err(unsupported("IDENTIFIER()", body.span)),
@@ -1278,6 +1279,7 @@ impl Lowerer {
             ExprKind::Parameter(_) => return Err(unsupported("parameter markers", sp)),
             ExprKind::Subscript(..) => return Err(unsupported("subscripts", sp)),
             ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
+            ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
             ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
             ExprKind::Lambda { .. } => return Err(unsupported("lambda functions", sp)),
             ExprKind::Row(_) | ExprKind::Struct(_) => {

@@ -937,6 +937,56 @@ pub enum SetExprKind {
     DynamicTable(DynamicName),
     /// `input |> operator |> ...`.
     Pipe(Pipe),
+    /// `SELECT TRANSFORM (...) USING 'script' ...`, `MAP ...` or `REDUCE ...`.
+    Transform(Box<TransformSelect>),
+}
+
+/// A script transformation, parsed and not run: `SELECT TRANSFORM (inputs)
+/// [ROW FORMAT ...] [RECORDWRITER 'class'] USING 'script' [AS output]
+/// [ROW FORMAT ...] [RECORDREADER 'class'] [FROM ...] [WHERE ...] ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TransformSelect {
+    /// Which keyword introduced it.
+    pub kind: TransformKind,
+    /// `DISTINCT` or `ALL`, which Spark parses and rejects.
+    pub quantifier: Option<SetQuantifier>,
+    /// How rows are written to the script.
+    pub input_format: Option<RowFormat>,
+    /// `RECORDWRITER 'class'`.
+    pub record_writer: Option<String>,
+    /// The script, `USING 'script'`.
+    pub script: String,
+    /// `AS (columns)`: names, or names with types.
+    pub output: Option<TransformOutput>,
+    /// How rows are read from the script.
+    pub output_format: Option<RowFormat>,
+    /// `RECORDREADER 'class'`.
+    pub record_reader: Option<String>,
+    /// The inputs as the select list (no aliases), with the `FROM` clause
+    /// and the filtering and grouping clauses after the transform.
+    pub select: Select,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The keyword that starts a [`TransformSelect`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
+pub enum TransformKind {
+    SelectTransform,
+    Map,
+    Reduce,
+}
+
+/// The `AS` clause of a [`TransformSelect`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TransformOutput {
+    /// Column names; the columns are strings.
+    Names(Vec<Ident>),
+    /// Column names with types.
+    Columns(Vec<StructField>),
 }
 
 /// A query term followed by pipe operators (`|>`, or `|` before an
@@ -1685,6 +1735,38 @@ pub struct LateralView {
     pub span: Span,
 }
 
+/// The path after the `:` of a variant extraction.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VariantPath {
+    /// The parts, in order (never empty).
+    pub parts: Vec<VariantPathPart>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// One part of a [`VariantPath`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VariantPathPart {
+    /// What it is.
+    pub kind: VariantPathPartKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`VariantPathPart`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum VariantPathPartKind {
+    /// A field name: the first part, or `.name`.
+    Field(Ident),
+    /// `['key']`.
+    Key(String),
+    /// `[0]`.
+    Index(String),
+    /// `[name]`, after the first part.
+    Name(Ident),
+}
+
 /// The type suffix of a numeric literal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -1977,6 +2059,8 @@ pub enum ExprKind {
     Field(Box<Expr>, Ident),
     /// `expr COLLATE name`.
     Collate(Box<Expr>, ObjectName),
+    /// `expr:path` on a variant (`v:a.b[0]`, `v:['key']`).
+    VariantGet(Box<Expr>, Box<VariantPath>),
     /// `expr[index]`.
     Subscript(Box<Expr>, Box<Expr>),
     /// A unary operator.

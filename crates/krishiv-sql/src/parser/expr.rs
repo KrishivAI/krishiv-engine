@@ -11,7 +11,8 @@ use crate::ast::{
     BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, Function, FunctionArg, Ident,
     Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment, NumKind, ObjectName,
     Partitioning, SelectItem, Span, TableArgument, TableArgumentPartitioning, TableArgumentSource,
-    Truth, UnaryOp, WhenClause, WindowFrame, WindowRef, WindowSpec,
+    Truth, UnaryOp, VariantPath, VariantPathPart, VariantPathPartKind, WhenClause, WindowFrame,
+    WindowRef, WindowSpec,
 };
 use crate::keywords::{NOT_FUNCTION_WORD, PRIMARY_WORD, RESERVED_WORD};
 use crate::lexer::{Sym, TokenKind, unescape_string};
@@ -640,6 +641,49 @@ impl Parser<'_> {
         self.postfix(e, start)
     }
 
+    /// `:path` after a variant: `name`, `['key']` or `[0]`, then `.name`,
+    /// `['key']`, `[0]` or `[name]` parts.
+    #[inline(never)]
+    fn variant_path(&mut self) -> PR<VariantPath> {
+        use VariantPathPartKind as K;
+        let start = self.start();
+        self.expect_sym(Sym::Colon)?;
+        let mut parts = vec![];
+        loop {
+            let begin = self.start();
+            let first = parts.is_empty();
+            let kind = if first && self.is_ident_at(0, true) || !first && self.eat_sym(Sym::Dot) {
+                K::Field(self.any_ident()?)
+            } else if self.eat_sym(Sym::LBracket) {
+                let kind = if self.single_string_at(0) {
+                    K::Key(self.string_lit().unwrap_or_default())
+                } else if self.kind(0) == Some(TokenKind::Number(NumKind::Int)) {
+                    let text = self.text(0).to_owned();
+                    self.bump();
+                    K::Index(text)
+                } else if !first && self.is_ident_at(0, true) {
+                    K::Name(self.any_ident()?)
+                } else {
+                    return self.fail();
+                };
+                self.expect_sym(Sym::RBracket)?;
+                kind
+            } else if first {
+                return self.fail();
+            } else {
+                break;
+            };
+            parts.push(VariantPathPart {
+                kind,
+                span: self.span_from(begin),
+            });
+        }
+        Ok(VariantPath {
+            parts,
+            span: self.span_from(start),
+        })
+    }
+
     #[inline(never)]
     fn postfix(&mut self, mut e: Expr, start: usize) -> PR<Expr> {
         let mut height = self.peak - self.depth;
@@ -654,6 +698,8 @@ impl Parser<'_> {
                 ExprKind::Field(boxed(e), self.any_ident()?)
             } else if self.eat_kw("COLLATE") {
                 ExprKind::Collate(boxed(e), self.table_name()?)
+            } else if self.sym_at(0, Sym::Colon) {
+                ExprKind::VariantGet(boxed(e), Box::new(self.variant_path()?))
             } else if self.eat_sym(Sym::DoubleColon) {
                 let keyword = self.pos;
                 let (data_type, h) = self.measured(Self::data_type)?;

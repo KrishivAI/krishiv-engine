@@ -272,6 +272,7 @@ fn children<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
     match &e.kind {
         ExprKind::Field(a, _)
         | ExprKind::Collate(a, _)
+        | ExprKind::VariantGet(a, _)
         | ExprKind::Unary(_, a)
         | ExprKind::Not(a)
         | ExprKind::Nested(a)
