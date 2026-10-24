@@ -70,7 +70,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 3;
+pub const ENCODING_VERSION: u16 = 4;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -805,6 +805,44 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 projections.iter().for_each(|p| self.exprs(p));
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
+            }
+            PlanNode::Pivot {
+                pivot_columns,
+                values,
+                aggregates,
+                ..
+            } => {
+                self.u8(25);
+                self.exprs(pivot_columns);
+                self.len(values.len());
+                for v in values {
+                    self.exprs(&v.exprs);
+                    self.u8(u8::from(v.alias.is_some()));
+                    if let Some(alias) = &v.alias {
+                        self.str(alias);
+                    }
+                }
+                self.exprs(aggregates);
+            }
+            PlanNode::Unpivot {
+                value_columns,
+                name_column,
+                column_sets,
+                include_nulls,
+                ..
+            } => {
+                self.u8(26);
+                self.strs(value_columns);
+                self.str(name_column);
+                self.len(column_sets.len());
+                for s in column_sets {
+                    self.exprs(&s.columns);
+                    self.u8(u8::from(s.alias.is_some()));
+                    if let Some(alias) = &s.alias {
+                        self.str(alias);
+                    }
+                }
+                self.u8(u8::from(*include_nulls));
             }
         }
     }

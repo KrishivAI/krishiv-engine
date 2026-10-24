@@ -72,11 +72,13 @@ mod fold;
 mod fold_ops;
 mod hints;
 mod ops;
+mod pivot;
 mod resolve;
 mod setops;
 mod subquery;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod unpivot;
 mod windows;
 
 use std::collections::{BTreeMap, BTreeSet};

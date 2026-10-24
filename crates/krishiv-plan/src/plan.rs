@@ -280,6 +280,63 @@ pub enum PlanNode {
         /// The output attributes, aligned with each projection.
         output: Vec<BoundColumn>,
     },
+    /// `PIVOT (aggregates FOR columns IN (values))`, unresolved (Spark's
+    /// `Pivot`): the analyzer rewrites it to an [`PlanNode::Aggregate`]
+    /// grouping every input column the pivot columns and the aggregates do
+    /// not reference, with one aggregate per (value, aggregate) pair of the
+    /// form `agg(if(pivot_col <=> value, expr, NULL))` (Spark's
+    /// `PivotTransformer`, always its non-`PivotFirst` path, which gives the
+    /// same results).
+    Pivot {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The pivot columns: one unresolved column reference, or several
+        /// (standing for a struct, as Spark's `CreateStruct` does).
+        pivot_columns: Vec<Arc<Expr>>,
+        /// The pivot values: one expression per pivot column, with an
+        /// optional alias (as Spark's parser builds them, `Alias`d when
+        /// aliased; several columns stand for a struct value).
+        values: Vec<PivotValue>,
+        /// The aggregate expressions, each with an optional alias
+        /// ([`crate::ExprNode::Alias`]).
+        aggregates: Vec<Arc<Expr>>,
+    },
+    /// `UNPIVOT ... (values FOR name IN (columns))`, unresolved (Spark's
+    /// `Unpivot`): the analyzer rewrites it to an [`PlanNode::Expand`]
+    /// (one projection per column set) and, without `INCLUDE NULLS`, a
+    /// [`PlanNode::Filter`] dropping rows whose values are all null (as
+    /// Spark's `UnpivotTransformer` and parser do).
+    Unpivot {
+        /// Input.
+        input: Arc<LogicalPlan>,
+        /// The value column names.
+        value_columns: Vec<String>,
+        /// The name column.
+        name_column: String,
+        /// The unpivoted column sets, with optional aliases.
+        column_sets: Vec<UnpivotColumnSet>,
+        /// `INCLUDE NULLS`.
+        include_nulls: bool,
+    },
+}
+
+/// One value of a [`PlanNode::Pivot`]: one expression per pivot column,
+/// with an optional alias.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PivotValue {
+    /// One foldable expression per pivot column.
+    pub exprs: Vec<Arc<Expr>>,
+    /// The value alias.
+    pub alias: Option<String>,
+}
+
+/// One column set of a [`PlanNode::Unpivot`]: `(cols) [AS alias]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnpivotColumnSet {
+    /// The set's columns: unresolved column references.
+    pub columns: Vec<Arc<Expr>>,
+    /// The set alias: the name column's value for this set.
+    pub alias: Option<String>,
 }
 
 /// The operation of a [`PlanNode::SetOp`].
@@ -602,6 +659,8 @@ impl LogicalPlan {
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
+            | PlanNode::Pivot { input, .. }
+            | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
@@ -636,6 +695,8 @@ impl LogicalPlan {
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
             | PlanNode::Expand { input, .. }
+            | PlanNode::Pivot { input, .. }
+            | PlanNode::Unpivot { input, .. }
             | PlanNode::Window { input, .. }
             | PlanNode::ReplicateRows { input, .. } => f(input),
             PlanNode::Join { left, right, .. } | PlanNode::SetOp { left, right, .. } => {
@@ -698,6 +759,20 @@ impl LogicalPlan {
             },
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
             PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
+            PlanNode::Pivot {
+                pivot_columns,
+                values,
+                aggregates,
+                ..
+            } => {
+                pivot_columns.iter().for_each(&mut *f);
+                values.iter().flat_map(|v| v.exprs.iter()).for_each(&mut *f);
+                aggregates.iter().for_each(f);
+            }
+            PlanNode::Unpivot { column_sets, .. } => column_sets
+                .iter()
+                .flat_map(|s| s.columns.iter())
+                .for_each(f),
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -761,6 +836,23 @@ impl LogicalPlan {
             PlanNode::Expand { projections, .. } => {
                 projections.iter_mut().flatten().for_each(f);
             }
+            PlanNode::Pivot {
+                pivot_columns,
+                values,
+                aggregates,
+                ..
+            } => {
+                pivot_columns.iter_mut().for_each(&mut *f);
+                values
+                    .iter_mut()
+                    .flat_map(|v| v.exprs.iter_mut())
+                    .for_each(&mut *f);
+                aggregates.iter_mut().for_each(f);
+            }
+            PlanNode::Unpivot { column_sets, .. } => column_sets
+                .iter_mut()
+                .flat_map(|s| s.columns.iter_mut())
+                .for_each(f),
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -896,6 +988,8 @@ impl LogicalPlan {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Pivot { .. }
+                | PlanNode::Unpivot { .. }
                 | PlanNode::Distinct { .. } => {
                     return None;
                 }
