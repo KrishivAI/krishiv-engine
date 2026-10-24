@@ -668,6 +668,11 @@ pub(super) fn inputs(
             };
             operator_types(builtin, args, call.ansi(), call.decimal_loss()).map(|t| t.casts)
         }
+        // `equal_null`: the casts of the null-safe `<=>` operator.
+        Inputs::NullSafeEqual => {
+            operator_types(Builtin::EqNullSafe, args, call.ansi(), call.decimal_loss())
+                .map(|t| t.casts)
+        }
         _ => match inputs.expected(call) {
             Some(types) => {
                 let casts = declared(&types, args)?;

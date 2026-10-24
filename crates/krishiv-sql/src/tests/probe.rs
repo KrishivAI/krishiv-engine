@@ -170,8 +170,16 @@ fn agrees_with_spark_on_the_type_string_fixture() {
     for case in doc["ddl"].as_array().unwrap() {
         let ddl = case["ddl"].as_str().unwrap();
         if ddl.to_ascii_lowercase().contains(" collate ") {
-            // Collated string types arrive with `COLLATE` (P2-T075b).
-            assert!(parse_data_type(ddl, &d).is_err(), "{ddl}");
+            // Collated string types parse (their `COLLATE` is DDL syntax)
+            // but do not resolve yet: `krishiv-types` rejects them as
+            // unsupported.
+            let t = parse_data_type(ddl, &d).unwrap_or_else(|e| panic!("{ddl}: {}", e.error));
+            let e = t.to_data_type().unwrap_err();
+            assert_eq!(
+                e.error_class().name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{ddl}"
+            );
             continue;
         }
         let ours = parse_data_type(ddl, &d);

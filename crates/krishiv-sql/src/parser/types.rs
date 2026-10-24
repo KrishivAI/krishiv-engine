@@ -280,8 +280,37 @@ impl Parser<'_> {
                 },
                 None => p.primitive_type(word)?,
             };
+            // `COLLATE ...` after a `STRING`, `CHAR` or `VARCHAR` type
+            // (Spark's `collateClause`). With no collation name after it,
+            // the type stays bare and `COLLATE` is extra input, as in
+            // Spark.
+            let collation = if !quoted
+                && matches!(&kind, DataTypeKind::Primitive { name, .. }
+                    if is_kw(name, "STRING")
+                        || is_kw(name, "CHARACTER")
+                        || is_kw(name, "CHAR")
+                        || is_kw(name, "VARCHAR"))
+                && p.kw_at(0, "COLLATE")
+            {
+                let save = p.checkpoint();
+                p.bump();
+                match p.table_name() {
+                    Ok(name) => {
+                        p.commit(save);
+                        Some(name)
+                    }
+                    Err(Fail::Syntax) => {
+                        p.restore(save);
+                        None
+                    }
+                    Err(fatal) => return Err(fatal),
+                }
+            } else {
+                None
+            };
             Ok(DataTypeSpec {
                 kind,
+                collation,
                 span: p.span_from(start),
             })
         })

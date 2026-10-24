@@ -1807,3 +1807,6 @@ proptest! {
         prop_assert_eq!(got, want);
     }
 }
+
+#[path = "group_limit_tests.rs"]
+mod group_limit_tests;

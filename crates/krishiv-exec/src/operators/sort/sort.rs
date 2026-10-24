@@ -38,6 +38,7 @@ use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::operators::{global_ref, local_mut};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
+use crate::window::{GroupLimitPlan, RankLike, Ranker};
 
 /// Default bound on the runs one merge reads at once.
 pub const DEFAULT_MAX_MERGE_FAN_IN: usize = 64;
@@ -78,6 +79,8 @@ pub struct SortMetrics {
     pub final_fan_in: u64,
     /// Hash buckets the rows were split into (1: none).
     pub buckets: u64,
+    /// Rows a window group limit dropped from the sorted batches.
+    pub rows_pruned: u64,
 }
 
 #[derive(Debug, Default)]
@@ -88,6 +91,51 @@ struct Counters {
     passes: AtomicU64,
     fan_in: AtomicU64,
     buckets: AtomicU64,
+    pruned: AtomicU64,
+}
+
+/// A window group limit applied to each sorted batch (the `Partial` mode of
+/// [`crate::window::WindowGroupLimit`]): rows past the limit within their
+/// batch are past it in their partition.
+#[derive(Debug)]
+struct Prune {
+    /// The partitioning keys, a prefix of the sort keys (none: one
+    /// partition).
+    partition: Option<Arc<KeyEncoder>>,
+    function: RankLike,
+    limit: u64,
+}
+
+/// Sorted batches a driver looks at before keeping pruning only if it
+/// drops at least a tenth of their rows.
+const PRUNE_PROBE_BATCHES: u32 = 8;
+
+/// One driver's pruning so far.
+#[derive(Debug, Default)]
+struct PruneStats {
+    batches: u32,
+    rows_in: u64,
+    rows_out: u64,
+    /// Too few rows dropped: pruning stopped.
+    off: bool,
+}
+
+impl PruneStats {
+    /// Counts a pruned batch the sink took: `rows` looked at (none: not
+    /// pruned), `dropped` of them dropped.
+    fn count(&mut self, rows: usize, dropped: usize) {
+        if rows == 0 {
+            return;
+        }
+        self.batches = self.batches.saturating_add(1);
+        self.rows_in = self.rows_in.saturating_add(rows as u64);
+        self.rows_out = self.rows_out.saturating_add((rows - dropped) as u64);
+        if self.batches >= PRUNE_PROBE_BATCHES
+            && self.rows_out.saturating_mul(10) > self.rows_in.saturating_mul(9)
+        {
+            self.off = true;
+        }
+    }
 }
 
 /// `ORDER BY` as a pipeline breaker: the sink side of one pipeline and the
@@ -108,6 +156,7 @@ pub struct Sort {
     counters: Arc<Counters>,
     /// The keys to bucket by ([`Sort::with_hash_buckets`]).
     bucket_keys: Option<Arc<KeyEncoder>>,
+    prune: Option<Prune>,
 }
 
 impl Sort {
@@ -128,7 +177,114 @@ impl Sort {
             max_fan_in: DEFAULT_MAX_MERGE_FAN_IN,
             counters: Arc::default(),
             bucket_keys: None,
+            prune: None,
         })
+    }
+
+    /// Drops, from each sorted batch, the rows past `limit`'s rank within
+    /// their partition (a window group limit's `Partial` mode); the sort's
+    /// keys must be `limit`'s partitioning keys ascending, then its
+    /// ordering. A driver stops pruning when its first batches lose less
+    /// than a tenth of their rows.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` when the sort's keys are not `limit`'s, as
+    /// [`Sort::new`] for the partitioning keys.
+    pub fn with_group_limit(mut self, keys: &[SortKey], limit: &GroupLimitPlan) -> Result<Self> {
+        if !limit.sorted_by(keys) || limit.limit == 0 {
+            return Err(internal(
+                "a window group limit over a sort by other keys".to_owned(),
+            ));
+        }
+        let partition = limit.partition_keys();
+        self.prune = Some(Prune {
+            partition: (!partition.is_empty())
+                .then(|| KeyEncoder::new(&self.schema, &partition))
+                .transpose()?,
+            function: limit.function,
+            limit: limit.limit,
+        });
+        Ok(self)
+    }
+
+    /// `sorted` without its rows past the group limit (see
+    /// [`Sort::with_group_limit`]).
+    /// Returns the batch and how many rows were looked at (0 without
+    /// pruning) and dropped; the caller counts them once the batch is
+    /// taken ([`PruneStats::count`]).
+    fn prune(
+        &self,
+        sorted: SortedBatch,
+        stats: &PruneStats,
+    ) -> Result<(SortedBatch, usize, usize)> {
+        let Some(p) = &self.prune else {
+            return Ok((sorted, 0, 0));
+        };
+        if stats.off || !sorted.batch.is_unweighted() {
+            return Ok((sorted, 0, 0));
+        }
+        let partition = p
+            .partition
+            .as_ref()
+            .map(|e| e.encode(sorted.batch.data()))
+            .transpose()?;
+        let mut ranker = Ranker::new(p.function, p.limit);
+        let peers = ranker.needs_peers();
+        let mut kept: Vec<u32> = Vec::with_capacity(sorted.order.len());
+        let mut bounds: Vec<u32> = Vec::with_capacity(sorted.bounds.len());
+        bounds.push(0);
+        // Bucket by bucket: rows of different buckets are of different
+        // partitions.
+        for w in sorted.bounds.windows(2) {
+            let mut prev: Option<usize> = None;
+            for &i in &sorted.order[w[0] as usize..w[1] as usize] {
+                let at = i as usize;
+                let (part_start, peer_start) = match prev {
+                    None => (true, true),
+                    Some(p) => (
+                        partition.as_ref().is_some_and(|r| r.row(at) != r.row(p)),
+                        // Equal full keys: equal partition and ordering.
+                        peers && sorted.rows.row(at) != sorted.rows.row(p),
+                    ),
+                };
+                if ranker.keep(part_start, peer_start) {
+                    kept.push(i);
+                }
+                prev = Some(at);
+            }
+            // At most the batch's rows, which fit in `u32` (`order`).
+            bounds.push(
+                u32::try_from(kept.len())
+                    .map_err(|_| internal("a batch has more than u32::MAX rows".to_owned()))?,
+            );
+        }
+        let n = sorted.order.len();
+        let dropped = n - kept.len();
+        if dropped == 0 {
+            return Ok((sorted, n, 0));
+        }
+        let indices: Vec<(usize, usize)> = kept.iter().map(|&i| (0, i as usize)).collect();
+        let batch = interleave_batches(&self.schema, &[&sorted.batch], &indices)?;
+        let bytes = kept
+            .iter()
+            .map(|&i| sorted.rows.row(i as usize).as_ref().len())
+            .sum();
+        let mut rows = self.encoder.empty_rows(kept.len(), bytes);
+        for &i in &kept {
+            rows.push(sorted.rows.row(i as usize));
+        }
+        let m = u32::try_from(kept.len())
+            .map_err(|_| internal("a batch has more than u32::MAX rows".to_owned()))?;
+        Ok((
+            SortedBatch {
+                batch,
+                rows,
+                order: (0..m).collect(),
+                bounds,
+            },
+            n,
+            dropped,
+        ))
     }
 
     /// Bounds the runs one merge reads at once (at least 2); more runs are
@@ -174,6 +330,7 @@ impl Sort {
             merge_passes: c.passes.load(Ordering::Relaxed),
             final_fan_in: c.fan_in.load(Ordering::Relaxed),
             buckets: c.buckets.load(Ordering::Relaxed),
+            rows_pruned: c.pruned.load(Ordering::Relaxed),
         }
     }
 }
@@ -275,6 +432,7 @@ struct SortLocal {
     signal: Arc<SpillSignal>,
     batch_rows: usize,
     bucketing: Option<Arc<Bucketing>>,
+    prune: PruneStats,
 }
 
 /// A combined driver's state, in combine order.
@@ -939,6 +1097,7 @@ impl Sink for Sort {
             signal: Arc::clone(memory.signal()),
             batch_rows: ctx.query().config().batch_size.max(1),
             bucketing: g.bucketing.clone(),
+            prune: PruneStats::default(),
         }))
     }
 
@@ -963,7 +1122,10 @@ impl Sink for Sort {
         } else {
             input
         };
-        let sorted = SortedBatch::new(input, &self.encoder, l.bucketing.as_deref())?;
+        let (sorted, looked_at, dropped) = self.prune(
+            SortedBatch::new(input, &self.encoder, l.bucketing.as_deref())?,
+            &l.prune,
+        )?;
         let bytes = sorted.bytes();
         let extra = if self.spill.is_some() {
             headroom(row_bytes, l.batch_rows).saturating_sub(l.buffer.headroom.size())
@@ -982,6 +1144,11 @@ impl Sink for Sort {
         b.row_bytes = row_bytes;
         b.batches.push(Arc::new(sorted));
         self.counters.rows.fetch_add(rows as u64, Ordering::Relaxed);
+        // Counted once taken: a batch refused for memory comes back.
+        l.prune.count(looked_at, dropped);
+        self.counters
+            .pruned
+            .fetch_add(dropped as u64, Ordering::Relaxed);
         if self.spill.is_some() {
             l.signal.set_spillable_bytes(b.reservation.size());
         }

@@ -57,6 +57,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
+    &WINDOW_GROUP_LIMIT_THRESHOLD,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -184,8 +185,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     ),
     (
+        "spark.sql.optimizer.windowGroupLimitThreshold",
+        &WINDOW_GROUP_LIMIT_THRESHOLD,
+    ),
+    (
         "krishiv.runtimeFilter.bloom.minApplicationRows",
         &RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
+    ),
+    (
+        "krishiv.sql.optimizer.windowGroupLimitThreshold",
+        &WINDOW_GROUP_LIMIT_THRESHOLD,
     ),
     (
         "spark.sql.optimizer.runtime.bloomFilter.enabled",
@@ -779,4 +788,17 @@ pub static RUNTIME_FILTER_ADAPTIVE_MIN_ROWS: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
+};
+
+/// `spark.sql.optimizer.windowGroupLimitThreshold`.
+pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.optimizer.windowGroupLimitThreshold",
+    value_type: ValueType::Int,
+    default: Some(ConfigValue::Int(1000)),
+    doc: "Highest rank a filter on row_number, rank or dense_rank may keep for the rows past it \
+          in each window partition to be dropped before the window is evaluated (Spark's window \
+          group limit); -1 turns it off. Results are the same either way.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
 };

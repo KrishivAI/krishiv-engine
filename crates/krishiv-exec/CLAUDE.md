@@ -39,7 +39,9 @@ aggregate `Accumulator`, one row at a time in Spark's order; decimal `sum`/`avg`
 evaluated), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
 them back in order; a partition that does not fit is copied to its own file; failed/cancelled steps leave the state
 failed, never a short result), `stream.rs` (a partition evaluated from disk: lead and trailing readers, bounded
-memory), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
+memory), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
+the sort also uses to prune each sorted batch while that pays; the planner infers it for a filter over the window,
+`planner/window.rs`), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the

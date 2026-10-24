@@ -57,6 +57,7 @@ use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, SourceNode};
 use crate::planner::subquery::{Slot, SubquerySink, SubqueryValue, WithSubqueries};
+use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -250,7 +251,12 @@ impl Instantiation<'_> {
     /// adds report under it.
     fn node(&mut self, n: &PhysNode) -> Result<Built> {
         let built = self.untagged(n)?;
-        Ok(match self.ids.get(&std::ptr::from_ref(n).addr()) {
+        Ok(self.tag(n, built))
+    }
+
+    /// `built` (the operators of `n`) under `n`'s `EXPLAIN ANALYZE` id.
+    fn tag(&self, n: &PhysNode, built: Built) -> Built {
+        match self.ids.get(&std::ptr::from_ref(n).addr()) {
             Some(&id) => Built {
                 schema: built.schema,
                 node: Arc::new(Tagged {
@@ -259,7 +265,7 @@ impl Instantiation<'_> {
                 }),
             },
             None => built,
-        })
+        }
     }
 
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
@@ -344,6 +350,35 @@ impl Instantiation<'_> {
                     self.spill.clone(),
                 )?;
                 Ok(operator(input, Arc::new(op)))
+            }
+            PhysNode::WindowGroupLimit { input, limit } => {
+                // Directly over its sort, the sort also prunes each sorted
+                // batch (the limit's `Partial` mode).
+                let input = match input.as_ref() {
+                    sort_node @ PhysNode::Sort { input, keys } if limit.sorted_by(keys) => {
+                        let buckets = hash_buckets(input, keys);
+                        let input = self.node(input)?;
+                        let sort = Sort::new(Arc::clone(&input.schema), keys, self.spill.clone())?
+                            .with_group_limit(keys, limit)?;
+                        let built = match buckets {
+                            // As a plain sort: a hash exchange below lowers
+                            // into the sort's buckets.
+                            Some(columns) => {
+                                bucketed(input, Arc::new(sort.with_hash_buckets(columns)?))
+                            }
+                            None => {
+                                let sort = Arc::new(sort);
+                                breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort)
+                            }
+                        };
+                        // Built here, not through `node`: tag it as `node`
+                        // does, for `EXPLAIN ANALYZE`.
+                        self.tag(sort_node, built)
+                    }
+                    other => self.node(other)?,
+                };
+                let op = group_limit_op(&input.schema, limit)?;
+                Ok(operator(input, op))
             }
             PhysNode::TopN { input, keys, limit } => {
                 let input = self.node(input)?;
@@ -675,6 +710,17 @@ pub(crate) fn replicate_op(
         Arc::clone(schema),
         Arc::new(Compiled(e)),
     ))
+}
+
+/// The exact window group limit `plan` over batches of `schema`.
+pub(crate) fn group_limit_op(
+    schema: &SchemaRef,
+    plan: &GroupLimitPlan,
+) -> Result<Arc<WindowGroupLimit>> {
+    Ok(Arc::new(WindowGroupLimit::new(
+        Arc::clone(schema),
+        plan.clone(),
+    )?))
 }
 
 pub(crate) fn sort_op(
