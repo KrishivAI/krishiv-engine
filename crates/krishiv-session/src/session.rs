@@ -224,7 +224,7 @@ impl SessionBuilder {
         let (config, _) = Config::from_pairs(self.pairs)?;
         let executor: Arc<dyn Executor> = match self.executor {
             Some(e) => e,
-            None => TokioExecutor::new(&ExecutorConfig::default())?,
+            None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
         let memory: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::from_config(&config));
         let io =

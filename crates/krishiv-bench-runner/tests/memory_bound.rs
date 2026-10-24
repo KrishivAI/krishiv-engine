@@ -122,6 +122,24 @@ fn cgroup_available() -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// The cgroup cap for a child with resident-set bound `bound`, or `None` where `systemd-run --user`
+/// does not work (CI runners). Says which, since a run without the cap only compares the peak
+/// RSS; `KRISHIV_TEST_REQUIRE_CGROUP=1` makes a missing cgroup a failure.
+fn cgroup_cap(bound: u64) -> Option<u64> {
+    let cap = cgroup_available().then_some(bound + PAGE_CACHE_ALLOWANCE);
+    match cap {
+        Some(c) => eprintln!("cgroup cap applied: MemoryMax={c} B (RSS bound {bound} B)"),
+        None => {
+            eprintln!("cgroup cap NOT applied (no systemd-run --user): RSS bound {bound} B only");
+            assert!(
+                std::env::var_os("KRISHIV_TEST_REQUIRE_CGROUP").is_none(),
+                "KRISHIV_TEST_REQUIRE_CGROUP is set but systemd-run --user does not work"
+            );
+        }
+    }
+    cap
+}
+
 /// The runner child, killed (with its cgroup scope) when dropped.
 struct Runner {
     child: Child,
@@ -130,7 +148,7 @@ struct Runner {
 }
 
 impl Runner {
-    fn start(data: &Path, limit: u64, threads: u64, cap: Option<u64>) -> Self {
+    fn start(data: &Path, limit: u64, threads: u64, cap: Option<u64>, extra: &[&str]) -> Self {
         let bin = env!("CARGO_BIN_EXE_krishiv-bench-runner");
         let args = [
             "--data",
@@ -153,6 +171,7 @@ impl Runner {
         };
         let mut child = cmd
             .args(args)
+            .args(extra)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -204,12 +223,12 @@ fn peak_rss_stays_within_the_bound_while_queries_spill() {
     // writes (reclaimable once written back, but charged meanwhile), which is
     // not resident memory: the cap allows for it on top of the bound. The
     // bound itself is checked on the child's peak RSS below.
-    let cap = cgroup_available().then_some(bound + PAGE_CACHE_ALLOWANCE);
+    let cap = cgroup_cap(bound);
     eprintln!(
         "memory bound {bound} B for a {LIMIT} B limit, cgroup cap: {}",
         cap.map_or_else(|| "unavailable".to_owned(), |c| c.to_string())
     );
-    let mut runner = Runner::start(dir.path(), LIMIT, THREADS, cap);
+    let mut runner = Runner::start(dir.path(), LIMIT, THREADS, cap, &[]);
     for (name, sql) in QUERIES {
         let file = dir.path().join(format!("{name}.sql"));
         std::fs::write(&file, sql).unwrap();
@@ -263,6 +282,9 @@ const LI_ROWS: i64 = 1_200_000;
 /// scans keep many reads in flight at once (as TPC-H Q21 at SF10 does on 12 threads).
 const LI_LIMIT: u64 = 96 << 20;
 const LI_THREADS: u64 = 6;
+/// `krishiv.io.blockingThreads` of the q21-shaped test: below the default, so the scans' reads
+/// (more than this many in flight) must queue for the I/O runtime's threads.
+const IO_BLOCKING: usize = 2;
 
 /// One `li` row: `(orderkey, suppkey, late)`, `late` being `receipt > commit`.
 fn li_row(i: i64) -> (i64, i64, bool) {
@@ -372,20 +394,34 @@ fn q21_shaped_expected() -> (i64, i64) {
     (count, sum)
 }
 
-/// TPC-H Q21 at SF10 was OOM-killed under a cgroup at its memory gate: the process held far more
-/// than the pool reserved, in allocator caches of the I/O runtime's blocking threads (one per
-/// local-file read in flight, unbounded). A q21-shaped query whose joins spill, on a scan that
-/// keeps many reads in flight, stays within [`rss_bound`] and returns the right result.
+/// TPC-H Q21 at SF10 was OOM-killed under the memory gate's cgroup (2816M, its driver included):
+/// the process held ~690 MiB more than the pool reserved, in the allocator caches of the I/O
+/// runtime's blocking threads (one per local-file request in flight, up to Tokio's 512). That
+/// failure is the cgroup's charge, at a scale this test does not reach (its RSS stays within
+/// [`rss_bound`] either way), so the regression check is the cause: the I/O runtime's threads
+/// stay within `krishiv.io.blockingThreads` plus its workers while a q21-shaped query whose
+/// joins spill keeps many reads in flight. The test also checks the RSS bound (and runs under a
+/// cgroup at that bound where `systemd-run --user` works) and the result.
 #[test]
 fn a_q21_shaped_spilling_join_stays_within_the_bound() {
     let dir = tempfile::tempdir().unwrap();
     write_li(dir.path());
     let bound = rss_bound(LI_LIMIT, LI_THREADS);
-    let cap = cgroup_available().then_some(bound + PAGE_CACHE_ALLOWANCE);
-    let mut runner = Runner::start(dir.path(), LI_LIMIT, LI_THREADS, cap);
+    let cap = cgroup_cap(bound);
+    let mut runner = Runner::start(
+        dir.path(),
+        LI_LIMIT,
+        LI_THREADS,
+        cap,
+        &[
+            "--conf",
+            &format!("krishiv.io.blockingThreads={IO_BLOCKING}"),
+        ],
+    );
     let file = dir.path().join("q21_shaped.sql");
     std::fs::write(&file, Q21_SHAPED).unwrap();
-    // The most threads the runner has while the query runs.
+    // The most I/O-runtime threads (workers and blocking, all named `krishiv-io`) the runner has
+    // while the query runs.
     let tasks = format!("/proc/{}/task", runner.child.id());
     let done = Arc::new(AtomicBool::new(false));
     let watch = {
@@ -393,7 +429,15 @@ fn a_q21_shaped_spilling_join_stays_within_the_bound() {
         std::thread::spawn(move || {
             let mut most = 0;
             while !done.load(Ordering::Acquire) {
-                most = most.max(std::fs::read_dir(&tasks).map_or(0, Iterator::count));
+                let io = std::fs::read_dir(&tasks).map_or(0, |d| {
+                    d.filter_map(Result::ok)
+                        .filter(|t| {
+                            std::fs::read_to_string(t.path().join("comm"))
+                                .is_ok_and(|c| c.trim_end() == "krishiv-io")
+                        })
+                        .count()
+                });
+                most = most.max(io);
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             most
@@ -406,21 +450,23 @@ fn a_q21_shaped_spilling_join_stays_within_the_bound() {
         reply.starts_with("OK "),
         "{reply:?} (an empty reply is a killed runner: memory above {bound} B)"
     );
-    // Every thread that allocates keeps freed memory in its own allocator heap, so their number
-    // is bounded: compute workers, as many blocking threads, the I/O runtime's workers and as
-    // many blocking threads (its default of two each), the main and memory-timer threads, and the
-    // heap sampler of a `heap-stats` build.
-    let allowed = 2 * LI_THREADS + 2 * 2 + 2 + u64::from(cfg!(feature = "heap-stats"));
+    // Every thread that allocates keeps freed memory in its own allocator heap, so the I/O
+    // runtime's are bounded: its two workers (the default) and `IO_BLOCKING` blocking threads.
+    let allowed = 2 + IO_BLOCKING;
     assert!(
-        u64::try_from(threads).unwrap() <= allowed,
-        "{threads} threads, at most {allowed} allocate"
+        threads >= 1,
+        "the I/O runtime's threads are named krishiv-io"
+    );
+    assert!(
+        threads <= allowed,
+        "{threads} krishiv-io threads, at most {allowed}"
     );
     let peak = memory_field(&reply, "peak_rss_bytes").expect("Linux reports the peak RSS");
     let reserved = memory_field(&reply, "peak_reserved_bytes").unwrap();
     let spilled = memory_field(&reply, "spill_files").unwrap();
     eprintln!(
         "q21-shaped: peak RSS {peak} B (bound {bound} B), peak reserved {reserved} B, \
-         {spilled} spill files, {threads} threads"
+         {spilled} spill files, {threads} krishiv-io threads"
     );
     assert!(
         spilled > 0,

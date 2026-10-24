@@ -79,6 +79,7 @@ fn threaded() -> QueryRunner {
         compute_threads: 2,
         io_threads: 1,
         blocking_threads: 2,
+        io_blocking_threads: 2,
     };
     QueryRunner::new(TokioExecutor::new(&config).unwrap())
 }

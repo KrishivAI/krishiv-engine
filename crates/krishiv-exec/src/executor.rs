@@ -155,12 +155,14 @@ fn join_error(e: JoinError) -> krishiv_common::error::KrishivError {
 pub struct ExecutorConfig {
     /// Compute worker threads (default: available cores).
     pub compute_threads: usize,
-    /// I/O runtime threads (default 2): its workers, and at most as many
-    /// blocking threads (where a local file store reads, see
-    /// [`TokioExecutor::new`]).
+    /// I/O runtime worker threads (default 2).
     pub io_threads: usize,
     /// Blocking closures that may run at once (default: compute threads).
     pub blocking_threads: usize,
+    /// Most blocking threads of the I/O runtime, where a local file store
+    /// reads and writes (`krishiv.io.blockingThreads`, default 8; see
+    /// [`TokioExecutor::new`]).
+    pub io_blocking_threads: usize,
 }
 
 impl Default for ExecutorConfig {
@@ -170,7 +172,25 @@ impl Default for ExecutorConfig {
             compute_threads: cores,
             io_threads: 2,
             blocking_threads: cores,
+            io_blocking_threads: DEFAULT_IO_BLOCKING_THREADS,
         }
+    }
+}
+
+/// The default of `krishiv.io.blockingThreads`.
+const DEFAULT_IO_BLOCKING_THREADS: usize = 8;
+
+impl ExecutorConfig {
+    /// Takes the executor settings of `config`: `krishiv.io.blockingThreads`
+    /// (validated as a positive integer when it was set).
+    #[must_use]
+    pub fn with_config(mut self, config: &krishiv_common::config::Config) -> Self {
+        let blocking = config
+            .get(&krishiv_common::config::IO_BLOCKING_THREADS)
+            .and_then(krishiv_common::config::ConfigValue::as_int)
+            .and_then(|n| usize::try_from(n).ok());
+        self.io_blocking_threads = blocking.unwrap_or(DEFAULT_IO_BLOCKING_THREADS);
+        self
     }
 }
 
@@ -232,21 +252,21 @@ impl TokioExecutor {
                 .max_blocking_threads(blocking_threads),
             "krishiv-compute",
         )?;
-        // The I/O runtime's blocking pool is bounded too. A local file
-        // store reads each range on a blocking thread, so the buffer lives
-        // in that thread's allocator heap; it is freed later on a compute
-        // thread, and the page it sat in stays resident in the reading
-        // thread's heap until that thread allocates again. Tokio's default
-        // pool grows to 512 threads (TPC-H Q21 at SF10 under a 2 GiB limit
-        // ran up to ~200 threads and held ~690 MiB more resident memory than
-        // the live heap; capped at the worker count, about 200 MiB less).
-        // Reads queue for a thread instead; from the page cache two keep up
-        // with twelve decoding threads (TPC-H SF10 Q1, Q6, Q12 unchanged).
-        let io_threads = config.io_threads.max(1);
+        // The I/O runtime's blocking pool is bounded too
+        // (`io_blocking_threads`). A local file store reads each range on a
+        // blocking thread, so the buffer lives in that thread's allocator
+        // heap; it is freed later on a compute thread, and the page it sat
+        // in stays resident in the reading thread's heap until that thread
+        // allocates again. Tokio's default pool grows to 512 threads (TPC-H
+        // Q21 at SF10 under a 2 GiB limit ran up to ~200 threads and held
+        // ~690 MiB more resident memory than the live heap). Requests beyond
+        // the bound queue for a thread. Reads a scan issues outside the I/O
+        // runtime (prefetch misses, footers) still run on the compute
+        // runtime's blocking pool, bounded by `blocking_threads`.
         let io = build(
             tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(io_threads)
-                .max_blocking_threads(io_threads),
+                .worker_threads(config.io_threads.max(1))
+                .max_blocking_threads(config.io_blocking_threads.max(1)),
             "krishiv-io",
         )?;
         Ok(Arc::new(Self {
@@ -333,5 +353,68 @@ impl Executor for TokioExecutor {
             return tokio::time::Instant::now().into_std();
         }
         Instant::now()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use krishiv_common::config::Config;
+
+    use super::*;
+
+    /// The most blocking closures that ran at once on `executor`'s I/O
+    /// runtime, out of `n` that each hold their thread for a while.
+    fn most_at_once_on_io(executor: &TokioExecutor, n: usize) -> usize {
+        let running = Arc::new(AtomicUsize::new(0));
+        let most = Arc::new(AtomicUsize::new(0));
+        let tasks: Vec<_> = (0..n)
+            .map(|_| {
+                let (running, most) = (Arc::clone(&running), Arc::clone(&most));
+                executor.io_handle().spawn_blocking(move || {
+                    let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+                    most.fetch_max(now, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(50));
+                    running.fetch_sub(1, Ordering::SeqCst);
+                })
+            })
+            .collect();
+        executor.io_handle().block_on(async {
+            for t in tasks {
+                t.await.unwrap();
+            }
+        });
+        most.load(Ordering::SeqCst)
+    }
+
+    #[test]
+    fn the_io_runtime_runs_at_most_its_blocking_threads_at_once() {
+        let config = ExecutorConfig {
+            compute_threads: 1,
+            io_threads: 1,
+            blocking_threads: 1,
+            io_blocking_threads: 3,
+        };
+        let executor = TokioExecutor::new(&config).unwrap();
+        let most = most_at_once_on_io(&executor, 12);
+        assert!((1..=3).contains(&most), "{most} blocking closures at once");
+    }
+
+    #[test]
+    fn the_blocking_thread_bound_comes_from_the_config() {
+        assert_eq!(ExecutorConfig::default().io_blocking_threads, 8);
+        let (set, _) = Config::from_pairs([("krishiv.io.blockingThreads", "2")]).unwrap();
+        let config = ExecutorConfig::default().with_config(&set);
+        assert_eq!(config.io_blocking_threads, 2);
+        let executor = TokioExecutor::new(&config).unwrap();
+        assert!(most_at_once_on_io(&executor, 8) <= 2);
+        for bad in ["0", "-2", "many"] {
+            assert!(
+                Config::from_pairs([("krishiv.io.blockingThreads", bad)]).is_err(),
+                "{bad}"
+            );
+        }
     }
 }

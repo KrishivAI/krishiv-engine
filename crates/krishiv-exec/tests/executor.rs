@@ -68,6 +68,7 @@ fn executor(threads: usize) -> Arc<TokioExecutor> {
         compute_threads: threads,
         io_threads: 1,
         blocking_threads: threads,
+        io_blocking_threads: 2,
     })
     .unwrap()
 }
