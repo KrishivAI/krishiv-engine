@@ -578,8 +578,9 @@ pub fn cast(
         ($o:ty, $t:ty) => {{
             let s = input.as_string::<$o>();
             let out = map_rows::<$t>(input, |i| {
-                // Out of the target's range is malformed too (Spark's `toInt`).
-                let v = text::parse_integral(s.value(i).as_bytes(), mode == CastMode::Ansi)
+                // Out of the target's range is malformed too (Spark's `toInt`);
+                // `try_cast` parses as ANSI does (`toLongExact`), so `'1.5'` is NULL.
+                let v = text::parse_integral(s.value(i).as_bytes(), mode != CastMode::Legacy)
                     .and_then(|v| match <$t as SparkIntegral>::narrow(i128::from(v)) {
                         (n, false) => Some(n),
                         (_, true) => None,

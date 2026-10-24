@@ -684,6 +684,106 @@ fn repeated_correlation_keys_stay_unique() {
     assert!(a.plan.root().to_string().contains("Aggregate [a#3], "));
 }
 
+/// A foldable `LIMIT` that is negative or NULL fails analysis as Spark's
+/// `checkLimitLikeClause` does (it used to reach the planner).
+/// The `LIMIT` count of `plan`, wherever it sits.
+fn limit_of(plan: &Arc<LogicalPlan>) -> Option<Arc<Expr>> {
+    if let PlanNode::Limit { limit, .. } = &plan.node {
+        return Some(Arc::clone(limit));
+    }
+    let mut found = None;
+    plan.for_each_child(&mut |c| {
+        if found.is_none() {
+            found = limit_of(c);
+        }
+    });
+    found
+}
+
+#[test]
+fn negative_and_null_limits_fail_analysis() {
+    let g = goldens();
+    let err = |sql: &str| {
+        analyze(&g, sql, ResolutionConf::default())
+            .unwrap_err()
+            .error
+    };
+    let e = err("SELECT a FROM t LIMIT -1");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    assert_eq!(e.sql_state(), Some("42K0E"));
+    assert!(e.message().contains("\"-1\""), "{}", e.message());
+    assert!(e.message().contains("but got -1"), "{}", e.message());
+    let e = err("SELECT a FROM t LIMIT CAST(NULL AS INT)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    let a = analyze(&g, "SELECT a FROM t LIMIT 0", ResolutionConf::default()).unwrap();
+    let limit = limit_of(a.plan.root()).expect("a Limit node");
+    assert!(
+        matches!(&limit.node, ExprNode::Literal(Literal::Integer(0))),
+        "{limit:?}"
+    );
+}
+
+/// `LIMIT` folds arithmetic before Spark's checks, and rejects counts that
+/// cannot be evaluated without rows.
+#[test]
+fn limit_folds_arithmetic_and_rejects_unfoldable_counts() {
+    let g = goldens();
+    let err = |sql: &str| {
+        analyze(&g, sql, ResolutionConf::default())
+            .unwrap_err()
+            .error
+    };
+    // `1 - 2` is a foldable negative count, not a passing limit.
+    let e = err("SELECT a FROM t LIMIT 1 - 2");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    assert_eq!(e.sql_state(), Some("42K0E"));
+    assert!(e.message().contains("but got -1"), "{}", e.message());
+    // `NULL + 1` stays NULL, and a cast of arithmetic folds through the kernels.
+    let e = err("SELECT a FROM t LIMIT CAST(NULL AS INT) + 1");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    let e = err("SELECT a FROM t LIMIT CAST(1 - 2 AS INT)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    assert!(e.message().contains("but got -1"), "{}", e.message());
+    let e = err("SELECT a FROM t LIMIT CAST(CAST(NULL AS INT) + 1 AS INT)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    // Unary minus over a constant folds as well.
+    let e = err("SELECT a FROM t LIMIT -(1)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    let e = err("SELECT a FROM t LIMIT -(CAST(NULL AS INT))");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    // A scalar subquery binds but is not foldable.
+    let e = err("SELECT a FROM t LIMIT (SELECT 1)");
+    assert_eq!(
+        e.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+    assert_eq!(e.sql_state(), Some("42K0E"));
+}
+
 /// The window-function goldens (`tests/fixtures/spark-4.2.0/window-goldens.json`,
 /// generated from a real Spark run) resolve to Spark's output names, types
 /// and nullability over the same schemas, and their resolved plans are a
