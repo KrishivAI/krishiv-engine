@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Plain-text rendering of an error with its SQL query context, in the
-//! layout of Spark's `SQLQueryContext.summary`.
+//! Plain-text rendering of an error with its SQL query context: the message
+//! followed by one `== SQL (line, position) ==` block per SQL context, the
+//! source line and a caret under the span.
+//!
+//! The attached spans follow the Spark 4.2.0 goldens (see
+//! `crates/krishiv-session/tests/error_context.rs`); the summary text itself
+//! is engine-defined and not verified against a live Spark run.
 
 use super::{ErrorContextType, ErrorQueryContext, KrishivError};
 
@@ -21,9 +26,9 @@ const ELLIPSIS: &str = "...";
 /// The header gives the line and the 1-based character position of the
 /// span's start. Each line of the span is shown with a caret line under the
 /// covered characters; tabs before the span are kept in the caret line so
-/// it lines up. Like Spark, at most 32 characters of the line before and
-/// after the span are shown, with `...` for what is cut. The text has no
-/// trailing newline and no colour.
+/// it lines up. At most 32 characters of the line before and after the span
+/// are shown, with `...` for what is cut. The text has no trailing newline
+/// and no colour.
 ///
 /// `sql` is the text the context's byte offsets refer to, shown as it is, so
 /// pass the redacted text (`RedactedSql::as_str`) when it may hold secrets.
@@ -33,6 +38,10 @@ const ELLIPSIS: &str = "...";
 /// has moved the offsets. Otherwise (a span outside the text, an empty or
 /// reversed span, a DataFrame context) only the message is given for that
 /// context. Never panics; the result depends only on the arguments.
+///
+/// The engine attaches only direct-query contexts (with empty `object_type`
+/// and `object_name`); a context naming an object renders an
+/// `== SQL of TYPE NAME ...` header.
 ///
 /// `Display` and the message parameters of `error` are not changed.
 #[must_use]
@@ -80,7 +89,7 @@ fn summary(context: &ErrorQueryContext, sql: &str) -> Option<String> {
     let marked_to = marked_from + span.chars().count();
     let text = format!("{lead}{prefix}{span}{suffix}{trail}");
 
-    // As Java's `split`, trailing empty lines are dropped.
+    // Trailing empty lines are dropped.
     let mut lines: Vec<&str> = text.split('\n').collect();
     while lines.last() == Some(&"") {
         lines.pop();
@@ -201,7 +210,7 @@ mod tests {
 
     #[test]
     fn multi_line_span_marks_each_line_it_covers() {
-        // As Spark's summary: every line of the span gets its own caret line.
+        // Every line of the span gets its own caret line.
         let sql = "SELECT a +\n  b +\n  c FROM t";
         let (start, stop) = (7, sql.find(" FROM").unwrap() - 1);
         assert_eq!(
@@ -244,6 +253,17 @@ mod tests {
         assert_eq!(
             rendered(&at(sql, start, start + 3), sql),
             "\n== SQL (line 2, position 3) ==\n  nope\n  ^^^^"
+        );
+    }
+
+    #[test]
+    fn a_span_across_crlf_breaks_keeps_the_carets_aligned() {
+        // The carriage returns are counted but not shown, so the carets of
+        // the lines after the first still sit under their characters.
+        let sql = "ab\r\ncd";
+        assert_eq!(
+            rendered(&at(sql, 0, 5), sql),
+            "\n== SQL (line 1, position 1) ==\nab\n^^\ncd\n^^"
         );
     }
 

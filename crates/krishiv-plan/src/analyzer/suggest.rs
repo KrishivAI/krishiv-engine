@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The names Spark proposes for one it cannot resolve
-//! (`UNRESOLVED_COLUMN.WITH_SUGGESTION`, and the same ranking for
-//! `UNRESOLVED_FIELD` and `UNRESOLVED_MAP_KEY`): Spark's
-//! `orderSuggestedIdentifiersBySimilarity`.
+//! The names proposed for a column the analyzer cannot resolve
+//! (`UNRESOLVED_COLUMN.WITH_SUGGESTION`): up to five of the scope's columns,
+//! ranked by edit distance with ties ordered by name.
 //!
-//! Only these classes propose names; the messages of the others, such as
+//! Only this class proposes names; the messages of the others, such as
 //! `UNRESOLVED_ROUTINE` and `TABLE_OR_VIEW_NOT_FOUND`, carry none, so their
 //! errors do not use this.
 

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Errors with their SQL query context rendered as Spark's
-//! `SQLQueryContext.summary` shows it (`render_with_context`): a snapshot per
-//! error class, and the contexts the renderer receives, checked against
-//! Spark 4.2.0's goldens (`tests/spark-golden/v4.2.0/results/*.sql.out`).
+//! Errors with their SQL query context rendered (`render_with_context`):
+//! a snapshot per error class, and the contexts the renderer receives.
+//! The attached spans are checked against Spark 4.2.0's goldens
+//! (`tests/spark-golden/v4.2.0/results/*.sql.out`); the summary text itself
+//! is engine-defined (see `krishiv-common/src/error/render.rs`).
 //!
 //! The goldens' JSON shows `startIndex` and `stopIndex` one higher than
 //! `QueryContext.startIndex()` (Spark's JSON writer adds one), so a golden's

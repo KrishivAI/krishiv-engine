@@ -151,50 +151,63 @@ fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
     writeln!(out, "{}", text.trim_end()).map_err(|e| format!("cannot write output: {e}"))
 }
 
-/// `error` of the statement `stmt` as shown to the user: for a syntax error
-/// Spark's `ParseException` layout ([`caret`]), otherwise the message with
-/// the SQL span that raised it marked. The text shown is the statement with
-/// its secrets redacted (`line_offset` applies to syntax errors only: the
-/// line of another error counts from the statement's own first line).
+/// `error` of the `line_offset`-th input line's statement `stmt` as shown
+/// to the user: a syntax error in Spark's `ParseException` layout
+/// ([`krishiv_sql::parse_exception_suffix`]), otherwise the message with the SQL span
+/// that raised it marked. The text shown is the statement with its secrets
+/// redacted, and line numbers count from the start of the input on both
+/// paths: the summary's headers are shifted by `line_offset`, whose lines
+/// the contexts count from the statement's own first line.
 fn describe(stmt: &str, line_offset: usize, error: &krishiv::Error) -> String {
-    let parse = caret(stmt, line_offset, error);
+    let redacted = krishiv_sql::redact_sql(stmt);
+    let text = redacted.as_str();
+    let parse = krishiv_sql::parse_exception_suffix(text, line_offset, error);
     if !parse.is_empty() {
         return format!("{error}{parse}");
     }
-    let redacted = krishiv_sql::redact_sql(stmt);
-    krishiv_common::error::render_with_context(error, redacted.as_str())
+    shift_lines(
+        &krishiv_common::error::render_with_context(error, text),
+        line_offset,
+    )
 }
 
-/// Spark-style position and caret for a parse error in `stmt`; empty for any
-/// other error. The statement is parsed again here to recover the span, also
-/// when it is empty (a syntax error at the end of the input), which a query
-/// context does not show.
-fn caret(stmt: &str, line_offset: usize, error: &krishiv::Error) -> String {
-    if !error.error_class().name().starts_with("PARSE_")
-        && !error.error_class().name().starts_with("UNCLOSED_")
-    {
-        return String::new();
+/// `rendered` with every `== SQL (line N, ...)` header moved `line_offset`
+/// lines down, so a statement past the first shows file-relative lines.
+fn shift_lines(rendered: &str, line_offset: usize) -> String {
+    if line_offset == 0 {
+        return rendered.to_owned();
     }
-    let Err(parse) = krishiv_sql::parse_statement(stmt, &krishiv_sql::ParserOptions::default())
-    else {
-        return String::new();
+    let mut out = String::with_capacity(rendered.len());
+    let mut first = true;
+    for line in rendered.split('\n') {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.push_str(&shift_header(line, line_offset));
+    }
+    out
+}
+
+/// `line` with its `== SQL (line N, ...)` header moved `line_offset` lines
+/// down; any other line unchanged.
+fn shift_header(line: &str, line_offset: usize) -> String {
+    let Some(after) = line.strip_prefix("== SQL") else {
+        return line.to_owned();
     };
-    let start = parse.span.start.min(stmt.len());
-    let before = &stmt[..stmt.floor_char_boundary(start)];
-    let line_no = line_offset + before.matches('\n').count() + 1;
-    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-    let line = stmt[line_start..].lines().next().unwrap_or("");
-    let col = before[line_start..].chars().count();
-    let width = stmt[before.len()..parse.span.end.max(start).min(stmt.len())]
+    let Some(found) = after.find("(line ") else {
+        return line.to_owned();
+    };
+    let digits: String = after[found + "(line ".len()..]
         .chars()
-        .take_while(|c| *c != '\n')
-        .count()
-        .max(1);
-    format!(
-        "\n(line {line_no}, pos {col})\n\n== SQL ==\n{line}\n{}{}",
-        " ".repeat(col),
-        "^".repeat(width)
-    )
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let Ok(no) = digits.parse::<usize>() else {
+        return line.to_owned();
+    };
+    let head = &line[..line.len() - after.len() + found + "(line ".len()];
+    let tail = &after[found + "(line ".len() + digits.len()..];
+    format!("{head}{}{tail}", no.saturating_add(line_offset))
 }
 
 fn print_result(df: &DataFrame, format: Format, tz: i64) -> Result<(), String> {
@@ -679,15 +692,18 @@ mod tests {
     }
 
     #[test]
-    fn caret_is_empty_for_non_parse_errors() {
+    fn parse_suffix_is_empty_for_non_parse_errors() {
         let e = Session::new()
             .and_then(|s| futures::executor::block_on(s.sql("select * from nope")).map(|_| ()))
             .expect_err("unknown table");
-        assert_eq!(caret("select * from nope", 0, &e), "");
+        assert_eq!(
+            krishiv_sql::parse_exception_suffix("select * from nope", 0, &e),
+            ""
+        );
     }
 
     #[test]
-    fn describe_marks_the_span_of_an_analysis_error() {
+    fn describe_counts_lines_from_the_file_start() {
         let stmt = "select x\nfrom (select 1 as a) t";
         let e = Session::new()
             .and_then(|s| futures::executor::block_on(s.sql(stmt)).map(|_| ()))
@@ -695,7 +711,16 @@ mod tests {
         let shown = describe(stmt, 5, &e);
         assert!(shown.starts_with(&e.to_string()), "{shown}");
         assert!(
-            shown.ends_with("\n== SQL (line 1, position 8) ==\nselect x\n       ^"),
+            shown.ends_with("\n== SQL (line 6, position 8) ==\nselect x\n       ^"),
+            "{shown}"
+        );
+        // A later statement's syntax error already counted from the file.
+        let parse = Session::new()
+            .and_then(|s| futures::executor::block_on(s.sql("xyz 1")).map(|_| ()))
+            .expect_err("syntax error");
+        let shown = describe("xyz 1", 2, &parse);
+        assert!(
+            shown.ends_with("(line 3, pos 0)\n\n== SQL ==\nxyz 1\n^^^"),
             "{shown}"
         );
     }

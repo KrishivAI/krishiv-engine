@@ -17,11 +17,19 @@ pub(crate) fn to_py(py: Python<'_>, error: &KrishivError) -> PyErr {
 }
 
 /// [`to_py`] for an error of the query `sql`: the exception's `str` also marks
-/// the SQL span that raised it (`render_with_context`), over the query text
-/// with its secrets redacted; `getMessage()` stays the message alone.
+/// the SQL span that raised it over the query text with its secrets redacted;
+/// `getMessage()` stays the message alone. A parse error uses Spark's
+/// `ParseException` layout (as `krishiv sql` does), any other error the
+/// query-context summary.
 pub(crate) fn to_py_for_sql(py: Python<'_>, error: &KrishivError, sql: &str) -> PyErr {
     let redacted = krishiv_sql::redact_sql(sql);
-    let rendered = render_with_context(error, redacted.as_str());
+    let text = redacted.as_str();
+    let suffix = krishiv_sql::parse_exception_suffix(text, 0, error);
+    let rendered = if suffix.is_empty() {
+        render_with_context(error, text)
+    } else {
+        format!("{error}{suffix}")
+    };
     convert(py, error, Some(rendered))
 }
 

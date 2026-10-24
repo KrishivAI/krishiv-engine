@@ -25,6 +25,49 @@ use krishiv_common::error::{
 
 use crate::ast::Span;
 
+/// The `ParseException` suffix for `error` over the (redacted) text `sql`
+/// (`""` when `error` is not what parsing `sql` raises): Spark shows a
+/// parse error with its line, 0-based position and the offending line, not
+/// with a query-context summary (Spark's golden `PARSE_*` entries carry no
+/// `queryContext`). Both user surfaces (the `krishiv sql` command and the
+/// text of Python exceptions from `spark.sql`) use this for parse errors
+/// and [`krishiv_common::error::render_with_context`] otherwise, so the two
+/// agree and match PySpark.
+///
+/// The statement is parsed again here to recover the span, also when it is
+/// empty (a syntax error at the end of the input), which a query context
+/// does not show. The suffix is `""` unless re-parsing `sql` raises the
+/// same error class, so every parser error class (including
+/// `FAILED_TO_PARSE_TOO_COMPLEX`, whose span is the whole statement) takes
+/// this layout without a class-prefix list to maintain. `line_offset` is
+/// the number of input lines before `sql` (a multi-statement input counts
+/// lines from its start on every surface).
+#[must_use]
+pub fn parse_exception_suffix(sql: &str, line_offset: usize, error: &KrishivError) -> String {
+    let Err(parse) = crate::parse_statement(sql, &crate::ParserOptions::default()) else {
+        return String::new();
+    };
+    if parse.error.error_class() != error.error_class() {
+        return String::new();
+    };
+    let start = parse.span.start.min(sql.len());
+    let before = &sql[..sql.floor_char_boundary(start)];
+    let line_no = line_offset + before.matches('\n').count() + 1;
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    let line = sql[line_start..].lines().next().unwrap_or("");
+    let col = before[line_start..].chars().count();
+    let width = sql[before.len()..parse.span.end.max(start).min(sql.len())]
+        .chars()
+        .take_while(|c| *c != '\n')
+        .count()
+        .max(1);
+    format!(
+        "\n(line {line_no}, pos {col})\n\n== SQL ==\n{line}\n{}{}",
+        " ".repeat(col),
+        "^".repeat(width)
+    )
+}
+
 /// A statement Spark's parser would reject.
 #[derive(Debug, Clone, Eq, thiserror::Error)]
 #[error("{error}")]

@@ -510,6 +510,17 @@ def test_capture_parse_exception(spark: SparkSession) -> None:
         spark.sql("abc")
 
 
+def test_parse_exception_text_is_the_parse_layout(spark: SparkSession) -> None:
+    with pytest.raises(errors.ParseException) as raised:
+        spark.sql("xyz 1")
+    e = raised.value
+    # As on the CLI and in classic PySpark: `getMessage()` is the message alone;
+    # `str()` adds the `ParseException` position and the offending line, not a
+    # query-context summary block.
+    assert "== SQL (line" not in str(e)
+    assert str(e) == e.getMessage() + "\n(line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^"
+
+
 def test_capture_analysis_exception(spark: SparkSession) -> None:
     with pytest.raises(errors.AnalysisException):
         spark.sql("select abc")

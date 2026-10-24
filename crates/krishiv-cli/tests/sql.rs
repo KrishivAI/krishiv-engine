@@ -123,7 +123,7 @@ fn syntax_error_exits_1_with_class_sqlstate_and_caret() {
 }
 
 #[test]
-fn analysis_error_shows_the_span_with_a_caret() {
+fn analysis_error_lines_count_from_the_file_start() {
     let o = krishiv(
         &["sql", "-e", "select 1;\nselect nope from (select 1 as a) t"],
         None,
@@ -133,10 +133,21 @@ fn analysis_error_shows_the_span_with_a_caret() {
     assert!(e.contains("[UNRESOLVED_COLUMN.WITH_SUGGESTION]"), "{e}");
     assert!(
         e.ends_with(
-            "\n== SQL (line 1, position 8) ==\nselect nope from (select 1 as a) t\n       ^^^^\n"
+            "\n== SQL (line 2, position 8) ==\nselect nope from (select 1 as a) t\n       ^^^^\n"
         ),
         "{e}"
     );
+}
+
+#[test]
+fn parse_error_shows_redacted_text() {
+    let o = krishiv(&["sql", "-e", "select 'https://user:hunter2@host/p"], None);
+    assert_eq!(o.status.code(), Some(1));
+    let e = err(&o);
+    // The `ParseException` layout over the redacted line, never the secret.
+    assert!(e.contains("\n== SQL ==\n"), "{e}");
+    assert!(e.contains("user:*********(redact"), "{e}");
+    assert!(!e.contains("hunter2"), "{e}");
 }
 
 #[test]

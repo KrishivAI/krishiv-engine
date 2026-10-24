@@ -42,7 +42,7 @@ mod redact;
 mod types;
 mod validate;
 
-pub use error::ParseError;
+pub use error::{ParseError, parse_exception_suffix};
 pub use frontend::Frontend;
 pub use lower::{
     lower, lower_expression, lower_select_item, parse_and_lower, parse_and_lower_named_expression,
