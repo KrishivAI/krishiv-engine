@@ -198,6 +198,24 @@ fn null_aware_and_weighted_inputs_are_refused() {
     })
     .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    for join_type in [
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+        JoinType::RightOuter,
+    ] {
+        let e = NestedLoopJoin::try_new(NestedLoopSpec {
+            join_type,
+            probe_schema: schema("p"),
+            build_schema: schema("b"),
+            filter: None,
+        })
+        .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        assert!(
+            e.to_string().contains("return rows of their build side"),
+            "{e}"
+        );
+    }
     let weighted = |name: &str| {
         let b = &batches(name, &[Some(1), Some(2)], 2)[0];
         vec![Batch::with_weights(b.data().clone(), Weights::Const(2)).unwrap()]

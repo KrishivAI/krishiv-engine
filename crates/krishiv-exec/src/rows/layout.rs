@@ -972,6 +972,12 @@ fn heap_bytes<'a>(row: &[u8], heap: &'a [u8], at: usize, len: usize) -> Option<&
 /// its two words folded, so a short key hashes without a byte loop. Every
 /// writer hashes short values this way and long ones with foldhash at the
 /// layout's seed, so equal values hash equally whatever their array type.
+///
+/// The seed is not folded in here: `h` is seedless (P2-T157 Appendix C;
+/// every caller of [`RowLayout::encode`] passes a constant), so a seed would
+/// not change which values collide, and folding it cost 1.5-3.5% on the
+/// short-key encode benchmarks. Collision resistance is the table-local
+/// `g` ([`finalize`]) and the flooding defence's concern, not `h`'s.
 #[inline]
 fn inline_hash(view: u128) -> u64 {
     #[expect(
@@ -1010,4 +1016,54 @@ fn normalize64(v: f64) -> f64 {
 
 fn normalize32(v: f32) -> f32 {
     if v.is_nan() { f32::NAN } else { v + 0.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The zero-padded inline view of `value` (at most 12 bytes).
+    fn view(value: &[u8]) -> u128 {
+        let mut b = [0u8; VIEW_BYTES];
+        b[..4].copy_from_slice(&u32::try_from(value.len()).unwrap().to_le_bytes());
+        b[4..4 + value.len()].copy_from_slice(value);
+        u128::from_le_bytes(b)
+    }
+
+    /// Inline Arrow views are copied with their padding cleared: views
+    /// whose bytes past the value are not zero (Arrow's validation rejects
+    /// them, but unchecked arrays need not have been validated) give the
+    /// rows and hashes of zero-padded views, for values of 0 to 12 bytes.
+    #[test]
+    fn inline_views_clear_their_padding() {
+        let values: [&[u8]; 5] = [b"", b"x", b"abcdef", b"abcdefghijk", b"abcdefghijkl"];
+        let clean: Vec<u128> = values.iter().map(|v| view(v)).collect();
+        let dirty: Vec<u128> = clean
+            .iter()
+            .zip(values)
+            .map(|(&v, b)| match 32 + 8 * b.len() {
+                128 => v,
+                keep => v | (u128::MAX << keep),
+            })
+            .collect();
+        assert_ne!(dirty, clean);
+        let layout = RowLayout::new(&[DataType::BinaryView], &[true]).unwrap();
+        let offset = layout.columns[0].offset;
+        let strings = foldhash::fast::FixedState::with_seed(3);
+        let put = |views: &[u128]| {
+            let n = views.len();
+            let mut keys = EncodedKeys {
+                stride: layout.stride,
+                len: n,
+                rows: vec![0; n * layout.stride],
+                heap: Vec::new(),
+                hashes: vec![0; n],
+                hashed: true,
+            };
+            keys.put_arrow_views(offset, None, &strings, views, |i| values[i])
+                .unwrap();
+            (keys.rows, keys.hashes)
+        };
+        assert_eq!(put(&dirty), put(&clean));
+    }
 }

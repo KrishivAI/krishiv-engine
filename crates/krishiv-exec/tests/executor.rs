@@ -561,6 +561,29 @@ async fn the_stall_detector_fails_a_non_yielding_driver() {
     assert_released(&root);
 }
 
+/// A driver that blocks inside a poll (a sleep standing in for blocking
+/// I/O) is a stall too: only run-queue waits are left out of a slice.
+#[tokio::test]
+async fn the_stall_detector_fails_a_blocking_driver() {
+    let runner = QueryRunner::new(executor(1));
+    let root = root(1 << 30);
+    let config = ExecConfig {
+        fail_on_stall: true,
+        ..ExecConfig::default()
+    };
+    let q = query(&root, 1, config);
+    let (_, scan) = scan(4 * DEFAULT_BATCH_SIZE as u64);
+    let block = hook(|_| {
+        std::thread::sleep(Duration::from_millis(30));
+        Ok(())
+    });
+    let e = run(&runner, pipe(scan, block), &q).await.unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(e.to_string().contains("without yielding"), "{e}");
+    assert!(q.metrics().drivers.stalls >= 1);
+    assert_released(&root);
+}
+
 /// Emits 16 outputs per input with `HaveMoreOutput`.
 struct Explode;
 
@@ -699,6 +722,15 @@ fn config_join_row_layout_keys() {
     assert_eq!(on.join_radix_bits, 5);
     assert_eq!(read("1").join_radix_bits, 3);
     assert_eq!(read("9").join_radix_bits, 6);
+}
+
+/// Sort hash buckets are on by default; `krishiv.exec.sort.hashBuckets`
+/// turns them off.
+#[test]
+fn config_sort_hash_buckets_key() {
+    assert!(ExecConfig::from_config(&Config::new()).sort_hash_buckets);
+    let (config, _) = Config::from_pairs([("krishiv.exec.sort.hashBuckets", "false")]).unwrap();
+    assert!(!ExecConfig::from_config(&config).sort_hash_buckets);
 }
 
 /// `krishiv.exec.batchSize` sizes the batches; morsels feed several drivers;

@@ -751,3 +751,31 @@ fn explain_runs_commands() {
     let e = block_on(s.sql("EXPLAIN EXPLAIN SET x=1")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
+
+/// DDL and `USE` statements parse but have no execution yet: `Session::sql`
+/// rejects them with `KRISHIV_UNSUPPORTED_FEATURE`, never a parse error.
+#[test]
+fn unexecuted_commands_parse_and_report_unsupported() {
+    let s = session();
+    for sql in [
+        "CREATE TABLE t (a INT NOT NULL DEFAULT 1, b STRING COMMENT 'x') USING parquet \
+         PARTITIONED BY (a) TBLPROPERTIES ('k' = 'v')",
+        "CREATE TABLE t USING parquet PARTITIONED BY (a) AS SELECT id AS a FROM people",
+        "CREATE TABLE t LIKE people",
+        "DROP TABLE IF EXISTS t PURGE",
+        "CREATE DATABASE IF NOT EXISTS db COMMENT 'c'",
+        "CREATE SCHEMA s",
+        "DROP SCHEMA IF EXISTS s CASCADE",
+        "USE s",
+        "USE NAMESPACE s",
+        "EXPLAIN CREATE TABLE t (a INT)",
+    ] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+        assert!(e.to_string().contains("in sessions"), "{sql}: {e}");
+    }
+}

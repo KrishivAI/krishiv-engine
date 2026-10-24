@@ -686,6 +686,13 @@ fn call<'a>(
     out: &mut Vec<Piece<'a>>,
 ) {
     let arg = |i: usize| Piece::Expr(&args[i]);
+    // `to_varchar` is Spark's `to_char` under its alias (the goldens show
+    // `to_char(78.12, $99.99)` for `to_varchar(78.12, '$99.99')`).
+    let name = if name == "to_varchar" {
+        "to_char"
+    } else {
+        name
+    };
     match (op, args.len()) {
         (Some(op), 2) if is_infix(op) && !distinct => {
             out.extend([Piece::Str("("), arg(0), Piece::Str(" ")]);
@@ -695,6 +702,22 @@ fn call<'a>(
                 arg(1),
                 Piece::Str(")"),
             ]);
+        }
+        // The bitwise operators are registry functions; Spark still shows
+        // them infix (`(20181117 >> 2)`), `~` prefix.
+        (None, 2) if !distinct => match registry_infix(name) {
+            Some(symbol) => {
+                out.extend([Piece::Str("("), arg(0), Piece::Str(" ")]);
+                out.extend([Piece::Str(symbol), Piece::Str(" "), arg(1), Piece::Str(")")]);
+            }
+            None => {
+                out.push(Piece::Owned(format!("{name}(")));
+                list(args, out);
+                out.push(Piece::Str(")"));
+            }
+        },
+        (None, 1) if name == "~" && !distinct => {
+            out.extend([Piece::Str("~"), arg(0)]);
         }
         (Some(Builtin::Not), 1) => out.extend([Piece::Str("(NOT "), arg(0), Piece::Str(")")]),
         (Some(Builtin::Negative), 1) => {
@@ -759,6 +782,20 @@ impl Display for SortOrder {
             NullOrdering::NullsLast => "NULLS LAST",
         };
         write!(f, "{} {dir} {nulls}", Text(&self.expr))
+    }
+}
+
+/// The infix symbol of a registry bitwise operator (`&`, `|`, `^`,
+/// `<<`, `>>`, `>>>`), if `name` is one.
+fn registry_infix(name: &str) -> Option<&'static str> {
+    match name {
+        "&" => Some("&"),
+        "|" => Some("|"),
+        "^" => Some("^"),
+        "<<" => Some("<<"),
+        ">>" => Some(">>"),
+        ">>>" => Some(">>>"),
+        _ => None,
     }
 }
 

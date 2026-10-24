@@ -1,11 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // krishiv.plan.v1: the stable serialized form of a physical plan (ADR 0003,
-// P2-T173; design P2-T171 I1). Compatibility rules (ADR 0026): N reads N-1
-// and N-1 reads N. Fields are only ever added with new numbers; a removed
-// field's number and name are `reserved`; an enum value is never reused. A
-// writer that needs semantics an older reader would silently ignore raises
-// `min_reader_version`, and an older reader rejects the plan.
+// P2-T173; design P2-T171 I1). Compatibility (ADR 0040): a plan's header
+// lists the features it uses, and a reader decodes every plan of its epoch
+// whose features it knows. Fields are only ever added with new numbers; a
+// removed field's number and name are `reserved`; an enum value is never
+// reused.
+//
+// Every element added from here on carries a comment line saying which
+// class it is (`tools/plan-protogen --check` enforces it; the elements that
+// predate the rule are listed in `tools/plan-protogen/baseline.txt`):
+// - `feature: <id>`: a reader without the feature would misread it or fail
+//   with an unhelpful error (a new oneof variant, enum value or message, a
+//   field whose absence changes results). The id is in the codec's
+//   registry (`crates/krishiv-plan-codec/src/features.rs`); the fields of a
+//   new message inherit its class.
+// - `ignorable`: an older reader may skip it and still compute the same
+//   result (a hint, an explain detail).
 //
 // Plans are DAG-flat: nodes, expressions and explain nodes live in tables in
 // post-order and refer to children by table index (always an earlier entry),
@@ -19,9 +30,12 @@ syntax = "proto3";
 package krishiv.plan.v1;
 
 message PhysicalPlan {
-  // The writer's format version (5).
+  // Frozen at 5 (the last sequential format version): readers that predate
+  // features check it with `min_reader_version`.
   uint32 format_version = 1;
-  // The oldest reader version that understands every field in use.
+  // For readers that predate features: 2 for a plan without features, else
+  // the highest legacy level of its features (3 limit_offset, 4 window,
+  // 5 expand, 6 for a feature added after the format version was frozen).
   uint32 min_reader_version = 2;
   // Plan nodes in post-order; a node's inputs are earlier entries.
   repeated Node nodes = 3;
@@ -35,6 +49,23 @@ message PhysicalPlan {
   ExprEnv env = 9;
   // Expressions in post-order; an expression's inputs are earlier entries.
   repeated Expr exprs = 10;
+  // The ids of the features the plan uses, sorted and without duplicates.
+  // ignorable: a reader that predates features checks min_reader_version.
+  repeated string features = 11;
+  // The wire epoch, written explicitly (1). Absent marks a plan written
+  // before the feature header existed: its features follow from its
+  // content.
+  // ignorable: a reader that predates features checks min_reader_version.
+  uint32 epoch = 12;
+}
+
+// The header fields of a `PhysicalPlan`, read without decoding its tables.
+// ignorable: a reader-side view of `PhysicalPlan`, never written as such.
+message PlanHeader {
+  uint32 format_version = 1;
+  uint32 min_reader_version = 2;
+  repeated string features = 11;
+  uint32 epoch = 12;
 }
 
 message ExprEnv {
@@ -67,11 +98,12 @@ message Node {
     UnionNode union = 12;
     WriteFilesNode write_files = 13;
     ExchangeNode exchange = 14;
-    // v4: a plan with a window needs a v4 reader.
+    // feature: window
     WindowNode window = 15;
-    // v5: a plan with an expand (ROLLUP, CUBE, GROUPING SETS) needs a v5
-    // reader.
+    // feature: expand
     ExpandNode expand = 16;
+    // feature: window_group_limit
+    WindowGroupLimitNode window_group_limit = 17;
   }
 }
 
@@ -101,7 +133,7 @@ message ProjectItem {
   oneof kind {
     ProjectColumn column = 1;
     ProjectExpr expr = 2;
-    // v5: only inside an expand; a plan holding one needs a v5 reader.
+    // feature: expand (only inside an expand)
     ProjectNullOf null_of = 3;
   }
 }
@@ -116,7 +148,8 @@ message ProjectExpr {
   uint32 expr = 2;
 }
 
-// v5: a column of nulls in the Arrow type of an input column.
+// feature: expand
+// A column of nulls in the Arrow type of an input column.
 message ProjectNullOf {
   uint64 index = 1;
   string name = 2;
@@ -139,7 +172,8 @@ enum SubqueryValueKind {
 message LimitNode {
   uint32 input = 1;
   uint64 limit = 2;
-  // v3: the number of leading rows to skip. v2 bytes leave this as zero.
+  // feature: limit_offset (when nonzero)
+  // The number of leading rows to skip. v2 bytes leave this as zero.
   uint64 offset = 3;
 }
 
@@ -150,7 +184,8 @@ message ReplicateRowsNode {
   repeated SubqueryPlan subqueries = 4;
 }
 
-// v5: each input row once per projection (ROLLUP, CUBE, GROUPING SETS).
+// feature: expand
+// Each input row once per projection (ROLLUP, CUBE, GROUPING SETS).
 message ExpandNode {
   uint32 input = 1;
   repeated uint64 layout = 2;
@@ -161,6 +196,7 @@ message ExpandNode {
   repeated SubqueryPlan subqueries = 5;
 }
 
+// feature: expand
 message ExpandProjection {
   repeated ProjectItem items = 1;
 }
@@ -182,13 +218,34 @@ message TopNNode {
   uint64 limit = 3;
 }
 
-// v4: window functions over an input sorted by the partitioning columns,
-// then the ordering.
+// feature: window
+// Window functions over an input sorted by the partitioning columns, then
+// the ordering.
 message WindowNode {
   uint32 input = 1;
   repeated uint64 partition_by = 2;
   repeated SortKey order_by = 3;
   repeated WindowFunctionPlan functions = 4;
+}
+
+// feature: window_group_limit
+// The rows of each partition a rank-like function ranks at most `limit`,
+// over an input sorted as a window's (Spark's WindowGroupLimit).
+message WindowGroupLimitNode {
+  uint32 input = 1;
+  repeated uint64 partition_by = 2;
+  repeated SortKey order_by = 3;
+  RankLikeFunction function = 4;
+  // At least one.
+  uint64 limit = 5;
+}
+
+// feature: window_group_limit
+enum RankLikeFunction {
+  RANK_LIKE_FUNCTION_UNSPECIFIED = 0;
+  RANK_LIKE_FUNCTION_ROW_NUMBER = 1;
+  RANK_LIKE_FUNCTION_RANK = 2;
+  RANK_LIKE_FUNCTION_DENSE_RANK = 3;
 }
 
 message WindowFunctionPlan {
@@ -201,6 +258,10 @@ message WindowFunctionPlan {
     // The bucket count.
     int32 ntile = 6;
     AggregateExpr aggregate = 7;
+    // feature: window_offset_functions
+    OffsetFunction offset_value = 11;
+    // feature: window_offset_functions
+    NthValueFunction nth_value = 12;
   }
   WindowFrame frame = 8;
   // A boolean input column an aggregate is restricted to.
@@ -208,10 +269,38 @@ message WindowFunctionPlan {
   string name = 10;
 }
 
+// `lag` / `lead`: input column `input` of the row `offset` rows after the
+// current one (before it when negative), or column `default`.
+// feature: window_offset_functions
+message OffsetFunction {
+  uint64 input = 1;
+  sint64 offset = 2;
+  optional uint64 default = 3;
+  bool ignore_nulls = 4;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 5;
+}
+
+// `nth_value`: input column `input` of the frame's `n`-th row.
+// feature: window_offset_functions
+message NthValueFunction {
+  uint64 input = 1;
+  sint64 n = 2;
+  bool ignore_nulls = 3;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 4;
+}
+
 message WindowFrame {
   FrameUnits units = 1;
   FrameBound lower = 2;
   FrameBound upper = 3;
+  // `FRAME_BOUND_OFFSET` bounds: rows after the current one (before it when
+  // negative).
+  // feature: window_frame_offsets
+  sint64 lower_offset = 4;
+  // feature: window_frame_offsets
+  sint64 upper_offset = 5;
 }
 
 enum FrameUnits {
@@ -225,6 +314,8 @@ enum FrameBound {
   FRAME_BOUND_UNBOUNDED_PRECEDING = 1;
   FRAME_BOUND_CURRENT_ROW = 2;
   FRAME_BOUND_UNBOUNDED_FOLLOWING = 3;
+  // feature: window_frame_offsets
+  FRAME_BOUND_OFFSET = 4;
 }
 
 message AggregateNode {
@@ -276,6 +367,14 @@ enum JoinType {
   JOIN_TYPE_LEFT_SEMI = 3;
   JOIN_TYPE_LEFT_ANTI = 4;
   JOIN_TYPE_NULL_AWARE_ANTI = 5;
+  // Joins that build their preserved side and return its rows by their
+  // matches.
+  // feature: join_build_preserved
+  JOIN_TYPE_RIGHT_SEMI = 6;
+  // feature: join_build_preserved
+  JOIN_TYPE_RIGHT_ANTI = 7;
+  // feature: join_build_preserved
+  JOIN_TYPE_RIGHT_OUTER = 8;
 }
 
 message Residual {

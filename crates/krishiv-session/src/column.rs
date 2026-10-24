@@ -6,8 +6,8 @@ use std::ops;
 use std::sync::Arc;
 
 use krishiv_plan::{
-    Builtin, ColumnRef, Expr, ExprNode, FunctionCall, Literal, NullOrdering, PlanId, SortDirection,
-    SortOrder, Star,
+    Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, Literal, NullOrdering, PlanId,
+    SortDirection, SortOrder, Star,
 };
 use krishiv_types::DataType;
 
@@ -81,6 +81,22 @@ impl Column {
     #[must_use]
     pub fn cast(self, to: DataType) -> Self {
         Self::new(self.expr.cast(to))
+    }
+
+    /// `TRY_CAST(self AS to)`: invalid input becomes `NULL`, even under ANSI.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::col;
+    /// use krishiv_types::DataType;
+    /// let c = col("a").try_cast(DataType::Long);
+    /// ```
+    #[must_use]
+    pub fn try_cast(self, to: DataType) -> Self {
+        Self::new(Expr::new(ExprNode::Cast {
+            expr: Arc::new(self.expr),
+            to,
+            mode: CastMode::Try,
+        }))
     }
 
     /// `self = other`.
@@ -391,6 +407,26 @@ mod tests {
         assert!(
             matches!(&all.expr.node, ExprNode::Star(s) if s.qualifier.is_empty() && s.plan_id == Some(PlanId(3)))
         );
+    }
+
+    #[test]
+    fn try_cast_uses_try_mode() {
+        let c = Column::from("a").try_cast(DataType::Long);
+        assert!(matches!(
+            &c.expr.node,
+            ExprNode::Cast {
+                mode: CastMode::Try,
+                ..
+            }
+        ));
+        let c = Column::from("a").cast(DataType::Long);
+        assert!(matches!(
+            &c.expr.node,
+            ExprNode::Cast {
+                mode: CastMode::Default,
+                ..
+            }
+        ));
     }
 
     #[test]

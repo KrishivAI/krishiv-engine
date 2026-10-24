@@ -241,7 +241,7 @@ The report never prints "all agree" if any check was skipped: skipped checks are
 * **ClickBench** (ClickHouse/ClickBench, licensed **CC BY-NC-SA 4.0**): the query texts are **fetched, not redistributed**. They are not in this repository.
   On first use the harness downloads two files from the pinned upstream commit `0e10b8434eef001b43156b860a4e2e3665a35d51`
   (`duckdb-parquet/queries.sql` for every engine but ClickHouse, `clickhouse/queries.sql` for ClickHouse), checks their SHA-256 (pinned in
-  `clickbench_queries.py`) and caches them under `$KRISHIV_DATA/clickbench/queries/<commit>/`, as the dataset is downloaded to `$KRISHIV_DATA/clickbench`.
+  `clickbench_queries.py`) and caches them under `$KRISHIV_DATA/cache/clickbench-queries/<commit>/`, outside the dataset directory `$KRISHIV_DATA/clickbench`.
   A download whose hash differs from the pin is rejected and never cached. The harness adapts the text at run time (`clickbench_queries.adapt`), without storing
   a modified copy: `STRLEN(x)` becomes `length(x)`; date-string bounds on `EventDate` become day numbers and `extract(minute FROM EventTime)` /
   `DATE_TRUNC('minute', EventTime)` become integer arithmetic (the raw Parquet columns are a day count and epoch seconds, read without a view); and

@@ -170,6 +170,25 @@ fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> 
     differs.then(|| with_children(expr, kids.iter().map(Bound::shown).collect()))
 }
 
+/// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
+/// with casts stripped as Spark's `toPrettySQL` strips them.
+fn assert_message(cond: &Bound, origin: Origin, zone: Option<i32>) -> Bound {
+    let mut shown = cond.shown();
+    while let ExprNode::Cast { expr, .. } = &shown.node {
+        shown = Arc::clone(expr);
+    }
+    let message = format!("'{}' is not true!", pretty(&shown, zone));
+    Bound {
+        expr: Arc::new(Expr::new(ExprNode::Literal(Literal::String(message))).with_origin(origin)),
+        ty: arg_type(DataType::String, false),
+        agg: None,
+        win: None,
+        outer: None,
+        lateral: Vec::new(),
+        shown: None,
+    }
+}
+
 /// A conditional function rewritten during analysis (Spark's
 /// `RuntimeReplaceable`).
 #[derive(Clone, Copy)]
@@ -975,6 +994,21 @@ impl Resolver<'_> {
                 if !window_fn {
                     call_checks(&entry, e, kids, n)?;
                 }
+                // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
+                // Spark's constructor materializes the default message, so
+                // the schema names it (`assert_true(true, 'true' is not
+                // true!)`) and the kernel raises it.
+                let mut owned: Vec<Bound>;
+                let (kids, n) = if entry.id.name() == "assert_true" && n == 1 {
+                    owned = kids.to_vec();
+                    owned.insert(
+                        1,
+                        assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
+                    );
+                    (&owned[..], 2)
+                } else {
+                    (kids, n)
+                };
                 if let Some(which) = Conditional::of(&f.name) {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
@@ -2361,6 +2395,26 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         ExprNode::Function(FunctionCall { name, distinct, .. }) => {
             call(name, Builtin::from_name(name), *distinct, k, None)
         }
+        // Spark's `lag`/`lead` show `input, offset, default`, and
+        // `nth_value` `input, offset` then ` ignore nulls` when set.
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Window
+                && matches!(f.id.name(), "lag" | "lead" | "nth_value")
+                && f.filter.is_none() =>
+        {
+            let shown = if f.id.name() == "nth_value" { 2 } else { 3 };
+            let n = shown.min(k.len());
+            let text = call(f.id.name(), None, f.distinct, &k[..n], Some(&f.data_type));
+            let ignore = matches!(
+                f.args.get(shown).map(|a| &a.node),
+                Some(ExprNode::Literal(Literal::Boolean(true)))
+            );
+            if ignore && f.id.name() == "nth_value" {
+                format!("{text} ignore nulls")
+            } else {
+                text
+            }
+        }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),
@@ -2588,6 +2642,14 @@ fn call(
         {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{})", name.to_lowercase(), k[0])
+        }
+        // The bitwise operators show infix (`(20181117 >> 2)`), `~`
+        // prefix; `to_varchar` shows as `to_char`.
+        _ if k.len() == 2 && matches!(name, "&" | "|" | "^" | "<<" | ">>" | ">>>") => infix(name),
+        _ if k.len() == 1 && name == "~" => format!("~{}", k[0]),
+        _ if name.eq_ignore_ascii_case("to_varchar") => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("to_char({d}{})", k.join(", "))
         }
         // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
         // two-argument math (`power`, `atan2`, `hypot`) print upper case,
