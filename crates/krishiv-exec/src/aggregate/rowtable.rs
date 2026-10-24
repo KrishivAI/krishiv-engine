@@ -436,19 +436,33 @@ impl RowTable {
             })
             .collect::<Result<Vec<_>>>()?;
         for part in &old {
+            // Rows per new partition first, so each grows once and exactly
+            // (no doubling slack: widening runs under a memory limit too).
             let mut ids: Vec<Vec<u32>> = vec![Vec::new(); nparts];
+            let mut heap = vec![0; nparts];
             for (i, row) in (0u32..).zip(part.rows.chunks_exact(stride)) {
                 let p = part_of(word(row, 0), bits);
                 ids[p].push(i);
-                let dst = &mut parts[p];
-                match &self.views {
-                    Some(l) => l.push_row(row, &part.heap, &mut dst.rows, &mut dst.heap)?,
-                    None => dst.rows.extend_from_slice(row),
+                if let Some(l) = &self.views {
+                    heap[p] += l.long_bytes(row);
                 }
             }
-            for (dst, ids) in parts.iter_mut().zip(&ids) {
+            for ((dst, ids), &bytes) in parts.iter_mut().zip(&ids).zip(&heap) {
                 if ids.is_empty() {
                     continue;
+                }
+                dst.rows.reserve_exact(ids.len() * stride);
+                dst.heap.reserve_exact(bytes);
+                for &i in ids {
+                    let at = i as usize * stride;
+                    let row = part
+                        .rows
+                        .get(at..at + stride)
+                        .ok_or_else(|| internal("a row outside its partition".to_owned()))?;
+                    match &self.views {
+                        Some(l) => l.push_row(row, &part.heap, &mut dst.rows, &mut dst.heap)?,
+                        None => dst.rows.extend_from_slice(row),
+                    }
                 }
                 let start = dst.rows.len() / stride - ids.len();
                 let to: Vec<u32> = (start..start + ids.len())
@@ -597,13 +611,24 @@ impl RowTable {
         let keys = layout(&self.core)?.encode(&keys, 0)?;
         let mut counts = [0; PARTS];
         let mut heap_counts = Vec::new();
-        for &h in keys.hashes() {
-            counts[part_of(h, self.bits)] += 1;
+        // One partition (a narrow table) needs no per-row pass: all rows,
+        // and all the batch heap's bytes (only long values go there), are
+        // its; a batch without long values adds no heap bytes anywhere.
+        if self.bits == 0 {
+            counts[0] = keys.len();
+        } else {
+            for &h in keys.hashes() {
+                counts[part_of(h, self.bits)] += 1;
+            }
         }
         if let Some(l) = &self.views {
             heap_counts = vec![0; PARTS];
-            for (i, &h) in keys.hashes().iter().enumerate() {
-                heap_counts[part_of(h, self.bits)] += l.long_bytes(keys.row(i));
+            if self.bits == 0 {
+                heap_counts[0] = keys.heap().len();
+            } else if !keys.heap().is_empty() {
+                for (i, &h) in keys.hashes().iter().enumerate() {
+                    heap_counts[part_of(h, self.bits)] += l.long_bytes(keys.row(i));
+                }
             }
         }
         Ok(RowPrepared {
@@ -978,15 +1003,24 @@ impl RowTable {
                     refs.push(self.push(keys.row(k), heap, h)?);
                 }
             }
-            Mode::Fixed { limit } => {
-                for (k, &h) in hashes.iter().enumerate() {
-                    refs.push(self.find_or_insert(keys.row(k), heap, h, limit)?);
-                }
+            Mode::Fixed { limit } => self.probe_all(keys, refs, limit)?,
+            Mode::Grow => self.probe_all(keys, refs, usize::MAX)?,
+        }
+        Ok(())
+    }
+
+    /// [`find_or_insert`](Self::find_or_insert) for every row of `keys`, in
+    /// one loop per key shape: the probe's compare of fixed-width keys has
+    /// no view branch, so it stays small enough to inline.
+    fn probe_all(&mut self, keys: &EncodedKeys, refs: &mut Vec<u32>, limit: usize) -> Result<()> {
+        let (hashes, heap) = (keys.hashes(), keys.heap());
+        if self.views.is_some() {
+            for (k, &h) in hashes.iter().enumerate() {
+                refs.push(self.find_or_insert::<true>(keys.row(k), heap, h, limit)?);
             }
-            Mode::Grow => {
-                for (k, &h) in hashes.iter().enumerate() {
-                    refs.push(self.find_or_insert(keys.row(k), heap, h, usize::MAX)?);
-                }
+        } else {
+            for (k, &h) in hashes.iter().enumerate() {
+                refs.push(self.find_or_insert::<false>(keys.row(k), heap, h, limit)?);
             }
         }
         Ok(())
@@ -995,9 +1029,15 @@ impl RowTable {
     /// The row of key row `key` (with hash `h`; its long values in
     /// `key_heap`), inserting it if new; an index holding `limit` keys is
     /// cleared before it takes another (the rows stay: a key seen again
-    /// gets a new row).
+    /// gets a new row). `VIEWS`: the layout has string or binary views.
     #[inline(always)]
-    fn find_or_insert(&mut self, key: &[u8], key_heap: &[u8], h: u64, limit: usize) -> Result<u32> {
+    fn find_or_insert<const VIEWS: bool>(
+        &mut self,
+        key: &[u8],
+        key_heap: &[u8],
+        h: u64,
+        limit: usize,
+    ) -> Result<u32> {
         let Self {
             parts,
             sketches,
@@ -1018,11 +1058,11 @@ impl RowTable {
         // then an insert on a miss.
         let found = index
             .find(g, |&r| match views {
-                None => same_key(row_at(parts, stride, *refs, r), key, stride),
-                Some(l) => {
+                Some(l) if VIEWS => {
                     let (row, heap) = row_heap_at(parts, stride, *refs, r);
                     !row.is_empty() && l.eq(row, heap, key, key_heap)
                 }
+                _ => same_key(row_at(parts, stride, *refs, r), key, stride),
             })
             .copied();
         if let Some(r) = found {
@@ -1247,14 +1287,22 @@ impl RowTable {
     /// [`memory_size`](Self::memory_size) after
     /// [`apply_merge`](Self::apply_merge) of `c` from `src`, plus the
     /// merge's scratch (an upper bound for the merge to reserve).
+    /// The partition of this (merge) table that chunk `c` lands in: its
+    /// own partition, or the only one of a table with one partition (which
+    /// merges any input, whatever its width).
+    fn merge_part(&self, c: &MergeChunk) -> usize {
+        if self.bits == 0 { 0 } else { c.part }
+    }
+
     pub(crate) fn projected_merge(&self, c: &MergeChunk) -> usize {
         let n = c.refs.len();
+        let part = self.merge_part(c);
         let rows: usize = self
             .parts
             .iter()
             .enumerate()
             .map(|(p, v)| {
-                if p == c.part {
+                if p == part {
                     grown(&v.rows, n * self.stride) + grown(&v.heap, c.heap)
                 } else {
                     v.rows.capacity() + v.heap.capacity()
@@ -1262,7 +1310,7 @@ impl RowTable {
             })
             .sum();
         let mut new = vec![0; self.parts.len()];
-        if let Some(x) = new.get_mut(c.part) {
+        if let Some(x) = new.get_mut(part) {
             *x = n;
         }
         let k = self.core.spec.group_by.len();
@@ -1282,21 +1330,27 @@ impl RowTable {
                 "merging into a table that is not growing".to_owned(),
             ));
         }
-        if self.bits != src.bits {
+        if self.bits != 0 && self.bits != src.bits {
             return Err(internal(
                 "merging tables of different radix bits".to_owned(),
             ));
         }
+        let part = self.merge_part(c);
         let mut refs = Vec::with_capacity(c.refs.len());
         self.reserve_index(c.refs.len());
-        if let Some(v) = self.parts.get_mut(c.part) {
+        if let Some(v) = self.parts.get_mut(part) {
             v.rows.reserve(c.refs.len() * self.stride);
             v.heap.reserve(c.heap);
         }
         let mut result = Ok(());
         for &r in &c.refs {
             let (row, heap) = row_heap_at(&src.parts, src.stride, src.refs, r);
-            match self.find_or_insert(row, heap, word(row, 0), usize::MAX) {
+            let found = if self.views.is_some() {
+                self.find_or_insert::<true>(row, heap, word(row, 0), usize::MAX)
+            } else {
+                self.find_or_insert::<false>(row, heap, word(row, 0), usize::MAX)
+            };
+            match found {
                 Ok(id) => refs.push(id),
                 Err(e) => {
                     result = Err(e);
@@ -1305,7 +1359,7 @@ impl RowTable {
             }
         }
         let mut counts = vec![0; self.parts.len()];
-        if let Some(x) = counts.get_mut(c.part) {
+        if let Some(x) = counts.get_mut(part) {
             *x = refs.len();
         }
         let k = self.core.spec.group_by.len();
@@ -1404,7 +1458,7 @@ impl RowTable {
 
 /// Row `r` of `parts` and its partition's heap (both empty if out of
 /// range).
-#[inline]
+#[inline(always)]
 fn row_heap_at(parts: &[Part], stride: usize, refs: Refs, r: u32) -> (&[u8], &[u8]) {
     let at = refs.row(r) as usize * stride;
     parts
@@ -1923,10 +1977,19 @@ mod tests {
         let bad = many.refs.make(0, many.part_len(0) + 1);
         assert!(many.output_batch(&[bad]).is_err());
         assert!(many.merge_chunk(0, 0..many.part_len(0) + 1).is_err());
-        // Merging needs the same radix bits.
-        let c = many.merge_chunk(0, 0..1).unwrap();
+        // A one-partition table merges every partition of a wider one
+        // (the final phase's merge of inputs of mixed widths)...
         let mut grow = RowTable::new(&core, &seed, Mode::Grow, false, 0).unwrap();
-        let e = grow.apply_merge(&many, &c).unwrap_err();
+        for p in 0..PARTS {
+            let c = many.merge_chunk(p, 0..many.part_len(p)).unwrap();
+            assert!(grow.projected_merge(&c) >= grow.memory_size());
+            grow.apply_merge(&many, &c).unwrap();
+        }
+        assert_eq!(sorted(&all(&grow)), sorted(&all(&one)));
+        // ... but a partitioned one needs the same radix bits.
+        let c = many.merge_chunk(0, 0..1).unwrap();
+        let mut two = RowTable::new(&core, &seed, Mode::Grow, false, 1).unwrap();
+        let e = two.apply_merge(&many, &c).unwrap_err();
         assert!(e.to_string().contains("radix bits"), "{e}");
     }
 
@@ -1991,7 +2054,10 @@ mod tests {
             t.widen().unwrap();
             assert_eq!((t.part_count(), t.wants_widen()), (PARTS, false));
             assert_eq!(all(&t), want, "{mode:?}");
-            assert!(t.memory_size() <= bytes + t.widen_bytes(), "{mode:?}");
+            // The copy grows each partition once, exactly: no more bytes
+            // than before but for the sketches it starts.
+            let sketches = PARTS * Hll::new(PART_HLL_BITS).bytes();
+            assert!(t.memory_size() <= bytes + sketches, "{mode:?}");
             assert!(t.sketches().is_some());
             let groups = t.len();
             apply(&mut t, &batch(&core, 0..4_500));

@@ -501,17 +501,30 @@ impl RowLayout {
 
     /// Whether row `a` (with heap `a_heap`) has the same key as row `b`
     /// (with heap `b_heap`). Rows must be of this layout.
-    #[inline]
+    ///
+    /// Always inlined: it runs once per probe of a hash table, and a call
+    /// there cost as much as the compare (P2-T159 profile of H2O q01).
+    #[inline(always)]
     pub fn eq(&self, a: &[u8], a_heap: &[u8], b: &[u8], b_heap: &[u8]) -> bool {
         match self.compare {
             Compare::One => word(a, 8) == word(b, 8),
             Compare::Two => word(a, 8) == word(b, 8) && word(a, 16) == word(b, 16),
             Compare::Words => {
-                self.words.iter().all(|&w| word(a, w) == word(b, w))
+                let (Some(a), Some(b)) = (a.get(..self.stride), b.get(..self.stride)) else {
+                    return false;
+                };
+                let ((wa, _), (wb, _)) = (a.as_chunks::<8>(), b.as_chunks::<8>());
+                let at = |w: &[[u8; 8]], i: usize| w.get(i).map_or(0, |x| u64::from_le_bytes(*x));
+                // Every compared word first (one branch), then the views.
+                let diff = self
+                    .words
+                    .iter()
+                    .fold(0, |d, &w| d | (at(wa, w / 8) ^ at(wb, w / 8)));
+                diff == 0
                     && self.views.iter().all(|&v| {
                         let len = view_len(a, v);
                         if len <= INLINE_MAX {
-                            word(a, v + 8) == word(b, v + 8)
+                            at(wa, v / 8 + 1) == at(wb, v / 8 + 1)
                         } else {
                             // A view outside its heap (a corrupt row)
                             // equals nothing, not even another corrupt row.
@@ -825,13 +838,18 @@ impl EncodedKeys {
                 self.put_view(i, offset, strings, value(i))?;
                 continue;
             }
-            let mut bytes = v.to_le_bytes();
-            bytes[4 + len..].fill(0);
+            // Clear the padding with a mask (no per-row `memset`).
+            let keep = 32 + 8 * len;
+            let v = if keep >= 128 {
+                v
+            } else {
+                v & ((1u128 << keep) - 1)
+            };
             if self.hashed {
-                self.hashes[i] = mix(self.hashes[i], strings.hash_one(&bytes[4..4 + len]));
+                self.hashes[i] = mix(self.hashes[i], inline_hash(v));
             }
             self.rows[i * stride + offset..i * stride + offset + VIEW_BYTES]
-                .copy_from_slice(&bytes);
+                .copy_from_slice(&v.to_le_bytes());
         }
         Ok(())
     }
@@ -859,9 +877,6 @@ impl EncodedKeys {
     ) -> Result<()> {
         let len = u32::try_from(bytes.len())
             .map_err(|_| internal("a key value longer than 4 GiB".to_owned()))?;
-        if self.hashed {
-            self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
-        }
         let at = self.heap.len();
         let stride = self.stride;
         let row = &mut self.rows[i * stride..(i + 1) * stride];
@@ -869,7 +884,15 @@ impl EncodedKeys {
         view[..4].copy_from_slice(&len.to_le_bytes());
         if bytes.len() <= INLINE_MAX {
             view[4..4 + bytes.len()].copy_from_slice(bytes);
+            if self.hashed {
+                let mut v = [0; VIEW_BYTES];
+                v.copy_from_slice(view);
+                self.hashes[i] = mix(self.hashes[i], inline_hash(u128::from_le_bytes(v)));
+            }
         } else {
+            if self.hashed {
+                self.hashes[i] = mix(self.hashes[i], strings.hash_one(bytes));
+            }
             view[4..8].copy_from_slice(&bytes[..4]);
             view[8..].copy_from_slice(&(at as u64).to_le_bytes());
             self.heap.extend_from_slice(bytes);
@@ -943,6 +966,20 @@ pub(super) fn view_len(row: &[u8], at: usize) -> usize {
 fn heap_bytes<'a>(row: &[u8], heap: &'a [u8], at: usize, len: usize) -> Option<&'a [u8]> {
     let start = usize::try_from(word(row, at + 8)).ok()?;
     heap.get(start..start.checked_add(len)?)
+}
+
+/// The hash of an inline view (a value of at most 12 bytes, zero-padded):
+/// its two words folded, so a short key hashes without a byte loop. Every
+/// writer hashes short values this way and long ones with foldhash at the
+/// layout's seed, so equal values hash equally whatever their array type.
+#[inline]
+fn inline_hash(view: u128) -> u64 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the view's two words are intended"
+    )]
+    let (lo, hi) = (view as u64, (view >> 64) as u64);
+    fold(fold(lo ^ MIX, FINISH) ^ hi, MIX)
 }
 
 fn round8(n: usize) -> usize {

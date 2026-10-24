@@ -2550,3 +2550,30 @@ async fn narrow_and_wide_tables_merge() {
     assert_eq!(sink_metric(&agg, "row_final_spills"), 1);
     assert!(agg.metrics().spill_runs >= 2);
 }
+
+/// Without a spill directory, a narrow table that cannot reserve its
+/// widening stays narrow (waiting for that memory could wait forever: at
+/// a tight limit nothing else frees it), and one task with one partition
+/// merges every partition of every table instead of one task per range.
+#[tokio::test]
+async fn a_refused_widening_merges_in_one_task() {
+    let (s, mut b) = grouped_input(80_000, 70_000);
+    let (_, small) = grouped_input(40, 10);
+    b.extend(small);
+    let expected = run_rows(single(&s, &b)).await;
+    // A fixed index (radix partitions at one thread too) that never fills.
+    let mode = rowtable::Mode::Fixed { limit: 100_000 };
+    // Widened: the 70,000 groups merge in several tasks.
+    let agg = HashAggregate::with_row_mode(spec(&s, vec![0], grouped_aggs(&s)), mode).unwrap();
+    let got = by_hand(&agg, &s, &b, 81).await;
+    assert_eq!(got.rows, expected);
+    assert!(sink_metric(&agg, "row_final_tasks") > 1);
+    // Refused (and no spill directory): one task. (A stall after
+    // `usize::MAX` tasks refuses only the widening.)
+    let sp = spec(&s, vec![0], grouped_aggs(&s));
+    let agg = HashAggregate::with_final_stall(sp, mode, usize::MAX).unwrap();
+    let got = by_hand(&agg, &s, &b, 81).await;
+    assert_eq!(got.rows, expected);
+    assert_eq!(sink_metric(&agg, "row_final_tasks"), 1);
+    assert_eq!(sink_metric(&agg, "row_final_spills"), 0);
+}

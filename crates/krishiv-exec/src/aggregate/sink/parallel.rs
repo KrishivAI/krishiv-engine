@@ -8,7 +8,8 @@
 //! phase is "read partition `p` from every producer" (P2-T171 §5.1, I8).
 //! Driver tables that stayed narrow (one partition) while another widened
 //! are widened first, so all share the radix partitions; when none
-//! widened, one task merges them all. Then one task per range of
+//! widened, or a widening's copy cannot be reserved and there is no spill
+//! directory, one task with one partition merges them all. Then one task per range of
 //! partitions ([`final_tasks`], sized from the merged per-partition
 //! sketches) takes that range out of every driver table
 //! ([`RowTable::split_parts`], with its share of the driver's reservation)
@@ -42,7 +43,7 @@ use futures::stream::FuturesUnordered;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{Reservation, SpillWriter};
 
-use super::super::rowtable::{Mode, RowTable, final_tasks};
+use super::super::rowtable::{FinalTask, Mode, RowTable, final_tasks};
 use super::super::table::Table;
 use super::{
     CHUNK, Final, Global, HEADROOM, HashAggregate, Output, Run, Spiller, bump, lend_headroom,
@@ -177,7 +178,8 @@ impl HashAggregate {
             return Ok(true);
         }
         let spill = self.spiller(ctx);
-        let refuse = self.refused(0);
+        // Tests: any final stall also refuses the widening.
+        let refuse = self.refused(usize::MAX);
         if !Self::widen_inputs(&mut inputs, &mut held, spill.is_some(), refuse).await? {
             // No memory to widen the narrow tables: everything goes to disk.
             if let Some(s) = &spill {
@@ -353,7 +355,9 @@ impl HashAggregate {
     /// partitions; tables that all stayed narrow merge in one task. Each
     /// widening first reserves the copy it makes. When that is refused,
     /// with a spill directory (`spill`) this returns `false` (the caller
-    /// spills the inputs); without one it waits for the memory. `refuse`
+    /// spills the inputs); without one the rest stay narrow and one task
+    /// merges every partition of every input (see
+    /// [`final_queue`](Self::final_queue)), which needs no copy. `refuse`
     /// (a test hook) refuses every reservation.
     async fn widen_inputs(
         inputs: &mut [RowTable],
@@ -369,10 +373,9 @@ impl HashAggregate {
             let before = r.size();
             let extra = t.widen_bytes();
             if refuse || r.try_grow(extra).is_err() {
-                if spill {
-                    return Ok(false);
-                }
-                r.grow(extra).await.map_err(KrishivError::from)?;
+                // Without a spill directory, the inputs stay of mixed
+                // widths and merge in one task.
+                return Ok(!spill);
             }
             t.widen()?;
             if t.part_count() != wide {
@@ -426,14 +429,24 @@ impl HashAggregate {
         held: Vec<Reservation>,
         spill: bool,
     ) -> Result<(VecDeque<Task>, Option<Reservation>)> {
-        let plan = {
+        // The inputs' radix width (one partition when none widened).
+        let wide = inputs.iter().map(RowTable::part_count).max().unwrap_or(1);
+        let same = inputs.iter().all(|t| t.part_count() == wide);
+        // A one-partition merge table takes inputs of any width.
+        let bits = if same { wide.trailing_zeros() } else { 0 };
+        let plan = if same {
             let refs: Vec<&RowTable> = inputs.iter().collect();
             final_tasks(&refs)
+        } else {
+            // Mixed widths (a narrow table could not widen): one task with
+            // one partition merges every partition of every input, in
+            // table order. It is presized for the largest input only
+            // (memory is short; the table grows if there are more groups).
+            vec![FinalTask {
+                parts: 0..wide,
+                groups: inputs.iter().map(RowTable::len).max().unwrap_or(0),
+            }]
         };
-        // The inputs' radix width (one partition when none widened).
-        let bits = inputs
-            .first()
-            .map_or(0, |t| t.part_count().trailing_zeros());
         let ranges: Vec<Range<usize>> = plan.iter().map(|t| t.parts.clone()).collect();
         let mut per_task: Vec<Vec<(RowTable, Reservation)>> = ranges
             .iter()
