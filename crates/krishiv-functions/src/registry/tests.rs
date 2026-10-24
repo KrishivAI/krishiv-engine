@@ -54,10 +54,11 @@ fn every_definition_is_in_sparks_catalog() {
         // so the catalog knows neither its determinism nor its kind; a
         // raising function is fixed as nondeterministic so the optimizer
         // never moves it.
-        if s.deterministic.is_some() {
+        if d.name == "raise_error" {
+            assert!(s.deterministic.is_none() && s.kind.is_none());
+            assert!(!d.deterministic);
+        } else {
             assert_eq!(Some(d.deterministic), s.deterministic, "{}", d.name);
-        }
-        if s.kind.is_some() {
             assert_eq!(s.kind, Some(d.kind), "{}", d.name);
         }
         let dbg = format!("{d:?}");

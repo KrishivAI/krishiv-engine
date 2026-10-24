@@ -142,8 +142,6 @@ fn conv(ansi: bool) -> Binding {
     })
 }
 
-/// Converts `num` from `from_base` to `to_base` (both validated by the
-/// caller to fit `i32`), or NULL. A faithful port of Hive/Spark's
 /// The default `format_number(x, d)` pattern for an int `d`.
 fn default_pattern(d: i32) -> String {
     let mut pattern = "#,###,###,###,###,###,##0".to_owned();

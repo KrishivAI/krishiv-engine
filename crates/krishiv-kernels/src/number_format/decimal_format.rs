@@ -415,6 +415,11 @@ pub fn format(pattern: &str, value: Value) -> Result<String, PatternError> {
             (int, frac) = round_up(&int, &frac);
         }
     }
+    // Optional fraction digits (`#`) drop trailing zeros, down to the
+    // required (`0`) ones.
+    while frac.len() > sub.min_frac && frac.ends_with('0') {
+        frac.pop();
+    }
     while frac.len() < sub.min_frac {
         frac.push('0');
     }
@@ -434,7 +439,8 @@ pub fn format(pattern: &str, value: Value) -> Result<String, PatternError> {
     let mut out = String::new();
     out.push_str(&sub.prefix);
     out.push_str(&int);
-    if sub.max_frac > 0 {
+    // A bare decimal point is never shown.
+    if !frac.is_empty() {
         out.push('.');
         out.push_str(&frac);
     }
@@ -518,7 +524,10 @@ mod tests {
             "12,332.1234"
         );
         // 9.999 to two places carries into the integer part.
-        assert_eq!(format("#.##", Value::Float(9.999)).unwrap(), "10.00");
+        assert_eq!(format("#.##", Value::Float(9.999)).unwrap(), "10");
+        // Optional fraction digits drop trailing zeros and a bare point.
+        assert_eq!(format("#.##", Value::Float(2.0)).unwrap(), "2");
+        assert_eq!(format("#.0#", Value::Float(9.999)).unwrap(), "10.0");
         // Minimum integer digits pad with zeros.
         assert_eq!(format("000", Value::Int(5)).unwrap(), "005");
         // The shortest digits show ties the exact value is just below:
