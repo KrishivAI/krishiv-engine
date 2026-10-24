@@ -13,12 +13,12 @@
 //! message parameters must match.
 //!
 //! The goldens build their inputs with `CREATE TEMPORARY VIEW ... AS VALUES`
-//! and inline `VALUES` table sources, which the engine does not implement
-//! yet; the driver extracts each flat `VALUES` literal into a registered
-//! table of the same name (as `grouping_analytics.rs` does), so the
-//! statements themselves run verbatim, except for two statements with an
-//! alias-less inline `VALUES` source, which the driver rewrites to a
-//! pre-registered table of the same contents (see `rewrite`).
+//! and inline `VALUES` table sources; the driver extracts each flat `VALUES`
+//! literal into a registered table of the same name (as
+//! `grouping_analytics.rs` does, independent of whether the engine runs
+//! `VALUES`), so the statements themselves run verbatim, except for two
+//! statements with an alias-less inline `VALUES` source, which the driver
+//! rewrites to a pre-registered table of the same contents (see `rewrite`).
 //!
 //! Statements the engine cannot run yet are skipped with a reason (see
 //! `skip_reason`): struct columns (`named_struct`), star arguments to
@@ -39,6 +39,7 @@ use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
 use krishiv_session::Session;
+use krishiv_session::functions::{col, sum};
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
@@ -954,5 +955,172 @@ fn qualify_outside_qualify_is_unresolved() -> R {
         Ok(df) => block_on(df.collect()).expect_err("stray qualify must fail"),
     };
     assert_eq!(e.error_class().name(), "UNRESOLVED_ROUTINE");
+    Ok(())
+}
+
+/// Two small integer tables for the cases below: `l(a, b)` and `r(a, q)`.
+fn join_tables(s: &Session) -> R {
+    for (name, columns, rows) in [
+        ("l", ["a", "b"], [["1", "2"], ["3", "4"]]),
+        ("r", ["a", "q"], [["1", "2"], ["5", "6"]]),
+    ] {
+        let t = Table {
+            name: name.to_owned(),
+            columns: columns.map(str::to_owned).to_vec(),
+            rows: rows
+                .iter()
+                .map(|r| r.iter().map(|v| Some((*v).to_owned())).collect())
+                .collect(),
+        };
+        register(s, &t, name)?;
+    }
+    Ok(())
+}
+
+/// The error of a query Spark rejects (at planning or at execution).
+fn error_of(s: &Session, sql: &str) -> R<KrishivError> {
+    match block_on(s.sql(sql)) {
+        Err(e) => Ok(e),
+        Ok(df) => match block_on(df.collect()) {
+            Err(e) => Ok(e),
+            Ok(_) => Err(format!("{sql} must fail").into()),
+        },
+    }
+}
+
+/// `SORT BY ALL` is not `ORDER BY ALL`: `all` is an unknown column there
+/// (`UNRESOLVED_COLUMN`, checked against Spark 4.2.0), while `ORDER BY ALL`
+/// and the DataFrame `orderBy("all")` expand.
+#[test]
+fn sort_by_all_is_an_unresolved_column() -> R {
+    let s = Session::new()?;
+    join_tables(&s)?;
+    for sql in [
+        "SELECT a, b FROM l SORT BY ALL",
+        "SELECT a, b FROM l SORT BY all",
+    ] {
+        let e = error_of(&s, sql)?;
+        assert!(
+            e.error_class().name().starts_with("UNRESOLVED_COLUMN"),
+            "{sql}: {e}"
+        );
+    }
+    let ordered = block_on(s.sql("SELECT a, b FROM l ORDER BY ALL DESC"))?;
+    assert_eq!(
+        block_on(ordered.collect())?
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    let ordered = s.table("l").order_by([col("all")]);
+    assert_eq!(
+        block_on(ordered.collect())?
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    Ok(())
+}
+
+/// `GROUP BY ALL` is SQL only: a DataFrame `groupBy("all")` is an unknown
+/// column, as in Spark.
+#[test]
+fn dataframe_group_by_all_does_not_expand() -> R {
+    let s = Session::new()?;
+    join_tables(&s)?;
+    let df = s.table("l").group_by([col("all")]).agg([sum(col("b"))]);
+    let e = block_on(df.collect()).expect_err("groupBy(\"all\") must fail");
+    assert!(
+        e.error_class().name().starts_with("UNRESOLVED_COLUMN"),
+        "{e}"
+    );
+    // The SQL clause still groups by the select list, and a column named
+    // `all` takes the name.
+    let df = block_on(s.sql("SELECT a, sum(b) FROM l GROUP BY ALL"))?;
+    assert_eq!(
+        block_on(df.collect())?
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    Ok(())
+}
+
+/// `NATURAL LEFT/RIGHT JOIN` with no common column keeps its kind with
+/// no condition (Spark returns the product), and `NATURAL LEFT SEMI/ANTI`
+/// is rejected (Spark: `requirement failed: Unsupported natural join type`).
+#[test]
+fn natural_outer_joins_without_common_columns_and_semi_joins() -> R {
+    let s = Session::new()?;
+    for (name, column, values) in [("p", "x", vec!["1", "2"]), ("q", "y", vec!["3", "4"])] {
+        let t = Table {
+            name: name.to_owned(),
+            columns: vec![column.to_owned()],
+            rows: values
+                .into_iter()
+                .map(|v| vec![Some(v.to_owned())])
+                .collect(),
+        };
+        register(&s, &t, name)?;
+    }
+    for kind in ["LEFT", "RIGHT"] {
+        let df = block_on(s.sql(&format!("SELECT * FROM p NATURAL {kind} JOIN q")))?;
+        let rows: usize = block_on(df.collect())?
+            .iter()
+            .map(RecordBatch::num_rows)
+            .sum();
+        assert_eq!(rows, 4, "NATURAL {kind} JOIN");
+    }
+    join_tables(&s)?;
+    for kind in ["LEFT SEMI", "LEFT ANTI"] {
+        let e = error_of(&s, &format!("SELECT * FROM l NATURAL {kind} JOIN r"))?;
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{kind}"
+        );
+    }
+    Ok(())
+}
+
+/// `SELECT * EXCEPT (a)` over a join that outputs `a` twice is ambiguous.
+#[test]
+fn except_over_a_repeated_name_is_ambiguous() -> R {
+    let s = Session::new()?;
+    join_tables(&s)?;
+    let e = error_of(&s, "SELECT * EXCEPT (a) FROM l JOIN r ON l.b = r.q")?;
+    assert_eq!(e.error_class().name(), "AMBIGUOUS_REFERENCE");
+    Ok(())
+}
+
+/// The `UNRESOLVED_COLUMN` proposals rank quoted candidates by edit
+/// distance to the written name (case ignored, qualified or not), with
+/// ties in column order (each expected list was taken from Spark 4.2.0).
+#[test]
+fn unresolved_column_proposals_rank_like_spark() -> R {
+    let s = Session::new()?;
+    join_tables(&s)?;
+    for (sql, proposal) in [
+        ("SELECT aa FROM l", "`a`, `b`"),
+        ("SELECT l.bb FROM l", "`l`.`b`, `l`.`a`"),
+        ("SELECT AA FROM l", "`a`, `b`"),
+        ("SELECT zz FROM l", "`a`, `b`"),
+    ] {
+        let e = error_of(&s, sql)?;
+        assert_eq!(
+            e.error_class().name(),
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+            "{sql}"
+        );
+        assert!(
+            e.message_parameters()
+                .iter()
+                .any(|(k, v)| *k == "proposal" && v == proposal),
+            "{sql}: {e}"
+        );
+    }
     Ok(())
 }

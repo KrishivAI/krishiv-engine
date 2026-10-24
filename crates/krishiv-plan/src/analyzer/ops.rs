@@ -1253,22 +1253,12 @@ impl Resolver<'_> {
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
-        // `GROUP BY ALL`: a lone unqualified `all` groups by the select
-        // list (a column named `all` takes precedence, as Spark resolves
-        // it first).
-        let group = if is_bare_all(keys) {
-            match self.group_keys(&c, keys, &items, env) {
-                Ok(group) => group,
-                Err(e)
-                    if e.error
-                        .error_class()
-                        .name()
-                        .starts_with("UNRESOLVED_COLUMN") =>
-                {
-                    self.group_by_all(&items, keys[0].origin)?
-                }
-                Err(e) => return Err(e),
-            }
+        // `GROUP BY ALL`: a lone unqualified `all` in SQL groups by the select
+        // list, unless a column or a select-list alias named `all` takes it
+        // (Spark resolves names first). A DataFrame `groupBy("all")` has no
+        // SQL span and never expands (`UNRESOLVED_COLUMN`, as in Spark).
+        let group = if p.origin.sql.is_some() && is_bare_all(keys) && !self.names_all(&c, &items) {
+            self.group_by_all(&items, keys[0].origin)?
         } else {
             self.group_keys(&c, keys, &items, env)?
         };
@@ -1276,6 +1266,17 @@ impl Resolver<'_> {
         // `MISSING_GROUP_BY` for an ungrouped column.
         let global = group.is_empty();
         self.build_aggregate(p.origin, &c, group, &items, global, None)
+    }
+
+    /// Whether the input has a column, or (with `group_by_aliases`) the
+    /// select list an output, named `all`: then `GROUP BY ALL` names it.
+    fn names_all(&self, c: &Rel, items: &[Bound]) -> bool {
+        let cs = self.ctx.conf.case_sensitive;
+        c.out.iter().any(|a| same(&a.col.name, "all", cs))
+            || (self.ctx.conf.group_by_aliases
+                && items
+                    .iter()
+                    .any(|b| same(&out_attr(b, &c.out).col.name, "all", cs)))
     }
 
     /// `GROUP BY ALL` over the select list `items`, as Spark's
@@ -1758,6 +1759,14 @@ impl Resolver<'_> {
                 // outer-join coalescing are exactly the `USING` ones. With
                 // no common columns the join is a cross join, as Spark's
                 // is.
+                if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                    // Spark fails here with a bare `requirement failed:
+                    // Unsupported natural join type LeftSemi` (no error class).
+                    return Err(unsupported(
+                        "NATURAL LEFT SEMI and LEFT ANTI joins",
+                        p.origin,
+                    ));
+                }
                 let commons = Self::common_columns(&l, &r, self.ctx.conf.case_sensitive);
                 if commons.is_empty() {
                     if kind == JoinKind::Inner {
@@ -2075,11 +2084,14 @@ impl Resolver<'_> {
         let c = self.child(input, env)?;
         // `ORDER BY ALL [ASC|DESC] [NULLS ...]`: every output column in
         // order, with that direction (a column named `all` takes
-        // precedence, as Spark resolves it first). Inside a window
+        // precedence, as Spark resolves it first). Only a global sort: in
+        // `SORT BY ALL` and `sortWithinPartitions("all")` it is an unknown
+        // column (`UNRESOLVED_COLUMN`, checked against Spark 4.2.0). Inside a window
         // specification `all` stays a column: only the sort's own key
         // expands here.
         let expanded;
-        let order = if order.len() == 1
+        let order = if global
+            && order.len() == 1
             && is_all(&order[0].expr)
             && !c
                 .out

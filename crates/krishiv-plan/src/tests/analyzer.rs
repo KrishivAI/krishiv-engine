@@ -2482,9 +2482,12 @@ fn group_by_all_expands_over_non_aggregates() {
         keys
     }
 
+    // Only SQL has a `GROUP BY ALL`: the plan carries its span.
+    let sql = || Origin::sql(crate::SourceId(0), crate::Span::new(0, 1));
     // `a` groups; `count(*)` does not.
-    let plan =
-        LogicalPlan::table(["t"]).aggregate(vec![c("all")], vec![c("a"), f("count", vec![star()])]);
+    let plan = LogicalPlan::table(["t"])
+        .aggregate(vec![c("all")], vec![c("a"), f("count", vec![star()])])
+        .with_origin(sql());
     let a = run(plan, &ctx()).unwrap();
     assert_eq!(
         a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
@@ -2492,14 +2495,24 @@ fn group_by_all_expands_over_non_aggregates() {
     );
     assert_eq!(grouping_of(a.plan.root()).len(), 1);
     // An item mixing a bare column with an aggregate cannot be inferred.
-    let plan = LogicalPlan::table(["t"]).aggregate(vec![c("all")], vec![add(c("a"), count_star())]);
+    let plan = LogicalPlan::table(["t"])
+        .aggregate(vec![c("all")], vec![add(c("a"), count_star())])
+        .with_origin(sql());
     assert_eq!(class(&run(plan, &ctx())), "UNRESOLVED_ALL_IN_GROUP_BY");
     // A column actually named `all` takes precedence over the expansion.
     let plan = LogicalPlan::table(["t"])
         .project(vec![c("a").alias("all"), c("b")])
-        .aggregate(vec![c("all")], vec![c("all"), f("count", vec![star()])]);
+        .aggregate(vec![c("all")], vec![c("all"), f("count", vec![star()])])
+        .with_origin(sql());
     let a = run(plan, &ctx()).unwrap();
     assert_eq!(grouping_of(a.plan.root()).len(), 1);
+    // A DataFrame `groupBy("all")` has no SQL span: an unknown column.
+    let plan =
+        LogicalPlan::table(["t"]).aggregate(vec![c("all")], vec![c("a"), f("count", vec![star()])]);
+    assert_eq!(
+        class(&run(plan, &ctx())),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
 }
 
 /// `ORDER BY ALL` sorts by every output column; a column actually named
@@ -2536,6 +2549,17 @@ fn order_by_all_sorts_by_every_output_column() {
         ControlFlow::Continue(())
     });
     assert_eq!(orders.len(), 1);
+    // `SORT BY ALL` / `sortWithinPartitions("all")` is a non-global sort:
+    // `all` is an unknown column there.
+    let plan = LogicalPlan::new(PlanNode::Sort {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a"), c("b")])),
+        order: vec![SortOrder::asc(c("all"))],
+        global: false,
+    });
+    assert_eq!(
+        class(&run(plan, &ctx())),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
 }
 
 /// `* EXCEPT` drops the named columns; overlapping entries and nested
