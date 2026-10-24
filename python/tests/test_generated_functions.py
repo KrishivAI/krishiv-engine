@@ -42,7 +42,7 @@ REGISTRY_NAME = {
 #: Spark's `trim(chars, str)`: PySpark's `(col, trim)` is sent reversed.
 REVERSED = {"ltrim", "rtrim", "trim"}
 HAND_WRITTEN = {"asc", "call_function", "col", "column", "concat", "count", "countDistinct", "count_distinct"}
-HAND_WRITTEN |= {"desc", "expr", "lit", "log"}
+HAND_WRITTEN |= {"desc", "expr", "lit", "log", "when"}
 #: Parameters that only take some values.
 CHECKED_VALUES = {("sha2", "numBits"): 256}
 

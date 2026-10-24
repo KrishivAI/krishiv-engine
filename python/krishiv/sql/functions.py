@@ -14,7 +14,7 @@ from krishiv import _native
 from krishiv.errors import not_expected_type
 from krishiv.sql._function_support import ColumnOrName, _call, _named, _num_or_col
 from krishiv.sql._generated_functions import *
-from krishiv.sql.column import Column, _literal
+from krishiv.sql.column import Column, _literal, _operand
 
 __all__ = [
     "abs",
@@ -178,6 +178,7 @@ __all__ = [
     "unhex",
     "upper",
     "user",
+    "when",
     "xxhash64",
     "year",
     "zeroifnull",
@@ -238,6 +239,30 @@ def log(arg1: ColumnOrName | float, arg2: ColumnOrName | None = None) -> Column:
 
 def concat(*cols: ColumnOrName) -> Column:
     return _call("concat", *[_named(c, "cols") for c in cols])
+
+
+def when(condition: Column, value: Any) -> Column:
+    """Starts a ``CASE WHEN condition THEN value`` chain, as
+    ``pyspark.sql.functions.when``. Chain :meth:`Column.when` for more
+    branches and :meth:`Column.otherwise` for the ``ELSE`` value; without
+    ``otherwise`` unmatched rows are NULL.
+
+    Examples
+    --------
+    >>> df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], ["age", "name"])
+    >>> df.select(df.name, when(df.age > 3, 1).otherwise(0)).show()
+    +-----+-------------------------------------+
+    | name|CASE WHEN (age > 3) THEN 1 ELSE 0 END|
+    +-----+-------------------------------------+
+    |Alice|                                    0|
+    |  Bob|                                    1|
+    +-----+-------------------------------------+
+    """
+    from krishiv.sql.column import _WhenColumn
+
+    if not isinstance(condition, Column):
+        raise not_expected_type("condition", "Column", condition)
+    return _WhenColumn([(condition._c, _operand(value))])
 
 
 def asc(col: ColumnOrName) -> Column:

@@ -18,7 +18,8 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
-    FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+    FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
+    WindowFunctionPlan, WindowPlan,
 };
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -493,6 +494,24 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "window_group_limit",
+            PhysNode::Window {
+                input: boxed(PhysNode::WindowGroupLimit {
+                    input: boxed(PhysNode::Sort {
+                        input: boxed(scan()),
+                        keys: vec![SortKey::asc(0), SortKey::desc(1)],
+                    }),
+                    limit: GroupLimitPlan {
+                        partition_by: vec![0],
+                        order_by: vec![SortKey::desc(1)],
+                        function: RankLike::DenseRank,
+                        limit: 3,
+                    },
+                }),
+                window: window_ranking(),
+            },
+        ),
+        (
             "aggregate_final",
             PhysNode::Aggregate {
                 input: boxed(scan()),
@@ -511,6 +530,27 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 residual: None,
                 runtime_filters: Vec::new(),
                 ..join(JoinType::NullAwareAnti)
+            }),
+        ),
+        (
+            "hash_join_right_semi",
+            PhysNode::HashJoin(HashJoinPlan {
+                distribution: JoinDistribution::Partitioned,
+                ..join(JoinType::RightSemi)
+            }),
+        ),
+        (
+            "hash_join_right_anti",
+            PhysNode::HashJoin(HashJoinPlan {
+                distribution: JoinDistribution::Partitioned,
+                ..join(JoinType::RightAnti)
+            }),
+        ),
+        (
+            "hash_join_right_outer",
+            PhysNode::HashJoin(HashJoinPlan {
+                distribution: JoinDistribution::Partitioned,
+                ..join(JoinType::RightOuter)
             }),
         ),
         (

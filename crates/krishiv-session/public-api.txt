@@ -89,6 +89,7 @@ pub fn krishiv_session::Column::lt(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::lt_eq(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::not_eq(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::or(self, impl core::convert::Into<Self>) -> Self
+pub fn krishiv_session::Column::try_cast(self, krishiv_types::data_type::DataType) -> Self
 impl core::clone::Clone for krishiv_session::Column
 pub fn krishiv_session::Column::clone(&self) -> krishiv_session::Column
 impl core::cmp::Eq for krishiv_session::Column
@@ -144,18 +145,29 @@ pub async fn krishiv_session::DataFrame::collect_with_metrics(&self) -> core::re
 pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::cross_join(&self, &Self) -> Self
+pub fn krishiv_session::DataFrame::distinct(&self) -> Self
+pub fn krishiv_session::DataFrame::except_all(&self, &Self) -> Self
 pub async fn krishiv_session::DataFrame::execute_stream(&self) -> core::result::Result<krishiv_session::RecordBatchStream, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain(&self, krishiv_session::ExplainMode) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::filter(&self, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::group_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
+pub fn krishiv_session::DataFrame::hint(&self, &str, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::DataFrame::intersect(&self, &Self) -> Self
+pub fn krishiv_session::DataFrame::intersect_all(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::join(&self, &Self, krishiv_session::Column, krishiv_session::JoinType) -> Self
 pub fn krishiv_session::DataFrame::join_using<'a>(&self, &Self, impl core::iter::traits::collect::IntoIterator<Item = &'a str>, krishiv_session::JoinType) -> Self
 pub fn krishiv_session::DataFrame::limit(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::offset(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::order_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::DataFrame::sample(&self, bool, f64, i64) -> Self
 pub async fn krishiv_session::DataFrame::schema(&self) -> core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::select(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub fn krishiv_session::DataFrame::sort(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::DataFrame::subtract(&self, &Self) -> Self
+pub fn krishiv_session::DataFrame::to_df(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> Self
+pub fn krishiv_session::DataFrame::union(&self, &Self) -> Self
+pub fn krishiv_session::DataFrame::union_by_name(&self, &Self, bool) -> Self
+pub fn krishiv_session::DataFrame::unpivot(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>, impl core::iter::traits::collect::IntoIterator<Item = (alloc::string::String, krishiv_session::Column)>, &str, &str) -> Self
 pub async fn krishiv_session::DataFrame::warnings(&self) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::where_(&self, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::with_column(&self, &str, krishiv_session::Column) -> Self

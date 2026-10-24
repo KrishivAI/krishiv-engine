@@ -9,6 +9,8 @@
 //!   table, all hits (join-shaped find).
 //! - `row_table/<index>_build_strings_64k`: the build with 24-byte string
 //!   keys (long views, heap compare).
+//! - `row_table/encode_short_<type>_128k`: encoding and hashing 128 Ki
+//!   10-byte string keys (inline views) as `Utf8View` or `Utf8`.
 //!
 //! These are cache-resident sizes for CodSpeed; the go/no-go matrix at
 //! 1e4–1.5e7 keys is `cargo run --release --features row-table-prototype --example row_table_matrix`.
@@ -25,7 +27,7 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Int64Array, StringViewArray};
+use arrow_array::{ArrayRef, Int64Array, StringArray, StringViewArray};
 use arrow_schema::DataType;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use krishiv_exec::hash::{HashSeed, KeyEncoder, KeyTable};
@@ -126,6 +128,28 @@ fn bench(c: &mut Criterion) {
                     let keys = layout.encode(&[Arc::clone(a)], 42).expect("encode");
                     table.find(&layout, &keys, &pages, &mut out);
                     black_box(&out);
+                }
+            });
+        });
+    }
+    // Short keys: the inline-view encode and hash alone.
+    for (name, t) in [("view", DataType::Utf8View), ("utf8", DataType::Utf8)] {
+        let layout = RowLayout::new(&[t.clone()], &[false]).expect("layout");
+        let short: Vec<ArrayRef> = build
+            .chunks(BATCH)
+            .map(|c| -> ArrayRef {
+                let values = c.iter().map(|&r| format!("{:010x}", scramble(r) >> 24));
+                if t == DataType::Utf8View {
+                    Arc::new(StringViewArray::from_iter_values(values))
+                } else {
+                    Arc::new(StringArray::from_iter_values(values))
+                }
+            })
+            .collect();
+        g.bench_function(format!("encode_short_{name}_128k"), |b| {
+            b.iter(|| {
+                for a in &short {
+                    black_box(layout.encode(&[Arc::clone(a)], 42).expect("encode"));
                 }
             });
         });

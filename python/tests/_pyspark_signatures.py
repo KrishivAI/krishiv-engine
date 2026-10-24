@@ -166,6 +166,7 @@ PYSPARK_SIGNATURES = {
     "unhex": "col",
     "upper": "col",
     "user": "",
+    "when": "condition, value",
     "xxhash64": "*cols",
     "year": "col",
     "zeroifnull": "col",

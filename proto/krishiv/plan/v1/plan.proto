@@ -102,6 +102,8 @@ message Node {
     WindowNode window = 15;
     // feature: expand
     ExpandNode expand = 16;
+    // feature: window_group_limit
+    WindowGroupLimitNode window_group_limit = 17;
   }
 }
 
@@ -226,6 +228,26 @@ message WindowNode {
   repeated WindowFunctionPlan functions = 4;
 }
 
+// feature: window_group_limit
+// The rows of each partition a rank-like function ranks at most `limit`,
+// over an input sorted as a window's (Spark's WindowGroupLimit).
+message WindowGroupLimitNode {
+  uint32 input = 1;
+  repeated uint64 partition_by = 2;
+  repeated SortKey order_by = 3;
+  RankLikeFunction function = 4;
+  // At least one.
+  uint64 limit = 5;
+}
+
+// feature: window_group_limit
+enum RankLikeFunction {
+  RANK_LIKE_FUNCTION_UNSPECIFIED = 0;
+  RANK_LIKE_FUNCTION_ROW_NUMBER = 1;
+  RANK_LIKE_FUNCTION_RANK = 2;
+  RANK_LIKE_FUNCTION_DENSE_RANK = 3;
+}
+
 message WindowFunctionPlan {
   oneof function {
     Empty row_number = 1;
@@ -311,6 +333,14 @@ enum JoinType {
   JOIN_TYPE_LEFT_SEMI = 3;
   JOIN_TYPE_LEFT_ANTI = 4;
   JOIN_TYPE_NULL_AWARE_ANTI = 5;
+  // Joins that build their preserved side and return its rows by their
+  // matches.
+  // feature: join_build_preserved
+  JOIN_TYPE_RIGHT_SEMI = 6;
+  // feature: join_build_preserved
+  JOIN_TYPE_RIGHT_ANTI = 7;
+  // feature: join_build_preserved
+  JOIN_TYPE_RIGHT_OUTER = 8;
 }
 
 message Residual {

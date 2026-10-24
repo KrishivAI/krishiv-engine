@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::ErrorClass;
-use krishiv_optimizer::{ColumnStats, Statistics, TableStats, TopN, optimize};
+use krishiv_optimizer::{ColumnStats, Statistics, TableStats, TopN, optimize, optimize_with};
 use krishiv_plan::{
     Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, LogicalPlan, Plan, PlanNode,
     ResolvedExpr, ResolvedFunction, Scan,
@@ -423,13 +423,13 @@ fn rules() {
     let ctx = support::ctx();
     for (name, sql) in CASES {
         let plan = support::resolve(sql, &ctx);
-        let optimized = optimize(&plan).unwrap();
+        let optimized = optimize_with(&plan, &support::AllDistinct).unwrap();
         assert_eq!(
             optimized.root().resolved_output(),
             plan.root().resolved_output(),
             "{name} keeps its output"
         );
-        let again = optimize(&optimized).unwrap();
+        let again = optimize_with(&optimized, &support::AllDistinct).unwrap();
         assert!(
             again.structurally_eq(&optimized),
             "{name} is a fixed point:\n{}",
