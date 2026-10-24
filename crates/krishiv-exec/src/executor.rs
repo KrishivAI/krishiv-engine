@@ -155,7 +155,9 @@ fn join_error(e: JoinError) -> krishiv_common::error::KrishivError {
 pub struct ExecutorConfig {
     /// Compute worker threads (default: available cores).
     pub compute_threads: usize,
-    /// I/O runtime threads (default 2).
+    /// I/O runtime threads (default 2): its workers, and at most as many
+    /// blocking threads (where a local file store reads, see
+    /// [`TokioExecutor::new`]).
     pub io_threads: usize,
     /// Blocking closures that may run at once (default: compute threads).
     pub blocking_threads: usize,
@@ -230,8 +232,21 @@ impl TokioExecutor {
                 .max_blocking_threads(blocking_threads),
             "krishiv-compute",
         )?;
+        // The I/O runtime's blocking pool is bounded too. A local file
+        // store reads each range on a blocking thread, so the buffer lives
+        // in that thread's allocator heap; it is freed later on a compute
+        // thread, and the page it sat in stays resident in the reading
+        // thread's heap until that thread allocates again. Tokio's default
+        // pool grows to 512 threads (TPC-H Q21 at SF10 under a 2 GiB limit
+        // ran up to ~200 threads and held ~690 MiB more resident memory than
+        // the live heap; capped at the worker count, about 200 MiB less).
+        // Reads queue for a thread instead; from the page cache two keep up
+        // with twelve decoding threads (TPC-H SF10 Q1, Q6, Q12 unchanged).
+        let io_threads = config.io_threads.max(1);
         let io = build(
-            tokio::runtime::Builder::new_multi_thread().worker_threads(config.io_threads.max(1)),
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(io_threads)
+                .max_blocking_threads(io_threads),
             "krishiv-io",
         )?;
         Ok(Arc::new(Self {

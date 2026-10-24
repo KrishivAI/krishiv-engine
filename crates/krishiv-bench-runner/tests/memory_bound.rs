@@ -12,6 +12,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
@@ -129,15 +130,15 @@ struct Runner {
 }
 
 impl Runner {
-    fn start(data: &Path, cap: Option<u64>) -> Self {
+    fn start(data: &Path, limit: u64, threads: u64, cap: Option<u64>) -> Self {
         let bin = env!("CARGO_BIN_EXE_krishiv-bench-runner");
         let args = [
             "--data",
             data.to_str().unwrap(),
             "--threads",
-            &THREADS.to_string(),
+            &threads.to_string(),
             "--memory-limit",
-            &LIMIT.to_string(),
+            &limit.to_string(),
         ]
         .map(str::to_owned);
         let mut cmd = match cap {
@@ -208,7 +209,7 @@ fn peak_rss_stays_within_the_bound_while_queries_spill() {
         "memory bound {bound} B for a {LIMIT} B limit, cgroup cap: {}",
         cap.map_or_else(|| "unavailable".to_owned(), |c| c.to_string())
     );
-    let mut runner = Runner::start(dir.path(), cap);
+    let mut runner = Runner::start(dir.path(), LIMIT, THREADS, cap);
     for (name, sql) in QUERIES {
         let file = dir.path().join(format!("{name}.sql"));
         std::fs::write(&file, sql).unwrap();
@@ -240,4 +241,232 @@ fn the_bound_is_a_quarter_over_the_limit_plus_the_floor() {
     );
     assert_eq!(rss_bound(u64::MAX, 1), u64::MAX);
     assert_eq!(rss_bound(0, 0), RSS_FLOOR_BASE);
+}
+
+/// The sum of the operators' `"key":` counters in a PROFILE reply.
+fn operator_counter(json: &str, key: &str) -> u64 {
+    let pat = format!("\"{key}\":");
+    json.match_indices(&pat)
+        .filter_map(|(at, _)| {
+            let digits: String = json[at + pat.len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            digits.parse::<u64>().ok()
+        })
+        .sum()
+}
+
+/// Rows of the TPC-H-shaped `li` table of the q21-shaped test.
+const LI_ROWS: i64 = 1_200_000;
+/// The q21-shaped test's limit and compute threads: more threads than the test above, so the
+/// scans keep many reads in flight at once (as TPC-H Q21 at SF10 does on 12 threads).
+const LI_LIMIT: u64 = 96 << 20;
+const LI_THREADS: u64 = 6;
+
+/// One `li` row: `(orderkey, suppkey, late)`, `late` being `receipt > commit`.
+fn li_row(i: i64) -> (i64, i64, bool) {
+    // About four lines per order, suppliers spread over 1,000, about half the lines late:
+    // deterministic, so the expected result is computed from the same function.
+    // splitmix64's finalizer: every output bit depends on every bit of `i`.
+    let mut z = u64::try_from(i)
+        .unwrap()
+        .wrapping_add(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^= z >> 31;
+    (i / 4, i64::try_from(z % 1_000).unwrap(), z >> 63 == 1)
+}
+
+/// `li(l_orderkey, l_suppkey, l_receipt, l_commit, l_comment)`: `LI_ROWS` rows in 64K-row
+/// row groups.
+fn write_li(dir: &Path) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l_orderkey", DataType::Int64, false),
+        Field::new("l_suppkey", DataType::Int64, false),
+        Field::new("l_receipt", DataType::Int64, false),
+        Field::new("l_commit", DataType::Int64, false),
+        Field::new("l_comment", DataType::Utf8, false),
+    ]));
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(65_536))
+        .build();
+    let mut w = ArrowWriter::try_new(
+        std::fs::File::create(dir.join("li.parquet")).unwrap(),
+        Arc::clone(&schema),
+        Some(props),
+    )
+    .unwrap();
+    for start in (0..LI_ROWS).step_by(50_000) {
+        let rows: Vec<_> = (start..(start + 50_000).min(LI_ROWS)).map(li_row).collect();
+        let commit: Vec<i64> = (start..(start + 50_000).min(LI_ROWS))
+            .map(|i| i % 365)
+            .collect();
+        let receipt: Vec<i64> = rows
+            .iter()
+            .zip(&commit)
+            .map(|(r, c)| if r.2 { c + 1 } else { c - 1 })
+            .collect();
+        let comment: Vec<String> = rows
+            .iter()
+            .map(|r| format!("{:x} carefully final deposits {}", r.0, r.1))
+            .collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int64Array::from(
+                    rows.iter().map(|r| r.0).collect::<Vec<_>>(),
+                )),
+                Arc::new(Int64Array::from(
+                    rows.iter().map(|r| r.1).collect::<Vec<_>>(),
+                )),
+                Arc::new(Int64Array::from(receipt)),
+                Arc::new(Int64Array::from(commit)),
+                Arc::new(StringArray::from(comment)),
+            ],
+        )
+        .unwrap();
+        w.write(&batch).unwrap();
+    }
+    w.close().unwrap();
+}
+
+/// TPC-H Q21's shape on `li`: late lines of a few suppliers (`l1`), kept if another supplier
+/// has a line in the order (`EXISTS`, a semi join) and no other supplier's line is late
+/// (`NOT EXISTS`, an anti join), both with a `<>` residual. Both build sides (`l2`, `l3`) are
+/// far larger than the limit and spill; the probe side is small next to them, so their
+/// spilled partitions are joined with roles reversed, as at SF10.
+const Q21_SHAPED: &str = "SELECT count(*), sum(l1.l_suppkey), sum(length(l1.l_comment)) FROM li l1 \
+    WHERE l1.l_receipt > l1.l_commit AND l1.l_suppkey % 25 = 0 \
+    AND EXISTS (SELECT * FROM li l2 WHERE l2.l_orderkey = l1.l_orderkey \
+        AND l2.l_suppkey <> l1.l_suppkey) \
+    AND NOT EXISTS (SELECT * FROM li l3 WHERE l3.l_orderkey = l1.l_orderkey \
+        AND l3.l_suppkey <> l1.l_suppkey AND l3.l_receipt > l3.l_commit)";
+
+/// `Q21_SHAPED`'s `(count, sum of suppkeys)`, computed directly from [`li_row`].
+fn q21_shaped_expected() -> (i64, i64) {
+    let (mut count, mut sum) = (0, 0);
+    let mut order = Vec::new();
+    let mut flush = |order: &mut Vec<(i64, i64, bool)>| {
+        for &(_, supp, late) in order.iter() {
+            let other = order.iter().any(|&(_, s, _)| s != supp);
+            let other_late = order.iter().any(|&(_, s, l)| s != supp && l);
+            if late && supp % 25 == 0 && other && !other_late {
+                count += 1;
+                sum += supp;
+            }
+        }
+        order.clear();
+    };
+    for i in 0..LI_ROWS {
+        let row = li_row(i);
+        if order
+            .first()
+            .is_some_and(|f: &(i64, i64, bool)| f.0 != row.0)
+        {
+            flush(&mut order);
+        }
+        order.push(row);
+    }
+    flush(&mut order);
+    (count, sum)
+}
+
+/// TPC-H Q21 at SF10 was OOM-killed under a cgroup at its memory gate: the process held far more
+/// than the pool reserved, in allocator caches of the I/O runtime's blocking threads (one per
+/// local-file read in flight, unbounded). A q21-shaped query whose joins spill, on a scan that
+/// keeps many reads in flight, stays within [`rss_bound`] and returns the right result.
+#[test]
+fn a_q21_shaped_spilling_join_stays_within_the_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    write_li(dir.path());
+    let bound = rss_bound(LI_LIMIT, LI_THREADS);
+    let cap = cgroup_available().then_some(bound + PAGE_CACHE_ALLOWANCE);
+    let mut runner = Runner::start(dir.path(), LI_LIMIT, LI_THREADS, cap);
+    let file = dir.path().join("q21_shaped.sql");
+    std::fs::write(&file, Q21_SHAPED).unwrap();
+    // The most threads the runner has while the query runs.
+    let tasks = format!("/proc/{}/task", runner.child.id());
+    let done = Arc::new(AtomicBool::new(false));
+    let watch = {
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || {
+            let mut most = 0;
+            while !done.load(Ordering::Acquire) {
+                most = most.max(std::fs::read_dir(&tasks).map_or(0, Iterator::count));
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            most
+        })
+    };
+    let reply = runner.command(&format!("PROFILE {}", encode_path(file.to_str().unwrap())));
+    done.store(true, Ordering::Release);
+    let threads = watch.join().unwrap();
+    assert!(
+        reply.starts_with("OK "),
+        "{reply:?} (an empty reply is a killed runner: memory above {bound} B)"
+    );
+    // Every thread that allocates keeps freed memory in its own allocator heap, so their number
+    // is bounded: compute workers, as many blocking threads, the I/O runtime's workers and as
+    // many blocking threads (its default of two each), and the main and memory-timer threads.
+    let allowed = 2 * LI_THREADS + 2 * 2 + 2;
+    assert!(
+        u64::try_from(threads).unwrap() <= allowed,
+        "{threads} threads, at most {allowed} allocate"
+    );
+    let peak = memory_field(&reply, "peak_rss_bytes").expect("Linux reports the peak RSS");
+    let reserved = memory_field(&reply, "peak_reserved_bytes").unwrap();
+    let spilled = memory_field(&reply, "spill_files").unwrap();
+    eprintln!(
+        "q21-shaped: peak RSS {peak} B (bound {bound} B), peak reserved {reserved} B, \
+         {spilled} spill files, {threads} threads"
+    );
+    assert!(
+        spilled > 0,
+        "the joins must spill under {LI_LIMIT} B: {reply}"
+    );
+    assert!(
+        operator_counter(&reply, "reversed_partitions") > 0,
+        "spilled partitions are joined with roles reversed: {reply}"
+    );
+    assert!(peak <= bound, "peak RSS {peak} B above {bound} B");
+    assert!(
+        reserved <= LI_LIMIT,
+        "reserved {reserved} B above the limit"
+    );
+    // The result, written by the same process.
+    let out = dir.path().join("out");
+    let reply = runner.command(&format!(
+        "DUMP {} {}",
+        encode_path(file.to_str().unwrap()),
+        encode_path(out.to_str().unwrap())
+    ));
+    assert!(reply.starts_with("OK 1 "), "{reply:?}");
+    let mut got = Vec::new();
+    for entry in std::fs::read_dir(&out).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "parquet") {
+            let reader = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(
+                std::fs::File::open(path).unwrap(),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+            for batch in reader {
+                let batch = batch.unwrap();
+                for c in 0..2 {
+                    let col = batch
+                        .column(c)
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap();
+                    got.extend(col.iter().map(Option::unwrap_or_default));
+                }
+            }
+        }
+    }
+    let (count, sum) = q21_shaped_expected();
+    assert!(count > 1_000, "the query keeps rows: {count}");
+    assert_eq!(got, vec![count, sum]);
+    assert_eq!(runner.command("QUIT"), "");
 }
