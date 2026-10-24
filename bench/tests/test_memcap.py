@@ -172,12 +172,15 @@ def test_q3_keeps_the_latest_order_of_every_customer(tiny):
     rows = _oracle(out, "q3_window_latest")
     distinct = _sql(f"SELECT count(DISTINCT customer_id) FROM read_parquet('{out}/sales/*.parquet')")
     assert len(rows) == distinct.fetchall()[0][0]
-    worst = _sql(
-        f"""SELECT count(*) FROM read_parquet('{out}/sales/*.parquet') s
-            JOIN (SELECT customer_id, max(ts) AS m FROM read_parquet('{out}/sales/*.parquet') GROUP BY 1) l
-              USING (customer_id) WHERE s.ts > l.m"""
+    expected = _sql(
+        f"""SELECT customer_id, order_id, ts FROM read_parquet('{out}/sales/*.parquet') s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM read_parquet('{out}/sales/*.parquet') s2
+                WHERE s2.customer_id = s.customer_id
+                  AND (s2.ts > s.ts OR (s2.ts = s.ts AND s2.order_id > s.order_id))
+            )"""
     ).fetchall()
-    assert worst == [(0,)]
+    assert sorted((r[0], r[1], r[2]) for r in rows) == sorted((r[0], r[1], r[2]) for r in expected)
 
 
 def test_q4_one_row_per_customer(tiny):
@@ -723,7 +726,7 @@ def test_run_one_runs_a_real_child_under_the_cap(tiny, tmp_path):
     assert rec["wall_s"] >= rec["query_s"]
     failing = memcap.run_one("duckdb", tmp_path / "nodata", "q4_highcard_agg", "1g", CAP, 120, tmp_path / "w2")
     assert failing["status"] == "failed"
-    assert "nodata" in failing["error"] or "No files found" in failing["error"] or failing["error"]
+    assert "No files found" in failing["error"]
 
 
 def test_cgroup_discovery_ignores_our_own_cgroup(monkeypatch):

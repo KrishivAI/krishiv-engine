@@ -257,7 +257,7 @@ def run_one(
     if status == "finished" and result is not None:
         rec |= {k: result[k] for k in ("version", "setup_s", "query_s", "rows_out")}
     else:
-        tail = stderr_f.read_text(errors="replace").strip().splitlines()[-3:]
+        tail = stderr_f.read_text(errors="replace").strip().splitlines()[-5:]
         rec["error"] = " | ".join(tail)[:500]
     return rec
 
