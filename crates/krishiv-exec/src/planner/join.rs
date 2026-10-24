@@ -31,6 +31,7 @@ use krishiv_plan::{
 
 use super::build::{Planned, Planner, unsupported};
 use super::explain::ExplainNode;
+use super::orient::{InputStats, StatsSource, orient};
 use super::properties::Distribution;
 use crate::error::Result;
 use crate::join::JoinType;
@@ -131,8 +132,23 @@ impl Planner<'_> {
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
         let (probe, probe_keys) = self.with_columns(probe, &probe_exprs)?;
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
-        let build_plan = if build_left { &logical.0 } else { &logical.1 };
+        let (probe_plan, build_plan) = if build_left {
+            (&logical.1, &logical.0)
+        } else {
+            (&logical.0, &logical.1)
+        };
         let build_rows = self.estimated_rows(build_plan);
+        // Which side the statistics say to build (design P2-T166). The
+        // joins that build their preserved side do not run yet: the plan
+        // keeps the right build and shows the preference.
+        let preferred = if choice.distribution.is_none() {
+            let probe_stats = self.input_stats(probe_plan, &probe.schema);
+            let build_stats = self.input_stats(build_plan, &build.schema);
+            let other = orient(join_type, &probe_stats, &build_stats);
+            (other != join_type).then_some((other, probe_stats, build_stats))
+        } else {
+            None
+        };
         // A hint decides, else the build's estimated size. The null-aware
         // anti join reads whether the whole build has a NULL key, so its
         // build is always broadcast.
@@ -200,6 +216,13 @@ impl Planner<'_> {
         for p in published {
             detail.push_str(&format!(", {p}"));
         }
+        if let Some((other, probe_stats, build_stats)) = preferred {
+            detail.push_str(&format!(
+                ", prefers {other:?} (probe: {}; build: {})",
+                probe_stats.describe(),
+                build_stats.describe()
+            ));
+        }
         let (probe_schema, build_schema) = (Arc::clone(&probe.schema), Arc::clone(&build.schema));
         let plan = HashJoinPlan {
             probe: Box::new(probe.node),
@@ -245,6 +268,21 @@ fn residual_of(probe: &Planned, build: &Planned, residual: &[&Expr]) -> Option<R
 }
 
 impl Planner<'_> {
+    /// The statistics of a join input planned as `schema` from `plan`.
+    fn input_stats(&self, plan: &Arc<LogicalPlan>, schema: &arrow_schema::Schema) -> InputStats {
+        let rows = self.estimated_rows(plan);
+        let source = if self.has_statistics(plan) {
+            StatsSource::Statistics
+        } else {
+            StatsSource::Default
+        };
+        InputStats {
+            rows,
+            bytes: estimated_bytes(rows, schema),
+            source,
+        }
+    }
+
     /// A join without an equality conjunct: a nested-loop join building the
     /// right input.
     fn nested_loop(

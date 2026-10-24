@@ -18,7 +18,8 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
-    FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+    FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
+    WindowFunctionPlan, WindowPlan,
 };
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -477,6 +478,10 @@ impl Decoder {
                 input: self.boxed(w.input)?,
                 window: window_plan(w)?,
             },
+            Kind::WindowGroupLimit(g) => PhysNode::WindowGroupLimit {
+                input: self.boxed(g.input)?,
+                limit: group_limit(g)?,
+            },
             Kind::Aggregate(a) => PhysNode::Aggregate {
                 input: self.boxed(a.input)?,
                 aggregate: aggregate(a)?,
@@ -743,6 +748,22 @@ fn window_plan(w: &pb::WindowNode) -> Result<WindowPlan> {
     })
 }
 
+fn group_limit(g: &pb::WindowGroupLimitNode) -> Result<GroupLimitPlan> {
+    if g.limit == 0 {
+        return Err(corrupt("a window group limit of 0 rows"));
+    }
+    Ok(GroupLimitPlan {
+        partition_by: usizes(&g.partition_by)?,
+        order_by: sort_keys(&g.order_by)?,
+        function: enum_map!(pb::RankLikeFunction, g.function, "rank-like function", {
+            RowNumber => RankLike::RowNumber,
+            Rank => RankLike::Rank,
+            DenseRank => RankLike::DenseRank,
+        })?,
+        limit: g.limit,
+    })
+}
+
 fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
     use pb::window_function_plan::Function;
     let function = match required(&f.function, "a window function")? {
@@ -758,13 +779,32 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
             WindowFunction::Ntile(*buckets)
         }
         Function::Aggregate(a) => WindowFunction::Aggregate(aggregate_expr(a)?),
+        Function::OffsetValue(o) => WindowFunction::Offset {
+            input: usize_of(o.input)?,
+            offset: o.offset,
+            default: o.default.map(usize_of).transpose()?,
+            ignore_nulls: o.ignore_nulls,
+            data_type: type_from(&o.data_type)?,
+        },
+        Function::NthValue(o) => {
+            if o.n <= 0 {
+                return Err(corrupt("an nth_value of a row below one"));
+            }
+            WindowFunction::NthValue {
+                input: usize_of(o.input)?,
+                n: o.n,
+                ignore_nulls: o.ignore_nulls,
+                data_type: type_from(&o.data_type)?,
+            }
+        }
     };
     let frame = required(&f.frame, "a window frame")?;
-    let bound = |b: i32| {
+    let bound = |b: i32, offset: i64| {
         enum_map!(pb::FrameBound, b, "window frame bound", {
             UnboundedPreceding => FrameBound::UnboundedPreceding,
             CurrentRow => FrameBound::CurrentRow,
             UnboundedFollowing => FrameBound::UnboundedFollowing,
+            Offset => FrameBound::Offset(offset),
         })
     };
     Ok(WindowFunctionPlan {
@@ -774,8 +814,8 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
                 Rows => FrameUnits::Rows,
                 Range => FrameUnits::Range,
             })?,
-            lower: bound(frame.lower)?,
-            upper: bound(frame.upper)?,
+            lower: bound(frame.lower, frame.lower_offset)?,
+            upper: bound(frame.upper, frame.upper_offset)?,
         },
         filter: f.filter.map(usize_of).transpose()?,
         name: f.name.clone(),
@@ -820,6 +860,9 @@ fn join_type(t: i32) -> Result<JoinType> {
         LeftSemi => JoinType::LeftSemi,
         LeftAnti => JoinType::LeftAnti,
         NullAwareAnti => JoinType::NullAwareAnti,
+        RightSemi => JoinType::RightSemi,
+        RightAnti => JoinType::RightAnti,
+        RightOuter => JoinType::RightOuter,
     })
 }
 

@@ -200,6 +200,17 @@ async fn run_keys(
     window: &WindowPlan,
     limit: usize,
 ) -> crate::Result<Vec<Batch>> {
+    run_keys_ansi(keys_as, rows, split, window, limit, true).await
+}
+
+async fn run_keys_ansi(
+    keys_as: Keys,
+    rows: &[Row],
+    split: usize,
+    window: &WindowPlan,
+    limit: usize,
+    ansi: bool,
+) -> crate::Result<Vec<Batch>> {
     let s = schema_of(keys_as);
     let batches: Vec<Batch> = rows
         .chunks(split.max(1))
@@ -213,7 +224,7 @@ async fn run_keys(
     keys.extend(window.order_by.iter().copied());
     keys.push(SortKey::asc(2));
     let sort = Arc::new(Sort::new(Arc::clone(&s), &keys, None)?);
-    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), true, None)?);
+    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), ansi, None)?);
     let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
         input: Arc::new(BreakerNode {
             input: Arc::new(SourceNode(Batches::new(s, batches))),
@@ -323,7 +334,71 @@ fn reference(
         let n = part.len();
         let rank = 1 + part.iter().filter(|x| key(x.1) < key(r.1)).count();
         let peers_end = part.iter().filter(|x| key(x.1) <= key(r.1)).count();
+        let peers_start = rank - 1;
+        let at = |k: i64| {
+            let i = i64::try_from(pos).unwrap().saturating_add(k);
+            usize::try_from(i.clamp(0, i64::try_from(n).unwrap())).unwrap()
+        };
+        let start = match (frame.units, frame.lower) {
+            (_, FrameBound::UnboundedPreceding) => 0,
+            (FrameUnits::Rows, FrameBound::CurrentRow) => pos,
+            (FrameUnits::Range, FrameBound::CurrentRow) => peers_start,
+            (_, FrameBound::Offset(k)) => at(k),
+            (_, b) => {
+                out.push(format!("<lower {b:?}>"));
+                continue;
+            }
+        };
+        let end = match (frame.units, frame.upper) {
+            (_, FrameBound::UnboundedFollowing) => n,
+            (FrameUnits::Rows, FrameBound::CurrentRow) => pos + 1,
+            (FrameUnits::Range, FrameBound::CurrentRow) => peers_end,
+            (_, FrameBound::Offset(k)) => at(k + 1),
+            (_, b) => {
+                out.push(format!("<upper {b:?}>"));
+                continue;
+            }
+        };
+        let show = |v: Option<i64>| v.map_or_else(|| "null".to_owned(), |v| v.to_string());
         out.push(match f {
+            WindowFunction::Offset {
+                offset,
+                default,
+                ignore_nulls,
+                ..
+            } => {
+                let p = i64::try_from(pos).unwrap();
+                let target = if !*ignore_nulls || *offset == 0 {
+                    usize::try_from(p + offset).ok().filter(|&j| j < n)
+                } else if *offset > 0 {
+                    let after: Vec<usize> = (pos + 1..n).filter(|&j| part[j].3.is_some()).collect();
+                    after.get(usize::try_from(offset - 1).unwrap()).copied()
+                } else {
+                    let before: Vec<usize> =
+                        (0..pos).rev().filter(|&j| part[j].3.is_some()).collect();
+                    before.get(usize::try_from(-offset - 1).unwrap()).copied()
+                };
+                match (target, default) {
+                    (Some(j), _) => show(part[j].3),
+                    // The default is the `id` column.
+                    (None, Some(_)) => r.2.to_string(),
+                    (None, None) => "null".to_owned(),
+                }
+            }
+            WindowFunction::NthValue {
+                n: nth,
+                ignore_nulls,
+                ..
+            } => {
+                let frame_rows = &part[start..end.max(start)];
+                let k = usize::try_from(nth - 1).unwrap();
+                let v = if *ignore_nulls {
+                    frame_rows.iter().filter_map(|x| x.3).nth(k)
+                } else {
+                    frame_rows.get(k).and_then(|x| x.3)
+                };
+                show(v)
+            }
             WindowFunction::RowNumber => (pos + 1).to_string(),
             WindowFunction::Rank => rank.to_string(),
             WindowFunction::DenseRank => {
@@ -346,12 +421,7 @@ fn reference(
             WindowFunction::CumeDist => format!("{:?}", to_f(peers_end) / to_f(n)),
             WindowFunction::Ntile(k) => ntile_spark(n, i64::from(*k))[pos].to_string(),
             WindowFunction::Aggregate(a) => {
-                let end = match (frame.units, frame.upper) {
-                    (_, FrameBound::UnboundedFollowing) => n,
-                    (FrameUnits::Rows, _) => pos + 1,
-                    (FrameUnits::Range, _) => peers_end,
-                };
-                let frame_rows = &part[..end];
+                let frame_rows = &part[start..end.max(start)];
                 if a.args == [4] {
                     // The string column: by bytes; first/last by row.
                     let texts: Vec<Option<String>> = frame_rows.iter().map(|x| text(x.3)).collect();
@@ -373,8 +443,27 @@ fn reference(
                 } else {
                     let vals: Vec<i64> = frame_rows.iter().filter_map(|x| x.3).collect();
                     match a.function {
-                        AggregateFunction::Count if a.args.is_empty() => end.to_string(),
+                        AggregateFunction::Count if a.args.is_empty() => {
+                            frame_rows.len().to_string()
+                        }
                         AggregateFunction::Count => vals.len().to_string(),
+                        AggregateFunction::First { ignore_nulls } => {
+                            let mut picked = frame_rows.iter().map(|x| x.3);
+                            let v = if ignore_nulls {
+                                vals.first().copied()
+                            } else {
+                                picked.next().flatten()
+                            };
+                            v.map_or_else(|| "null".to_owned(), |v| v.to_string())
+                        }
+                        AggregateFunction::Last { ignore_nulls } => {
+                            let v = if ignore_nulls {
+                                vals.last().copied()
+                            } else {
+                                frame_rows.last().and_then(|x| x.3)
+                            };
+                            v.map_or_else(|| "null".to_owned(), |v| v.to_string())
+                        }
                         _ if vals.is_empty() => "null".to_owned(),
                         AggregateFunction::Sum => vals.iter().sum::<i64>().to_string(),
                         AggregateFunction::Min => vals.iter().min().unwrap().to_string(),
@@ -388,7 +477,6 @@ fn reference(
                             let s = vals.iter().fold(0.0, |s, v| s + *v as f64);
                             format!("{:?}", s / to_f(vals.len()))
                         }
-                        other => format!("<{other:?}>"),
                     }
                 }
             }
@@ -443,6 +531,116 @@ fn functions() -> Vec<(WindowFunction, WindowFrame)> {
     ]
 }
 
+/// Frames that do not start at the partition's first row or end at the
+/// current row (P2-T055 part 2), over every aggregate shape.
+fn frame_functions() -> Vec<(WindowFunction, WindowFrame)> {
+    use AggregateFunction::{Avg, Count, First, Last, Max, Min, Sum};
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    let around = rows(FrameBound::Offset(-1), FrameBound::Offset(1));
+    let ahead = rows(FrameBound::Offset(2), FrameBound::Offset(3));
+    let before = rows(FrameBound::UnboundedPreceding, FrameBound::Offset(-1));
+    let to_end = rows(FrameBound::Offset(-1), FrameBound::UnboundedFollowing);
+    let rows_rest = rows(FrameBound::CurrentRow, FrameBound::UnboundedFollowing);
+    let range_rest = WindowFrame {
+        units: FrameUnits::Range,
+        lower: FrameBound::CurrentRow,
+        upper: FrameBound::UnboundedFollowing,
+    };
+    let empty = rows(FrameBound::Offset(1), FrameBound::CurrentRow);
+    vec![
+        (agg(Sum, Some(3)), around),
+        (agg(Count, None), ahead),
+        (agg(Count, Some(3)), around),
+        (agg(Min, Some(3)), to_end),
+        (agg(Max, Some(3)), before),
+        (agg(Avg, Some(3)), around),
+        (agg(Sum, Some(3)), range_rest),
+        (agg(Sum, Some(3)), empty),
+        (
+            agg(
+                First {
+                    ignore_nulls: false,
+                },
+                Some(3),
+            ),
+            ahead,
+        ),
+        (agg(Last { ignore_nulls: true }, Some(3)), around),
+        (agg(Max, Some(4)), around),
+        (agg(Min, Some(4)), range_rest),
+        (agg(First { ignore_nulls: true }, Some(4)), to_end),
+        (
+            agg(
+                Last {
+                    ignore_nulls: false,
+                },
+                Some(4),
+            ),
+            before,
+        ),
+        (agg(Last { ignore_nulls: true }, Some(4)), rows_rest),
+        (
+            agg(
+                First {
+                    ignore_nulls: false,
+                },
+                Some(4),
+            ),
+            empty,
+        ),
+        (nth(2, false), WindowFrame::running(FrameUnits::Range)),
+        (nth(1, true), around),
+        (nth(3, true), WindowFrame::whole(FrameUnits::Rows)),
+        (nth(2, false), to_end),
+        (
+            lag_lead(-1, None, false),
+            rows(FrameBound::Offset(-1), FrameBound::Offset(-1)),
+        ),
+        (
+            lag_lead(2, Some(2), false),
+            rows(FrameBound::Offset(2), FrameBound::Offset(2)),
+        ),
+        (
+            lag_lead(-2, Some(2), true),
+            rows(FrameBound::Offset(-2), FrameBound::Offset(-2)),
+        ),
+        (
+            lag_lead(1, None, true),
+            rows(FrameBound::Offset(1), FrameBound::Offset(1)),
+        ),
+        (
+            lag_lead(0, None, true),
+            rows(FrameBound::Offset(0), FrameBound::Offset(0)),
+        ),
+    ]
+}
+
+/// `nth_value(v, n)` (column 3).
+fn nth(n: i64, ignore_nulls: bool) -> WindowFunction {
+    WindowFunction::NthValue {
+        input: 3,
+        n,
+        ignore_nulls,
+        data_type: DataType::Int64,
+    }
+}
+
+/// `lead(v, offset, id)` (`lag` for a negative offset; the default is the
+/// `id` column when given).
+fn lag_lead(offset: i64, default: Option<usize>, ignore_nulls: bool) -> WindowFunction {
+    WindowFunction::Offset {
+        input: 3,
+        offset,
+        default,
+        ignore_nulls,
+        data_type: DataType::Int64,
+    }
+}
+
 fn rows_strategy() -> impl Strategy<Value = Vec<Row>> {
     let opt = |hi: i64| prop_oneof![1 => Just(None), 4 => (0..hi).prop_map(Some)];
     prop::collection::vec((opt(4), opt(5), opt(100)), 0..60).prop_map(|v| {
@@ -478,6 +676,47 @@ proptest! {
         let columns: Vec<Vec<String>> = functions
             .iter()
             .map(|(f, frame)| reference(kt, &sorted, f, *frame, partitioned))
+            .collect();
+        let want: Vec<String> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let cells: Vec<String> = columns.iter().map(|c| c[i].clone()).collect();
+                format!("{}: {}", r.2, cells.join(", "))
+            })
+            .collect();
+        prop_assert_eq!(got, want);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    /// Frames with offsets and frames to the partition's end give the
+    /// naive value over each row's frame, with ANSI on (integer sums in
+    /// order) and off (integer sums through the segment tree).
+    #[test]
+    fn frames_match_a_naive_reference(
+        rows in rows_strategy(),
+        split in 1_usize..9,
+        partitioned in any::<bool>(),
+        ansi in any::<bool>(),
+    ) {
+        let functions = frame_functions();
+        let window = plan(functions.clone(), partitioned);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let out = rt
+            .block_on(run_keys_ansi(Keys::Int, &rows, split, &window, 1 << 30, ansi))
+            .unwrap();
+        let got = outputs(&out, functions.len());
+        let mut sorted = rows;
+        sorted.sort_by_key(|r| {
+            let p = if partitioned { Keys::Int.key(r.0) } else { (false, Vec::new()) };
+            (p, Keys::Int.key(r.1), r.2)
+        });
+        let columns: Vec<Vec<String>> = functions
+            .iter()
+            .map(|(f, frame)| reference(Keys::Int, &sorted, f, *frame, partitioned))
             .collect();
         let want: Vec<String> = sorted
             .iter()
@@ -828,10 +1067,11 @@ fn invalid_plans_are_rejected() {
         )),
         internal
     );
+    // RANGE frames with value bounds are a later part of P2-T055.
     let following = WindowFrame {
-        units: FrameUnits::Rows,
-        lower: FrameBound::CurrentRow,
-        upper: FrameBound::UnboundedFollowing,
+        units: FrameUnits::Range,
+        lower: FrameBound::Offset(-1),
+        upper: FrameBound::CurrentRow,
     };
     assert_eq!(
         class(window(
@@ -1593,6 +1833,211 @@ async fn a_refused_flush_headroom_fails_the_window() {
     drop((hog, local));
 }
 
+/// The reservation for frames with offsets covers their outputs and row
+/// maps (it also holds the frames, the tree and a chunk of scratch).
+#[test]
+fn frame_costs_cover_their_outputs() {
+    for (rows, parts) in [(10_000, 100), (4_096, 4_096)] {
+        for f in frame_functions() {
+            let window = plan(vec![f.clone()], true);
+            let (b, part, peer) = sorted_unit(rows, parts);
+            let n = b.num_rows();
+            let slice = super::eval::Slice {
+                batch: b.data(),
+                offset: 0,
+                len: n,
+                part_start: &part,
+                peer_start: &peer,
+            };
+            let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+            let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
+            let held: usize = out
+                .iter()
+                .map(|c| Array::get_array_memory_size(c.as_ref()))
+                .sum::<usize>()
+                + 8 * n * 2;
+            let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+            assert!(cost >= held, "{f:?}: reserved {cost} < held {held}");
+        }
+    }
+}
+
+/// `lag`/`lead`/`nth_value` reserve their peak: the input copied into
+/// views (strings), the default column's views too, the counting rows, the
+/// picks, the gather's locations and indices, the frames (`nth_value`) and
+/// the result, all alive while the result is gathered.
+#[test]
+fn offset_function_costs_cover_their_scratch() {
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    let lag_s = WindowFunction::Offset {
+        input: 4,
+        offset: -1,
+        default: Some(4),
+        ignore_nulls: false,
+        data_type: DataType::Utf8View,
+    };
+    let nth_s = WindowFunction::NthValue {
+        input: 4,
+        n: 2,
+        ignore_nulls: true,
+        data_type: DataType::Utf8View,
+    };
+    let cases = [
+        (
+            lag_s,
+            rows(FrameBound::Offset(-1), FrameBound::Offset(-1)),
+            true,
+            0,
+        ),
+        (nth_s, WindowFrame::whole(FrameUnits::Rows), false, 8),
+        (
+            nth(3, false),
+            WindowFrame::whole(FrameUnits::Rows),
+            false,
+            8,
+        ),
+    ];
+    for (function, frame, with_default, frames) in cases {
+        let window = plan(vec![(function.clone(), frame)], true);
+        let (b, part, peer) = sorted_unit(10_000, 100);
+        let n = b.num_rows();
+        let slice = super::eval::Slice {
+            batch: b.data(),
+            offset: 0,
+            len: n,
+            part_start: &part,
+            peer_start: &peer,
+        };
+        let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+        // What an array holds of its own: views share the input's value
+        // buffers.
+        let own = |a: &ArrayRef| {
+            let shared: usize = match a.data_type() {
+                DataType::Utf8View => a
+                    .as_string_view()
+                    .data_buffers()
+                    .iter()
+                    .map(arrow_buffer::Buffer::capacity)
+                    .sum(),
+                _ => 0,
+            };
+            Array::get_array_memory_size(a.as_ref()) - shared
+        };
+        let output: usize = out.iter().map(own).sum();
+        let views = match &function {
+            WindowFunction::Offset { .. } | WindowFunction::NthValue { input: 4, .. } => {
+                let v = super::eval::to_view(b.data().column(4)).unwrap();
+                own(&v) * (1 + usize::from(with_default))
+            }
+            _ => 0,
+        };
+        // Counting rows, picks, gather locations and indices, frames.
+        let scratch = n * (8 + 16 + 32 + frames);
+        let held = output + views + scratch;
+        let count = |v: &[bool]| v.iter().filter(|&&x| x).count();
+        let cost = super::eval::cost(&window, n, count(&part), count(&peer)).unwrap();
+        assert!(cost >= held, "{function:?}: reserved {cost} < held {held}");
+    }
+}
+
+/// A segment tree over more rows than a chunk is built a chunk of parents
+/// at a time and still gives each frame's value.
+#[test]
+fn trees_larger_than_a_chunk_match_the_reference() {
+    use AggregateFunction::{Count, Max, Min, Sum};
+    let frame = WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::Offset(-3),
+        upper: FrameBound::Offset(2),
+    };
+    let functions: Vec<(WindowFunction, WindowFrame)> = [Sum, Count, Min, Max]
+        .into_iter()
+        .map(|f| (agg(f, Some(3)), frame))
+        .collect();
+    let n = i64::try_from(2 * super::frames::CHUNK + 777).unwrap();
+    let data: Vec<Row> = (0..n)
+        .map(|i| (Some(0), Some(i), i, (i % 13 != 0).then_some(i % 97 - 40)))
+        .collect();
+    let window = plan(functions, true);
+    let b = batch(&data);
+    let part: Vec<bool> = (0..data.len()).map(|i| i == 0).collect();
+    let peer = vec![true; data.len()];
+    let slice = super::eval::Slice {
+        batch: b.data(),
+        offset: 0,
+        len: data.len(),
+        part_start: &part,
+        peer_start: &peer,
+    };
+    let out = super::eval::evaluate(&window, &[slice], false).unwrap();
+    let got: Vec<String> = data
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            let cells: Vec<String> = out.iter().map(|c| cell(c, i)).collect();
+            format!("{}: {}", r.2, cells.join(", "))
+        })
+        .collect();
+    // Each row's frame of non-NULL values, directly (one partition).
+    let want: Vec<String> = (0..data.len())
+        .map(|i| {
+            let lo = i.saturating_sub(3);
+            let hi = (i + 3).min(data.len());
+            let vals: Vec<i64> = data[lo..hi].iter().filter_map(|r| r.3).collect();
+            let show = |v: Option<i64>| v.map_or_else(|| "null".to_owned(), |v| v.to_string());
+            let sum = (!vals.is_empty()).then(|| vals.iter().sum::<i64>());
+            let count = i64::try_from(vals.len()).unwrap();
+            format!(
+                "{}: {}, {}, {}, {}",
+                data[i].2,
+                show(sum),
+                count,
+                show(vals.iter().min().copied()),
+                show(vals.iter().max().copied())
+            )
+        })
+        .collect();
+    assert_eq!(got, want);
+}
+
+/// A frame with offsets over a partition larger than memory is refused
+/// (evaluating it from disk is a later part of P2-T055), never answered
+/// short.
+#[tokio::test]
+async fn a_frame_over_a_partition_on_disk_is_refused() {
+    let rows: Vec<Row> = (0..3_000)
+        .map(|i| (Some(0), Some(i), i, Some(i % 7)))
+        .collect();
+    let around = WindowFrame {
+        units: FrameUnits::Rows,
+        lower: FrameBound::Offset(-1),
+        upper: FrameBound::Offset(1),
+    };
+    let window = plan(vec![(agg(AggregateFunction::Sum, Some(3)), around)], true);
+    let (_dir, scope) = spill_scope();
+    let op = Window::new(schema(), window, true, Some(scope)).unwrap();
+    let limit = 1 << 30;
+    let (root, ctx) = task(limit);
+    let batches: Vec<Batch> = rows.chunks(100).map(batch).collect();
+    let spills = Spills {
+        every: 1,
+        slack: Some(96 << 10),
+    };
+    let e = drive_spilling(&op, &ctx, limit, &root, &batches, spills)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(e.to_string().contains("larger than memory"), "{e}");
+}
+
 /// The window's metrics count its input once: rows read back in the flush
 /// phase (in memory or copied to a partition's own file) are not counted
 /// again.
@@ -1712,3 +2157,101 @@ async fn bytes_of_rows_waiting_in_the_output_stay_reserved_through_a_spill() {
     ctx.consumer().consumer().release_credit();
     assert_eq!(root.reserved(), 0);
 }
+
+/// [`run_keys`] over a sort bucketed by the partitioning keys, read by four
+/// drivers: each driver's window sees whole partitions, in order.
+async fn run_bucketed(
+    keys_as: Keys,
+    rows: &[Row],
+    split: usize,
+    window: &WindowPlan,
+) -> crate::Result<Vec<Batch>> {
+    let s = schema_of(keys_as);
+    let batches: Vec<Batch> = rows
+        .chunks(split.max(1))
+        .map(|c| batch_of(keys_as, c))
+        .collect();
+    let mut keys: Vec<SortKey> = window
+        .partition_by
+        .iter()
+        .map(|&c| SortKey::asc(c))
+        .collect();
+    keys.extend(window.order_by.iter().copied());
+    keys.push(SortKey::asc(2));
+    let sort = Sort::new(Arc::clone(&s), &keys, None)?.with_hash_buckets(&window.partition_by)?;
+    let sort = Arc::new(sort);
+    let op = Arc::new(Window::new(Arc::clone(&s), window.clone(), true, None)?);
+    let plan: Arc<dyn ExecNode> = Arc::new(OperatorNode {
+        input: Arc::new(BreakerNode {
+            input: Arc::new(SourceNode(Batches::new(s, batches))),
+            sink: Arc::clone(&sort) as Arc<dyn crate::Sink>,
+            source: Arc::clone(&sort) as Arc<dyn crate::Source>,
+            ordered: false,
+        }),
+        op,
+    });
+    let runner = QueryRunner::new(TokioExecutor::deterministic(4)?);
+    let root = pool(1 << 30);
+    let config = ExecConfig {
+        batch_size: 4,
+        ..ExecConfig::default()
+    };
+    let q = QueryContext::new(
+        QueryId(1),
+        WorkloadClass::Batch,
+        config,
+        root.child("q", Some(1 << 30)),
+    );
+    let result = async {
+        let mut stream = runner.execute(plan, Arc::clone(&q)).await?;
+        let mut out = Vec::new();
+        while let Some(b) = stream.next().await {
+            out.push(b?);
+        }
+        Ok(out)
+    }
+    .await;
+    drop(q);
+    assert_eq!(root.reserved(), 0, "the query pool is empty at the end");
+    assert_eq!(sort.metrics().buckets, 16);
+    result
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(32))]
+
+    /// Every function over a bucketed sort (partitions split among four
+    /// drivers) gives the naive value of every row.
+    #[test]
+    fn bucketed_windows_match_the_naive_reference(
+        rows in rows_strategy(),
+        split in 1_usize..9,
+        kt in prop_oneof![Just(Keys::Int), Just(Keys::Float), Just(Keys::Decimal), Just(Keys::Text)],
+    ) {
+        let functions = functions();
+        let window = plan(functions.clone(), true);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let out = rt.block_on(run_bucketed(kt, &rows, split, &window)).unwrap();
+        let mut got = outputs(&out, functions.len());
+        got.sort();
+        let mut sorted = rows;
+        sorted.sort_by_key(|r| (kt.key(r.0), kt.key(r.1), r.2));
+        let columns: Vec<Vec<String>> = functions
+            .iter()
+            .map(|(f, frame)| reference(kt, &sorted, f, *frame, true))
+            .collect();
+        let mut want: Vec<String> = sorted
+            .iter()
+            .enumerate()
+            .map(|(i, r)| {
+                let cells: Vec<String> = columns.iter().map(|c| c[i].clone()).collect();
+                format!("{}: {}", r.2, cells.join(", "))
+            })
+            .collect();
+        want.sort();
+        prop_assert_eq!(got, want);
+    }
+}
+
+#[path = "group_limit_tests.rs"]
+mod group_limit_tests;

@@ -13,8 +13,10 @@
 mod conditionals;
 mod exchanges;
 mod folding;
+mod group_limit;
 mod hints;
 mod listing;
+mod orientation;
 mod physical;
 mod runtime_filters;
 mod semantics;
@@ -207,6 +209,15 @@ fn run_in(
     plan: &Runnable,
     root: &TreePool,
 ) -> (Result<Vec<RecordBatch>, KrishivError>, Arc<QueryContext>) {
+    run_on(plan, root, &ExecutorConfig::default())
+}
+
+/// [`run_in`] on an executor of `executor`'s threads.
+fn run_on(
+    plan: &Runnable,
+    root: &TreePool,
+    executor: &ExecutorConfig,
+) -> (Result<Vec<RecordBatch>, KrishivError>, Arc<QueryContext>) {
     let agg_row_layout =
         AGG_ROW_LAYOUT.get() || std::env::var("KRISHIV_AGG_ROW_LAYOUT").is_ok_and(|v| v == "1");
     let query = QueryContext::new(
@@ -219,7 +230,7 @@ fn run_in(
         },
         root.child("q", None),
     );
-    let runner = match TokioExecutor::new(&ExecutorConfig::default()) {
+    let runner = match TokioExecutor::new(executor) {
         Ok(executor) => QueryRunner::new(executor),
         Err(e) => return (Err(e), query),
     };

@@ -18,11 +18,15 @@ use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction};
 use crate::error::Result;
 use crate::operator::Source;
 use crate::operators::SortKey;
+use crate::operators::TopN;
 use crate::physical::PhysNode;
+use crate::physical::{group_limit_op, top_n_op};
 use crate::window::{
-    FrameBound as Bound, FrameUnits as Units, RequiredDistribution, Window, WindowFrame,
-    WindowFunction, WindowFunctionPlan, WindowPlan,
+    FrameBound as Bound, FrameUnits as Units, GroupLimitPlan, RankLike, RequiredDistribution,
+    Window, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
 };
+use krishiv_common::config::{ConfigValue, WINDOW_GROUP_LIMIT_THRESHOLD};
+use krishiv_optimizer::{DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD, RankLikeFunction, WindowGroupLimit};
 
 /// One window expression, read off the plan: its function call, frame and
 /// output attribute, and the expressions it reads (arguments, filter).
@@ -33,12 +37,25 @@ struct Call<'a> {
 }
 
 impl Planner<'_> {
+    /// `spark.sql.optimizer.windowGroupLimitThreshold` (Spark's default
+    /// when unset); Spark refuses values below -1, which turn the rule off
+    /// here as -1 does.
+    pub(crate) fn window_group_limit_threshold(&self) -> i64 {
+        self.cx
+            .config
+            .get(&WINDOW_GROUP_LIMIT_THRESHOLD)
+            .and_then(ConfigValue::as_int)
+            .unwrap_or(DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD)
+            .max(-1)
+    }
+
     pub(crate) fn window(
         &mut self,
         input: Planned,
         exprs: &[Arc<Expr>],
         partition_by: &[Arc<Expr>],
         order_by: &[SortOrder],
+        limit: Option<WindowGroupLimit>,
     ) -> Result<Planned> {
         let calls = exprs.iter().map(|e| call(e)).collect::<Result<Vec<_>>>()?;
         // The columns the window reads: partitioning, ordering, then each
@@ -95,6 +112,41 @@ impl Planner<'_> {
             order_by: order_keys,
             functions,
         };
+        let mut sorted_by: Vec<SortOrder> = partition_by
+            .iter()
+            .map(|e| SortOrder::asc(Arc::clone(e)))
+            .collect();
+        sorted_by.extend(order_by.iter().cloned());
+        let top = match limit {
+            Some(WindowGroupLimit::Limit(n)) => usize::try_from(n)
+                .is_ok_and(|n| n <= TopN::MAX_ROWS)
+                .then_some(n),
+            _ => None,
+        };
+        let group = match limit {
+            Some(WindowGroupLimit::Group { function, limit }) => Some((function, limit)),
+            // Past the top-N's rows: the group limit of one partition.
+            Some(WindowGroupLimit::Limit(n)) if top.is_none() => {
+                Some((RankLikeFunction::RowNumber, n))
+            }
+            _ => None,
+        };
+        // No row passes the filter: none reaches the sort (Spark plans an
+        // empty relation).
+        let input = if limit == Some(WindowGroupLimit::Empty) {
+            Self::local_limit(input, 0)
+        } else {
+            input
+        };
+        // `row_number` without partitioning (Spark's top-K path): each
+        // partition keeps its first `n` rows before the gather.
+        let input = match top {
+            Some(n) if !input.placement.satisfies(Distribution::Single) => {
+                let detail = format!("{n}, {}", orders(&sorted_by));
+                Self::local_top_n(input, &keys, n, detail)?
+            }
+            _ => input,
+        };
         // Every row of a partition in one partition of the input (the
         // property pass inserts an exchange where the input is not placed
         // so), then the local sort; without keys the sort gathers the rows
@@ -109,23 +161,62 @@ impl Planner<'_> {
                 self.require(input, Distribution::Clustered(&attrs))?
             }
         };
-        // The sort, then the window over it.
-        let sort_schema = crate::physical::sort_op(&input.schema, &keys, None)?.schema();
+        // The sort (or the top-N), then the window over it.
         let layout = input.layout.clone();
         // The sort's keys as a sort shows them: partitioning keys ascending,
         // then the ordering.
-        let mut sorted_by: Vec<SortOrder> = partition_by
-            .iter()
-            .map(|e| SortOrder::asc(Arc::clone(e)))
-            .collect();
-        sorted_by.extend(order_by.iter().cloned());
         let sort_detail = orders(&sorted_by);
-        let sorted = input.wrap(
-            |input| PhysNode::Sort { input, keys },
-            sort_schema,
-            layout,
-            ("Sort", sort_detail),
-        );
+        let sorted = if let Some(n) = top {
+            let schema = top_n_op(&input.schema, &keys, n)?.schema();
+            input.wrap(
+                |input| PhysNode::TopN {
+                    input,
+                    keys,
+                    limit: n,
+                },
+                schema,
+                layout,
+                ("TopN", format!("{n}, {sort_detail}")),
+            )
+        } else {
+            let sort_schema = crate::physical::sort_op(&input.schema, &keys, None)?.schema();
+            input.wrap(
+                |input| PhysNode::Sort { input, keys },
+                sort_schema,
+                layout,
+                ("Sort", sort_detail),
+            )
+        };
+        let sorted = match group {
+            Some((function, limit)) => {
+                let plan = GroupLimitPlan {
+                    partition_by: window.partition_by.clone(),
+                    order_by: window.order_by.clone(),
+                    function: match function {
+                        RankLikeFunction::RowNumber => RankLike::RowNumber,
+                        RankLikeFunction::Rank => RankLike::Rank,
+                        RankLikeFunction::DenseRank => RankLike::DenseRank,
+                    },
+                    limit,
+                };
+                let schema =
+                    crate::operator::Operator::schema(&*group_limit_op(&sorted.schema, &plan)?);
+                let layout = sorted.layout.clone();
+                let detail = format!(
+                    "{}, {}, {}(), {limit}",
+                    list(partition_by),
+                    orders(order_by),
+                    plan.function.name()
+                );
+                sorted.wrap(
+                    |input| PhysNode::WindowGroupLimit { input, limit: plan },
+                    schema,
+                    layout,
+                    ("WindowGroupLimit", detail),
+                )
+            }
+            None => sorted,
+        };
         let op = Window::new(
             Arc::clone(&sorted.schema),
             window.clone(),
@@ -165,6 +256,37 @@ impl Planner<'_> {
                 "percent_rank" => WindowFunction::PercentRank,
                 "cume_dist" => WindowFunction::CumeDist,
                 "ntile" => WindowFunction::Ntile(ntile_buckets(c.f)?),
+                "lag" | "lead" => {
+                    // The analyzer made the offset the frame: `ROWS BETWEEN
+                    // k FOLLOWING AND k FOLLOWING`.
+                    let Bound::Offset(offset) = c.frame.lower else {
+                        return Err(internal("lag/lead without its offset frame"));
+                    };
+                    WindowFunction::Offset {
+                        input: *args
+                            .first()
+                            .ok_or_else(|| internal("lag/lead without input"))?,
+                        offset,
+                        default: args.get(1).copied(),
+                        ignore_nulls: flag(c.f, 3),
+                        data_type: c.output.data_type.to_arrow(),
+                    }
+                }
+                "nth_value" => WindowFunction::NthValue {
+                    input: *args
+                        .first()
+                        .ok_or_else(|| internal("nth_value without input"))?,
+                    n: match c.f.args.get(1).map(|a| &a.node) {
+                        Some(ExprNode::Literal(krishiv_plan::Literal::Integer(n))) => i64::from(*n),
+                        _ => {
+                            return Err(unsupported(
+                                "nth_value with an offset that is not an int literal",
+                            ));
+                        }
+                    },
+                    ignore_nulls: flag(c.f, 2),
+                    data_type: c.output.data_type.to_arrow(),
+                },
                 other => return Err(unsupported(&format!("the window function {other}"))),
             });
         }
@@ -241,7 +363,14 @@ fn call(e: &Expr) -> Result<Call<'_>> {
         FrameBound::UnboundedPreceding => Ok(Bound::UnboundedPreceding),
         FrameBound::CurrentRow => Ok(Bound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(Bound::UnboundedFollowing),
-        _ => Err(unsupported("window frames with value bounds")),
+        // The analyzer leaves a checked offset as an `int` literal.
+        FrameBound::Offset(e) => match &e.node {
+            ExprNode::Literal(krishiv_plan::Literal::Integer(v)) => {
+                Ok(Bound::Offset(i64::from(*v)))
+            }
+            _ => Err(unsupported("window frame bounds that are not int literals")),
+        },
+        _ => Err(unsupported("this window frame bound")),
     };
     let frame = WindowFrame {
         units: match frame.units {
@@ -259,7 +388,15 @@ fn call(e: &Expr) -> Result<Call<'_>> {
 /// none (their arguments are constants).
 fn arguments(f: &krishiv_plan::ResolvedFunction) -> Vec<&Arc<Expr>> {
     if f.kind == FunctionKind::Window {
-        return Vec::new();
+        // `lag`/`lead` read their input and default, `nth_value` its input.
+        return match f.id.name() {
+            "lag" | "lead" => [f.args.first(), f.args.get(2)]
+                .into_iter()
+                .flatten()
+                .collect(),
+            "nth_value" => f.args.first().into_iter().collect(),
+            _ => Vec::new(),
+        };
     }
     let name = f.id.name();
     f.args
@@ -267,6 +404,15 @@ fn arguments(f: &krishiv_plan::ResolvedFunction) -> Vec<&Arc<Expr>> {
         .take(if picks(name).is_some() { 1 } else { usize::MAX })
         .filter(|a| !non_null_literal(a) || name != "count")
         .collect()
+}
+
+/// Whether argument `i` of `f` is the literal `true` (an `IGNORE NULLS`
+/// flag).
+fn flag(f: &krishiv_plan::ResolvedFunction, i: usize) -> bool {
+    matches!(
+        f.args.get(i).map(|a| &a.node),
+        Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
+    )
 }
 
 /// `ntile(n)`'s bucket count: the analyzer checked it is an `int` literal
