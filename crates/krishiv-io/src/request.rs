@@ -480,6 +480,49 @@ pub enum RowFilterPolicy {
     Auto,
 }
 
+/// What a scan's row-level stages (late materialisation in the format,
+/// the executor's runtime-filter row stage) may drop rows by. Pruning of
+/// whole units (files, row groups, pages) always uses
+/// [`ScanRequest::predicate`].
+///
+/// A filter above the scan sees every row the scan returns, its conjuncts
+/// in written order. When a conjunct may raise an error (an ANSI cast, an
+/// interval operand), a row dropped early is a row it never sees, so the
+/// error would be lost: then rows may only be dropped by the conjuncts
+/// written before it, and only where one of them is FALSE.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
+pub enum RowLevel {
+    /// Row stages may evaluate the whole `predicate` and the runtime
+    /// filters (no conjunct above the scan can raise).
+    #[default]
+    Full,
+    /// Row stages may evaluate only this predicate, and no runtime filter.
+    /// It is never NULL on a row (a format may keep only the rows it may
+    /// be TRUE on). `None`: no row is dropped at row level.
+    Prefix(Option<PushdownExpr>),
+}
+
+impl RowLevel {
+    /// The predicate row stages may evaluate, given the scan's `predicate`.
+    #[must_use]
+    pub fn predicate<'a>(
+        &'a self,
+        predicate: Option<&'a PushdownExpr>,
+    ) -> Option<&'a PushdownExpr> {
+        match self {
+            Self::Full => predicate,
+            Self::Prefix(p) => p.as_ref(),
+        }
+    }
+
+    /// Whether row stages may evaluate runtime filters.
+    #[must_use]
+    pub const fn runtime_filters(&self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
 /// The `_metadata` columns a scan returns. The constant ones are appended by
 /// the framework; `row_index` needs the decoder (only it knows positions),
 /// which appends [`ROW_INDEX_COLUMN`].
@@ -554,6 +597,8 @@ pub struct ScanRequest {
     pub selection: Option<RowSelection>,
     /// Late-materialisation policy.
     pub row_filter: RowFilterPolicy,
+    /// What row-level stages may drop rows by.
+    pub row_level: RowLevel,
     /// Most rows needed (a pushed `LIMIT` without a filter in between);
     /// a hint, never a reason to return fewer rows than exist.
     pub limit: Option<u64>,
@@ -575,6 +620,7 @@ impl ScanRequest {
             dynamic: Vec::new(),
             selection: None,
             row_filter: RowFilterPolicy::Auto,
+            row_level: RowLevel::Full,
             limit: None,
             metadata_cols: MetadataCols::default(),
             mapping: FieldMapping::default(),
