@@ -547,6 +547,40 @@ def test_unresolved_column_sql_context(spark: SparkSession) -> None:
     assert qc.objectType() == ""
 
 
+def test_sql_error_text_marks_the_span(spark: SparkSession) -> None:
+    with pytest.raises(errors.AnalysisException) as raised:
+        spark.sql("SELECT a")
+    e = raised.value
+    # `getMessage()` is Spark's message alone; `str()` adds the span, as classic PySpark does.
+    assert "== SQL" not in e.getMessage()
+    assert str(e) == e.getMessage() + "\n== SQL (line 1, position 8) ==\nSELECT a\n       ^"
+
+
+def test_sql_error_text_counts_lines_and_characters(spark: SparkSession) -> None:
+    with pytest.raises(errors.AnalysisException) as raised:
+        spark.sql("SELECT 'é',\n  nope")
+    assert str(raised.value).endswith("\n== SQL (line 2, position 3) ==\n  nope\n  ^^^^")
+    with pytest.raises(errors.AnalysisException) as raised:
+        spark.sql("SELECT 'é' + nope")
+    assert str(raised.value).endswith("\n== SQL (line 1, position 14) ==\nSELECT 'é' + nope\n             ^^^^")
+
+
+def test_sql_error_text_does_not_show_secrets(spark: SparkSession) -> None:
+    with pytest.raises(errors.AnalysisException) as raised:
+        spark.sql("SELECT nope, 'https://user:hunter2@host/p' AS u")
+    text = str(raised.value)
+    assert "\n       ^^^^" in text
+    assert "user:*********(redact" in text
+    assert "hunter2" not in text
+
+
+def test_dataframe_error_text_is_the_message(spark: SparkSession) -> None:
+    df = spark.createDataFrame(pa.table({"a": [1, 2]}))
+    with pytest.raises(errors.AnalysisException) as raised:
+        df.select("missing").collect()
+    assert str(raised.value) == raised.value.getMessage()
+
+
 def test_unresolved_column_dataframe_context(spark: SparkSession) -> None:
     df = spark.createDataFrame(pa.table({"a": [1, 2]}))
     with pytest.raises(errors.AnalysisException) as raised:

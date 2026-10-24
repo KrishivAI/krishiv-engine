@@ -75,6 +75,7 @@ mod ops;
 mod resolve;
 mod setops;
 mod subquery;
+mod suggest;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 mod windows;

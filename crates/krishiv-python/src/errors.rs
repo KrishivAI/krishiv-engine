@@ -2,7 +2,7 @@
 //! Engine errors as Python exceptions: `krishiv.errors._from_native` picks the
 //! `pyspark.errors`-shaped class for the Spark error class and SQLSTATE.
 
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, render_with_context};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -13,6 +13,19 @@ type RawContext = (u8, String, usize, usize, String, String, String, String);
 /// The Python exception for `error`; a `RuntimeError` carrying the message (and
 /// the conversion failure as its cause) if `krishiv.errors` cannot be used.
 pub(crate) fn to_py(py: Python<'_>, error: &KrishivError) -> PyErr {
+    convert(py, error, None)
+}
+
+/// [`to_py`] for an error of the query `sql`: the exception's `str` also marks
+/// the SQL span that raised it (`render_with_context`), over the query text
+/// with its secrets redacted; `getMessage()` stays the message alone.
+pub(crate) fn to_py_for_sql(py: Python<'_>, error: &KrishivError, sql: &str) -> PyErr {
+    let redacted = krishiv_sql::redact_sql(sql);
+    let rendered = render_with_context(error, redacted.as_str());
+    convert(py, error, Some(rendered))
+}
+
+fn convert(py: Python<'_>, error: &KrishivError, rendered: Option<String>) -> PyErr {
     let build = || -> PyResult<PyErr> {
         let parameters = PyDict::new(py);
         for (key, value) in error.message_parameters() {
@@ -47,6 +60,7 @@ pub(crate) fn to_py(py: Python<'_>, error: &KrishivError) -> PyErr {
                 error.to_string(),
                 parameters,
                 contexts,
+                rendered,
             ))?;
         Ok(PyErr::from_value(exception))
     };
@@ -65,4 +79,15 @@ pub(crate) fn block_on<T: Send>(
 ) -> PyResult<T> {
     py.detach(|| futures::executor::block_on(work))
         .map_err(|e| to_py(py, &e))
+}
+
+/// [`block_on`] for the query `sql`, whose errors are converted by
+/// [`to_py_for_sql`].
+pub(crate) fn block_on_sql<T: Send>(
+    py: Python<'_>,
+    sql: &str,
+    work: impl std::future::Future<Output = Result<T, KrishivError>> + Send,
+) -> PyResult<T> {
+    py.detach(|| futures::executor::block_on(work))
+        .map_err(|e| to_py_for_sql(py, &e, sql))
 }

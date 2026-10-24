@@ -120,7 +120,7 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
     for (line_offset, stmt) in split_statements(&input) {
         let start = Instant::now();
         let df = futures::executor::block_on(session.sql(&stmt))
-            .map_err(|e| format!("{e}{}", caret(&stmt, line_offset, &e)))?;
+            .map_err(|e| describe(&stmt, line_offset, &e))?;
         if args.explain_analyze || args.explain_verbose {
             print_explain(&df, args)?;
         } else {
@@ -151,9 +151,24 @@ fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
     writeln!(out, "{}", text.trim_end()).map_err(|e| format!("cannot write output: {e}"))
 }
 
+/// `error` of the statement `stmt` as shown to the user: for a syntax error
+/// Spark's `ParseException` layout ([`caret`]), otherwise the message with
+/// the SQL span that raised it marked. The text shown is the statement with
+/// its secrets redacted (`line_offset` applies to syntax errors only: the
+/// line of another error counts from the statement's own first line).
+fn describe(stmt: &str, line_offset: usize, error: &krishiv::Error) -> String {
+    let parse = caret(stmt, line_offset, error);
+    if !parse.is_empty() {
+        return format!("{error}{parse}");
+    }
+    let redacted = krishiv_sql::redact_sql(stmt);
+    krishiv_common::error::render_with_context(error, redacted.as_str())
+}
+
 /// Spark-style position and caret for a parse error in `stmt`; empty for any
-/// other error. The session drops the parser's span, so the statement is
-/// parsed again here to recover it.
+/// other error. The statement is parsed again here to recover the span, also
+/// when it is empty (a syntax error at the end of the input), which a query
+/// context does not show.
 fn caret(stmt: &str, line_offset: usize, error: &krishiv::Error) -> String {
     if !error.error_class().name().starts_with("PARSE_")
         && !error.error_class().name().starts_with("UNCLOSED_")
@@ -669,6 +684,33 @@ mod tests {
             .and_then(|s| futures::executor::block_on(s.sql("select * from nope")).map(|_| ()))
             .expect_err("unknown table");
         assert_eq!(caret("select * from nope", 0, &e), "");
+    }
+
+    #[test]
+    fn describe_marks_the_span_of_an_analysis_error() {
+        let stmt = "select x\nfrom (select 1 as a) t";
+        let e = Session::new()
+            .and_then(|s| futures::executor::block_on(s.sql(stmt)).map(|_| ()))
+            .expect_err("unknown column");
+        let shown = describe(stmt, 5, &e);
+        assert!(shown.starts_with(&e.to_string()), "{shown}");
+        assert!(
+            shown.ends_with("\n== SQL (line 1, position 8) ==\nselect x\n       ^"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn describe_keeps_the_parse_exception_layout_for_syntax_errors() {
+        let e = Session::new()
+            .and_then(|s| futures::executor::block_on(s.sql("xyz 1")).map(|_| ()))
+            .expect_err("syntax error");
+        let shown = describe("xyz 1", 0, &e);
+        assert!(
+            shown.ends_with("(line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^"),
+            "{shown}"
+        );
+        assert_eq!(shown.matches("== SQL").count(), 1, "{shown}");
     }
 
     #[test]
