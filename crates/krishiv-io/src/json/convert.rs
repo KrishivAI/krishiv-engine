@@ -50,9 +50,11 @@ impl JsonConverter<'_> {
     /// field `name` of Spark type `target`.
     ///
     /// # Errors
-    /// [`Conv::Malformed`] for a value that is not of the type;
+    /// [`Conv::Malformed`] for a value that is not of the type (including a
+    /// nested value flat schemas cannot hold: it is a malformed record, not
+    /// a failed scan);
     /// [`Conv::Fatal`] for a conversion that cannot be done at all (a
-    /// region time zone, or a nested value flat schemas cannot hold).
+    /// region time zone).
     pub(crate) fn convert(
         &self,
         kind: &Kind,
@@ -81,7 +83,21 @@ impl JsonConverter<'_> {
             (Kind::Str, JVal::Num(t, _)) => Val::Text(t.clone()),
             (Kind::Bin, JVal::Str(s)) => Val::Bytes(decode_base64(s).ok_or_else(bad)?),
             (Kind::Bool, JVal::Bool(b)) => Val::Bool(*b),
-            (Kind::Bool, JVal::Str(s)) => Val::Bool(s.eq_ignore_ascii_case("true")),
+            // Like the CSV converter: only `true`/`false` (any case) read;
+            // anything else is a malformed record (Spark's JacksonParser
+            // rejects non-boolean strings for BooleanType).
+            (Kind::Bool, JVal::Str(s)) => {
+                if s.eq_ignore_ascii_case("true") {
+                    Val::Bool(true)
+                } else if s.eq_ignore_ascii_case("false") {
+                    Val::Bool(false)
+                } else {
+                    return Err(Conv::Malformed);
+                }
+            }
+            // Spark's JacksonParser reads `VALUE_NUMBER_*` for BooleanType
+            // as `!= 0` (`getLongValue`/`getDoubleValue`); `NaN != 0` is
+            // true in Java, so `NaN` reads `true`.
             (Kind::Bool, JVal::Num(t, _)) => {
                 Val::Bool(java_parse_double(t).ok_or_else(bad)? != 0.0)
             }
@@ -131,11 +147,11 @@ impl JsonConverter<'_> {
         })
     }
 
-    /// A nested value where a flat column was requested.
-    fn nested(name: &str) -> Conv {
-        Conv::Fatal(unsupported(format!(
-            "a nested object or array in the JSON field `{name}` (only flat records are supported)"
-        )))
+    /// A nested value where a flat column was requested: a malformed
+    /// record (handled by the parse mode), never a failed scan. Only a
+    /// nested *schema* is unsupported at open.
+    fn nested(_name: &str) -> Conv {
+        Conv::Malformed
     }
 }
 
@@ -159,6 +175,12 @@ fn scalar_text(v: &JVal) -> String {
 }
 
 /// The standard base64 alphabet.
+///
+/// Hand-rolled per ADR 0028 (prefer small own code over a new dependency):
+/// standard base64 with padding, exactly as Spark writes binary JSON. The
+/// edge cases a vetted implementation buys (padding only at the end, at most
+/// two pad chars, length a multiple of four, no white space: JSON strings
+/// carry none) are asserted in `super::tests::base64_edge_cases`.
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// `bytes` in standard base64 with padding, as Spark writes binary JSON.
@@ -188,11 +210,13 @@ pub(crate) fn decode_base64(s: &str) -> Option<Vec<u8>> {
     if !s.len().is_multiple_of(4) {
         return None;
     }
+    let chunks: Vec<&[u8]> = s.as_bytes().chunks(4).collect();
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    for chunk in s.as_bytes().chunks(4) {
+    for (i, chunk) in chunks.iter().enumerate() {
+        let last = i + 1 == chunks.len();
         let mut n = 0_u32;
         let mut pad = 0;
-        for b in chunk {
+        for b in *chunk {
             let v = match b {
                 b'A'..=b'Z' => u32::from(b - b'A'),
                 b'a'..=b'z' => u32::from(b - b'a') + 26,
@@ -212,6 +236,10 @@ pub(crate) fn decode_base64(s: &str) -> Option<Vec<u8>> {
             n = (n << 6) | v;
         }
         if pad > 2 {
+            return None;
+        }
+        // Padding only in the final quantum.
+        if pad > 0 && !last {
             return None;
         }
         let bytes = n.to_be_bytes();

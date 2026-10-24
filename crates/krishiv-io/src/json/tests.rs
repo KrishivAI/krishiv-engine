@@ -3,8 +3,12 @@
 //! every option, inference, split boundaries, `multiLine`, encodings and
 //! write round trips.
 //!
-//! Behaviour is checked against Spark 4.2's documented JSON semantics
-//! (no Spark-built JSON fixtures exist in this tree).
+//! Behaviour follows Spark 4.2's documented JSON semantics and JacksonParser
+//! coercion rules; the real-Spark fixture (`tests/fixtures/spark-4.2.0/json.json`,
+//! made by `tests/scripts/gen_json_goldens.py`) is not yet in this tree, so
+//! the disputed coercions (boolean from string/number incl. `NaN`, nested
+//! values as malformed records, base64 edge cases) are asserted explicitly
+//! below against those rules.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -23,8 +27,9 @@ use krishiv_common::secret::OptionValue;
 use krishiv_kernels::text::{java_double_string, java_float_string32};
 
 use super::JsonFormat;
-use super::decode::{JVal, Syntax, Top, parse_line, parse_next};
+use super::decode::{JVal, Top, parse_line, parse_next};
 use super::encode::JsonEncoder;
+use super::options::Syntax;
 use crate::format::{Decoder, Encoder, FileFormat, FileMetadata, Step};
 use crate::io::{ByteRange, FileRef, IoConfig, IoScheduler, StoreId};
 use crate::options::FormatOptions;
@@ -579,9 +584,80 @@ fn all_flat_types_read() {
     assert_eq!(rows[1][6], Some("Infinity".into()));
     assert_eq!(rows[1][9], Some("3".into()));
     assert_eq!(rows[1][10], None);
-    // `1.0` never reads as an integer: the record is malformed in every mode.
+    // Numeric `1` reads as boolean `true`; `1.0` never reads as an integer:
+    // the record is malformed in every mode.
+    assert_eq!(rows[2][0], Some("true".into()));
     assert_eq!(rows[2][3], None);
     assert_eq!(rows[2][1], Some("1".into()));
+}
+
+#[test]
+fn boolean_strings_and_numbers_follow_spark_rules() {
+    // Only `true`/`false` (any case) read as booleans: anything else is a
+    // malformed record, as in the CSV converter and Spark's JacksonParser.
+    // Numbers read as `!= 0` (`NaN` reads `true`, as `NaN != 0` in Java).
+    let schema = ddl("b boolean, _corrupt_record string");
+    let permissive = options(&serde_json::json!({}));
+    for (text, want) in [
+        ("{\"b\":\"true\"}\n", Some("true")),
+        ("{\"b\":\"TRUE\"}\n", Some("true")),
+        ("{\"b\":\"False\"}\n", Some("false")),
+        ("{\"b\":true}\n", Some("true")),
+        ("{\"b\":1}\n", Some("true")),
+        ("{\"b\":0}\n", Some("false")),
+        ("{\"b\":0.0}\n", Some("false")),
+        ("{\"b\":1.5}\n", Some("true")),
+        ("{\"b\":NaN}\n", Some("true")),
+    ] {
+        let got = read(
+            text.as_bytes(),
+            &permissive,
+            &ScanRequest::all(Arc::clone(&schema)),
+        )
+        .expect("read");
+        assert_eq!(rows_of(&got)[0][0].as_deref(), want, "{text:?}");
+    }
+    for text in [
+        "{\"b\":\"yes\"}\n",
+        "{\"b\":\"1\"}\n",
+        "{\"b\":\"\"}\n",
+        "{\"b\":\"TRUE \"}\n",
+    ] {
+        let got = read(
+            text.as_bytes(),
+            &permissive,
+            &ScanRequest::all(Arc::clone(&schema)),
+        )
+        .expect("malformed permissive");
+        assert_eq!(
+            rows_of(&got),
+            [vec![None, Some(text.trim_end().to_owned())]],
+            "{text:?}"
+        );
+        let drop = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
+        let got = read(
+            text.as_bytes(),
+            &drop,
+            &ScanRequest::all(Arc::clone(&schema)),
+        )
+        .expect("malformed drop");
+        assert!(rows_of(&got).is_empty(), "{text:?}");
+        let fail = options(&serde_json::json!({"mode": "FAILFAST"}));
+        let e = read(
+            text.as_bytes(),
+            &fail,
+            &ScanRequest::all(Arc::clone(&schema)),
+        )
+        .expect_err("malformed failfast");
+        assert_eq!(
+            classes_of(&e),
+            [
+                ErrorClass::FailedReadFileNoHint,
+                ErrorClass::MalformedRecordInParsingWithoutSuggestion,
+            ],
+            "{text:?}"
+        );
+    }
 }
 
 #[test]
@@ -607,31 +683,93 @@ fn primitives_as_string_reads_scalars_as_text() {
             vec![None, None, None, None, Some("{\"a\":oops}".into())],
         ]
     );
-    // Nested values stay unsupported, even as strings.
-    let e = read(b"{\"a\":[1]}\n", &o, &ScanRequest::all(Arc::clone(&schema))).expect_err("nested");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // Nested values are malformed records, even as strings: PERMISSIVE
+    // keeps nulls plus the raw record, DROPMALFORMED drops the record.
+    let got = read(b"{\"a\":[1]}\n", &o, &ScanRequest::all(Arc::clone(&schema)))
+        .expect("nested permissive");
+    assert_eq!(
+        rows_of(&got),
+        [vec![None, None, None, None, Some("{\"a\":[1]}".into())]]
+    );
+    let drop = options(&serde_json::json!({"primitivesAsString": "true", "mode": "DROPMALFORMED"}));
+    let got = read(
+        b"{\"a\":[1]}\n{\"a\":2}\n",
+        &drop,
+        &ScanRequest::all(Arc::clone(&schema)),
+    )
+    .expect("nested drop");
+    assert_eq!(
+        rows_of(&got),
+        [vec![Some("2".into()), None, None, None, None]]
+    );
 }
 
 #[test]
-fn nested_data_and_schemas_are_unsupported() {
+fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
     use ErrorClass::{KrishivUnsupportedFeature as Unsupported, UnsupportedDataTypeForDatasource};
     let o = options(&serde_json::json!({}));
-    // A nested value in the data names its field.
+    // A nested value in the data is a malformed record, not a failed scan:
+    // PERMISSIVE keeps the good fields plus the raw record in the corrupt
+    // column (or nulls without it).
+    let corrupt = ddl("a int, n string, _corrupt_record string");
     for record in [
         "{\"a\":1,\"n\":{\"b\":2}}",
         "{\"a\":1,\"n\":[1,2]}",
         "{\"a\":1,\"n\":[[[]]]}",
         "{\"n\":{}}",
     ] {
-        let e = read(
+        let got = read(
             format!("{record}\n").as_bytes(),
             &o,
-            &ScanRequest::all(ddl("a int, n string")),
+            &ScanRequest::all(Arc::clone(&corrupt)),
         )
-        .expect_err("nested data");
-        assert_eq!(e.error_class(), Unsupported, "{record}");
-        assert!(e.to_string().contains('`'), "{record}: names the value");
+        .expect("nested permissive");
+        let rows = rows_of(&got);
+        assert_eq!(rows.len(), 1, "{record}");
+        assert_eq!(rows[0][2].as_deref(), Some(record), "{record}");
+        if record.starts_with("{\"a\":1") {
+            assert_eq!(rows[0][0].as_deref(), Some("1"), "{record}");
+        }
+        assert_eq!(rows[0][1], None, "{record}");
     }
+    let plain = ddl("a int, n string");
+    let got = read(
+        b"{\"a\":1,\"n\":{\"b\":2}}\n{\"a\":2,\"n\":\"x\"}\n",
+        &o,
+        &ScanRequest::all(Arc::clone(&plain)),
+    )
+    .expect("nested permissive without corrupt column");
+    assert_eq!(
+        rows_of(&got),
+        [
+            vec![Some("1".into()), None],
+            vec![Some("2".into()), Some("x".into())],
+        ]
+    );
+    // DROPMALFORMED drops nested records; FAILFAST fails with the nested
+    // cause under `MALFORMED_RECORD_IN_PARSING`.
+    let drop = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
+    let got = read(
+        b"{\"a\":1,\"n\":{\"b\":2}}\n{\"a\":2,\"n\":\"x\"}\n",
+        &drop,
+        &ScanRequest::all(Arc::clone(&plain)),
+    )
+    .expect("nested drop");
+    assert_eq!(rows_of(&got), [vec![Some("2".into()), Some("x".into())]]);
+    let fail = options(&serde_json::json!({"mode": "FAILFAST"}));
+    let e = read(
+        b"{\"a\":1,\"n\":{\"b\":2}}\n",
+        &fail,
+        &ScanRequest::all(Arc::clone(&plain)),
+    )
+    .expect_err("nested failfast");
+    assert_eq!(
+        classes_of(&e),
+        [
+            ErrorClass::FailedReadFileNoHint,
+            ErrorClass::MalformedRecordInParsingWithoutSuggestion,
+        ]
+    );
     // Unrequested nested fields are pruned away, not an error.
     let got = read(
         b"{\"a\":1,\"n\":{\"b\":2}}\n",
@@ -837,7 +975,8 @@ fn multi_line_records_span_lines() {
     )
     .expect("read");
     assert_eq!(rows_of(&got)[0][0], Some("3".into()));
-    // A truncated tail is one malformed record, not silent loss.
+    // A truncated tail is one malformed record, not silent loss: PERMISSIVE
+    // keeps nulls plus the raw tail in the corrupt column.
     let o = options(&serde_json::json!({"multiLine": "true"}));
     let got = read(
         "{\"a\": 1}\n{\"a\": ".as_bytes(),
@@ -846,6 +985,28 @@ fn multi_line_records_span_lines() {
     )
     .expect("read");
     assert_eq!(rows_of(&got).len(), 2);
+    let corrupt = ddl("a int, _corrupt_record string");
+    let got = read(
+        "{\"a\": 1}\n{\"a\": ".as_bytes(),
+        &o,
+        &ScanRequest::all(Arc::clone(&corrupt)),
+    )
+    .expect("read corrupt");
+    assert_eq!(
+        rows_of(&got),
+        [
+            vec![Some("1".into()), None],
+            vec![None, Some("\n{\"a\": ".into())],
+        ]
+    );
+    let o = options(&serde_json::json!({"multiLine": "true", "mode": "DROPMALFORMED"}));
+    let got = read(
+        "{\"a\": 1}\n{\"a\": ".as_bytes(),
+        &o,
+        &ScanRequest::all(Arc::clone(&corrupt)),
+    )
+    .expect("read drop");
+    assert_eq!(rows_of(&got), [vec![Some("1".into()), None]]);
     let o = options(&serde_json::json!({"multiLine": "true", "mode": "FAILFAST"}));
     let e = read(
         "{\"a\": 1}\n{\"a\": ".as_bytes(),
@@ -1110,15 +1271,96 @@ fn truncated_and_garbage_inputs_never_panic() {
             }
         }
     }
-    // Deep nesting is an error, not a stack overflow.
+    // Deep nesting is a malformed record, not a stack overflow: the
+    // scanner is iterative with `checked_add` depth counting.
     let deep = format!("{{\"a\":{}}}", "[".repeat(10_000) + &"]".repeat(10_000));
     let o = options(&serde_json::json!({}));
-    let e = read(deep.as_bytes(), &o, &ScanRequest::all(ddl("a string"))).expect_err("deep");
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    let got = read(
+        deep.as_bytes(),
+        &o,
+        &ScanRequest::all(ddl("a string, _corrupt_record string")),
+    )
+    .expect("deep permissive");
+    assert_eq!(rows_of(&got).len(), 1);
+    assert_eq!(rows_of(&got)[0][0], None);
+    let o = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
+    let got = read(deep.as_bytes(), &o, &ScanRequest::all(ddl("a string"))).expect("deep drop");
+    assert!(rows_of(&got).is_empty());
     let top = " [".to_owned() + &"[".repeat(9_999) + &"]".repeat(10_000);
     let o = options(&serde_json::json!({"mode": "FAILFAST"}));
     let e = read(top.as_bytes(), &o, &ScanRequest::all(ddl("a string"))).expect_err("deep top");
     assert_eq!(e.error_class(), ErrorClass::FailedReadFileNoHint);
+}
+
+#[test]
+fn base64_edge_cases() {
+    use super::convert::{decode_base64, encode_base64};
+    // Round trips, including empty and unpadded lengths.
+    for bytes in [
+        &[][..],
+        &[0x00][..],
+        &[0xFF][..],
+        b"qw".as_slice(),
+        b"hello world".as_slice(),
+    ] {
+        let text = encode_base64(bytes);
+        assert_eq!(decode_base64(&text).as_deref(), Some(bytes));
+    }
+    assert_eq!(encode_base64(b""), "");
+    assert_eq!(decode_base64(""), Some(Vec::new()));
+    assert_eq!(decode_base64("qw==").expect("pad"), vec![0xAB]);
+    // Padding only ends the input, at most two chars, length multiple of four.
+    for bad in [
+        "q", "qw=", "qw===", "=====", "qw=qw==", "qw==qw==", "q=w=", "q===", "q w=", "qw\n=",
+        " qw==", "qw== ", "q*==", "q/w", "====",
+    ] {
+        assert_eq!(decode_base64(bad), None, "{bad:?}");
+    }
+    // Binary columns reject bad base64 as malformed records.
+    let schema = ddl("bin binary, _corrupt_record string");
+    let o = options(&serde_json::json!({}));
+    let got = read(
+        b"{\"bin\":\"qw==\"}\n{\"bin\":\"!!!\"}\n",
+        &o,
+        &ScanRequest::all(Arc::clone(&schema)),
+    )
+    .expect("read");
+    assert_eq!(
+        rows_of(&got),
+        [
+            vec![Some("qw==".into()), None],
+            vec![None, Some("{\"bin\":\"!!!\"}".into())],
+        ]
+    );
+}
+
+#[test]
+fn read_path_option_negatives() {
+    // `samplingRatio` above 1 is accepted (as in CSV): inference reads all rows.
+    let o = options(&serde_json::json!({"samplingRatio": "2.0"}));
+    let s = infer(b"{\"a\":1}\n", &o).expect("ratio above 1 reads all rows");
+    assert_eq!(s.fields().len(), 1);
+    // An invalid `mode` is rejected at option-parse level, like CSV.
+    let user = BTreeMap::from([(
+        "mode".to_owned(),
+        OptionValue::from_user("mode", "WHATEVER"),
+    )]);
+    let e = JsonFormat
+        .options()
+        .parse(&user, &Config::new())
+        .expect_err("bad mode");
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidFormatOptionValue);
+    // An invalid `encoding` fails the read; an empty `lineSep` fails option parsing.
+    let e = read(
+        b"{}\n",
+        &options(&serde_json::json!({"encoding": "EBCDIC"})),
+        &ScanRequest::all(ddl("a int")),
+    )
+    .expect_err("bad charset");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    let e = super::options::JsonOptions::new(&options(&serde_json::json!({"lineSep": ""})), false)
+        .expect_err("empty lineSep");
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidFormatOptionValue);
 }
 
 #[test]

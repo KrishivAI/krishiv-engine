@@ -330,7 +330,8 @@ fn write_checks_and_nulls() {
     )]));
     let e = TextFormat.check_write(&int, &o).expect_err("int column");
     assert!(matches!(&e, crate::error::FormatError::Other(e) if e.error_class() == Unsupported));
-    // NULL is a write failure, as Spark's null pointer is.
+    // NULL is a write failure (`TASK_WRITE_FAILED`, the engine's
+    // write-failure class; Spark fails the task with a null pointer).
     let batch = RecordBatch::try_new(
         value_schema(),
         vec![Arc::new(arrow_array::StringViewArray::from(vec![

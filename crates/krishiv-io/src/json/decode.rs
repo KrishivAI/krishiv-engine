@@ -6,9 +6,10 @@
 //! The tokenizer is a small flat-object scanner over the record's text. A
 //! parsed record owns its field names and string values (like the CSV
 //! decoder's owned tokens); numbers borrow nothing either, so a huge line
-//! holds only its own bytes plus one batch. Nested objects and arrays are
-//! recognised and reported (flat schemas cannot hold them) rather than
-//! recursed into.
+//! holds only its own bytes plus one batch. Nested values are recognised
+//! iteratively (never recursed into) and treated as malformed records:
+//! nulls plus the raw record in PERMISSIVE, dropped in DROPMALFORMED,
+//! failed in FAILFAST. Only a nested *schema* is unsupported at open.
 
 use std::collections::HashMap;
 use std::ops::Range;
@@ -24,7 +25,7 @@ use krishiv_common::error::{
 use krishiv_kernels::datetime_pattern::Purpose;
 
 use super::convert::kind_of;
-use super::options::{JsonOptions, Mode};
+use super::options::{JsonOptions, Mode, Syntax};
 use crate::csv::convert::{Column, Conv, Kind, Val};
 use crate::error::{FormatError, FormatResult, internal};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
@@ -67,30 +68,8 @@ pub(crate) enum Top {
     Other(String),
 }
 
-/// The scanner's settings.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Syntax {
-    pub comments: bool,
-    pub unquoted_names: bool,
-    pub single_quotes: bool,
-    pub leading_zeros: bool,
-    pub backslash_any: bool,
-    pub unquoted_controls: bool,
-}
-
-impl From<&JsonOptions> for Syntax {
-    fn from(o: &JsonOptions) -> Self {
-        Self {
-            comments: o.syntax.comments,
-            unquoted_names: o.syntax.unquoted_names,
-            single_quotes: o.syntax.single_quotes,
-            leading_zeros: o.syntax.leading_zeros,
-            backslash_any: o.syntax.backslash_any,
-            unquoted_controls: o.syntax.unquoted_controls,
-        }
-    }
-}
-
+/// The scanner's settings live in `super::options` ([`Syntax`]): the
+/// tokenizer, decoder and options share the one struct.
 /// The bytes of a record, with a cursor.
 struct Cur<'t> {
     b: &'t [u8],
@@ -906,6 +885,10 @@ impl JsonDecoder {
                             Val::Null
                         }
                         Err(Conv::Fatal(e)) => {
+                            // A conversion that cannot be done at all (a
+                            // region time zone) fails the scan even in
+                            // PERMISSIVE. Nested values never reach here:
+                            // they are `Malformed` above.
                             if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" {
                                 return Err(FormatError::Other(e));
                             }

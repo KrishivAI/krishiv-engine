@@ -132,6 +132,19 @@ pub(crate) struct Syntax {
     pub unquoted_controls: bool,
 }
 
+impl From<&JsonOptions> for Syntax {
+    fn from(o: &JsonOptions) -> Self {
+        Self {
+            comments: o.syntax.comments,
+            unquoted_names: o.syntax.unquoted_names,
+            single_quotes: o.syntax.single_quotes,
+            leading_zeros: o.syntax.leading_zeros,
+            backslash_any: o.syntax.backslash_any,
+            unquoted_controls: o.syntax.unquoted_controls,
+        }
+    }
+}
+
 /// The parsed options of a read or write.
 #[derive(Debug, Clone)]
 pub(crate) struct JsonOptions {

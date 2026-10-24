@@ -9,7 +9,8 @@ use futures::future::BoxFuture;
 use krishiv_kernels::datetime_pattern::Purpose;
 use krishiv_kernels::text::java_parse_long;
 
-use super::decode::{JObject, JVal, Syntax, Top, parse_line, parse_next};
+use super::decode::{JObject, JVal, Top, parse_line, parse_next};
+use super::options::Syntax;
 use super::options::{JsonOptions, sampling_ratio};
 use crate::csv::sampling::Sampler;
 use crate::error::{FormatError, FormatResult, internal, unsupported};

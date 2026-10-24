@@ -3,9 +3,11 @@
 //! with Spark's options and parse modes, schema inference with Spark's
 //! `samplingRatio` semantics, and an encoder with Spark's value renderings.
 //!
-//! Only flat records are supported: a nested object or array in the data or
-//! in the requested schema is `KRISHIV_UNSUPPORTED_FEATURE`. Compressed
-//! files are `KRISHIV_UNSUPPORTED_FEATURE` for now.
+//! Only flat schemas are supported: a nested object or array in the
+//! requested schema is `KRISHIV_UNSUPPORTED_FEATURE`. A nested value in the
+//! *data* is a malformed record (nulls plus the raw record in PERMISSIVE,
+//! dropped in DROPMALFORMED, failed in FAILFAST). Compressed files are
+//! `KRISHIV_UNSUPPORTED_FEATURE` for now.
 
 mod convert;
 mod decode;
