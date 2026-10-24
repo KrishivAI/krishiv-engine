@@ -73,6 +73,7 @@ struct Subpattern {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Char {
     Literal(char),
+    Quoted(char),
     Zero,
     Hash,
     Point,
@@ -88,7 +89,7 @@ fn lex(side: &str) -> Result<Vec<Char>, ()> {
     while let Some(c) = chars.next() {
         if c == '\'' {
             if in_quote && chars.peek() == Some(&'\'') {
-                out.push(Char::Literal('\''));
+                out.push(Char::Quoted('\''));
                 chars.next();
             } else {
                 in_quote = !in_quote;
@@ -96,7 +97,7 @@ fn lex(side: &str) -> Result<Vec<Char>, ()> {
             continue;
         }
         if in_quote {
-            out.push(Char::Literal(c));
+            out.push(Char::Quoted(c));
             continue;
         }
         out.push(match c {
@@ -124,10 +125,10 @@ fn parse_side(side: &str) -> Result<Subpattern, PatternError> {
         // `format_number(12332.123456, 'abc')` as `abc12332`).
         let mut prefix = String::new();
         for c in &chars {
-            let Char::Literal(c) = c else {
-                return Err(bad());
-            };
-            prefix.push(*c);
+            match c {
+                Char::Literal(c) | Char::Quoted(c) => prefix.push(*c),
+                _ => return Err(bad()),
+            }
         }
         return Ok(Subpattern {
             prefix,
@@ -142,14 +143,15 @@ fn parse_side(side: &str) -> Result<Subpattern, PatternError> {
     // Quoted text cannot sit inside the number part.
     if chars[first..=last]
         .iter()
-        .any(|c| matches!(c, Char::Literal(_)))
+        .any(|c| matches!(c, Char::Literal(_) | Char::Quoted(_)))
     {
-        // ... except the multipliers, which stay literal and multiply.
+        // ... except the unquoted multipliers, which stay literal and
+        // multiply (a quoted `'%'` is plain text, without a multiplier).
         let inner: Vec<char> = chars[first..=last]
             .iter()
             .filter_map(|c| match c {
                 Char::Literal('%' | '‰') => None,
-                Char::Literal(c) => Some(*c),
+                Char::Literal(c) | Char::Quoted(c) => Some(*c),
                 _ => None,
             })
             .collect();
@@ -160,13 +162,23 @@ fn parse_side(side: &str) -> Result<Subpattern, PatternError> {
     let mut prefix = String::new();
     let mut suffix = String::new();
     for (i, c) in chars.iter().enumerate() {
-        if let Char::Literal(c) = c {
-            if i < first {
-                prefix.push(*c);
-            } else if i > last || *c == '%' || *c == '‰' {
-                // Multipliers stay literal in the affix, wherever they are.
-                suffix.push(*c);
+        match c {
+            Char::Literal(c) => {
+                if i < first {
+                    prefix.push(*c);
+                } else if i > last || *c == '%' || *c == '‰' {
+                    // Multipliers stay literal in the affix, wherever they are.
+                    suffix.push(*c);
+                }
             }
+            Char::Quoted(c) => {
+                if i < first {
+                    prefix.push(*c);
+                } else if i > last {
+                    suffix.push(*c);
+                }
+            }
+            _ => {}
         }
     }
     let (mut min_int, mut min_frac, mut max_frac) = (0_usize, 0_usize, 0_usize);
@@ -249,6 +261,39 @@ fn shortest_digits(v: f64) -> (String, i32) {
     }
 }
 
+/// Whether a shortest-digit tie (`5` followed by zeros) rounds up, from
+/// the exact finite `f64` value: above the tie rounds up, below rounds
+/// down, exactly on the tie half-even on the kept digit.
+fn exact_tie_up(abs: f64, shift: u32, max_frac: usize, int: &str, keep: &str) -> bool {
+    // The exact decimal terminates within 1074 fractional digits (the
+    // smallest subnormal is `2^-1074`).
+    let text = format!("{abs:.1074}");
+    let (int_part, frac_part) = text.split_once('.').unwrap_or((text.as_str(), ""));
+    let shift = usize::try_from(shift).unwrap_or(usize::MAX);
+    let (scaled_frac, first, rest) = if shift >= frac_part.len() {
+        (String::new(), '0', false)
+    } else {
+        let scaled = &frac_part[shift..];
+        let first = scaled.chars().nth(max_frac).unwrap_or('0');
+        let rest = scaled.chars().skip(max_frac + 1).any(|c| c != '0');
+        (scaled.to_owned(), first, rest)
+    };
+    let _ = (int_part, scaled_frac);
+    if first > '5' {
+        return true;
+    }
+    if first < '5' {
+        return false;
+    }
+    if rest {
+        return true;
+    }
+    keep.chars()
+        .last()
+        .or_else(|| int.chars().last())
+        .is_some_and(|c| c.to_digit(10).is_some_and(|d| d % 2 == 1))
+}
+
 /// Formats `value` with `pattern`.
 ///
 /// # Errors
@@ -263,7 +308,7 @@ pub fn format(pattern: &str, value: Value) -> Result<String, PatternError> {
     }
     let positive = parse_side(parts[0])?;
     let negative = parts.get(1).map(|p| parse_side(p)).transpose()?;
-    let (neg, digits, exp) = match value {
+    let (neg, digits, exp, float_abs) = match value {
         Value::Int(v) => {
             let (neg, abs) = if v < 0 {
                 (true, v.unsigned_abs())
@@ -275,11 +320,12 @@ pub fn format(pattern: &str, value: Value) -> Result<String, PatternError> {
                 neg,
                 digits.clone(),
                 i32::try_from(digits.len()).unwrap_or(i32::MAX),
+                None,
             )
         }
         Value::Float(v) => {
             if v.is_nan() {
-                return Ok(format!("{}NaN{}", positive.prefix, positive.suffix));
+                return Ok("NaN".to_owned());
             }
             if v.is_infinite() {
                 if v < 0.0 {
@@ -292,7 +338,7 @@ pub fn format(pattern: &str, value: Value) -> Result<String, PatternError> {
             }
             let (neg, abs) = if v < 0.0 { (true, -v) } else { (false, v) };
             let (digits, exp) = shortest_digits(abs);
-            (neg, digits, exp)
+            (neg, digits, exp, Some(abs))
         }
         Value::Decimal { unscaled, scale } => {
             let (neg, abs) = if unscaled < 0 {
@@ -306,6 +352,7 @@ pub fn format(pattern: &str, value: Value) -> Result<String, PatternError> {
                 digits.clone(),
                 i32::try_from(digits.len()).unwrap_or(i32::MAX)
                     - i32::try_from(scale).unwrap_or(i32::MAX),
+                None,
             )
         }
     };
@@ -346,13 +393,23 @@ pub fn format(pattern: &str, value: Value) -> Result<String, PatternError> {
         let mut dropped = drop.chars();
         let first = dropped.next();
         let rest_nonzero = dropped.any(|c| c != '0');
+        // The kept digit for half-even ties: the last kept fraction
+        // digit, or the last integer digit when nothing is kept.
+        let parity_odd = keep
+            .chars()
+            .last()
+            .or_else(|| int.chars().last())
+            .is_some_and(|c| c.to_digit(10).is_some_and(|d| d % 2 == 1));
         let up = match first {
             Some(c) if c > '5' => true,
             Some('5') if rest_nonzero => true,
-            Some('5') => keep
-                .chars()
-                .last()
-                .is_some_and(|c| c.to_digit(10).is_some_and(|d| d % 2 == 1)),
+            Some('5') => match float_abs {
+                // The shortest digits can show a tie the exact value
+                // is not on (`2.675` is `2.67499...`): decide from the
+                // exact decimal expansion.
+                Some(abs) => exact_tie_up(abs, sub.shift, sub.max_frac, &int, keep),
+                None => parity_odd,
+            },
             _ => false,
         };
         frac = keep.to_owned();
@@ -423,7 +480,10 @@ mod tests {
     #[test]
     fn quoted_literals_are_affixes() {
         assert_eq!(format("'USD'#,##0", Value::Int(5)).unwrap(), "USD5");
-        assert_eq!(format("#'%'#", Value::Int(5)).unwrap(), "500%");
+        // A quoted `'%'` is plain text: no multiplier.
+        assert_eq!(format("#'%'", Value::Int(5)).unwrap(), "5%");
+        // An unquoted `#` cannot appear in the suffix.
+        assert!(format("#'%'#", Value::Int(5)).is_err());
     }
 
     #[test]
@@ -436,6 +496,8 @@ mod tests {
     #[test]
     fn non_finite_values() {
         assert_eq!(format("#,##0", Value::Float(f64::NAN)).unwrap(), "NaN");
+        // Java returns the bare `NaN` symbol, without the pattern's affixes.
+        assert_eq!(format("'$'0", Value::Float(f64::NAN)).unwrap(), "NaN");
         assert_eq!(format("#,##0", Value::Float(f64::INFINITY)).unwrap(), "∞");
         assert_eq!(
             format("#,##0", Value::Float(f64::NEG_INFINITY)).unwrap(),
@@ -461,6 +523,10 @@ mod tests {
         assert_eq!(format("#.##", Value::Float(9.999)).unwrap(), "10.00");
         // Minimum integer digits pad with zeros.
         assert_eq!(format("000", Value::Int(5)).unwrap(), "005");
+        // The shortest digits show ties the exact value is just below:
+        // `2.675` is `2.67499...`, `0.8055` is `0.80549...`.
+        assert_eq!(format("0.00", Value::Float(2.675)).unwrap(), "2.67");
+        assert_eq!(format("0.000", Value::Float(0.8055)).unwrap(), "0.805");
     }
 
     #[test]

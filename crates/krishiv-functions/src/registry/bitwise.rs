@@ -97,6 +97,21 @@ fn common_bitwise(c: &CallTypes<'_>) -> Option<DataType> {
         (Some(x), Some(y)) if is_integral(Some(x)) && is_integral(Some(y)) => Some(wider(x, y)),
         (None, None) => Some(DataType::Integer),
         (None, Some(t)) | (Some(t), None) if is_integral(Some(t)) => Some(t.clone()),
+        (Some(DataType::String), Some(other)) | (Some(other), Some(DataType::String))
+            if c.ansi() =>
+        {
+            // A string meets integrals (and booleans, which the declared
+            // cast then refuses) as `bigint`; a non-integral number would
+            // narrow through `Exact(Long)`, so it is incompatible.
+            if matches!(
+                other,
+                DataType::Float | DataType::Double | DataType::Decimal(_)
+            ) {
+                None
+            } else {
+                Some(DataType::Long)
+            }
+        }
         (Some(DataType::String), _) | (_, Some(DataType::String)) if c.ansi() => {
             Some(DataType::Long)
         }

@@ -733,6 +733,26 @@ fn bitwise_signatures() {
         result("&", &[nullable(DataType::Long), l.clone()], &[]).unwrap(),
         nullable(DataType::Long)
     );
+    // A string meets integrals as `bigint`, but not non-integral numbers:
+    // narrowing a `double` through `bigint` would reach execution.
+    assert_eq!(
+        built("&", &[ty(DataType::String), l.clone()]),
+        Some(vec![
+            InputType::Exact(DataType::Long),
+            InputType::Exact(DataType::Long)
+        ])
+    );
+    for t in [DataType::Float, DataType::Double, dec(10, 2)] {
+        assert_eq!(
+            built("&", &[ty(DataType::String), ty(t.clone())]),
+            Some(vec![InputType::Any, InputType::Any])
+        );
+        let err = result("&", &[ty(DataType::String), ty(t)], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchBinaryOpDiffTypes
+        );
+    }
     // `~` keeps its child's type; strings are refused as `INTEGRAL`.
     assert_eq!(result("~", std::slice::from_ref(&b), &[]).unwrap(), b);
     assert_eq!(result("~", std::slice::from_ref(&l), &[]).unwrap(), l);
@@ -755,7 +775,7 @@ fn bitwise_signatures() {
         result(">>", &[l.clone(), i.clone()], &[]).unwrap(),
         ty(DataType::Long)
     );
-    // A failing cast (here a `float` to `int`) makes the post-cast type
+    // Nullability passes through the result: a nullable operand stays
     // nullable, as the analyzer records it.
     assert_eq!(
         result(">>>", &[nullable(DataType::Integer), i.clone()], &[]).unwrap(),
@@ -940,6 +960,15 @@ fn number_signatures() {
         result("format_number", &[ty(DataType::Double), i.clone()], &[]).unwrap(),
         ArgType::new(DataType::String, true)
     );
+    // A string value meets the first argument as `double` (Spark's
+    // implicit cast), so `'12.5'` formats instead of failing.
+    assert_eq!(
+        built("format_number", &[s.clone(), i.clone()]),
+        Some(vec![
+            InputType::Numeric { intervals: false },
+            InputType::Any
+        ])
+    );
     let err = result("format_number", &[s.clone(), i], &[]).unwrap_err();
     assert_eq!(
         err.error_class(),
@@ -999,12 +1028,18 @@ fn number_signatures() {
         result("to_char", &args, &fmt("000")).unwrap(),
         ty(DataType::String)
     );
-    let err = result("to_char", &[ty(DataType::Boolean), s], &fmt("000")).unwrap_err();
+    let err = result("to_char", &[ty(DataType::Boolean), s.clone()], &fmt("000")).unwrap_err();
     assert_eq!(
         err.error_class(),
         ErrorClass::DatatypeMismatchUnexpectedInputType
     );
     assert!(err.to_string().contains("\"DECIMAL\""), "{err}");
+    // A binary `to_char` only takes `base64`/`hex`/`utf-8`.
+    let err = result("to_char", &[ty(DataType::Binary), s], &fmt("999")).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::InvalidParameterValueBinaryFormat
+    );
 }
 
 #[test]

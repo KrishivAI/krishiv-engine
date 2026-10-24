@@ -281,6 +281,12 @@ fn predicate_goldens() {
         col(1),
         ["true", "false", "false", "true", "false", "false", "true"]
     );
+    // A column condition with a failing row after row 0 reports the
+    // literal message (scalars broadcast to the row count).
+    assert_eq!(
+        error_of(&s, "SELECT assert_true(b = c, 'boom') FROM t1").to_string(),
+        "[USER_RAISED_EXCEPTION] boom SQLSTATE: P0001"
+    );
     // `isnan`: `NaN` is, NULL is not, never NULL itself.
     assert_eq!(
         run(
@@ -352,4 +358,6 @@ fn number_goldens() {
         ),
         ["12332.123"]
     );
+    // A string value takes Spark's implicit cast to `DOUBLE`.
+    assert_eq!(run(&s, "SELECT format_number('12.5', 1)"), ["12.5"]);
 }

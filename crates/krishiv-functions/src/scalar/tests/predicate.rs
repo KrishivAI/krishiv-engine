@@ -129,6 +129,13 @@ fn isnull_and_isnotnull() {
     for name in ["isnull", "ISNOTNULL"] {
         assert_eq!(bind(name, &[&a]).return_type(), &DataType::Boolean);
     }
+    // An untyped `NULL` has no validity buffer; it is null in every row.
+    let n: ArrayRef = Arc::new(arrow_array::NullArray::new(2));
+    assert_eq!(bool_values(&run("isnull", &[&n])), [Some(true), Some(true)]);
+    assert_eq!(
+        bool_values(&run("isnotnull", &[&n])),
+        [Some(false), Some(false)]
+    );
 }
 
 #[test]

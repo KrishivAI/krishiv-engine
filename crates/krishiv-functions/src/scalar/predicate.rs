@@ -127,9 +127,10 @@ fn isnan(t: &DataType) -> Option<Binding> {
 fn is_null(negated: bool) -> Binding {
     Binding::new(DataType::Boolean, move |x: &Inputs<'_>| {
         let a = x.column(0)?;
+        let nulls = a.logical_nulls();
         Ok(Arc::new(BooleanArray::from(
             (0..a.len())
-                .map(|i| Some(a.is_null(i) != negated))
+                .map(|i| Some(nulls.as_ref().is_some_and(|n| n.is_null(i)) != negated))
                 .collect::<Vec<_>>(),
         )) as ArrayRef)
     })
