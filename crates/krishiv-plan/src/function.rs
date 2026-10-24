@@ -103,6 +103,17 @@ pub enum Builtin {
     Concat,
 }
 
+/// The three axes of a [`Builtin`] `[NOT] LIKE|ILIKE ANY|ALL` operator.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QuantifiedLike {
+    /// `ILIKE` rather than `LIKE`.
+    pub insensitive: bool,
+    /// `NOT LIKE`: each pattern match is negated.
+    pub negated: bool,
+    /// `ALL` (an `AND` chain) rather than `ANY`/`SOME` (an `OR` chain).
+    pub all: bool,
+}
+
 impl Builtin {
     /// Every operator, in declaration order.
     pub const ALL: [Self; 33] = [
@@ -179,6 +190,28 @@ impl Builtin {
             Self::When => "when",
             Self::Concat => "concat",
         }
+    }
+
+    /// The shape of a `[NOT] LIKE|ILIKE ANY|ALL` operator, `None` for any
+    /// other. One mapping for the analyzer rewrite and the printers.
+    #[must_use]
+    pub const fn quantified_like(self) -> Option<QuantifiedLike> {
+        let (insensitive, negated, all) = match self {
+            Self::LikeAny => (false, false, false),
+            Self::LikeAll => (false, false, true),
+            Self::NotLikeAny => (false, true, false),
+            Self::NotLikeAll => (false, true, true),
+            Self::ILikeAny => (true, false, false),
+            Self::ILikeAll => (true, false, true),
+            Self::NotILikeAny => (true, true, false),
+            Self::NotILikeAll => (true, true, true),
+            _ => return None,
+        };
+        Some(QuantifiedLike {
+            insensitive,
+            negated,
+            all,
+        })
     }
 
     /// The operator with canonical name `name`, ASCII case-insensitively

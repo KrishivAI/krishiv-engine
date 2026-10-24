@@ -717,27 +717,17 @@ fn call<'a>(
         name
     };
     // `a [NOT] LIKE|ILIKE ANY|SOME|ALL (p, ...)`, as Spark writes the form.
-    let mut quantified = |negated: bool, insensitive: bool, all: bool| {
-        out.extend([
-            Piece::Expr(&args[0]),
-            Piece::Str(if negated { " NOT " } else { " " }),
-        ]);
-        out.extend([
-            Piece::Str(if insensitive { "ILIKE " } else { "LIKE " }),
-            Piece::Str(if all { "ALL (" } else { "ANY (" }),
-        ]);
-        list(&args[1..], out);
-        out.push(Piece::Str(")"));
-    };
     match (op, args.len()) {
-        (Some(Builtin::LikeAny), n) if n >= 1 => quantified(false, false, false),
-        (Some(Builtin::LikeAll), n) if n >= 1 => quantified(false, false, true),
-        (Some(Builtin::NotLikeAny), n) if n >= 1 => quantified(true, false, false),
-        (Some(Builtin::NotLikeAll), n) if n >= 1 => quantified(true, false, true),
-        (Some(Builtin::ILikeAny), n) if n >= 1 => quantified(false, true, false),
-        (Some(Builtin::ILikeAll), n) if n >= 1 => quantified(false, true, true),
-        (Some(Builtin::NotILikeAny), n) if n >= 1 => quantified(true, true, false),
-        (Some(Builtin::NotILikeAll), n) if n >= 1 => quantified(true, true, true),
+        (Some(op), n) if n >= 1 && op.quantified_like().is_some() => {
+            let q = op.quantified_like().unwrap_or_default();
+            out.extend([arg(0), Piece::Str(if q.negated { " NOT " } else { " " })]);
+            out.extend([
+                Piece::Str(if q.insensitive { "ILIKE " } else { "LIKE " }),
+                Piece::Str(if q.all { "ALL (" } else { "ANY (" }),
+            ]);
+            list(&args[1..], out);
+            out.push(Piece::Str(")"));
+        }
         (Some(op), 2) if is_infix(op) && !distinct => {
             out.extend([Piece::Str("("), arg(0), Piece::Str(" ")]);
             out.extend([

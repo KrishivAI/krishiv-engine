@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Lowering of the P2-T180 function-call forms: named arguments, qualified
+//! Lowering of the function-call forms: named arguments, qualified
 //! builtin names, `ILIKE`, and `LIKE|ILIKE ANY|SOME|ALL`.
 
 use std::sync::Arc;

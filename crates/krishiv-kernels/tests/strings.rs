@@ -588,3 +588,22 @@ fn mask_replaces_each_class_or_retains_on_null() {
     .unwrap();
     assert_eq!(rows(&out), [Some("xnⅫⅻn".to_owned())]);
 }
+
+#[test]
+fn mask_classifies_like_spark_beyond_ascii() {
+    use krishiv_kernels::string::mask;
+    // Spark 4.2: `mask('AbⒶ1²½Ⅻ-', 'U', 'l', 'd', 'o')` is `Ulodoooo`;
+    // an astral scalar is two UTF-16 units, so two other characters.
+    let out = mask(
+        S::Array(&strs(&[Some("AbⒶ1²½Ⅻ-"), Some("a\u{1F600}b\u{1D400}")])),
+        S::Scalar(Some("U")),
+        S::Scalar(Some("l")),
+        S::Scalar(Some("d")),
+        S::Scalar(Some("o")),
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&out),
+        [Some("Ulodoooo".to_owned()), Some("looloo".to_owned())]
+    );
+}

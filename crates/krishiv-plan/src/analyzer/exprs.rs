@@ -35,8 +35,8 @@ use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
-    FunctionKind, Literal, LogicalPlan, Origin, ResolvedExpr, ResolvedFunction, Star, SubqueryKind,
-    TypedLiteralKind,
+    FunctionKind, Literal, LogicalPlan, Origin, QuantifiedLike, ResolvedExpr, ResolvedFunction,
+    Star, SubqueryKind, TypedLiteralKind,
 };
 
 /// Where an operator's expressions resolve.
@@ -888,17 +888,7 @@ impl Resolver<'_> {
                     if op == Builtin::ILike {
                         return self.ilike_call(e, &kids[..n]);
                     }
-                    if matches!(
-                        op,
-                        Builtin::LikeAny
-                            | Builtin::LikeAll
-                            | Builtin::NotLikeAny
-                            | Builtin::NotLikeAll
-                            | Builtin::ILikeAny
-                            | Builtin::ILikeAll
-                            | Builtin::NotILikeAny
-                            | Builtin::NotILikeAll
-                    ) {
+                    if op.quantified_like().is_some() {
                         return self.like_quantified_call(op, e, &kids[..n]);
                     }
                     return self.operator_call(op, e.origin, &kids[..n]);
@@ -1367,7 +1357,11 @@ impl Resolver<'_> {
             for (i, name) in f.arg_names.iter().enumerate().skip(first) {
                 match name {
                     None => {
-                        let prev = f.arg_names[i - 1].as_deref().unwrap_or_default();
+                        let prev = i
+                            .checked_sub(1)
+                            .and_then(|j| f.arg_names.get(j))
+                            .and_then(Option::as_deref)
+                            .unwrap_or_default();
                         return Err(AnalysisError::new(
                             UnexpectedPositionalArgument {
                                 routine_name: routine(),
@@ -1431,10 +1425,9 @@ impl Resolver<'_> {
             let valid: Vec<String> = (required..=signature.len())
                 .map(|v| v.to_string())
                 .collect();
-            let expected = if valid.len() == 1 {
-                valid[0].clone()
-            } else {
-                format!("[{}]", valid.join(", "))
+            let expected = match valid.as_slice() {
+                [only] => only.clone(),
+                _ => format!("[{}]", valid.join(", ")),
             };
             return Err(AnalysisError::new(
                 WrongNumArgsWithoutSuggestion {
@@ -1473,7 +1466,9 @@ impl Resolver<'_> {
                 let literal = match p.default {
                     NamedDefault::Null => Literal::Null(None),
                     NamedDefault::Text(s) => Literal::String(s.to_owned()),
-                    NamedDefault::Required => unreachable!("checked above"),
+                    NamedDefault::Required => {
+                        return Err(unsupported("a required parameter default", origin));
+                    }
                 };
                 let data_type = literal_type(&literal);
                 reordered.push(Bound {
@@ -1491,6 +1486,45 @@ impl Resolver<'_> {
             }
         }
         Ok(reordered)
+    }
+
+    /// `lower(b)` as a call of the registry's `lower` (`entry`), keeping the
+    /// argument's aggregate, window and outer-reference bookkeeping.
+    fn lowered(
+        &self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        b: &Bound,
+    ) -> Result<Bound, AnalysisError> {
+        let (mut v, ty) = self.typed_call(entry, e, std::slice::from_ref(b))?;
+        if v.is_empty() {
+            return Err(unsupported("function lower", e.origin));
+        }
+        let arg = v.remove(0);
+        let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
+        Ok(Bound {
+            expr: Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        id: entry.id.clone(),
+                        kind: entry.kind,
+                        args: vec![Arc::clone(&arg.expr)],
+                        distinct: false,
+                        filter: None,
+                        data_type,
+                        nullable: ty.nullable,
+                        deterministic: entry.deterministic,
+                    },
+                )))
+                .with_origin(e.origin),
+            ),
+            ty,
+            agg: arg.agg,
+            win: arg.win,
+            outer: arg.outer,
+            lateral: arg.lateral,
+            shown: None,
+        })
     }
 
     /// `ilike(a, b[, escape])` as Spark's `ILike` replacement:
@@ -1516,35 +1550,10 @@ impl Resolver<'_> {
             return Err(unsupported("function lower", e.origin));
         };
         let origin = e.origin;
-        let lowered = |b: &Bound| {
-            let (mut v, ty) = self.typed_call(&lower, e, std::slice::from_ref(b))?;
-            let arg = v.remove(0);
-            let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
-            Ok(Bound {
-                expr: Arc::new(
-                    Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-                        ResolvedFunction {
-                            id: lower.id.clone(),
-                            kind: lower.kind,
-                            args: vec![Arc::clone(&arg.expr)],
-                            distinct: false,
-                            filter: None,
-                            data_type,
-                            nullable: ty.nullable,
-                            deterministic: lower.deterministic,
-                        },
-                    )))
-                    .with_origin(origin),
-                ),
-                ty,
-                agg: arg.agg,
-                win: arg.win,
-                outer: arg.outer,
-                lateral: arg.lateral,
-                shown: None,
-            })
-        };
-        let mut like_kids = vec![lowered(&kids[0])?, lowered(&kids[1])?];
+        let mut like_kids = vec![
+            self.lowered(&lower, e, &kids[0])?,
+            self.lowered(&lower, e, &kids[1])?,
+        ];
         if n == 3 {
             like_kids.push(kids[2].clone());
         }
@@ -1578,16 +1587,13 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         kids: &[Bound],
     ) -> Result<Bound, AnalysisError> {
-        let (insensitive, negated, all) = match which {
-            Builtin::LikeAny => (false, false, false),
-            Builtin::LikeAll => (false, false, true),
-            Builtin::NotLikeAny => (false, true, false),
-            Builtin::NotLikeAll => (false, true, true),
-            Builtin::ILikeAny => (true, false, false),
-            Builtin::ILikeAll => (true, false, true),
-            Builtin::NotILikeAny => (true, true, false),
-            Builtin::NotILikeAll => (true, true, true),
-            _ => return Err(unsupported("a LIKE ANY, SOME or ALL form", e.origin)),
+        let Some(QuantifiedLike {
+            insensitive,
+            negated,
+            all,
+        }) = which.quantified_like()
+        else {
+            return Err(unsupported("a LIKE ANY, SOME or ALL form", e.origin));
         };
         let origin = e.origin;
         let Some((written, patterns)) = kids.split_first() else {
@@ -1606,41 +1612,14 @@ impl Resolver<'_> {
         } else {
             None
         };
-        let wrap = |b: Bound| match &lower {
-            None => Ok(b),
-            Some(entry) => {
-                let (mut v, ty) = self.typed_call(entry, e, std::slice::from_ref(&b))?;
-                let arg = v.remove(0);
-                let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
-                Ok(Bound {
-                    expr: Arc::new(
-                        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-                            ResolvedFunction {
-                                id: entry.id.clone(),
-                                kind: entry.kind,
-                                args: vec![Arc::clone(&arg.expr)],
-                                distinct: false,
-                                filter: None,
-                                data_type,
-                                nullable: ty.nullable,
-                                deterministic: entry.deterministic,
-                            },
-                        )))
-                        .with_origin(origin),
-                    ),
-                    ty,
-                    agg: arg.agg,
-                    win: arg.win,
-                    outer: arg.outer,
-                    lateral: arg.lateral,
-                    shown: None,
-                })
-            }
+        let wrap = |b: &Bound| match &lower {
+            None => Ok(b.clone()),
+            Some(entry) => self.lowered(entry, e, b),
         };
-        let child = wrap(child.clone())?;
+        let child = wrap(child)?;
         let mut lowered_patterns = Vec::with_capacity(patterns.len());
         for p in patterns {
-            lowered_patterns.push(wrap(p.clone())?);
+            lowered_patterns.push(wrap(p)?);
         }
         let mut acc: Option<Bound> = None;
         for p in lowered_patterns {
@@ -1745,7 +1724,14 @@ impl Resolver<'_> {
             )
         };
         for (i, name) in NAMES.iter().enumerate() {
-            let arg = &call_kids[1 + i];
+            let (Some(arg), Some(written)) = (call_kids.get(1 + i), kids.get(1 + i)) else {
+                return Err(unsupported(
+                    "a mask call without its replacements",
+                    call_kids
+                        .first()
+                        .map_or_else(Origin::default, |k| k.expr.origin),
+                ));
+            };
             match self.fold(&arg.expr, ansi) {
                 Some(Constant::Null) => {}
                 Some(Constant::String(s)) if s.chars().count() == 1 => {}
@@ -1767,7 +1753,7 @@ impl Resolver<'_> {
                             sql_expr: sql_expr(),
                             input_name: format!("`{name}`"),
                             input_type: "\"STRING\"".to_owned(),
-                            input_expr: format!("\"{}\"", pretty(&kids[1 + i].shown(), zone)),
+                            input_expr: format!("\"{}\"", pretty(&written.shown(), zone)),
                         },
                         arg.expr.origin,
                     ));
@@ -2958,20 +2944,15 @@ fn call(
     // `[NOT] LIKE|ILIKE ANY|SOME|ALL` with literal patterns: Spark's
     // `LikeAny`-family name, `likeany(child)` (the child is `lower(child)`
     // for ILIKE; the patterns are not shown), in both its name and SQL form.
-    let quantified = |negated: bool, _insensitive: bool, all: bool| {
-        let not = if negated { "not" } else { "" };
-        let any = if all { "all" } else { "any" };
+    let quantified = |q: QuantifiedLike| {
+        let not = if q.negated { "not" } else { "" };
+        let any = if q.all { "all" } else { "any" };
         format!("{not}like{any}({})", k[0])
     };
     match (op, k.len()) {
-        (Some(Builtin::LikeAny), n) if n >= 1 => quantified(false, false, false),
-        (Some(Builtin::LikeAll), n) if n >= 1 => quantified(false, false, true),
-        (Some(Builtin::NotLikeAny), n) if n >= 1 => quantified(true, false, false),
-        (Some(Builtin::NotLikeAll), n) if n >= 1 => quantified(true, false, true),
-        (Some(Builtin::ILikeAny), n) if n >= 1 => quantified(false, true, false),
-        (Some(Builtin::ILikeAll), n) if n >= 1 => quantified(false, true, true),
-        (Some(Builtin::NotILikeAny), n) if n >= 1 => quantified(true, true, false),
-        (Some(Builtin::NotILikeAll), n) if n >= 1 => quantified(true, true, true),
+        (Some(op), n) if n >= 1 && op.quantified_like().is_some() => {
+            quantified(op.quantified_like().unwrap_or_default())
+        }
         (Some(Builtin::Eq), 2) => infix("="),
         (Some(Builtin::EqNullSafe), 2) => infix("<=>"),
         (Some(Builtin::Lt), 2) => infix("<"),

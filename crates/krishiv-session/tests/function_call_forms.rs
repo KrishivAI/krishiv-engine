@@ -324,3 +324,58 @@ fn function_call_forms_match_spark() {
     }
     assert!(failures.is_empty(), "\n{failures}");
 }
+
+/// Spark 4.2: `*` expands to positional arguments, so a named argument
+/// after it fills the parameters from the expanded count on, and naming a
+/// parameter the expansion already covers is an error.
+#[test]
+fn named_arguments_after_star_follow_the_expanded_count() {
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Utf8, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(vec!["Ab1"]))],
+    )
+    .unwrap();
+    s.register_batches("one_col", schema, vec![batch]).unwrap();
+    strings_table(&s, "two_cols", &[("Ab1", "xY")]);
+    let first = |sql: &str| {
+        let rows = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+        cell(rows[0].column(0), 0)
+    };
+    assert_eq!(
+        first("SELECT mask(*, upperChar => 'Q') FROM one_col"),
+        "Qxn"
+    );
+    assert_eq!(
+        first("SELECT mask(*, upperChar => 'Q', digitChar => 'D') FROM one_col"),
+        "QxD"
+    );
+    for sql in [
+        "SELECT mask(*, upperChar => 'Q') FROM two_cols",
+        "SELECT mask(*, lowerChar => 'q', upperChar => 'Q') FROM two_cols",
+    ] {
+        let e = block_on(s.sql(sql)).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.BOTH_POSITIONAL_AND_NAMED",
+            "{sql}: {e}"
+        );
+    }
+}
+
+/// Spark 4.2: a `builtin.` qualifier does not make an unknown function
+/// resolve; the routine is named with its qualifier.
+#[test]
+fn qualified_unknown_builtin_is_an_unresolved_routine() {
+    let s = Session::new().unwrap();
+    let e = block_on(s.sql("SELECT builtin.nope(1)")).unwrap_err();
+    assert_eq!(e.error_class().name(), "UNRESOLVED_ROUTINE", "{e}");
+    assert!(
+        e.message_parameters()
+            .iter()
+            .any(|(k, v)| *k == "routineName" && v == "`builtin`.`nope`"),
+        "{:?}",
+        e.message_parameters()
+    );
+}

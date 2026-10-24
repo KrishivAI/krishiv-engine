@@ -124,7 +124,7 @@ pub use expr::{
     NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind,
     TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
 };
-pub use function::{Builtin, FunctionId, FunctionKind};
+pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use plan::{

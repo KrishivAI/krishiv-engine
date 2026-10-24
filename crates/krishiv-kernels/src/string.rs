@@ -15,6 +15,7 @@
 
 mod case_table;
 mod like;
+mod mask_table;
 mod split;
 
 use arrow_array::builder::{BooleanBufferBuilder, GenericByteBuilder};
@@ -512,22 +513,64 @@ pub fn match_binary<O: OffsetSizeTrait>(
     }))
 }
 
-// ---- replace ----
+// ---- mask ----
 
-/// Whether `c` is a decimal digit: ASCII digits, and other numeric
-/// characters that are not alphabetic. This approximates Java's
-/// `DECIMAL_DIGIT_NUMBER`: letter numbers such as `Ⅷ` are alphabetic and
-/// count as other characters, but `No` numbers such as `²` count as digits
-/// here while Spark counts them as other characters. Likewise symbols with a
-/// case (`Ⓐ`) count as letters here and as other characters in Spark.
-fn is_digit(c: char) -> bool {
-    c.is_ascii_digit() || (!c.is_alphabetic() && c.is_numeric())
+/// The class `mask()` assigns to a character.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MaskClass {
+    Upper,
+    Lower,
+    Digit,
+    Other,
+}
+
+/// Spark's `mask()` class of `c`: general category `Lu`, `Ll` or `Nd`
+/// (`Ⓐ`, `²`, `Ⅻ` are other characters), as of Spark 4.2's Unicode data.
+/// ASCII follows the ASCII rule; the rest of the basic multilingual plane is
+/// looked up in the generated runs. Spark classifies UTF-16 units, so a
+/// supplementary scalar is two other characters (see [`mask`]).
+fn mask_class(c: char) -> MaskClass {
+    match c {
+        'A'..='Z' => MaskClass::Upper,
+        'a'..='z' => MaskClass::Lower,
+        '0'..='9' => MaskClass::Digit,
+        _ => {
+            let cp = u32::from(c);
+            if in_runs(&mask_table::UPPER, cp) {
+                MaskClass::Upper
+            } else if in_runs(&mask_table::LOWER, cp) {
+                MaskClass::Lower
+            } else if in_runs(&mask_table::DIGIT, cp) {
+                MaskClass::Digit
+            } else {
+                MaskClass::Other
+            }
+        }
+    }
+}
+
+/// Whether `cp` is in one of the sorted, disjoint `(first, last, step)` runs.
+fn in_runs(runs: &[(u32, u32, u32)], cp: u32) -> bool {
+    let i = runs.partition_point(|&(_, last, _)| last < cp);
+    runs.get(i).is_some_and(|&(first, _, step)| {
+        cp.checked_sub(first)
+            .and_then(|d| d.checked_rem(step))
+            .is_some_and(|r| r == 0)
+    })
 }
 
 /// `mask(str[, upperChar[, lowerChar[, digitChar[, otherChar]]]])`: an
 /// uppercase letter becomes `upperChar`, a lowercase letter `lowerChar`, a
 /// digit `digitChar`, any other character `otherChar`; a NULL replacement
 /// retains the character. A NULL input is NULL.
+///
+/// Characters are classified as Spark 4.2 does (`Lu`, `Ll`, `Nd`; the table
+/// is generated from the Spark oracle by `tests/scripts/gen_mask_table.py`).
+/// Spark works on UTF-16 units: a character outside the basic multilingual
+/// plane is two other characters, so `otherChar` is emitted twice for it.
+/// A replacement is the first scalar of its string; Spark takes its first
+/// UTF-16 unit, so a replacement outside the basic multilingual plane (a lone
+/// surrogate in Spark) is not representable here.
 ///
 /// # Errors
 /// `INTERNAL_ERROR` for operands of different lengths;
@@ -558,23 +601,26 @@ pub fn mask<O: OffsetSizeTrait>(
         );
         scratch.clear();
         for c in input.at(i).chars() {
-            // Letter numbers (`Ⅻ`, `ⅻ`) carry a case but are not letters:
-            // Spark leaves them to `otherChar`.
-            let replacement = if c.is_uppercase() && !c.is_numeric() {
-                u
-            } else if c.is_lowercase() && !c.is_numeric() {
-                l
-            } else if is_digit(c) {
-                d
+            let (replacement, units) = if u32::from(c) > 0xFFFF {
+                (o, 2)
             } else {
-                o
+                match mask_class(c) {
+                    MaskClass::Upper => (u, 1),
+                    MaskClass::Lower => (l, 1),
+                    MaskClass::Digit => (d, 1),
+                    MaskClass::Other => (o, 1),
+                }
             };
-            scratch.push(replacement.unwrap_or(c));
+            for _ in 0..units {
+                scratch.push(replacement.unwrap_or(c));
+            }
         }
         sink.push(&scratch)?;
     }
     Ok(sink.finish())
 }
+
+// ---- replace ----
 
 /// `replace(str, search, replacement)`: every non-overlapping occurrence,
 /// left to right; an empty `search` replaces nothing.
