@@ -122,6 +122,10 @@ pub(crate) struct ParquetDecoder {
     fetching: Option<usize>,
     /// Planned row groups, in order.
     planned: Vec<Unit>,
+    /// The column chunk ranges of every unit planned at the start, sorted
+    /// by start: what [`Self::check_page_headers`] looks pushed ranges up
+    /// in (pruned units may stay; checking their chunks is harmless).
+    chunk_ranges: Vec<Range<u64>>,
     meta: Arc<ParquetMetadata>,
     /// Runtime filters (file level) and the generation each had when the
     /// remaining units were last pruned with it.
@@ -303,12 +307,18 @@ impl ParquetDecoder {
             units_pruned: pruned,
             ..ScanUnitMetrics::default()
         };
+        let mut chunk_ranges: Vec<Range<u64>> = planned
+            .iter()
+            .flat_map(|u| u.chunks.iter().cloned())
+            .collect();
+        chunk_ranges.sort_by_key(|r| (r.start, r.end));
         Ok(Self {
             decoder: Some(decoder),
             reader: None,
             reading: 0,
             fetching: None,
             planned,
+            chunk_ranges,
             meta: Arc::clone(meta),
             // The units were planned with these generations' filters.
             dynamic: req
@@ -512,12 +522,19 @@ impl ParquetDecoder {
 
     /// Walks the page headers of every planned column chunk that `ranges`
     /// hold before arrow-rs reads them ([`super::thrift_guard::check_pages`]).
+    ///
+    /// The push decoder asks for whole column chunks: the footer is read
+    /// without the page index (`PageIndexPolicy::Skip` in `meta.rs`), and
+    /// only an offset index lets arrow-rs fetch part of a chunk. Loading the
+    /// page index would need this check to handle partial ranges.
     fn check_page_headers(&self, ranges: &[Range<u64>], bytes: &[Bytes]) -> FormatResult<()> {
         for (range, held) in ranges.iter().zip(bytes) {
-            for c in self.planned.iter().flat_map(|u| &u.chunks) {
-                if !(range.start <= c.start && c.end <= range.end) {
-                    continue;
-                }
+            let first = self.chunk_ranges.partition_point(|c| c.start < range.start);
+            let inside = self.chunk_ranges[first..]
+                .iter()
+                .take_while(|c| c.start < range.end)
+                .filter(|c| c.end <= range.end);
+            for c in inside {
                 let at = |offset: u64| usize::try_from(offset - range.start).ok();
                 if let Some(chunk) = at(c.start)
                     .zip(at(c.end))

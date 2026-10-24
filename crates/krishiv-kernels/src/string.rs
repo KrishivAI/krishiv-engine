@@ -861,13 +861,13 @@ mod tests {
 
     impl CaseMapping for NewerUnicode {
         fn string(&self, s: &str, case: Case) -> String {
-            s.chars()
-                .map(|c| match (case, c) {
-                    (Case::Upper, '\u{0277}') => '\u{A7DD}'.to_string(),
-                    (Case::Lower, '\u{A7DD}') => '\u{0277}'.to_string(),
-                    _ => StdMapping.string(&c.to_string(), case),
-                })
-                .collect()
+            // std's whole-string mapping (final sigma included) leaves both
+            // code points unchanged on a toolchain without these mappings.
+            let mapped = StdMapping.string(s, case);
+            match case {
+                Case::Upper => mapped.replace('\u{0277}', "\u{A7DD}"),
+                Case::Lower => mapped.replace('\u{A7DD}', "\u{0277}"),
+            }
         }
 
         fn changes(&self, c: char, case: Case) -> bool {
@@ -889,6 +889,10 @@ mod tests {
             assert_eq!(up("\u{0277}é"), "\u{0277}É");
             assert_eq!(low("\u{A7DD}É"), "\u{A7DD}é");
             assert_eq!(up("straße"), "STRASSE");
+            // Context still applies: a final sigma, and a held character
+            // ends the word before it like an uncased one.
+            assert_eq!(low("ΟΔΟΣ ΟΔΟΣ"), "οδος οδος");
+            assert_eq!(low("ΟΣ\u{A7DD}É"), "ος\u{A7DD}é");
         }
     }
 

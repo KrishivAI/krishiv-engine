@@ -130,12 +130,14 @@ fn walk_struct(buf: &[u8]) -> Result<Walked, &'static str> {
 /// [`check`] walks a footer, then its `compressed_page_size` bytes of page
 /// data are stepped over, up to the end of the chunk.
 ///
-/// Only a count larger than the bytes left and nesting that is too deep
-/// are errors: arrow-rs reads them in time that does not follow the bytes.
+/// A count larger than the bytes left and nesting that are too deep are
+/// errors (arrow-rs reads them in time that does not follow the bytes), and
+/// so is a varint longer than 10 bytes or past 64 bits (arrow-rs reads it
+/// with wrapping shifts and would go on to headers this walk did not see).
 /// Anything else that does not parse (bytes after the last page, a
-/// truncated header) ends the walk and is left to arrow-rs, which reads
-/// pages only as far as the chunk's values go and rejects a bad header in
-/// linear time.
+/// truncated header, an unknown type) ends the walk and is left to arrow-rs,
+/// which reads pages only as far as the chunk's values go and rejects a bad
+/// header in linear time.
 ///
 /// # Errors
 /// Which of the two was found.
@@ -144,7 +146,10 @@ pub(super) fn check_pages(chunk: &[u8]) -> Result<(), &'static str> {
     while let Some(rest) = chunk.get(pos..).filter(|r| !r.is_empty()) {
         let walked = match walk_struct(rest) {
             Ok(w) => w,
-            Err(e @ (COUNT_TOO_LARGE | ENTRIES_TOO_MANY | TOO_DEEP)) => return Err(e),
+            Err(
+                e @ (COUNT_TOO_LARGE | ENTRIES_TOO_MANY | TOO_DEEP | VARINT_TOO_LONG
+                | VARINT_OVERFLOW),
+            ) => return Err(e),
             Err(_) => return Ok(()),
         };
         let Some(next) = walked
@@ -168,6 +173,8 @@ fn unzigzag(raw: u64) -> i64 {
 const COUNT_TOO_LARGE: &str = "an element count larger than the bytes left";
 const ENTRIES_TOO_MANY: &str = "an entry count larger than the bytes left";
 const TOO_DEEP: &str = "nested too deeply";
+const VARINT_TOO_LONG: &str = "varint longer than 10 bytes";
+const VARINT_OVERFLOW: &str = "varint overflows 64 bits";
 
 fn set_top(stack: &mut [Frame], frame: Frame) {
     if let Some(top) = stack.last_mut() {
@@ -207,14 +214,14 @@ impl Walk<'_> {
             // The tenth byte holds the top bit of a u64: more would be
             // shifted out silently and read as a smaller value.
             if shift == 63 && byte & 0x7f > 1 {
-                return Err("varint overflows 64 bits");
+                return Err(VARINT_OVERFLOW);
             }
             value |= u64::from(byte & 0x7f) << shift;
             if byte & 0x80 == 0 {
                 return Ok(value);
             }
         }
-        Err("varint longer than 10 bytes")
+        Err(VARINT_TOO_LONG)
     }
 
     /// Steps over a value of type `ty`, or returns the frame to walk into.
@@ -398,5 +405,13 @@ mod tests {
             check_pages(&long_id),
             Err("an element count larger than the bytes left")
         );
+        // A varint arrow-rs would read with wrapping shifts (11 bytes, as
+        // the uncompressed size) is rejected, not the end of the walk: the
+        // decoder would read on to the next header.
+        let mut overlong = vec![0x15, 0x00, 0x15];
+        overlong.extend([0x80; 10]);
+        overlong.extend([0x00, 0x15, 0x02, 0x00, 0xAB]);
+        overlong.extend(page(2, &[0x69, 0xf1, 0xff, 0xff, 0xff, 0xff, 0x07]));
+        assert_eq!(check_pages(&overlong), Err("varint longer than 10 bytes"));
     }
 }
