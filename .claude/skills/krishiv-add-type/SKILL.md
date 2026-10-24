@@ -39,7 +39,7 @@ real run (skill `krishiv-spark-function`, step 2); never memory.
     and compare the type; refresh affected manifests (skill `krishiv-golden-category`).
 
 ## Verify
-- `cargo nextest run -p krishiv-types -p krishiv-plan -p krishiv-kernels -p krishiv-io -p krishiv-connect -p krishiv-plan-codec -p krishiv-testkit --no-tests=pass`
+- `cargo nextest run -p krishiv-types -p krishiv-plan -p krishiv-kernels -p krishiv-io -p krishiv-connect -p krishiv-plan-codec -p krishiv-testkit -p krishiv-sql -p krishiv-functions -p krishiv-exec -p krishiv-optimizer --no-tests=pass`
 - `cd python && uv run pytest && uv run ruff check && uv run ty check`
 - `cargo xtask layering`; clippy with `-D warnings`.
 - Moved counts in `tests/fixtures/analysis/*-manifest.json` are rewritten with `KRISHIV_UPDATE_MANIFEST=1`; read the

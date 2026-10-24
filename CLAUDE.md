@@ -11,7 +11,7 @@ not here). Start sessions here with `claude --add-dir ../krishiv-internal`.
 3. Only the ADRs your task lists: `../krishiv-internal/adr/NNNN-*.md`. Spec chapters in `../krishiv-internal/spec/`
    only when an ADR or the task points there. Read by path; never paste docs into prompts.
 4. `git status`, `git log --oneline -10`, `git worktree list`, `gh pr list` before changing anything.
-5. `ARCHITECTURE.md`: the path of a query through the crates, the layer table and a "where does X live" index.
+5. [`ARCHITECTURE.md`](ARCHITECTURE.md): the path of a query through the crates, the layer table and a "where does X live" index.
 
 Navigate code with the LSP tool (go-to-definition, find-references) before grepping or reading whole files.
 
@@ -73,7 +73,7 @@ A crate depends only on crates in the same or a lower layer.
 - L1 types, memory; SDKs udf-sdk, connector-sdk (L1: depend on L0–L1 only)
 - L2 kernels, functions, io
 - L3 sql, plan, optimizer
-- L4 exec, state, stream
+- L4 exec, plan-codec, state, stream
 - L5 shuffle, scheduler, connectors-{kafka,iceberg,delta,cdc}
 - L6 connect, flight-sql, mcp, server, python, ui-assets
 - L7 krishiv (facade), krishiv-cli (binary `krishiv`); test infrastructure krishiv-testkit (conformance harness) and

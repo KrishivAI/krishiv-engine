@@ -31,4 +31,4 @@ config, never Cargo features (ADR 0027). Model: the `krishiv.sql.optimizer.windo
 6. **Behaviour changes** that Spark can observe also need goldens (skill `krishiv-spark-function`).
 
 ## Verify
-`cargo nextest run -p krishiv-common --no-tests=pass`, `cargo xtask docs-config | grep <key>`, clippy `-D warnings`.
+`cargo nextest run -p krishiv-common --no-tests=pass`, `cargo xtask docs-config | grep krishiv.spill.dir` (substitute your key), clippy `-D warnings`.

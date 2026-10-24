@@ -32,8 +32,8 @@ or by hand (ADR 0008). Three kinds exist; pick the one that fits.
    `crates/krishiv-testkit/tests/` (kernel and analysis level), `crates/krishiv-connect/tests/goldens.rs` (snapshots).
    Cases the engine cannot do yet are listed in the test, each with a reason, and are asserted to fail in the
    expected way (a `PENDING` list, as in `window_goldens.rs`), so closing one forces the list to shrink.
-4. **Fixture tests.** If the generator has pure logic, test it in `tests/scripts/` (`test_*.py`, run by that
-   directory's `pyproject.toml`).
+4. **Fixture tests.** If the generator has pure logic, test it in `tests/scripts/test_*.py` (that
+   directory's `pyproject.toml` only configures lint).
 
 ## C. Ratcheted manifests
 `tests/fixtures/analysis/type-coercion-manifest.json` and `registry-matrix-manifest.json` list the cases that fail
@@ -45,6 +45,6 @@ match the actual failures exactly, so a fix shrinks it and a regression fails.
   it may only shrink, and the test fails when a listed item starts to pass.
 
 ## Verify
-`cargo nextest run -p krishiv-testkit --no-tests=pass` and the consuming crate; `taplo fmt --check; typos`. Fixture
+`cargo nextest run -p krishiv-testkit --no-tests=pass` and the consuming crate; `(cd bench && uv run --group dev pytest ../tests/scripts/test_*.py)` when the generator has tests; `taplo fmt --check; typos`. Fixture
 and golden paths are excluded from markdownlint (`.markdownlint-cli2.yaml`), so write notes in the generator's
 docstring.
