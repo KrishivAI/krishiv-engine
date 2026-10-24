@@ -18,7 +18,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from .paths import data_root, dataset_dir, fmt_sf
+from .paths import data_root, dataset_dir, fmt_sf, manifest_stem
 
 TPCH_TABLES = ["customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"]
 CLICKBENCH_URL = "https://datasets.clickhouse.com/hits_compatible/hits.parquet"
@@ -70,7 +70,9 @@ def gen_tpch_dbgen(sf: float, force: bool = False) -> Path:
     """
     import duckdb
 
-    out = dataset_dir("tpch-dbgen", sf)
+    # Versioned by the generator that writes it: the dbgen text columns differ between DuckDB versions, and each
+    # version's official answers match only its own output. A dataset is never regenerated in place.
+    out = dataset_dir(f"tpch-dbgen@{duckdb.__version__}", sf)
     if out.exists() and any(out.iterdir()) and not force:
         print(f"[tpch-dbgen] {out} exists, skipping (use --force)")
         return out
@@ -257,6 +259,8 @@ def main(argv=None) -> None:
     p.add_argument("--keys", type=int, default=1_000_000)
     p.add_argument("--alpha", type=float, default=1.1)
     p.add_argument("--seed", type=int, default=0)
+    p = sub.add_parser("memcap", help="memcap suite data (seeded star schema) under $KRISHIV_DATA/memcap/v1/<rows>")
+    p.add_argument("--rows", nargs="+", default=["10m"], metavar="N", help="whole millions, e.g. 10m 50m 150m")
     p = sub.add_parser("manifest", help="(re)write sha256 manifest for a dataset dir")
     p.add_argument("name", choices=["tpch", "tpch-dbgen", "tpcds"])
     p.add_argument("--sf", type=float, default=1)
@@ -266,9 +270,17 @@ def main(argv=None) -> None:
     if a.cmd in ("tpch", "tpch-dbgen", "tpcds"):
         d = {"tpch": gen_tpch, "tpch-dbgen": gen_tpch_dbgen, "tpcds": gen_tpcds}[a.cmd](a.sf, a.force)
         if not a.no_manifest:
-            print("manifest:", write_manifest(d, f"{a.cmd}-sf{fmt_sf(a.sf)}"))
+            print("manifest:", write_manifest(d, f"{d.parent.name}-{d.name}"))
+    elif a.cmd == "memcap":
+        from .memcap_data import generate
+
+        try:
+            for label in a.rows:
+                generate(label)
+        except (ValueError, FileExistsError) as e:
+            ap.error(str(e))
     elif a.cmd == "manifest":
-        print(write_manifest(dataset_dir(a.name, a.sf), f"{a.name}-sf{fmt_sf(a.sf)}"))
+        print(write_manifest(dataset_dir(a.name, a.sf), manifest_stem(a.name, a.sf)))
     elif a.cmd == "clickbench":
         if not a.yes:
             sys.exit("ClickBench is ~14 GB; re-run with --yes to download.")

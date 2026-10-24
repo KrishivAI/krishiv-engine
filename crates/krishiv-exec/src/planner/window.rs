@@ -129,7 +129,12 @@ impl Planner<'_> {
             layout,
             ("Sort", sort_detail),
         );
-        let op = Window::new(Arc::clone(&sorted.schema), window.clone(), self.env.ansi)?;
+        let op = Window::new(
+            Arc::clone(&sorted.schema),
+            window.clone(),
+            self.env.ansi,
+            None,
+        )?;
         let mut layout = sorted.layout.clone();
         layout.extend(calls.iter().map(|c| c.output.id));
         let names: Vec<String> = calls.iter().map(|c| c.output.name.clone()).collect();

@@ -1938,3 +1938,313 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
     // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
     assert!(try_add.output[0].nullable);
 }
+
+/// An unused CTE is not resolved: its column errors never fail the query.
+/// Spark's golden `cte` case 50 keeps an unused `cte3` whose projection
+/// over the duplicate-case columns of `cte2` would be ambiguous.
+#[test]
+fn unused_cte_definitions_are_not_resolved() {
+    let ctx = ctx();
+    let valid = LogicalPlan::table(["t"]).project(vec![c("a")]);
+    let ambiguous = LogicalPlan::table(["t"])
+        .join(
+            LogicalPlan::table(["u"]),
+            JoinKind::Inner,
+            JoinCondition::None,
+        )
+        .project(vec![c("a")]);
+    assert_eq!(class(&run(ambiguous.clone(), &ctx)), "AMBIGUOUS_REFERENCE");
+    // The main query reads only the valid definition; the ambiguous one
+    // is never referenced, so the query resolves.
+    let unused = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["good"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "good".to_owned(),
+                plan: Arc::new(valid),
+            },
+            Cte {
+                name: "bad".to_owned(),
+                plan: Arc::new(ambiguous),
+            },
+        ],
+    });
+    let a = run(unused, &ctx).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    // Referencing the bad definition fails.
+    let used = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["bad"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "good".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "bad".to_owned(),
+                plan: Arc::new(
+                    LogicalPlan::table(["t"])
+                        .join(
+                            LogicalPlan::table(["u"]),
+                            JoinKind::Inner,
+                            JoinCondition::None,
+                        )
+                        .project(vec![c("a")]),
+                ),
+            },
+        ],
+    });
+    assert_eq!(class(&run(used, &ctx)), "AMBIGUOUS_REFERENCE");
+}
+
+/// `SELECT 1 GROUP BY `1`` groups by the select-list alias `1`, even
+/// though the item has no explicit alias (Spark golden `group-by-alias`
+/// case 11). With `groupByAliases` off the same key is unresolved.
+#[test]
+fn group_by_resolves_implicit_select_aliases() {
+    let plan = LogicalPlan::new(PlanNode::OneRowRelation).aggregate(vec![c("1")], vec![int(1)]);
+    let a = run(plan, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["1"]
+    );
+    let conf = ResolutionConf {
+        group_by_aliases: false,
+        ..ResolutionConf::default()
+    };
+    let no_alias = context(catalog(), conf);
+    let plan = LogicalPlan::new(PlanNode::OneRowRelation).aggregate(vec![c("1")], vec![int(1)]);
+    assert_eq!(
+        class(&run(plan, &no_alias)),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+}
+
+/// A grouping expression may not contain an aggregate call, however it was
+/// written: directly, or through a select-list alias (`SELECT COUNT(b) AS k
+/// ... GROUP BY k`, Spark golden `group-by-alias`). Without the check the
+/// alias resolves to the aggregate, whose semantic key is already in the
+/// grouping-key set `check_aggregation` skips, so the plan wrongly builds.
+#[test]
+fn group_by_rejects_aggregate_functions() {
+    let aliased = LogicalPlan::table(["t"])
+        .aggregate(vec![c("k")], vec![f("count", vec![c("b")]).alias("k")]);
+    assert_eq!(class(&run(aliased, &ctx())), "GROUP_BY_AGGREGATE");
+    let direct = LogicalPlan::table(["t"]).aggregate(vec![f("count", vec![c("b")])], vec![c("a")]);
+    assert_eq!(class(&run(direct, &ctx())), "GROUP_BY_AGGREGATE");
+}
+
+/// A `GROUP BY` key naming a select-list alias that reads lateral column
+/// aliases is `UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY` (Spark
+/// golden `column-resolution-aggregate`: `SELECT k AS lca, lca + 1 AS col
+/// ... GROUP BY k, col`). Grouping by a lateral alias itself stays fine.
+#[test]
+fn group_by_rejects_aliases_reading_lateral_aliases() {
+    let items = || vec![c("a").alias("lca"), add(c("lca"), int(1)).alias("col")];
+    let lateral = LogicalPlan::table(["t"]).aggregate(vec![c("col")], items());
+    assert_eq!(
+        class(&run(lateral, &ctx())),
+        "UNSUPPORTED_FEATURE.LATERAL_COLUMN_ALIAS_IN_GROUP_BY"
+    );
+    let direct = LogicalPlan::table(["t"]).aggregate(vec![c("lca")], items());
+    run(direct, &ctx()).unwrap();
+}
+
+/// A plan shared under two inner `WITH` scopes with different shadowing
+/// names is visited under each scope: visits are keyed by scope contents,
+/// not scope length, so a shadowing scope cannot hide a read the other
+/// scope reports and drop a definition the input needs.
+#[test]
+fn cte_refs_visit_shared_plans_under_each_scope() {
+    let shared = Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")]));
+    let inner = |name: &str| {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::clone(&shared),
+            ctes: vec![Cte {
+                name: name.to_owned(),
+                plan: Arc::new(LogicalPlan::table(["u"]).project(vec![c("a")])),
+            }],
+        })
+    };
+    // The right branch shadows `x`, so `shared` is visited under its scope
+    // first (a join pops its right child first): keying visits by scope
+    // length alone would skip the left branch's read and drop the outer `x`.
+    let input = inner("y").join(inner("x"), JoinKind::Inner, JoinCondition::None);
+    let plan = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(input),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        }],
+    });
+    let a = run(plan, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a", "a"]
+    );
+}
+
+/// The same shared subquery expression under two inner `WITH` scopes with
+/// different shadowing names is visited under each scope too: expression
+/// visits are keyed by scope contents as well, or the shadowed visit hides
+/// the read the other scope's subquery reports.
+#[test]
+fn cte_refs_visit_shared_exprs_under_each_scope() {
+    let sub: Arc<Expr> = Arc::new(Expr::subquery(
+        crate::SubqueryKind::Scalar,
+        LogicalPlan::table(["x"]).project(vec![c("a")]),
+    ));
+    let branch = |name: &str| {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::new(PlanNode::Project {
+                input: Arc::new(LogicalPlan::table(["t"])),
+                exprs: vec![Arc::clone(&sub)],
+            })),
+            ctes: vec![Cte {
+                name: name.to_owned(),
+                plan: Arc::new(LogicalPlan::table(["u"]).project(vec![c("a")])),
+            }],
+        })
+    };
+    // As above, the right branch shadows `x` and is visited first.
+    let input = branch("y").join(branch("x"), JoinKind::Inner, JoinCondition::None);
+    let plan = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(input),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        }],
+    });
+    let a = run(plan, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["scalarsubquery()", "scalarsubquery()"]
+    );
+}
+
+/// An inner `WITH` name shadows the outer one: reads inside the inner scope
+/// resolve to the inner definition, so an outer definition nothing else
+/// reads is dropped (even when it would not resolve), while a read outside
+/// the inner scope still needs the outer definition.
+#[test]
+fn inner_with_names_shadow_outer_ctes() {
+    let bad = || {
+        LogicalPlan::table(["t"])
+            .join(
+                LogicalPlan::table(["u"]),
+                JoinKind::Inner,
+                JoinCondition::None,
+            )
+            .project(vec![c("a")])
+    };
+    assert_eq!(class(&run(bad(), &ctx())), "AMBIGUOUS_REFERENCE");
+    let good = || LogicalPlan::table(["t"]).project(vec![c("a")]);
+    let inner = || {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")])),
+            ctes: vec![Cte {
+                name: "x".to_owned(),
+                plan: Arc::new(good()),
+            }],
+        })
+    };
+    // Only the inner `x` is read: the outer one is dropped, so its
+    // ambiguity never fails the query.
+    let shadowed = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(inner()),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(bad()),
+        }],
+    });
+    let a = run(shadowed, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    // A read outside the inner scope still needs the outer definition.
+    let outer_read = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(inner().join(
+            LogicalPlan::table(["x"]).project(vec![c("a")]),
+            JoinKind::Inner,
+            JoinCondition::None,
+        )),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(bad()),
+        }],
+    });
+    assert_eq!(class(&run(outer_read, &ctx())), "AMBIGUOUS_REFERENCE");
+}
+
+/// A definition's reads see only the outer CTEs and the earlier definitions:
+/// a forward reference never marks a later definition, so the read falls
+/// through to table binding.
+#[test]
+fn cte_forward_references_fall_through_to_tables() {
+    // `a` reads `b`, which is defined later: `b` is dropped, and resolving
+    // `a` reads a missing table.
+    let forward = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["a"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "a".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["b"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "b".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+        ],
+    });
+    assert_eq!(class(&run(forward, &ctx())), "TABLE_OR_VIEW_NOT_FOUND");
+    // The same definitions in dependency order resolve.
+    let ordered = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["b"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "a".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "b".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["a"]).project(vec![c("a")])),
+            },
+        ],
+    });
+    let a = run(ordered, &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+}
+
+/// CTE-name matching follows `spark.sql.caseSensitive`: case-insensitive by
+/// default, exact when set.
+#[test]
+fn cte_name_matching_follows_case_sensitivity() {
+    let plan = || {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")])),
+            ctes: vec![Cte {
+                name: "X".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            }],
+        })
+    };
+    let a = run(plan(), &ctx()).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    let sensitive = ResolutionConf {
+        case_sensitive: true,
+        ..ResolutionConf::default()
+    };
+    assert_eq!(
+        class(&run(plan(), &context(catalog(), sensitive))),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+}
