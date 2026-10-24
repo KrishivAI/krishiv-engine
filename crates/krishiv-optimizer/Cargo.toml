@@ -12,6 +12,7 @@ publish = false
 arrow-array.workspace = true
 arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
+krishiv-functions = { path = "../krishiv-functions" }
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }

@@ -32,6 +32,16 @@ const DOLLAR_MULTILINE: &str =
 /// that is not the end of the input.
 const CARET_MULTILINE: &str = r"(?:\A|(?<=[\n\x{85}\x{2028}\x{2029}])(?!\z)|(?<=\r)(?![\n])(?!\z))";
 
+/// A pattern longer than this (in characters) is rejected as invalid:
+/// the engines translate to an NFA whose build is superlinear, so
+/// untrusted patterns could blow up memory. Java itself has no limit; this
+/// is a deliberate divergence, raised as `INVALID_PARAMETER_VALUE.PATTERN`.
+pub(super) const MAX_PATTERN_LEN: usize = 64 * 1024;
+
+/// A counted repetition bound above this is rejected as invalid (same
+/// error class and reason as [`MAX_PATTERN_LEN`]).
+pub(super) const MAX_REPETITION: u32 = 1_000_000;
+
 /// POSIX classes of `\p{Name}` (ASCII only, as in Java).
 const POSIX: &[(&str, &str)] = &[
     ("Lower", "a-z"),
@@ -80,6 +90,9 @@ impl Flags {
 /// matches before a final line terminator (the form for inputs that end
 /// with one; without it `$` is `\z`).
 pub(super) fn translate(src: &str, terminated: bool) -> Result<Translated, String> {
+    if src.chars().count() > MAX_PATTERN_LEN {
+        return Err("pattern too large".to_owned());
+    }
     let chars: Vec<char> = src.chars().collect();
     let mut t = Translator {
         chars: &chars,
@@ -89,6 +102,9 @@ pub(super) fn translate(src: &str, terminated: bool) -> Result<Translated, Strin
         has_dollar: false,
         stack: vec![Flags::default()],
         quantified: false,
+        lazy_stack: false,
+        atom_start: 0,
+        atom_stack: Vec::new(),
         groups: 0,
     };
     t.run()?;
@@ -105,8 +121,16 @@ struct Translator<'a> {
     terminated: bool,
     has_dollar: bool,
     stack: Vec<Flags>,
-    /// The previous token was a quantifier (a following `+` is possessive).
+    /// The previous token was a quantifier.
     quantified: bool,
+    /// The previous token was a lazy `?` (a second one dangles, as in Java).
+    lazy_stack: bool,
+    /// The byte offset in [`Self::out`] where the current atom starts: what
+    /// a following possessive `+` wraps in an atomic group.
+    atom_start: usize,
+    /// The atom starts of enclosing groups and classes, innermost last;
+    /// the closer restores its own.
+    atom_stack: Vec<usize>,
     /// Capturing groups opened so far (Java reads back-reference digits
     /// against this count).
     groups: usize,
@@ -130,6 +154,28 @@ impl Translator<'_> {
 
     fn flags(&self) -> Flags {
         self.stack.last().copied().unwrap_or_default()
+    }
+
+    /// Notes the start of a new atom: a following possessive `+` wraps
+    /// everything from here in an atomic group.
+    fn atom(&mut self) {
+        self.atom_start = self.out.len();
+        self.lazy_stack = false;
+    }
+
+    /// Wraps the current atom and its quantifier (`X*`, `X+`, `X?`,
+    /// `X{n,m}`) in an atomic group: Java's possessive quantifier, which the
+    /// engines spell `(?>X*)`. The wrap is complete, so a further
+    /// quantifier dangles (rejected when it arrives, as in Java); `atom`
+    /// stays at the end, so the check sees nothing to quantify.
+    fn possessive(&mut self) {
+        let atom = self.out.split_off(self.atom_start);
+        self.out.push_str("(?>");
+        self.out.push_str(&atom);
+        self.out.push(')');
+        self.atom_start = self.out.len();
+        self.quantified = true;
+        self.lazy_stack = false;
     }
 
     /// Under `(?x)`: skips whitespace and `#` comments, which Java's parser
@@ -169,16 +215,35 @@ impl Translator<'_> {
             let was_quantified = std::mem::take(&mut self.quantified);
             self.at += 1;
             match c {
-                '\\' => self.escape(false)?,
-                '[' => self.class()?,
-                '(' => self.group()?,
+                '\\' => {
+                    self.atom();
+                    self.escape(false)?;
+                }
+                '[' => {
+                    self.atom();
+                    self.class()?;
+                }
+                '(' => {
+                    self.atom();
+                    self.group()?;
+                }
                 ')' => {
                     if self.stack.len() > 1 {
                         self.stack.pop();
                     }
                     self.out.push(')');
+                    // The closed group is one atom (or a literal `)` with
+                    // no group open).
+                    if let Some(start) = self.atom_stack.pop() {
+                        self.atom_start = start;
+                    } else {
+                        self.atom();
+                    }
+                    self.quantified = false;
+                    self.lazy_stack = false;
                 }
                 '.' => {
+                    self.atom();
                     if self.flags().dotall {
                         self.out.push_str(r"[\s\S]");
                     } else if self.flags().unix_lines {
@@ -188,6 +253,7 @@ impl Translator<'_> {
                     }
                 }
                 '$' => {
+                    self.atom();
                     if self.flags().multiline {
                         let unix = self.flags().unix_lines;
                         self.out.push_str(if unix {
@@ -200,6 +266,7 @@ impl Translator<'_> {
                     }
                 }
                 '^' => {
+                    self.atom();
                     if self.flags().multiline {
                         let unix = self.flags().unix_lines;
                         self.out.push_str(if unix {
@@ -212,17 +279,50 @@ impl Translator<'_> {
                     }
                 }
                 '*' | '?' | '+' if was_quantified => {
-                    if c == '+' {
-                        return Err("possessive quantifier".to_owned());
+                    if self.out.len() == self.atom_start {
+                        // Nothing to quantify: at the start, after `|`
+                        // or `(`, or right after a possessive wrap.
+                        return Err(format!("dangling meta character {c}"));
                     }
-                    // A lazy quantifier.
-                    self.out.push('?');
+                    match c {
+                        // A possessive quantifier: the atom and its
+                        // quantifier become an atomic group.
+                        '+' => self.possessive(),
+                        '?' if self.lazy_stack => {
+                            return Err("dangling meta character ?".to_owned());
+                        }
+                        // A lazy quantifier.
+                        '?' => {
+                            self.out.push('?');
+                            self.quantified = true;
+                            self.lazy_stack = true;
+                        }
+                        // A stacked `*` dangles, as in Java.
+                        _ => return Err("dangling meta character *".to_owned()),
+                    }
                 }
                 '*' | '+' | '?' => {
+                    if self.out.len() == self.atom_start {
+                        // Nothing to quantify: at the start or after `|`
+                        // (a quantifier after `(` is a literal the engines
+                        // reject at build, as Java does).
+                        return Err(format!("dangling meta character {c}"));
+                    }
                     self.out.push(c);
                     self.quantified = true;
                 }
+                '|' => {
+                    self.out.push('|');
+                    self.quantified = false;
+                    self.lazy_stack = false;
+                    self.atom_start = self.out.len();
+                }
                 '{' => {
+                    if was_quantified {
+                        // `a*{2}`, `a{2}{3}`, `a*+{2}`: a repetition of a
+                        // quantifier dangles, as in Java.
+                        return Err("dangling meta character {".to_owned());
+                    }
                     // Java rejects a brace that is not `{n}`, `{n,}` or `{n,m}`.
                     let close = self.chars[self.at..]
                         .iter()
@@ -241,16 +341,25 @@ impl Translator<'_> {
                     } else {
                         bound(high)?
                     };
-                    if bound(low)? > high_bound {
+                    let low_bound = bound(low)?;
+                    if low_bound > high_bound {
                         return Err("illegal repetition range".to_owned());
+                    }
+                    // The engines expand (or loop) counted repetitions;
+                    // bound them so untrusted patterns cannot blow up
+                    // memory or time.
+                    if low_bound > MAX_REPETITION as i32
+                        || (!high.is_empty() && high_bound > MAX_REPETITION as i32)
+                    {
+                        return Err("repetition too large".to_owned());
                     }
                     self.out.push('{');
                     self.out.push_str(&body);
                     self.out.push('}');
                     self.at += close + 1;
                     self.quantified = true;
+                    self.lazy_stack = false;
                 }
-                '|' => self.out.push('|'),
                 c => self.literal(c),
             }
         }
@@ -264,7 +373,7 @@ impl Translator<'_> {
         if self.peek(0) != Some('?') {
             self.groups += 1;
             self.stack.push(flags);
-            self.out.push('(');
+            self.open_paren();
             return Ok(());
         }
         let rest: String = self.chars[self.at..].iter().take(3).collect();
@@ -284,7 +393,7 @@ impl Translator<'_> {
             if !named || self.chars.get(end) != Some(&'>') {
                 return Err("illegal group name".to_owned());
             }
-            self.out.push('(');
+            self.open_paren();
             self.out.extend(&self.chars[self.at..=end]);
             self.at = end + 1;
             return Ok(());
@@ -297,7 +406,7 @@ impl Translator<'_> {
             || rest.starts_with("?<!")
         {
             self.stack.push(flags);
-            self.out.push('(');
+            self.open_paren();
             return Ok(());
         }
         // `(?flags)` or `(?flags:`.
@@ -329,6 +438,8 @@ impl Translator<'_> {
         };
         if close == ':' {
             self.stack.push(flags);
+            self.atom_stack.push(self.out.len());
+            self.atom_start = self.out.len();
             let _ = write!(self.out, "(?{spec}:");
         } else {
             // `(?flags)` applies to the rest of the enclosing group.
@@ -342,8 +453,18 @@ impl Translator<'_> {
         Ok(())
     }
 
+    /// Pushes a group-open `(`: the closed group reads as one atom, so the
+    /// paren position is saved for the `)` to restore (group content must
+    /// not move the current atom).
+    fn open_paren(&mut self) {
+        self.atom_stack.push(self.out.len());
+        self.out.push('(');
+        self.atom_start = self.out.len() - 1;
+    }
+
     /// A literal character outside a class.
     fn literal(&mut self, c: char) {
+        self.atom();
         self.fold_literal(c, false);
     }
 
@@ -568,8 +689,12 @@ impl Translator<'_> {
         Ok(())
     }
 
-    /// A bracketed class (the `[` is consumed), possibly nested.
+    /// A bracketed class (the `[` is consumed), possibly nested. The
+    /// closed class reads as one atom, so the bracket position is saved
+    /// for the `]` to restore.
     fn class(&mut self) -> Result<(), String> {
+        self.atom_stack.push(self.out.len());
+        self.atom_start = self.out.len();
         self.out.push('[');
         if self.peek(0) == Some('^') {
             self.at += 1;
@@ -583,6 +708,9 @@ impl Translator<'_> {
             match c {
                 ']' if !first => {
                     self.out.push(']');
+                    if let Some(start) = self.atom_stack.pop() {
+                        self.atom_start = start;
+                    }
                     return Ok(());
                 }
                 '[' => self.class()?,

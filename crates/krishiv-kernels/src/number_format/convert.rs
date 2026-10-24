@@ -106,7 +106,7 @@ fn convert_one(
 /// Overflow of `conv`: raise in ANSI mode, `2^64 - 1` otherwise.
 fn convert_overflow(ansi: bool, row: Option<usize>) -> Result<u64, KernelError> {
     if ansi {
-        Err(KernelError::at(
+        Err(KernelError::with_row(
             row,
             krishiv_common::error::ArithmeticOverflow {
                 message: "Overflow in function conv()".to_owned(),

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The string functions of the kernel evaluator (P2-T023a): `upper`, `lower`,
 //! `length`, the `trim` family, `startswith`/`endswith`/`contains`,
-//! `replace`, `lpad`/`rpad`, `substring`, `concat`/`||`, `like` and a
-//! literal-delimiter `split`, typed with Spark 4.2's implicit casts
+//! `replace`, `lpad`/`rpad`, `substring`, `concat`/`||`, `like` and `split`
+//! (literal delimiters on the kernels, Java-regex delimiters through the
+//! function library), typed with Spark 4.2's implicit casts
 //! (`StringTypeWithCollation` arguments take any atomic type as its string
 //! rendering; binary stays binary only where Spark has a binary overload).
 
@@ -10,6 +11,7 @@ use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayRef, BooleanArray, cast::AsArray};
 use arrow_schema::{DataType, Field};
 use krishiv_kernels::Operand;
+use krishiv_kernels::error::KernelError;
 use krishiv_kernels::string::{
     self, BinOperand, MatchKind, PadSide, StrOperand, TrimSide, literal_delimiter,
 };
@@ -19,6 +21,15 @@ use super::{Binder, EvalError, Evaluator, Node, Shape, Skip, is_numeric, scalar,
 
 /// What `string_call` reports for a name that is not a string function.
 const NOT_A_STRING_FUNCTION: &str = "\0";
+
+/// What `split` splits by: a NULL delimiter (an all-NULL result), a
+/// literal string, or a Java regular expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SplitBy {
+    Null,
+    Literal(String),
+    Regex(String),
+}
 
 /// A string function.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,8 +49,8 @@ pub(super) enum StrFn {
     Concat,
     ConcatBinary,
     Like(char),
-    /// `Some(delimiter)`, or `None` for a NULL delimiter (an all-NULL result).
-    Split(Option<String>),
+    /// What `split` splits by (see [`SplitBy`]).
+    Split(SplitBy),
     /// `NOT`.
     Not,
     /// `hex(x)`.
@@ -358,18 +369,19 @@ impl Binder<'_> {
         Self::call(StrFn::Not, vec![node], DataType::Boolean)
     }
 
-    /// `split(str, delimiter[, limit])` with a constant literal delimiter.
+    /// `split(str, delimiter[, limit])` with a constant delimiter: a
+    /// literal split, or a Java-regex split for a real expression.
     fn split(self, args: &[&ast::Expr]) -> Result<Node, Skip> {
         if !(2..=3).contains(&args.len()) {
             return Err(format!("analysis: split with {} arguments", args.len()));
         }
         let s = self.str_arg(args[0])?;
         let delimiter = match self.fold_string(args[1])? {
-            None => None,
-            Some(regex) => Some(
-                literal_delimiter(&regex)
-                    .ok_or_else(|| format!("split by the regular expression {regex:?}"))?,
-            ),
+            None => SplitBy::Null,
+            Some(regex) => match literal_delimiter(&regex) {
+                Some(d) => SplitBy::Literal(d),
+                None => SplitBy::Regex(regex),
+            },
         };
         let limit = match args.get(2) {
             Some(e) => self.int_arg(e)?,
@@ -393,6 +405,13 @@ impl Binder<'_> {
                 "a constant argument that fails to evaluate".to_owned()
             }
         })?;
+        // A lossy cast still evaluates: Krishiv's `STRING` cannot hold the
+        // bytes, so there is nothing faithful to fold (same divergence).
+        if ev.invalid_utf8.get() {
+            return Err(
+                "documented divergence (ADR 0023): STRING holds valid UTF-8 only".to_owned(),
+            );
+        }
         Ok(v.is_valid(0)
             .then(|| v.as_string::<i32>().value(0).to_owned()))
     }
@@ -518,8 +537,21 @@ impl Evaluator<'_> {
                 std::sync::Arc::new(string::concat_binary(&parts)?)
             }
             StrFn::Like(escape) => std::sync::Arc::new(string::like(s(0), s(1), *escape)?),
-            StrFn::Split(Some(d)) => std::sync::Arc::new(string::split_literal(s(0), d, int(1))?),
-            StrFn::Split(None) => arrow_array::new_null_array(&string_list(), v[0].len()),
+            StrFn::Split(SplitBy::Literal(d)) => {
+                std::sync::Arc::new(string::split_literal(s(0), d, int(1))?)
+            }
+            StrFn::Split(SplitBy::Null) => arrow_array::new_null_array(&string_list(), v[0].len()),
+            StrFn::Split(SplitBy::Regex(pattern)) => {
+                let input = v[0].as_string::<i32>();
+                let limits: Vec<Option<i32>> = match int(1) {
+                    Operand::Scalar(v) => vec![v; input.len()],
+                    Operand::Array(a) => a.iter().collect(),
+                };
+                std::sync::Arc::new(
+                    krishiv_functions::scalar::split_regex(input, pattern, &limits)
+                        .map_err(|e| KernelError::with_row(None, e))?,
+                )
+            }
             StrFn::Not => {
                 let x = v[0].as_boolean();
                 std::sync::Arc::new(BooleanArray::new(!x.values(), x.nulls().cloned()))

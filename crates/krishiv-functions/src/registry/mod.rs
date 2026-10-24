@@ -27,6 +27,7 @@ use std::fmt;
 use std::sync::{Arc, LazyLock};
 
 pub use catalog::SparkFunction;
+pub use defs::legacy_day_count;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};
 

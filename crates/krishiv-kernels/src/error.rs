@@ -65,8 +65,11 @@ impl KernelError {
         &self.error
     }
 
-    /// A registry error at `row` (`None` for analysis-time failures).
-    pub(crate) fn at(row: Option<usize>, error: KrishivError) -> Self {
+    /// Wraps `error` as a kernel failure at `row` (`None` for a failure of
+    /// the whole call, such as an invalid pattern compiled once for every
+    /// row, rather than of one row's data).
+    #[must_use]
+    pub fn with_row(row: Option<usize>, error: KrishivError) -> Self {
         Self { row, error }
     }
 

@@ -2096,6 +2096,12 @@ mod tests {
             ),
             (
                 "split",
+                "SELECT split('a', '[ab]')",
+                "array<string>",
+                json!(["", ""]),
+            ),
+            (
+                "split",
                 "SELECT split('a', NULL)",
                 "array<string>",
                 Value::Null,
@@ -2123,7 +2129,6 @@ mod tests {
             );
         }
         for (f, sql) in [
-            ("split", "SELECT split('a', '[ab]')"),
             ("like", "SELECT 'a' ILIKE 'A'"),
             ("like", "SELECT 'a' LIKE 'a' ESCAPE 'ab'"),
             ("upper", "SELECT upper()"),

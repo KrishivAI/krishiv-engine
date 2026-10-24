@@ -716,7 +716,7 @@ impl ParseFailure {
         input: &str,
         format: &str,
     ) -> KernelError {
-        KernelError::at(
+        KernelError::with_row(
             row,
             InvalidFormatMismatchInput {
                 format: format.to_owned(),
