@@ -34,6 +34,7 @@ fuzz_target!(|data: &[u8]| {
         legacy_bang_equals_not: bits & 16 != 0,
         legacy_interval: bits & 32 != 0,
         timestamp_ntz: bits & 64 != 0,
+        legacy_identifier_clause: bits & 128 != 0,
     };
     match parse_query(&sql, &options) {
         Ok(q) => {

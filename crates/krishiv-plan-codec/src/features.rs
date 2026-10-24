@@ -118,6 +118,7 @@ registry! {
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
+    (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
 }
 
 /// Ids retired at an epoch change: never reused.
@@ -163,6 +164,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Limit { offset, .. } => (*offset != 0).then_some(Feature::LimitOffset),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
+            PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::Scan(_)
             | PhysNode::OneRow
             | PhysNode::Filter { .. }
@@ -251,6 +253,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::ReplicateRows { .. }
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
+        | PhysNode::WindowGroupLimit { .. }
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. } => {}
     }

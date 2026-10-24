@@ -1047,11 +1047,6 @@
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select unhex('-123')",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function unhex"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select unix_timestamp('2018-01-01', a) from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function unix_timestamp"
     },

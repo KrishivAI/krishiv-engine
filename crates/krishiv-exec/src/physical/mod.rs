@@ -56,8 +56,8 @@ pub use data::{PlanData, assert_plan_data};
 pub(crate) use instantiate::node_ids;
 pub use instantiate::{SpillScopes, WorkerContext, instantiate};
 pub(crate) use instantiate::{
-    Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, hash_join,
-    nested_loop_join, project_op, replicate_op, scan_filter, sort_op, top_n_op,
+    Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, group_limit_op,
+    hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op, top_n_op,
 };
 
 use crate::aggregate::{AggregateExpr, AggregateOutput};
@@ -65,7 +65,7 @@ use crate::error::Result;
 use crate::join::JoinType;
 use crate::operators::{FileWriteSink, RowStageSettings, SortKey};
 use crate::planner::ExplainNode;
-use crate::window::WindowPlan;
+use crate::window::{GroupLimitPlan, WindowPlan};
 
 /// A scan of a plan, numbered by the planner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -252,6 +252,17 @@ pub enum PhysNode {
         input: Box<PhysNode>,
         /// Partitioning, ordering and functions.
         window: WindowPlan,
+    },
+    /// The rows of each partition of `input` ranked within a limit by a
+    /// rank-like function (Spark's `WindowGroupLimit`), below the window
+    /// whose filter keeps only those: `input` is sorted as the window's is,
+    /// and a sort directly below also drops rows past the limit within
+    /// each of its sorted batches.
+    WindowGroupLimit {
+        /// The sorted input.
+        input: Box<PhysNode>,
+        /// Partitioning, ordering, function and limit.
+        limit: GroupLimitPlan,
     },
     /// A hash aggregate.
     Aggregate {
@@ -470,6 +481,7 @@ plan_data!(enum PhysNode {
     Sort { input, keys },
     TopN { input, keys, limit },
     Window { input, window },
+    WindowGroupLimit { input, limit },
     Aggregate { input, aggregate },
     HashJoin(join),
     NestedLoopJoin(join),
@@ -522,6 +534,7 @@ impl PhysNode {
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
             | Self::Window { input, .. }
+            | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::WriteFiles { input } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
@@ -553,6 +566,7 @@ impl PhysNode {
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
             | Self::Window { input, .. }
+            | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::WriteFiles { input } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],

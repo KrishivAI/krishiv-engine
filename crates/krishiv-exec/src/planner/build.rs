@@ -241,6 +241,23 @@ impl<'a> Planner<'a> {
                 {
                     return self.scan(p, scan, Some(predicate));
                 }
+                if let PlanNode::Window {
+                    input: below,
+                    exprs,
+                    partition_by,
+                    order_by,
+                } = &input.node
+                {
+                    // Spark's window group limit (`InferWindowGroupLimit`).
+                    let limit = krishiv_optimizer::infer_window_group_limit(
+                        predicate,
+                        input,
+                        self.window_group_limit_threshold(),
+                    );
+                    let below = self.plan(below)?;
+                    let window = self.window(below, exprs, partition_by, order_by, limit)?;
+                    return self.filter(window, predicate);
+                }
                 let input = self.plan(input)?;
                 self.filter(input, predicate)
             }
@@ -378,7 +395,7 @@ impl<'a> Planner<'a> {
                 order_by,
             } => {
                 let input = self.plan(input)?;
-                self.window(input, exprs, partition_by, order_by)
+                self.window(input, exprs, partition_by, order_by, None)
             }
             PlanNode::OneRowRelation => Ok(one_row()),
             _ => {
@@ -1095,8 +1112,34 @@ impl<'a> Planner<'a> {
         Ok(planned)
     }
 
+    /// `input` cut to its first `n` rows by `keys` in each partition,
+    /// shown with `detail`.
+    pub(crate) fn local_top_n(
+        input: Planned,
+        keys: &[SortKey],
+        n: u64,
+        detail: String,
+    ) -> Result<Planned> {
+        let schema = top_n_op(&input.schema, keys, n)?.schema();
+        let layout = input.layout.clone();
+        let local = keys.to_vec();
+        let mut local = input.wrap(
+            |input| PhysNode::TopN {
+                input,
+                keys: local,
+                limit: n,
+            },
+            schema,
+            layout,
+            ("LocalTopN", detail),
+        );
+        // A runtime filter below would drop rows the top-N ranks.
+        local.sites.clear();
+        Ok(local)
+    }
+
     /// `input` cut to `n` rows in each partition.
-    fn local_limit(input: Planned, n: u64) -> Planned {
+    pub(crate) fn local_limit(input: Planned, n: u64) -> Planned {
         let schema = Arc::clone(&input.schema);
         let layout = input.layout.clone();
         let mut local = input.wrap(
@@ -1119,21 +1162,7 @@ impl<'a> Planner<'a> {
         let input = if input.placement.satisfies(Distribution::Single) {
             input
         } else {
-            let schema = top_n_op(&input.schema, &keys, n)?.schema();
-            let layout = input.layout.clone();
-            let local = keys.clone();
-            let mut local = input.wrap(
-                |input| PhysNode::TopN {
-                    input,
-                    keys: local,
-                    limit: n,
-                },
-                schema,
-                layout,
-                ("LocalTopN", format!("{n}, {}", orders(order))),
-            );
-            local.sites.clear();
-            local
+            Self::local_top_n(input, &keys, n, format!("{n}, {}", orders(order)))?
         };
         let input = self.require(input, Distribution::Single)?;
         let schema = top_n_op(&input.schema, &keys, n)?.schema();

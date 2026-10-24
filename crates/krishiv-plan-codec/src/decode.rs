@@ -18,7 +18,8 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
-    FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+    FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
+    WindowFunctionPlan, WindowPlan,
 };
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -477,6 +478,10 @@ impl Decoder {
                 input: self.boxed(w.input)?,
                 window: window_plan(w)?,
             },
+            Kind::WindowGroupLimit(g) => PhysNode::WindowGroupLimit {
+                input: self.boxed(g.input)?,
+                limit: group_limit(g)?,
+            },
             Kind::Aggregate(a) => PhysNode::Aggregate {
                 input: self.boxed(a.input)?,
                 aggregate: aggregate(a)?,
@@ -740,6 +745,22 @@ fn window_plan(w: &pb::WindowNode) -> Result<WindowPlan> {
             .iter()
             .map(window_function)
             .collect::<Result<_>>()?,
+    })
+}
+
+fn group_limit(g: &pb::WindowGroupLimitNode) -> Result<GroupLimitPlan> {
+    if g.limit == 0 {
+        return Err(corrupt("a window group limit of 0 rows"));
+    }
+    Ok(GroupLimitPlan {
+        partition_by: usizes(&g.partition_by)?,
+        order_by: sort_keys(&g.order_by)?,
+        function: enum_map!(pb::RankLikeFunction, g.function, "rank-like function", {
+            RowNumber => RankLike::RowNumber,
+            Rank => RankLike::Rank,
+            DenseRank => RankLike::DenseRank,
+        })?,
+        limit: g.limit,
     })
 }
 
