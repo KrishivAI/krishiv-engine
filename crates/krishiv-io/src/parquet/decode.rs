@@ -510,6 +510,28 @@ impl ParquetDecoder {
             .collect()
     }
 
+    /// Walks the page headers of every planned column chunk that `ranges`
+    /// hold before arrow-rs reads them ([`super::thrift_guard::check_pages`]).
+    fn check_page_headers(&self, ranges: &[Range<u64>], bytes: &[Bytes]) -> FormatResult<()> {
+        for (range, held) in ranges.iter().zip(bytes) {
+            for c in self.planned.iter().flat_map(|u| &u.chunks) {
+                if !(range.start <= c.start && c.end <= range.end) {
+                    continue;
+                }
+                let at = |offset: u64| usize::try_from(offset - range.start).ok();
+                if let Some(chunk) = at(c.start)
+                    .zip(at(c.end))
+                    .and_then(|(from, to)| held.get(from..to))
+                {
+                    super::thrift_guard::check_pages(chunk).map_err(|why| {
+                        FormatError::Corrupt(format!("a page header is malformed: {why}"))
+                    })?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn step_inner(&mut self) -> FormatResult<Step> {
         loop {
             if let Some(reader) = self.reader.as_mut() {
@@ -583,6 +605,10 @@ impl Decoder for ParquetDecoder {
     fn push(&mut self, data: Vec<(Range<u64>, Bytes)>) -> FormatResult<()> {
         let (ranges, bytes): (Vec<_>, Vec<_>) = data.into_iter().unzip();
         self.metrics.bytes_pushed += bytes.iter().map(|b| b.len() as u64).sum::<u64>();
+        if let Err(e) = self.check_page_headers(&ranges, &bytes) {
+            self.poisoned = true;
+            return Err(e);
+        }
         let decoder = self.decoder()?;
         let result = super::contain("buffering", FormatError::Corrupt, || {
             decoder

@@ -8,6 +8,12 @@
 //! least one byte on the wire, so a count larger than the bytes left is
 //! corrupt. This walk checks that, and the nesting depth, without
 //! allocating per element and in time linear in the footer's size.
+//!
+//! Page headers are Thrift structs too, read by arrow-rs from the column
+//! chunk bytes; [`check_pages`] walks a chunk's page headers the same way
+//! before the chunk reaches the decoder (arrow-rs skips a `list<bool>` of
+//! an unknown field without reading a byte per element, so a count of
+//! 2^31 costs seconds of CPU per header).
 
 /// Nesting deeper than this is corrupt: the Parquet footer is about six
 /// levels deep.
@@ -43,11 +49,21 @@ enum Frame {
 /// What is wrong, for a truncated value, an element count larger than the
 /// bytes left, an unknown type or nesting that is too deep.
 pub(super) fn check(footer: &[u8]) -> Result<(), &'static str> {
-    let mut walk = Walk {
-        buf: footer,
-        pos: 0,
-    };
+    walk_struct(footer).map(|_| ())
+}
+
+/// What [`walk_struct`] found: the bytes the struct takes, and the value of
+/// its top-level `i32` field 3 (a page header's `compressed_page_size`).
+struct Walked {
+    len: usize,
+    field_3: Option<u64>,
+}
+
+/// Walks the compact-protocol struct at the start of `buf`.
+fn walk_struct(buf: &[u8]) -> Result<Walked, &'static str> {
+    let mut walk = Walk { buf, pos: 0 };
     let mut stack = vec![Frame::Struct];
+    let (mut last_id, mut field_3) = (0_i64, None);
     while let Some(top) = stack.last().copied() {
         let (ty, in_list) = match top {
             Frame::Struct => {
@@ -56,11 +72,21 @@ pub(super) fn check(footer: &[u8]) -> Result<(), &'static str> {
                     stack.pop();
                     continue;
                 }
-                if header >> 4 == 0 {
+                let id = if header >> 4 == 0 {
                     // A field id that does not follow its predecessor.
-                    walk.varint()?;
+                    unzigzag(walk.varint()?)
+                } else {
+                    last_id.saturating_add(i64::from(header >> 4))
+                };
+                let ty = header & 0x0f;
+                if stack.len() == 1 {
+                    last_id = id;
+                    if id == 3 && ty == I32 {
+                        field_3 = Some(walk.varint()?);
+                        continue;
+                    }
                 }
-                (header & 0x0f, false)
+                (ty, false)
             }
             Frame::Items { left, ty } => {
                 let Some(rest) = left.checked_sub(1) else {
@@ -89,13 +115,59 @@ pub(super) fn check(footer: &[u8]) -> Result<(), &'static str> {
         };
         if let Some(inner) = walk.value(ty, in_list)? {
             if stack.len() >= MAX_DEPTH {
-                return Err("nested too deeply");
+                return Err(TOO_DEEP);
             }
             stack.push(inner);
         }
     }
+    Ok(Walked {
+        len: walk.pos,
+        field_3,
+    })
+}
+
+/// Checks the page headers of the column chunk `chunk`: each is walked as
+/// [`check`] walks a footer, then its `compressed_page_size` bytes of page
+/// data are stepped over, up to the end of the chunk.
+///
+/// Only a count larger than the bytes left and nesting that is too deep
+/// are errors: arrow-rs reads them in time that does not follow the bytes.
+/// Anything else that does not parse (bytes after the last page, a
+/// truncated header) ends the walk and is left to arrow-rs, which reads
+/// pages only as far as the chunk's values go and rejects a bad header in
+/// linear time.
+///
+/// # Errors
+/// Which of the two was found.
+pub(super) fn check_pages(chunk: &[u8]) -> Result<(), &'static str> {
+    let mut pos = 0_usize;
+    while let Some(rest) = chunk.get(pos..).filter(|r| !r.is_empty()) {
+        let walked = match walk_struct(rest) {
+            Ok(w) => w,
+            Err(e @ (COUNT_TOO_LARGE | ENTRIES_TOO_MANY | TOO_DEEP)) => return Err(e),
+            Err(_) => return Ok(()),
+        };
+        let Some(next) = walked
+            .field_3
+            .and_then(|raw| usize::try_from(unzigzag(raw)).ok())
+            .and_then(|size| size.checked_add(walked.len))
+            .and_then(|step| pos.checked_add(step))
+        else {
+            return Ok(());
+        };
+        pos = next;
+    }
     Ok(())
 }
+
+/// The signed value of a zigzag varint.
+fn unzigzag(raw: u64) -> i64 {
+    i64::from_ne_bytes(((raw >> 1) ^ (raw & 1).wrapping_neg()).to_ne_bytes())
+}
+
+const COUNT_TOO_LARGE: &str = "an element count larger than the bytes left";
+const ENTRIES_TOO_MANY: &str = "an entry count larger than the bytes left";
+const TOO_DEEP: &str = "nested too deeply";
 
 fn set_top(stack: &mut [Frame], frame: Frame) {
     if let Some(top) = stack.last_mut() {
@@ -171,7 +243,7 @@ impl Walk<'_> {
                 }
                 let ty = header & 0x0f;
                 if count > self.left() as u64 {
-                    return Err("an element count larger than the bytes left");
+                    return Err(COUNT_TOO_LARGE);
                 }
                 return Ok(Some(Frame::Items { left: count, ty }));
             }
@@ -182,7 +254,7 @@ impl Walk<'_> {
                 }
                 // A key and a value take two bytes at least.
                 if count > (self.left() / 2) as u64 {
-                    return Err("an entry count larger than the bytes left");
+                    return Err(ENTRIES_TOO_MANY);
                 }
                 let types = self.byte()?;
                 return Ok(Some(Frame::Entries {
@@ -200,7 +272,7 @@ impl Walk<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::check;
+    use super::{check, check_pages};
 
     #[test]
     fn accepts_a_nested_footer() {
@@ -282,5 +354,49 @@ mod tests {
         let mut deep = vec![0x1c; 64];
         deep.extend([0x00; 64]);
         assert_eq!(check(&deep), Err("nested too deeply"));
+    }
+
+    /// A page header: `type`, `uncompressed_page_size` and
+    /// `compressed_page_size` (all `n`), then `extra` fields, then `n`
+    /// bytes of page data.
+    fn page(n: u8, extra: &[u8]) -> Vec<u8> {
+        let mut p = vec![0x15, 0x00, 0x15, n * 2, 0x15, n * 2];
+        p.extend(extra);
+        p.push(0x00);
+        p.extend(std::iter::repeat_n(0xAB, usize::from(n)));
+        p
+    }
+
+    #[test]
+    fn walks_the_pages_of_a_chunk() {
+        let mut chunk = page(4, &[]);
+        chunk.extend(page(0, &[]));
+        chunk.extend(page(3, &[0x2c, 0x15, 0x02, 0x00])); // field 5: struct
+        assert_eq!(check_pages(&chunk), Ok(()));
+        // Bytes after the last page, a truncated header or a size past the
+        // end end the walk: arrow-rs reads (or rejects) those itself.
+        chunk.extend([0x00, 0x00, 0x15]);
+        assert_eq!(check_pages(&chunk), Ok(()));
+        assert_eq!(check_pages(&page(9, &[])[..10]), Ok(()));
+        assert_eq!(check_pages(&[]), Ok(()));
+    }
+
+    #[test]
+    fn rejects_a_page_header_list_longer_than_the_chunk() {
+        // Field 9 (unknown to arrow-rs, which skips it): a list of 2^31 - 1
+        // bools, in the second page header.
+        let mut chunk = page(2, &[]);
+        chunk.extend(page(2, &[0x69, 0xf1, 0xff, 0xff, 0xff, 0xff, 0x07]));
+        assert_eq!(
+            check_pages(&chunk),
+            Err("an element count larger than the bytes left")
+        );
+        // A field id given in full (zigzag) before field 3 still finds it.
+        let mut long_id = vec![0x05, 0x02, 0x00, 0x15, 0x00, 0x15, 0x02, 0x00, 0xAB];
+        long_id.extend(page(1, &[0x69, 0xf1, 0xff, 0xff, 0xff, 0xff, 0x07]));
+        assert_eq!(
+            check_pages(&long_id),
+            Err("an element count larger than the bytes left")
+        );
     }
 }
