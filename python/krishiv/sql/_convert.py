@@ -6,6 +6,7 @@ pyarrow is imported lazily: the package works without it, and the actions that n
 
 from __future__ import annotations
 
+import html
 import math
 import re
 import struct
@@ -195,6 +196,21 @@ def show_string(names: list[str], rows: list[list[str]], n: int, truncate: bool 
     if len(rows) > n:
         lines.append(f"only showing top {n} row{'s' if n != 1 else ''}")
     return "\n".join(lines) + "\n"
+
+
+def repr_html_string(columns: list[tuple[str, str]], rows: list[list[str]]) -> str:
+    """The HTML table ``DataFrame._repr_html_`` returns: one header row of column names, one of
+    their types, then one row per preview row. Everything is HTML-escaped, so values cannot
+    break the table (``rows`` holds the display text of each cell, as :func:`table_cells` gives)."""
+    head = "".join(f"<th>{html.escape(name)}</th>" for name, _ in columns)
+    types = "".join(f"<th>{html.escape(type_)}</th>" for _, type_ in columns)
+    body = "".join("<tr>" + "".join(f"<td>{html.escape(value)}</td>" for value in row) + "</tr>" for row in rows)
+    return (
+        '<table border="1" class="dataframe">'
+        f"<thead><tr>{head}</tr><tr>{types}</tr></thead>"
+        f"<tbody>{body}</tbody>"
+        "</table>"
+    )
 
 
 def _arrow_zone_name(zone: tzinfo) -> str:

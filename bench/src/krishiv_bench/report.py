@@ -201,6 +201,10 @@ def render(results: dict[str, dict], baseline: str | None = None) -> str:
 def write_report(
     suite: str, sf: float, baseline: str | None = None, files: list[Path] | None = None, dataset: str | None = None
 ) -> Path:
+    from . import h2o
+
+    if h2o.is_h2o(suite):
+        return h2o.write_report(suite, sf, baseline, files, dataset)
     if files:
         res = {}
         for f in files:

@@ -74,11 +74,12 @@ pub struct Sort {
 impl Sort {
     /// Sorts batches of `schema` by `keys`. With a `spill` scope the sort
     /// spills sorted runs under memory pressure; without one it can only
-    /// hold its input in memory.
+    /// hold its input in memory. Without keys every row ties: the sort
+    /// gathers its input into one stream (a window over all rows).
     ///
     /// # Errors
     /// As [`SortKey`] validation: `KRISHIV_UNSUPPORTED_FEATURE` for a key
-    /// type the sort does not order yet, `INTERNAL_ERROR` for no keys or an
+    /// type the sort does not order yet, `INTERNAL_ERROR` for an
     /// out-of-range column.
     pub fn new(schema: SchemaRef, keys: &[SortKey], spill: Option<SpillScope>) -> Result<Self> {
         Ok(Self {
@@ -539,7 +540,7 @@ pub(super) fn group_size(total: usize, fan_in: usize) -> usize {
 /// `runs` at once. An intermediate merge (`writing` a run) halves the
 /// fan-in down to 2 while the pool refuses and also reserves the spill
 /// writer's scratch; the final merge needs every run.
-async fn merge_budget(
+pub(super) async fn merge_budget(
     runs: &[SpillRun],
     max_fan_in: usize,
     batch_rows: usize,
@@ -556,7 +557,14 @@ async fn merge_budget(
     let mut fan_in = max_fan_in.min(runs.len());
     let mut budget = handle.reservation();
     loop {
-        let need = per_run.saturating_mul(fan_in).saturating_add(out);
+        // The merger's per-source `slot`/`stamp` metadata (see
+        // [`super::merge::metadata_bytes`]): small next to the frames, but
+        // reserved with them so the merge never grows past its budget.
+        let meta = super::merge::metadata_bytes(fan_in);
+        let need = per_run
+            .saturating_mul(fan_in)
+            .saturating_add(out)
+            .saturating_add(meta);
         match budget.grow(need).await {
             Ok(()) => return Ok((budget, fan_in)),
             Err(_) if writing && fan_in > 2 => fan_in = (fan_in / 2).max(2),

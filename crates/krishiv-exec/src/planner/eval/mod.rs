@@ -255,7 +255,7 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 .map(|a| compile(a, input))
                 .collect::<Result<Vec<_>>>()?;
             match &f.id {
-                FunctionId::Builtin(b) => builtin(*b, f, args, input),
+                FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
                 FunctionId::Registry { name, .. } => func::compile(name, f, args, input, e),
                 _ => Err(unsupported_expr(e)),
             }
@@ -271,6 +271,7 @@ fn builtin(
     f: &ResolvedFunction,
     mut args: Vec<Arc<dyn PhysExpr>>,
     input: Input<'_>,
+    e: &Expr,
 ) -> Result<Arc<dyn PhysExpr>> {
     let out = f.data_type.to_arrow();
     let env = input.env;
@@ -325,6 +326,9 @@ fn builtin(
             logic::and_or(true, ge, le)
         }
         (Builtin::Like, 2 | 3) => strings::like(args)?,
+        // `rlike(a, b)` is Spark's `RLike(a, b)`: the registry's
+        // `regexp_like` kernel over the same arguments.
+        (Builtin::RLike, 2) => func::compile("regexp_like", f, args, input, e)?,
         (Builtin::When, n) if n >= 2 => cond::when(args, out)?,
         (Builtin::Concat, _) => strings::concat(args, f.nullable)?,
         _ => {

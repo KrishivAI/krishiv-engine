@@ -403,6 +403,15 @@ impl Table {
         }
     }
 
+    /// Group counts of the table's radix partitions, in position order
+    /// (one partition for an `AggTable`).
+    pub(crate) fn part_lens(&self) -> Vec<usize> {
+        match self {
+            Self::Keys(t) => vec![t.len()],
+            Self::Rows(t) => (0..t.part_count()).map(|p| t.part_len(p)).collect(),
+        }
+    }
+
     pub(crate) fn memory_size(&self) -> usize {
         match self {
             Self::Keys(t) => t.memory_size(),
@@ -430,6 +439,16 @@ impl Table {
             (Self::Keys(t), TablePrepared::Keys(p)) => Ok(t.projected(p)),
             (Self::Rows(t), TablePrepared::Rows(p)) => Ok(t.projected(p)),
             _ => Err(mixed()),
+        }
+    }
+
+    /// Bytes [`apply`](Self::apply) needs while it runs, beyond
+    /// [`projected`](Self::projected), and frees before it returns: a row
+    /// table's scatter of the batch over its partitions.
+    pub(crate) fn transient(&self, p: &TablePrepared) -> usize {
+        match (self, p) {
+            (Self::Rows(t), TablePrepared::Rows(p)) => t.transient(p),
+            _ => 0,
         }
     }
 

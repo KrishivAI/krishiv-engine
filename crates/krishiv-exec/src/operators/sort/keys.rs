@@ -80,7 +80,14 @@ impl KeyEncoder {
     /// `INTERNAL_ERROR` for no keys or an out-of-range column.
     pub(crate) fn new(schema: &Schema, keys: &[SortKey]) -> Result<Arc<Self>> {
         if keys.is_empty() {
-            return Err(internal("a sort needs at least one key".to_owned()));
+            // No keys: every row is equal (all rows in one stream, ties in
+            // input order). One NULL per row stands in for the key.
+            let converter = RowConverter::new(vec![SortField::new(DataType::Null)])
+                .map_err(|e| internal(e.to_string()))?;
+            return Ok(Arc::new(Self {
+                converter,
+                columns: Vec::new(),
+            }));
         }
         let fields = keys
             .iter()
@@ -113,6 +120,13 @@ impl KeyEncoder {
 
     /// The rows of `batch`'s keys, in row order.
     pub(crate) fn encode(&self, batch: &RecordBatch) -> Result<Rows> {
+        if self.columns.is_empty() {
+            let nulls = arrow_array::new_null_array(&DataType::Null, batch.num_rows());
+            return self
+                .converter
+                .convert_columns(&[nulls])
+                .map_err(|e| internal(e.to_string()));
+        }
         let columns = self
             .columns
             .iter()
