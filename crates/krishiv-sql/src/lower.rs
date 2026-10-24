@@ -394,6 +394,7 @@ impl Lowerer {
             SetExprKind::Pipe(_) => return Err(unsupported("pipe operators", body.span)),
             SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
             SetExprKind::Query(inner) => self.query(inner)?,
+            SetExprKind::DynamicTable(_) => return Err(unsupported("IDENTIFIER()", body.span)),
             SetExprKind::Table(name) => self.node(
                 PlanNode::Read(ReadSource::Table {
                     name: name.parts.iter().map(|p| p.value.clone()).collect(),
@@ -825,6 +826,9 @@ impl Lowerer {
                 JoinConstraint::Using(cols) => {
                     JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
                 }
+                JoinConstraint::NearestBy(n) => {
+                    return Err(unsupported("NEAREST BY joins", n.span));
+                }
             };
             plan = self.node(
                 PlanNode::Join {
@@ -897,6 +901,9 @@ impl Lowerer {
                 inner
             }
             TableFactorKind::Nested(r) => self.deeper(|l| l.relation(r))?,
+            TableFactorKind::DynamicTable { name, .. } => {
+                return Err(unsupported("IDENTIFIER()", name.span));
+            }
             TableFactorKind::Values(_) => return Err(unsupported("VALUES", tf.span)),
             _ => return Err(unsupported("table-valued functions", tf.span)),
         };
@@ -1195,6 +1202,9 @@ impl Lowerer {
                 self.call(Builtin::When.name(), args, sp)
             }
             ExprKind::Function(f) => {
+                if let Some(dynamic) = &f.dynamic_name {
+                    return Err(unsupported("IDENTIFIER() function names", dynamic.span));
+                }
                 let [name] = &f.name.parts[..] else {
                     return Err(unsupported("qualified function names", f.name.span));
                 };
@@ -1268,6 +1278,7 @@ impl Lowerer {
             ExprKind::Parameter(_) => return Err(unsupported("parameter markers", sp)),
             ExprKind::Subscript(..) => return Err(unsupported("subscripts", sp)),
             ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
+            ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
             ExprKind::Lambda { .. } => return Err(unsupported("lambda functions", sp)),
             ExprKind::Row(_) | ExprKind::Struct(_) => {
                 return Err(unsupported("row and struct constructors", sp));

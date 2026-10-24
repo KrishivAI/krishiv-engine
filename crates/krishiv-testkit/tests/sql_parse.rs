@@ -131,7 +131,7 @@ fn dql_corpus_parses_with_spans_and_differential_equality() -> R {
         .map(|(c, n)| ((*c).to_owned(), *n))
         .collect();
     assert_eq!(accepted, owed);
-    assert_eq!(rejected.get("PARSE_SYNTAX_ERROR").copied(), Some(58));
+    assert_eq!(rejected.get("PARSE_SYNTAX_ERROR").copied(), Some(84));
     assert_eq!(rejected.get("UNCLOSED_BRACKETED_COMMENT").copied(), Some(2));
     Ok(())
 }

@@ -17,6 +17,7 @@
 //! | `IN ()` | `INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE` |
 //! | `LIKE ANY ()`, a frame bound that is not a literal | `_LEGACY_ERROR_TEMP_0064` |
 //! | pipe operators and result clause combinations | see [`pipe`] |
+//! | `NEAREST BY` joins, `TABLE(...)` arguments | see [`relation`] |
 //! | `TABLESAMPLE` with no method, an out-of-range percentage, `SYSTEM` misuse, byte and column forms | see [`sample`] |
 //! | duplicate CTE names, duplicate window names | `DUPLICATED_CTE_NAMES`, `INVALID_SQL_SYNTAX.REPETITIVE_WINDOW_DEFINITION` |
 //! | `MAX RECURSION LEVEL` without `RECURSIVE`, a table option without a value | `_LEGACY_ERROR_TEMP_0035` |
@@ -34,6 +35,7 @@
 mod interval;
 pub(crate) mod literal;
 mod pipe;
+mod relation;
 mod sample;
 mod types;
 
@@ -57,7 +59,7 @@ use crate::ast::{
     GroupWith, GroupingSet, Join, JoinConstraint, Literal, NamedWindow, NumKind,
     PartitionFieldKind, Query, Relation, RelationExt, Select, SelectItem, SetExpr, SetExprKind,
     SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind, TableElement,
-    TableFactor, TableFactorKind, WindowRef, WindowSpec, With,
+    TableFactor, TableFactorKind, TableOption, TemporalClause, WindowRef, WindowSpec, With,
 };
 use crate::error::ParseError;
 use crate::lexer::tokenize;
@@ -362,6 +364,7 @@ impl Checker<'_> {
             SetExprKind::Query(q) => self.query(q),
             SetExprKind::Values(v) => self.inline_table(&v.rows, v.alias.as_ref(), v.span),
             SetExprKind::Pipe(p) => self.pipe(p),
+            SetExprKind::DynamicTable(d) => self.expr(&d.expr),
             _ => Ok(()),
         }
     }
@@ -429,6 +432,9 @@ impl Checker<'_> {
     }
 
     fn join(&self, j: &Join) -> R {
+        if let JoinConstraint::NearestBy(n) = &j.constraint {
+            self.nearest_by(j, n)?;
+        }
         if j.lateral {
             if j.natural {
                 return Err(at(
@@ -455,52 +461,73 @@ impl Checker<'_> {
         f.sample.as_ref().map_or(Ok(()), |s| self.sample(s))
     }
 
+    /// The time travel and options of a table reference named at `name`.
+    fn table_reference(
+        &self,
+        name: Span,
+        temporal: Option<&TemporalClause>,
+        options: &[TableOption],
+    ) -> R {
+        if let Some(t) = temporal {
+            self.expr(&t.value)?;
+        }
+        let missing: Vec<String> = options
+            .iter()
+            .filter(|o| o.value.is_none())
+            .map(|o| {
+                o.key
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .collect();
+        if !missing.is_empty() {
+            let error: KrishivError = LegacyErrorTemp0035 {
+                message: format!(
+                    "Values must be specified for key(s): [{}]",
+                    missing.join(",")
+                ),
+            }
+            .into();
+            // A key written as a string literal is never echoed (it
+            // may hold a secret, like `'password' 'x'` read as one
+            // key).
+            let string_key = options.iter().any(|o| o.value.is_none() && o.key.is_string);
+            let error = if string_key { error.redacted() } else { error };
+            return Err(at(error, name));
+        }
+        options
+            .iter()
+            .filter_map(|o| o.value.as_ref())
+            .try_for_each(|e| self.expr(e))
+    }
+
     fn factor_kind(&self, f: &TableFactor) -> R {
         match &f.kind {
             TableFactorKind::Table {
                 name,
                 temporal,
                 options,
+            } => self.table_reference(name.span, temporal.as_ref(), options),
+            TableFactorKind::DynamicTable {
+                name,
+                temporal,
+                options,
             } => {
-                if let Some(t) = temporal {
-                    self.expr(&t.value)?;
-                }
-                let missing: Vec<String> = options
-                    .iter()
-                    .filter(|o| o.value.is_none())
-                    .map(|o| {
-                        o.key
-                            .parts
-                            .iter()
-                            .map(|p| p.value.as_str())
-                            .collect::<Vec<_>>()
-                            .join(".")
-                    })
-                    .collect();
-                if !missing.is_empty() {
-                    let error: KrishivError = LegacyErrorTemp0035 {
-                        message: format!(
-                            "Values must be specified for key(s): [{}]",
-                            missing.join(",")
-                        ),
-                    }
-                    .into();
-                    // A key written as a string literal is never echoed (it
-                    // may hold a secret, like `'password' 'x'` read as one
-                    // key).
-                    let string_key = options.iter().any(|o| o.value.is_none() && o.key.is_string);
-                    let error = if string_key { error.redacted() } else { error };
-                    return Err(at(error, name.span));
-                }
-                options
-                    .iter()
-                    .filter_map(|o| o.value.as_ref())
-                    .try_for_each(|e| self.expr(e))
+                self.expr(&name.expr)?;
+                self.table_reference(name.span, temporal.as_ref(), options)
             }
             TableFactorKind::Subquery(q) => self.query(q),
             TableFactorKind::Nested(r) => self.relation(r),
             TableFactorKind::Values(rows) => self.inline_table(rows, f.alias.as_ref(), f.span),
-            TableFactorKind::TableFunction { args, .. } => {
+            TableFactorKind::TableFunction {
+                dynamic_name, args, ..
+            } => {
+                if let Some(d) = dynamic_name {
+                    self.expr(&d.expr)?;
+                }
                 args.iter().try_for_each(|a| self.expr(&a.expr))
             }
         }
@@ -636,6 +663,9 @@ impl Checker<'_> {
     }
 
     fn function(&self, f: &Function) -> R {
+        if let Some(d) = &f.dynamic_name {
+            self.expr(&d.expr)?;
+        }
         self.datetime_unit(f)?;
         f.args.iter().try_for_each(|a| self.expr(&a.expr))?;
         self.sort_items(&f.within_group)?;
@@ -788,6 +818,7 @@ impl Checker<'_> {
                 else_result.as_ref().map_or(Ok(()), |e| self.expr(e))
             }
             ExprKind::Function(f) => self.function(f),
+            ExprKind::TableArgument(t) => self.table_argument(t),
             ExprKind::Lambda { body, .. } => self.expr(body),
             ExprKind::Row(items) | ExprKind::Struct(items) => self.select_items(items),
             _ => Ok(()),

@@ -288,7 +288,8 @@ pub struct DropView {
     pub span: Span,
 }
 
-/// A table, namespace or `USE` name in a DDL statement: dotted parts or
+/// A table, namespace or `USE` name in a DDL statement, or the table of a
+/// `TABLE(...)` argument (Spark's `identifierReference`): dotted parts or
 /// `IDENTIFIER(expr)`, which Spark resolves when it analyzes the plan.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -297,6 +298,17 @@ pub enum DdlName {
     Parts(ObjectName),
     /// `IDENTIFIER(expr)`, kept as written.
     Dynamic(DynamicName),
+}
+
+impl DdlName {
+    /// Source text.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Parts(n) => n.span,
+            Self::Dynamic(d) => d.span,
+        }
+    }
 }
 
 /// `IDENTIFIER(expr)`: a name computed from an expression.
@@ -921,6 +933,8 @@ pub enum SetExprKind {
     Values(Values),
     /// `TABLE name`.
     Table(ObjectName),
+    /// `TABLE IDENTIFIER(expr)`.
+    DynamicTable(DynamicName),
     /// `input |> operator |> ...`.
     Pipe(Pipe),
 }
@@ -1394,6 +1408,15 @@ pub enum TableFactorKind {
         /// `WITH (key = value, ...)`.
         options: Vec<TableOption>,
     },
+    /// A table or view named `IDENTIFIER(expr)`.
+    DynamicTable {
+        /// The name expression.
+        name: DynamicName,
+        /// `VERSION AS OF` / `TIMESTAMP AS OF`.
+        temporal: Option<TemporalClause>,
+        /// `WITH (key = value, ...)`.
+        options: Vec<TableOption>,
+    },
     /// `(query)`.
     Subquery(Box<Query>),
     /// `(relation)`.
@@ -1404,7 +1427,10 @@ pub enum TableFactorKind {
     TableFunction {
         /// The function name.
         name: ObjectName,
-        /// The arguments.
+        /// `IDENTIFIER(expr)` written as the name, which `name` then holds
+        /// as the word `IDENTIFIER`.
+        dynamic_name: Option<DynamicName>,
+        /// The arguments (`TABLE(...)` ones included).
         args: Vec<FunctionArg>,
     },
 }
@@ -1554,6 +1580,32 @@ pub enum JoinConstraint {
     On(Expr),
     /// `USING (columns)`.
     Using(Vec<Ident>),
+    /// `[APPROX | EXACT] NEAREST [k] BY DISTANCE | SIMILARITY expr`.
+    NearestBy(NearestBy),
+}
+
+/// The ranking clause of a top-k join.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NearestBy {
+    /// `APPROX` (`true`) or `EXACT`.
+    pub approx: bool,
+    /// The number of matches per left row, as written (one if absent).
+    pub num_results: Option<String>,
+    /// `DISTANCE` (smaller is nearer) or `SIMILARITY` (larger is nearer).
+    pub direction: NearestDirection,
+    /// The ranking expression.
+    pub ranking: Expr,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The direction of a [`NearestBy`] ranking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
+pub enum NearestDirection {
+    Distance,
+    Similarity,
 }
 
 /// `[NATURAL] kind JOIN [LATERAL] right [constraint]`.
@@ -1872,6 +1924,9 @@ pub struct Function {
     pub null_treatment: Option<NullTreatment>,
     /// `OVER window`.
     pub over: Option<WindowRef>,
+    /// `IDENTIFIER(expr)` written as the function's name, which `name`
+    /// then holds as the word `IDENTIFIER`.
+    pub dynamic_name: Option<DynamicName>,
     /// Source text.
     pub span: Span,
 }
@@ -2066,4 +2121,55 @@ pub enum ExprKind {
     Struct(Vec<SelectItem>),
     /// `(expr)`.
     Nested(Box<Expr>),
+    /// `TABLE(...)`, an argument of a table-valued function.
+    TableArgument(Box<TableArgument>),
+}
+
+/// `TABLE(name)` or `TABLE(query)` with an optional partitioning, an
+/// argument of a table-valued function.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableArgument {
+    /// The relation passed.
+    pub source: TableArgumentSource,
+    /// Written `TABLE name`, which Spark rejects: the name needs
+    /// parentheses.
+    pub unparenthesized: bool,
+    /// `WITH SINGLE PARTITION`, `PARTITION BY ...`, ...
+    pub partitioning: Option<TableArgumentPartitioning>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// What a [`TableArgument`] passes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TableArgumentSource {
+    /// A table or view.
+    Table(DdlName),
+    /// A query.
+    Query(Box<Query>),
+}
+
+/// `WITH SINGLE PARTITION | (PARTITION | DISTRIBUTE) BY ... [(ORDER | SORT)
+/// BY ...]` after a [`TableArgument`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableArgumentPartitioning {
+    /// `WITH SINGLE PARTITION`.
+    pub single: bool,
+    /// `DISTRIBUTE BY` rather than `PARTITION BY`.
+    pub distribute: bool,
+    /// The partitioning expressions.
+    pub partition_by: Vec<Expr>,
+    /// The first expression of an unparenthesized list of several, which
+    /// Spark parses and rejects.
+    pub extra_partition: Option<Span>,
+    /// `SORT BY` rather than `ORDER BY`.
+    pub sort: bool,
+    /// The ordering.
+    pub order_by: Vec<SortItem>,
+    /// The first item of an unparenthesized list of several, which Spark
+    /// parses and rejects.
+    pub extra_order: Option<Span>,
+    /// Source text.
+    pub span: Span,
 }

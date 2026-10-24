@@ -35,6 +35,7 @@ const SPANLESS: &[&str] = &[
     "Primitive",
     "Percent",
     "Bucket",
+    "DynamicTable",
     "Table",
     "TableFunction",
 ];
@@ -192,7 +193,13 @@ fn check_tree(
                             f.name
                         ));
                     }
-                    if f.name == "Expr" && !lines[f.first_line + 1].contains("kind: Keyword(") {
+                    // A keyword argument and a `TABLE(...)` argument are no
+                    // select-list expressions on their own.
+                    let own = lines[f.first_line + 1];
+                    if f.name == "Expr"
+                        && !own.contains("kind: Keyword(")
+                        && !own.contains("kind: TableArgument(")
+                    {
                         let text = sql.get(a..b).ok_or("span out of range")?;
                         let node = without_spans(lines[f.first_line..=i].iter().copied());
                         if !reparsed(text, options).contains(&Some(node)) {

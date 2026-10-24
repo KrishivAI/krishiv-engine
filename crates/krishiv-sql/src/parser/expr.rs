@@ -10,7 +10,8 @@ use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, Function, FunctionArg, Ident,
     Interval, IntervalValue, LikeQuantifier, Literal, NullTreatment, NumKind, ObjectName,
-    Partitioning, SelectItem, Span, Truth, UnaryOp, WhenClause, WindowFrame, WindowRef, WindowSpec,
+    Partitioning, SelectItem, Span, TableArgument, TableArgumentPartitioning, TableArgumentSource,
+    Truth, UnaryOp, WhenClause, WindowFrame, WindowRef, WindowSpec,
 };
 use crate::keywords::{NOT_FUNCTION_WORD, PRIMARY_WORD, RESERVED_WORD};
 use crate::lexer::{Sym, TokenKind, unescape_string};
@@ -744,7 +745,7 @@ impl Parser<'_> {
     }
 
     /// One string token (`singleStringLitWithoutMarker`) at offset `n`.
-    fn single_string_at(&self, n: usize) -> bool {
+    pub(super) fn single_string_at(&self, n: usize) -> bool {
         match self.kind(n) {
             Some(TokenKind::String) => true,
             Some(TokenKind::DoubleQuoted) => !self.opts.double_quoted_identifiers,
@@ -787,6 +788,32 @@ impl Parser<'_> {
             self.bump();
             let body = boxed(self.expr()?);
             return Ok(Some(self.mk(ExprKind::Lambda { params, body }, start)));
+        }
+        // `(SELECT 'a', 'b')` is also a row of the typed literal `SELECT 'a'`
+        // and a string; ANTLR prefers the row constructor, which is listed
+        // before the subquery.
+        if self.kw_at(1, "SELECT") && self.single_string_at(2) {
+            let at = self.checkpoint();
+            self.bump();
+            let item_start = self.start();
+            let type_name = self.keyword_ident();
+            let literal = self.typed_literal(type_name, item_start);
+            if self.sym_at(0, Sym::Comma) {
+                let first = SelectItem {
+                    span: literal.span,
+                    expr: literal,
+                    alias: None,
+                };
+                match self.paren_tail(first, start) {
+                    Ok(row) => {
+                        self.commit(at);
+                        return Ok(Some(row));
+                    }
+                    Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                    Err(Fail::Syntax) => {}
+                }
+            }
+            self.restore(at);
         }
         if self.query_follows(1) {
             let save = self.pos;
@@ -834,6 +861,12 @@ impl Parser<'_> {
         if quoted_type && self.single_string_at(1) {
             let type_name = self.any_ident()?;
             return Ok(self.typed_literal(type_name, start));
+        }
+        if self.kw_at(0, "IDENTIFIER")
+            && self.sym_at(1, Sym::LParen)
+            && let Some(e) = self.identifier_call(start)?
+        {
+            return Ok(e);
         }
         let special = self.class(0) & PRIMARY_WORD != 0 || self.single_string_at(1);
         if self.kind(0) == Some(TokenKind::Word)
@@ -1036,6 +1069,7 @@ impl Parser<'_> {
             filter: None,
             null_treatment: None,
             over: None,
+            dynamic_name: None,
             span,
         }
     }
@@ -1151,7 +1185,7 @@ impl Parser<'_> {
             expr: first,
         }];
         if self.eat_sym(Sym::Comma) {
-            args.extend(self.function_args()?);
+            args.extend(self.function_args(false)?);
         }
         self.call_tail(name, None, args, start)
     }
@@ -1195,7 +1229,9 @@ impl Parser<'_> {
 
     // ---- function calls -------------------------------------------------
 
-    pub(super) fn function_args(&mut self) -> PR<Vec<FunctionArg>> {
+    /// The arguments of a call; `table_args` admits `TABLE(...)` ones, which
+    /// only a table-valued function in a `FROM` clause takes.
+    pub(super) fn function_args(&mut self, table_args: bool) -> PR<Vec<FunctionArg>> {
         if self.sym_at(0, Sym::RParen) {
             return Ok(vec![]);
         }
@@ -1208,13 +1244,140 @@ impl Parser<'_> {
             } else {
                 None
             };
-            let expr = p.expr()?;
+            let expr = if table_args && p.kw_at(0, "TABLE") {
+                p.table_argument()?
+            } else {
+                p.expr()?
+            };
             Ok(FunctionArg {
                 name,
                 expr,
                 span: p.span_from(start),
             })
         })
+    }
+
+    /// `TABLE(name)`, `TABLE(query)` or the invalid `TABLE name`, with its
+    /// partitioning.
+    #[inline(never)]
+    fn table_argument(&mut self) -> PR<Expr> {
+        let start = self.start();
+        self.expect_kw("TABLE")?;
+        let unparenthesized = !self.sym_at(0, Sym::LParen);
+        let source = if unparenthesized {
+            TableArgumentSource::Table(self.ddl_name()?)
+        } else {
+            self.bump();
+            let source = if self.query_follows(0) {
+                TableArgumentSource::Query(Box::new(self.query()?))
+            } else {
+                TableArgumentSource::Table(self.ddl_name()?)
+            };
+            self.expect_sym(Sym::RParen)?;
+            source
+        };
+        let partitioning = self.table_argument_partitioning()?;
+        let arg = TableArgument {
+            source,
+            unparenthesized,
+            partitioning,
+            span: self.span_from(start),
+        };
+        Ok(self.mk(ExprKind::TableArgument(Box::new(arg)), start))
+    }
+
+    fn table_argument_partitioning(&mut self) -> PR<Option<TableArgumentPartitioning>> {
+        let start = self.start();
+        let mut p = TableArgumentPartitioning {
+            single: false,
+            distribute: false,
+            partition_by: vec![],
+            extra_partition: None,
+            sort: false,
+            order_by: vec![],
+            extra_order: None,
+            span: Span::default(),
+        };
+        if self.kw_at(0, "WITH") && self.kw_at(1, "SINGLE") && self.kw_at(2, "PARTITION") {
+            self.pos += 3;
+            p.single = true;
+        } else if self.any_kw_at(0, &["PARTITION", "DISTRIBUTE"]) && self.kw_at(1, "BY") {
+            p.distribute = self.kw_at(0, "DISTRIBUTE");
+            self.pos += 2;
+            (p.partition_by, p.extra_partition) = self.table_argument_list(Self::expr)?;
+        } else {
+            return Ok(None);
+        }
+        if self.any_kw_at(0, &["ORDER", "SORT"]) && self.kw_at(1, "BY") {
+            p.sort = self.kw_at(0, "SORT");
+            self.pos += 2;
+            (p.order_by, p.extra_order) = self.table_argument_list(|p| p.sort_item(false))?;
+        }
+        p.span = self.span_from(start);
+        Ok(Some(p))
+    }
+
+    /// `(item, ...)`, or one `item`; several unparenthesized items parse
+    /// too, and the span of all but the first is returned for Spark's error.
+    fn table_argument_list<T>(
+        &mut self,
+        mut item: impl FnMut(&mut Self) -> PR<T>,
+    ) -> PR<(Vec<T>, Option<Span>)> {
+        if self.sym_at(0, Sym::LParen) {
+            // `(a, b)` is the list unless it only starts an expression
+            // (`(a + b) * 2`).
+            let at = self.checkpoint();
+            match self.paren_list(&mut item) {
+                Ok(items) if self.item_end_at(0) || self.any_kw_at(0, &["ORDER", "SORT"]) => {
+                    self.commit(at);
+                    return Ok((items, None));
+                }
+                Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                _ => self.restore(at),
+            }
+        }
+        let mut items = vec![item(self)?];
+        let mut extra = None;
+        while self.eat_sym(Sym::Comma) {
+            let begin = self.start();
+            items.push(item(self)?);
+            let span = self.span_from(begin);
+            extra = Some(extra.map_or(span, |e: Span| e.to(span)));
+        }
+        Ok((items, extra))
+    }
+
+    /// `IDENTIFIER(expr)` where a function name may start: a call of the
+    /// name it computes when `(` follows, else a call of the function
+    /// `identifier`, which Spark reads as an identifier clause. `None` when
+    /// the parentheses hold no single expression.
+    #[inline(never)]
+    fn identifier_call(&mut self, start: usize) -> PR<Option<Expr>> {
+        let at = self.checkpoint();
+        let word = self.tok(0).map_or_else(Span::default, |t| t.span);
+        let dynamic = match self.identifier_name() {
+            Ok(d) => d,
+            Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+            Err(Fail::Syntax) => {
+                self.restore(at);
+                return Ok(None);
+            }
+        };
+        self.commit(at);
+        let name = self.identifier_word(word);
+        if self.sym_at(0, Sym::LParen) {
+            let mut e = self.function_call(name, start)?;
+            if let ExprKind::Function(f) = &mut e.kind {
+                f.dynamic_name = Some(dynamic);
+            }
+            return Ok(Some(e));
+        }
+        if let ExprKind::Literal(Literal::String(text)) = &dynamic.expr.kind {
+            self.check_identifier_literal(text, dynamic.span, usize::MAX);
+        }
+        let span = self.span_from(start);
+        let call = Self::call(name, vec![*dynamic.expr], span);
+        Ok(Some(self.mk(ExprKind::Function(Box::new(call)), start)))
     }
 
     #[inline(never)]
@@ -1225,7 +1388,7 @@ impl Parser<'_> {
         } else {
             self.set_quantifier()
         };
-        let args = self.function_args()?;
+        let args = self.function_args(false)?;
         let f = self.call_tail(name, quantifier, args, start)?;
         Ok(self.mk(ExprKind::Function(Box::new(f)), start))
     }
@@ -1306,6 +1469,7 @@ impl Parser<'_> {
             filter,
             null_treatment,
             over,
+            dynamic_name: None,
             span: self.span_from(start),
         })
     }

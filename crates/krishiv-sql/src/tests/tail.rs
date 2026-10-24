@@ -554,3 +554,293 @@ fn pipelines_lower_as_unsupported_and_cap_their_depth() {
 fn pipe_trees_are_snapshotted() {
     insta::assert_snapshot!(super::snapshot(&["TABLE t |> WHERE a | LIMIT 2"]));
 }
+
+fn first_join(sql: &str) -> ast::Join {
+    let q = ok(sql);
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!()
+    };
+    let rel = s.from.unwrap().relations.into_iter().next().unwrap();
+    match rel.extensions.into_iter().next() {
+        Some(ast::RelationExt::Join(j)) => j,
+        other => panic!("{sql}: {other:?}"),
+    }
+}
+
+#[test]
+fn nearest_by_joins() {
+    use ast::{JoinConstraint, NearestDirection};
+    let sql = "SELECT * FROM u JOIN p APPROX NEAREST 2 BY DISTANCE abs(u.s - p.s) WHERE true";
+    let j = first_join(sql);
+    let JoinConstraint::NearestBy(n) = &j.constraint else {
+        panic!("{j:?}")
+    };
+    assert!(n.approx && n.num_results.as_deref() == Some("2"));
+    assert_eq!(n.direction, NearestDirection::Distance);
+    assert_eq!(n.ranking.span.text(sql), "abs(u.s - p.s)");
+    assert!(j.right.alias.is_none(), "APPROX is no alias");
+    let j = first_join("SELECT * FROM u LEFT OUTER JOIN p q EXACT NEAREST BY SIMILARITY -abs(x)");
+    let JoinConstraint::NearestBy(n) = &j.constraint else {
+        panic!()
+    };
+    assert!(!n.approx && n.num_results.is_none() && j.right.alias.is_some());
+    assert_eq!(n.direction, NearestDirection::Similarity);
+    // `approx` and `exact` stay usable as names.
+    ok("SELECT approx, exact FROM t approx JOIN u exact ON true");
+    for sql in [
+        "SELECT * FROM u JOIN p APPROX NEAREST BY x",
+        "SELECT * FROM u JOIN p NEAREST BY DISTANCE x",
+        "SELECT * FROM u NATURAL JOIN p APPROX NEAREST BY DISTANCE x",
+        "SELECT * FROM u JOIN p APPROX NEAREST 1.5 BY DISTANCE x",
+    ] {
+        assert_eq!(class(sql), "PARSE_SYNTAX_ERROR", "{sql}");
+    }
+    for (join, expected) in [
+        (
+            "RIGHT OUTER JOIN p",
+            "NEAREST_BY_JOIN.UNSUPPORTED_JOIN_TYPE",
+        ),
+        ("FULL JOIN p", "NEAREST_BY_JOIN.UNSUPPORTED_JOIN_TYPE"),
+        ("LEFT SEMI JOIN p", "NEAREST_BY_JOIN.UNSUPPORTED_JOIN_TYPE"),
+        (
+            "JOIN LATERAL (SELECT 1) p",
+            "UNSUPPORTED_FEATURE.LATERAL_JOIN_NEAREST_BY",
+        ),
+    ] {
+        let sql = format!("SELECT * FROM u {join} APPROX NEAREST BY DISTANCE x");
+        assert_eq!(class(&sql), expected, "{sql}");
+    }
+    for k in ["0", "100001", "99999999999999999999"] {
+        let sql = format!("SELECT * FROM u JOIN p APPROX NEAREST {k} BY DISTANCE x");
+        assert_eq!(
+            class(&sql),
+            "NEAREST_BY_JOIN.NUM_RESULTS_OUT_OF_RANGE",
+            "{k}"
+        );
+    }
+    parse_query(
+        "SELECT * FROM u JOIN p EXACT NEAREST 100000 BY DISTANCE x",
+        &defaults(),
+    )
+    .unwrap();
+    parse_query(
+        "SELECT * FROM u INNER JOIN p EXACT NEAREST 1 BY DISTANCE x",
+        &defaults(),
+    )
+    .unwrap();
+    assert!(
+        unsupported("SELECT * FROM u JOIN p APPROX NEAREST BY DISTANCE x").contains("NEAREST BY")
+    );
+}
+
+fn table_function_args(sql: &str) -> Vec<ast::FunctionArg> {
+    match first_factor(sql).kind {
+        ast::TableFactorKind::TableFunction { args, .. } => args,
+        other => panic!("{sql}: {other:?}"),
+    }
+}
+
+#[test]
+fn table_arguments() {
+    use ast::TableArgumentSource as S;
+    let table_arg = |arg: &ast::FunctionArg| match &arg.expr.kind {
+        ExprKind::TableArgument(t) => (**t).clone(),
+        other => panic!("{other:?}"),
+    };
+    let args = table_function_args("SELECT * FROM f(TABLE(t), TABLE(SELECT 1), 3)");
+    assert!(matches!(table_arg(&args[0]).source, S::Table(_)));
+    assert!(matches!(table_arg(&args[1]).source, S::Query(_)));
+    assert!(matches!(args[2].expr.kind, ExprKind::Literal(_)));
+    let sql = "SELECT * FROM f(k => TABLE(a.b) PARTITION BY (x, y + 1) ORDER BY z DESC, w)";
+    let args = table_function_args(sql);
+    assert_eq!(args[0].name.as_ref().unwrap().value, "k");
+    let p = table_arg(&args[0]).partitioning.unwrap();
+    assert_eq!(
+        (p.partition_by.len(), p.order_by.len(), p.single),
+        (2, 2, false)
+    );
+    assert!(p.extra_partition.is_none() && !p.distribute && !p.sort);
+    let sql =
+        "SELECT * FROM f(TABLE(t) DISTRIBUTE BY x SORT BY y), g(TABLE(t) WITH SINGLE PARTITION)";
+    let q = ok(sql);
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!()
+    };
+    let rels = s.from.unwrap().relations;
+    let ast::TableFactorKind::TableFunction { args, .. } = &rels[0].primary.kind else {
+        panic!()
+    };
+    let p = table_arg(&args[0]).partitioning.unwrap();
+    assert!(p.distribute && p.sort && p.partition_by.len() == 1);
+    let ast::TableFactorKind::TableFunction { args, .. } = &rels[1].primary.kind else {
+        panic!()
+    };
+    assert!(table_arg(&args[0]).partitioning.unwrap().single);
+    // A parenthesized prefix of a bigger expression is that expression.
+    let args = table_function_args("SELECT * FROM f(TABLE(t) PARTITION BY (a + b) * 2)");
+    let p = table_arg(&args[0]).partitioning.unwrap();
+    assert!(matches!(p.partition_by[0].kind, ExprKind::Binary(..)));
+    // Only the table-valued functions of a FROM clause take them; in an
+    // expression `TABLE(t)` calls a function named `TABLE`, as Spark reads it.
+    assert!(matches!(
+        first_expr("SELECT f(TABLE(t))").kind,
+        ExprKind::Function(_)
+    ));
+    for sql in ["SELECT * FROM f(TABLE(t)", "SELECT * FROM f(TABLE)"] {
+        assert_eq!(class(sql), "PARSE_SYNTAX_ERROR", "{sql}");
+    }
+    for (sql, expected) in [
+        (
+            "SELECT * FROM f(TABLE t)",
+            "INVALID_SQL_SYNTAX.INVALID_TABLE_FUNCTION_IDENTIFIER_ARGUMENT_MISSING_PARENTHESES",
+        ),
+        (
+            "SELECT * FROM f(TABLE(t) PARTITION BY a, b)",
+            "_LEGACY_ERROR_TEMP_0064",
+        ),
+        (
+            "SELECT * FROM f(TABLE(t) PARTITION BY a ORDER BY b, c)",
+            "_LEGACY_ERROR_TEMP_0064",
+        ),
+        (
+            "SELECT * FROM f(TABLE(SELECT DATE 'x'))",
+            "INVALID_TYPED_LITERAL",
+        ),
+    ] {
+        let found = parse_query(sql, &defaults()).map(drop);
+        assert_eq!(
+            found.unwrap_err().error.error_class().name(),
+            expected,
+            "{sql}"
+        );
+    }
+    assert!(unsupported("SELECT * FROM f(TABLE(t))").contains("table-valued functions"));
+}
+
+#[test]
+fn identifier_clauses() {
+    use ast::TableFactorKind as F;
+    let table = |sql: &str| first_factor(sql).kind;
+    assert!(matches!(
+        table("SELECT * FROM IDENTIFIER('a' || 'b')"),
+        F::DynamicTable { .. }
+    ));
+    assert!(matches!(
+        table("SELECT * FROM IDENTIFIER('tab')"),
+        F::DynamicTable { .. }
+    ));
+    for sql in [
+        "SELECT * FROM IDENTIFIER('s').tab",
+        "SELECT * FROM s.IDENTIFIER('tab')",
+    ] {
+        let F::Table { name, .. } = table(sql) else {
+            panic!("{sql}")
+        };
+        assert_eq!(
+            name.parts
+                .iter()
+                .map(|p| p.value.as_str())
+                .collect::<Vec<_>>(),
+            ["s", "tab"]
+        );
+    }
+    let q = ok("TABLE IDENTIFIER('t')");
+    assert!(matches!(q.body.kind, SetExprKind::DynamicTable(_)));
+    // A table-valued function and a scalar function by computed name.
+    let F::TableFunction {
+        name, dynamic_name, ..
+    } = table("SELECT * FROM IDENTIFIER('ra' || 'nge')(0, 1)")
+    else {
+        panic!()
+    };
+    assert!(dynamic_name.is_some() && name.parts[0].value == "IDENTIFIER");
+    let ExprKind::Function(f) = first_expr("SELECT IDENTIFIER('abs')(c1)").kind else {
+        panic!()
+    };
+    assert!(f.dynamic_name.is_some() && f.args.len() == 1);
+    // Without a second argument list it is the function `identifier`.
+    let ExprKind::Function(f) = first_expr("SELECT IDENTIFIER('c' || '1')").kind else {
+        panic!()
+    };
+    assert!(f.dynamic_name.is_none() && f.name.parts[0].value == "IDENTIFIER" && f.args.len() == 1);
+    let ExprKind::Field(inner, field) = first_expr("SELECT IDENTIFIER('t').c1").kind else {
+        panic!()
+    };
+    assert!(matches!(inner.kind, ExprKind::Function(_)) && field.value == "c1");
+    // An identifier literal names one part wherever an identifier fits.
+    let sql = "SELECT 1 AS IDENTIFIER('`a b`') FROM t AS IDENTIFIER('x') (IDENTIFIER('y'))";
+    let q = ok(sql);
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!()
+    };
+    let Some(ast::Alias::Name(alias)) = &s.projection[0].alias else {
+        panic!()
+    };
+    assert_eq!((alias.value.as_str(), alias.quoted), ("a b", true));
+    assert_eq!(alias.span.text(sql), "IDENTIFIER('`a b`')");
+    let table_alias = s.from.unwrap().relations[0].primary.alias.clone().unwrap();
+    assert_eq!(table_alias.columns[0].value, "y");
+    for (sql, expected) in [
+        (
+            "SELECT 1 AS IDENTIFIER('a.b')",
+            "IDENTIFIER_TOO_MANY_NAME_PARTS",
+        ),
+        (
+            "SELECT * FROM VALUES (1) AS IDENTIFIER('s.t')",
+            "IDENTIFIER_TOO_MANY_NAME_PARTS",
+        ),
+        ("SELECT IDENTIFIER('c 1')", "PARSE_SYNTAX_ERROR"),
+        ("SELECT IDENTIFIER('')", "PARSE_EMPTY_STATEMENT"),
+        (
+            "SELECT IDENTIFIER((SELECT 'a', 'b'))",
+            "UNSUPPORTED_TYPED_LITERAL",
+        ),
+    ] {
+        let found = parse_query(sql, &defaults()).map(drop);
+        assert_eq!(
+            found.unwrap_err().error.error_class().name(),
+            expected,
+            "{sql}"
+        );
+    }
+    parse_query(
+        "SELECT IDENTIFIER('t.c1'), IDENTIFIER((SELECT 'c'))",
+        &defaults(),
+    )
+    .unwrap();
+    // Not where only a plain word fits: hints, `EXTRACT` fields.
+    for sql in [
+        "SELECT /*+ IDENTIFIER('BROADCAST')(t) */ * FROM t",
+        "SELECT EXTRACT(IDENTIFIER('YEAR') FROM d)",
+    ] {
+        assert_eq!(class(sql), "PARSE_SYNTAX_ERROR", "{sql}");
+    }
+    assert!(unsupported("SELECT * FROM IDENTIFIER('t')").contains("IDENTIFIER"));
+    assert!(unsupported("SELECT IDENTIFIER('abs')(c1) FROM t").contains("IDENTIFIER"));
+}
+
+#[test]
+fn legacy_identifier_clause_takes_only_the_function_syntax() {
+    let legacy =
+        ParserOptions::from_conf(|k| (k == "spark.sql.legacy.identifierClause").then_some("true"));
+    for sql in [
+        "SELECT 1 AS IDENTIFIER('c')",
+        "SELECT * FROM s.IDENTIFIER('tab')",
+        "SELECT * FROM IDENTIFIER('s').IDENTIFIER('tab')",
+        "SELECT * FROM IDENTIFIER('s').tab",
+        "SELECT map('a', 1).IDENTIFIER('a')",
+        "SELECT * FROM t JOIN u USING (IDENTIFIER('c'))",
+    ] {
+        assert!(parse_query(sql, &legacy).is_err(), "{sql}");
+        if !sql.contains("map(") {
+            assert!(parse_query(sql, &defaults()).is_ok(), "{sql}");
+        }
+    }
+    for sql in [
+        "SELECT * FROM IDENTIFIER('t')",
+        "SELECT IDENTIFIER('abs')(c1)",
+        "SELECT IDENTIFIER('c')",
+    ] {
+        parse_query(sql, &legacy).unwrap();
+    }
+}

@@ -27,15 +27,15 @@ use crate::ast::{
     ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind, ForeignKeyConstraint, ForeignKeyRef,
     FromClause, FromStatement, GeneratedColumn, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
     GroupWith, GroupingSet, Hint, Ident, IdentityColumn, IdentityHow, Join, JoinConstraint,
-    JoinKind, LateralView, Limit, Literal, NamedWindow, NamespaceKind, NumKind, ObjectName,
-    OptionKey, OrderedIdent, PartitionColumn, PartitionField, PartitionFieldKind,
-    PartitionTransform, Pipe, PipeAggregate, PipeAssignment, PipeOp, PipeOpKind, PipeSelect,
-    PipeWhere, Pivot, Query, QueryOrganization, Relation, RelationExt, Reset, RowDelimited,
-    RowFormat, RowFormatKind, RowSerde, SampleMethod, SampleMethodKind, SampleType, Select,
-    SelectItem, Set, SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier, SkewSpec, SortItem,
-    Span, Statement, StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement,
-    TableFactor, TableFactorKind, TableOption, TableSample, TemporalClause, TemporalKind, TimeZone,
-    Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
+    JoinKind, LateralView, Limit, Literal, NamedWindow, NamespaceKind, NearestBy, NearestDirection,
+    NumKind, ObjectName, OptionKey, OrderedIdent, PartitionColumn, PartitionField,
+    PartitionFieldKind, PartitionTransform, Pipe, PipeAggregate, PipeAssignment, PipeOp,
+    PipeOpKind, PipeSelect, PipeWhere, Pivot, Query, QueryOrganization, Relation, RelationExt,
+    Reset, RowDelimited, RowFormat, RowFormatKind, RowSerde, SampleMethod, SampleMethodKind,
+    SampleType, Select, SelectItem, Set, SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier,
+    SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
+    TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TableSample,
+    TemporalClause, TemporalKind, TimeZone, Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -1011,6 +1011,15 @@ impl<'s> Parser<'s> {
     /// keyword (a position where only an identifier fits) unless keywords
     /// are enforced.
     fn ident_at(&self, n: usize, strong: bool) -> Option<Ident> {
+        if self.identifier_literal_at(n) {
+            let (first, last) = (self.tok(n)?, self.tok(n + 3)?);
+            let literal = self.tok(n + 2)?.span.text(self.src);
+            return Some(Ident {
+                value: unescape_string(literal, !self.opts.escaped_string_literals),
+                quoted: true,
+                span: first.span.to(last.span),
+            });
+        }
         let t = self.tok(n)?;
         let text = t.span.text(self.src);
         let (value, quoted) = match t.kind {
@@ -1037,6 +1046,36 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// Whether `IDENTIFIER('name')` starts at token `n`: an identifier
+    /// literal (not with only the legacy function syntax on).
+    fn identifier_literal_at(&self, n: usize) -> bool {
+        !self.opts.legacy_identifier_clause
+            && self.kw_at(n, "IDENTIFIER")
+            && self.sym_at(n + 1, Sym::LParen)
+            && self.single_string_at(n + 2)
+            && self.sym_at(n + 3, Sym::RParen)
+    }
+
+    /// Spark parses the string of an identifier literal as a name when it
+    /// builds the tree: it must be a name (not empty), of `parts` parts at
+    /// most (`1` for a position taking one identifier). The first problem
+    /// is deferred.
+    fn check_identifier_literal(&mut self, text: &str, span: Span, parts: usize) {
+        match parse_multipart_identifier(text, self.opts) {
+            Err(e) => self.defer(ParseError { span, ..e }),
+            Ok(name) if name.parts.len() > parts => {
+                let identifier: Vec<String> =
+                    name.parts.iter().map(|p| quote_ident(&p.value)).collect();
+                self.defer(error::identifier_too_many_name_parts(
+                    identifier.join("."),
+                    parts,
+                    span,
+                ));
+            }
+            Ok(_) => {}
+        }
+    }
+
     /// Whether token `n` is an identifier ([`Self::ident_at`] without
     /// building it).
     fn is_ident_at(&self, n: usize, strong: bool) -> bool {
@@ -1056,6 +1095,19 @@ impl<'s> Parser<'s> {
         let Some(id) = self.ident_at(0, strong) else {
             return self.fail();
         };
+        if self.identifier_literal_at(0) {
+            let mut id = id;
+            self.check_identifier_literal(&id.value, id.span, 1);
+            // A name that is not one part is an error already; one part
+            // is the identifier.
+            if let Ok(name) = parse_multipart_identifier(&id.value, self.opts)
+                && let [part] = name.parts.as_slice()
+            {
+                id.value.clone_from(&part.value);
+            }
+            self.pos += 4;
+            return Ok(id);
+        }
         // Spark's `exitUnquotedIdentifier`: only ASCII letters, digits, `_`.
         if !id.quoted
             && !id
@@ -1112,7 +1164,14 @@ impl<'s> Parser<'s> {
     fn table_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
         let mut parts = vec![self.name_part(true)?];
-        while self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
+        // With only the legacy function syntax, `IDENTIFIER(` is never a
+        // later part of a name.
+        while self.sym_at(0, Sym::Dot)
+            && self.is_ident_at(1, true)
+            && !(self.opts.legacy_identifier_clause
+                && self.kw_at(1, "IDENTIFIER")
+                && self.sym_at(2, Sym::LParen))
+        {
             self.bump();
             parts.push(self.name_part(true)?);
         }
@@ -1179,6 +1238,10 @@ impl<'s> Parser<'s> {
     /// ANTLR reads it); `strict` admits the strict-non-reserved words
     /// (`UNION`, `JOIN`, ...), which only a column alias may be.
     fn implicit_alias(&mut self, strict: bool) -> PR<Option<Ident>> {
+        // `APPROX NEAREST ...` after a join's relation is its ranking clause.
+        if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
+            return Ok(None);
+        }
         let keyword = !self.opts.enforce_reserved_keywords
             && self.kind(0) == Some(TokenKind::Word)
             && self.item_end_at(1)
@@ -1794,7 +1857,15 @@ impl<'s> Parser<'s> {
     /// both identifier modes.
     fn ddl_name(&mut self) -> PR<DdlName> {
         if self.kw_at(0, "IDENTIFIER") && self.sym_at(1, Sym::LParen) {
-            return self.identifier_name().map(DdlName::Dynamic);
+            let at = self.checkpoint();
+            let name = self.identifier_name()?;
+            // `IDENTIFIER('a').b` is a dotted name whose first part is an
+            // identifier literal, unless only the legacy function syntax is on.
+            if !self.sym_at(0, Sym::Dot) || self.opts.legacy_identifier_clause {
+                self.commit(at);
+                return Ok(DdlName::Dynamic(name));
+            }
+            self.restore(at);
         }
         self.table_name().map(DdlName::Parts)
     }
@@ -1810,6 +1881,19 @@ impl<'s> Parser<'s> {
             return self.identifier_name().map(ColumnName::Dynamic);
         }
         self.name_part(true).map(ColumnName::Ident)
+    }
+
+    /// The name `IDENTIFIER` as written at `word`: what a function named by
+    /// `IDENTIFIER(expr)` holds as its name.
+    pub(crate) fn identifier_word(&self, word: Span) -> ObjectName {
+        ObjectName {
+            parts: vec![Ident {
+                value: word.text(self.src).to_owned(),
+                quoted: false,
+                span: word,
+            }],
+            span: word,
+        }
     }
 
     /// `IDENTIFIER(expr)`.
@@ -3289,7 +3373,10 @@ impl<'s> Parser<'s> {
         } else if self.kw_at(0, "VALUES") {
             SetExprKind::Values(self.values()?)
         } else if self.eat_kw("TABLE") {
-            SetExprKind::Table(self.object_name()?)
+            match self.ddl_name()? {
+                DdlName::Parts(name) => SetExprKind::Table(name),
+                DdlName::Dynamic(name) => SetExprKind::DynamicTable(name),
+            }
         } else if self.eat_sym(Sym::LParen) {
             let q = self.query()?;
             self.expect_sym(Sym::RParen)?;
@@ -3438,7 +3525,19 @@ impl<'s> Parser<'s> {
         self.bump();
         loop {
             let start = self.start();
-            let name = self.any_ident()?;
+            // A hint name is a plain word: `IDENTIFIER('x')` is the hint
+            // `IDENTIFIER` with the parameter `'x'`.
+            let name = if self.identifier_literal_at(0) {
+                let span = self.tok(0).map_or_else(Span::default, |t| t.span);
+                self.bump();
+                Ident {
+                    value: span.text(self.src).to_owned(),
+                    quoted: false,
+                    span,
+                }
+            } else {
+                self.any_ident()?
+            };
             let params = if self.sym_at(0, Sym::LParen) {
                 self.paren_list(Self::primary_expr)?
             } else {
@@ -3785,19 +3884,37 @@ impl<'s> Parser<'s> {
                 }
             }
         } else {
-            let name = self.table_name()?;
+            let name = self.ddl_name()?;
             if self.sym_at(0, Sym::LParen) {
                 self.bump();
-                let args = self.function_args()?;
+                let args = self.function_args(true)?;
                 self.expect_sym(Sym::RParen)?;
-                TableFactorKind::TableFunction { name, args }
+                let (name, dynamic_name) = match name {
+                    DdlName::Parts(name) => (name, None),
+                    DdlName::Dynamic(d) => {
+                        let word = Span::new(d.span.start, d.span.start + "IDENTIFIER".len());
+                        (self.identifier_word(word), Some(d))
+                    }
+                };
+                TableFactorKind::TableFunction {
+                    name,
+                    dynamic_name,
+                    args,
+                }
             } else {
                 let temporal = self.temporal_clause()?;
                 let options = self.table_options()?;
-                TableFactorKind::Table {
-                    name,
-                    temporal,
-                    options,
+                match name {
+                    DdlName::Parts(name) => TableFactorKind::Table {
+                        name,
+                        temporal,
+                        options,
+                    },
+                    DdlName::Dynamic(name) => TableFactorKind::DynamicTable {
+                        name,
+                        temporal,
+                        options,
+                    },
                 }
             }
         };
@@ -4068,6 +4185,8 @@ impl<'s> Parser<'s> {
             JoinConstraint::On(self.expr()?)
         } else if self.eat_kw("USING") {
             JoinConstraint::Using(self.ident_list()?)
+        } else if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
+            JoinConstraint::NearestBy(self.nearest_by()?)
         } else {
             JoinConstraint::None
         };
@@ -4079,6 +4198,34 @@ impl<'s> Parser<'s> {
             constraint,
             span: self.span_from(start),
         }))
+    }
+
+    /// `(APPROX | EXACT) NEAREST [k] BY (DISTANCE | SIMILARITY) expr`.
+    fn nearest_by(&mut self) -> PR<NearestBy> {
+        let start = self.start();
+        let approx = self.kw_at(0, "APPROX");
+        self.pos += 2;
+        let num_results = if self.kind(0) == Some(TokenKind::Number(NumKind::Int)) {
+            Some(self.integer_text()?)
+        } else {
+            None
+        };
+        self.expect_kw("BY")?;
+        let direction = if self.eat_kw("DISTANCE") {
+            NearestDirection::Distance
+        } else if self.eat_kw("SIMILARITY") {
+            NearestDirection::Similarity
+        } else {
+            return self.fail();
+        };
+        let ranking = self.expr()?;
+        Ok(NearestBy {
+            approx,
+            num_results,
+            direction,
+            ranking,
+            span: self.span_from(start),
+        })
     }
 
     #[inline(never)]
