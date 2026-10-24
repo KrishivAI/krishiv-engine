@@ -741,8 +741,10 @@ fn bitwise_signatures() {
         result("&", &[nullable(DataType::Long), l.clone()], &[]).unwrap(),
         nullable(DataType::Long)
     );
-    // A string meets integrals as `bigint`, but not non-integral numbers:
-    // narrowing a `double` through `bigint` would reach execution.
+    // A string meets integrals as `bigint` and non-integral numbers as
+    // `double` (never narrowed through `bigint`), which is then the wrong
+    // type: Spark 4.2 raises BINARY_OP_WRONG_TYPE on DOUBLE for
+    // `'5' & 1.5D`, `'5' & 1.5BD` and `'5' & CAST(1 AS FLOAT)`.
     assert_eq!(
         built("&", &[ty(DataType::String), l.clone()]),
         Some(vec![
@@ -753,14 +755,20 @@ fn bitwise_signatures() {
     for t in [DataType::Float, DataType::Double, dec(10, 2)] {
         assert_eq!(
             built("&", &[ty(DataType::String), ty(t.clone())]),
-            Some(vec![InputType::Any, InputType::Any])
-        );
-        let err = result("&", &[ty(DataType::String), ty(t)], &[]).unwrap_err();
-        assert_eq!(
-            err.error_class(),
-            ErrorClass::DatatypeMismatchBinaryOpDiffTypes
+            Some(vec![
+                InputType::Exact(DataType::Double),
+                InputType::Exact(DataType::Double)
+            ])
         );
     }
+    // Two operands of one non-integral type are the wrong type, not a
+    // mismatch (Spark 4.2: `1.5D & 2.5D`).
+    let err = result("&", &[ty(DataType::Double), ty(DataType::Double)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchBinaryOpWrongType
+    );
+    assert!(err.to_string().contains("\"DOUBLE\""), "{err}");
     // `~` keeps its child's type; strings are refused as `INTEGRAL`.
     assert_eq!(result("~", std::slice::from_ref(&b), &[]).unwrap(), b);
     assert_eq!(result("~", std::slice::from_ref(&l), &[]).unwrap(), l);
@@ -967,15 +975,6 @@ fn number_signatures() {
     assert_eq!(
         result("format_number", &[ty(DataType::Double), i.clone()], &[]).unwrap(),
         ArgType::new(DataType::String, true)
-    );
-    // A string value meets the first argument as `double` (Spark's
-    // implicit cast), so `'12.5'` formats instead of failing.
-    assert_eq!(
-        built("format_number", &[s.clone(), i.clone()]),
-        Some(vec![
-            InputType::Numeric { intervals: false },
-            InputType::Any
-        ])
     );
     let err = result("format_number", &[s.clone(), i], &[]).unwrap_err();
     assert_eq!(

@@ -358,6 +358,10 @@ fn number_goldens() {
         ),
         ["12332.123"]
     );
-    // A string value takes Spark's implicit cast to `DOUBLE`.
-    assert_eq!(run(&s, "SELECT format_number('12.5', 1)"), ["12.5"]);
+    // A string value is not cast: Spark 4.2 raises UNEXPECTED_INPUT_TYPE
+    // for `format_number('12.5', 1)`.
+    assert_eq!(
+        class_of(&s, "SELECT format_number('12.5', 1)"),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
 }

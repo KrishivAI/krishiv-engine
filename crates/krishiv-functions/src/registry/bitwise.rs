@@ -11,7 +11,8 @@
 //! function-matrix family (590 cases).
 
 use krishiv_common::error::{
-    DatatypeMismatchBinaryOpDiffTypes, DatatypeMismatchUnexpectedInputType, KrishivError,
+    DatatypeMismatchBinaryOpDiffTypes, DatatypeMismatchBinaryOpWrongType,
+    DatatypeMismatchUnexpectedInputType, KrishivError,
 };
 use krishiv_types::DataType;
 
@@ -86,6 +87,20 @@ fn diff_types(c: &CallTypes<'_>, symbol: &str) -> KrishivError {
     .into()
 }
 
+/// `BINARY_OP_WRONG_TYPE`: both operands are `actual`, which is not integral.
+fn wrong_type(c: &CallTypes<'_>, symbol: &str, actual: &DataType) -> KrishivError {
+    DatatypeMismatchBinaryOpWrongType {
+        sql_expr: format!(
+            "\"({} {symbol} {})\"",
+            c.sql(0).unwrap_or_default(),
+            c.sql(1).unwrap_or_default()
+        ),
+        input_type: "\"INTEGRAL\"".to_owned(),
+        actual_data_type: quoted(Some(actual)),
+    }
+    .into()
+}
+
 // ---- `&`, `|`, `^` ----
 
 /// The operands' common integral type (`None` when incompatible): integrals
@@ -101,13 +116,14 @@ fn common_bitwise(c: &CallTypes<'_>) -> Option<DataType> {
             if c.ansi() =>
         {
             // A string meets integrals (and booleans, which the declared
-            // cast then refuses) as `bigint`; a non-integral number would
-            // narrow through `Exact(Long)`, so it is incompatible.
+            // cast then refuses) as `bigint`, and a non-integral number as
+            // `double`, which the result rule then refuses as not integral
+            // (Spark 4.2: `'5' & 1.5BD` is BINARY_OP_WRONG_TYPE on DOUBLE).
             if matches!(
                 other,
                 DataType::Float | DataType::Double | DataType::Decimal(_)
             ) {
-                None
+                Some(DataType::Double)
             } else {
                 Some(DataType::Long)
             }
@@ -146,6 +162,9 @@ macro_rules! bitwise_result {
                 (Some(x), Some(y)) if is_integral(Some(x)) && is_integral(Some(y)) => {
                     Ok(ArgType::new(wider(x, y), c.any_nullable()))
                 }
+                // One non-integral type on both sides is the wrong type,
+                // not a type mismatch (Spark 4.2: `1.5D & 2.5D`).
+                (Some(x), Some(y)) if x == y => Err(wrong_type(c, $symbol, x)),
                 _ => Err(diff_types(c, $symbol)),
             }
         }

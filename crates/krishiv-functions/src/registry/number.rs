@@ -558,9 +558,7 @@ pub(super) fn specs() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["format_number"],
-        &Inputs::Built(InputBuilder(|_| {
-            vec![InputType::Numeric { intervals: false }, InputType::Any]
-        })),
+        &Inputs::Built(InputBuilder(|_| vec![InputType::Any, InputType::Any])),
         format_number_result,
     ));
     // The value casts to a string; the format stays one.
