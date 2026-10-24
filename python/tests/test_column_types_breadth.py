@@ -9,6 +9,7 @@ the SQL equivalent fails with) instead of emulating the feature.
 from __future__ import annotations
 
 import datetime
+import math
 from decimal import Decimal
 from typing import Any
 
@@ -152,15 +153,12 @@ def test_substr(spark: SparkSession, df: DataFrame) -> None:
 
 
 def test_bitwise_matches_sql(spark: SparkSession) -> None:
+    # PySpark's docstring values, and the same as the SQL operators.
     df = spark.createDataFrame([(170, 75)], ["a", "b"])
-    for method, op in (("bitwiseOR", "|"), ("bitwiseAND", "&"), ("bitwiseXOR", "^")):
-        column = getattr(df.a, method)(df.b)
-        with pytest.raises(errors.UnsupportedOperationException) as py:
-            _ = df.select(column).columns
-        with pytest.raises(errors.UnsupportedOperationException) as sql:
-            _ = spark.sql(f"SELECT a {op} b AS x FROM (SELECT 170 AS a, 75 AS b)").columns
-        assert py.value.getCondition() == sql.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-        assert type(py.value) is type(sql.value)
+    for method, op, want in (("bitwiseOR", "|", 235), ("bitwiseAND", "&", 10), ("bitwiseXOR", "^", 225)):
+        got = df.select(getattr(df.a, method)(df.b).alias("x")).collect()
+        sql = spark.sql(f"SELECT a {op} b AS x FROM (SELECT 170 AS a, 75 AS b)").collect()
+        assert got == sql == [Row(x=want)], method
 
 
 # isNaN -------------------------------------------------------------------------
@@ -168,11 +166,14 @@ def test_bitwise_matches_sql(spark: SparkSession) -> None:
 
 def test_isnan_matches_sql(spark: SparkSession) -> None:
     df = spark.createDataFrame([(1.0,), (float("nan"),)], ["x"])
-    with pytest.raises(errors.UnsupportedOperationException) as py:
-        _ = df.filter(df.x.isNaN()).columns
-    with pytest.raises(errors.UnsupportedOperationException) as sql:
-        _ = spark.sql("SELECT isnan(CAST(1.0 AS DOUBLE))").columns
-    assert py.value.getCondition() == sql.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+    [row] = df.filter(df.x.isNaN()).collect()
+    assert math.isnan(row.x)
+    df.createOrReplaceTempView("isnan_input")
+    try:
+        assert [r.n for r in spark.sql("SELECT isnan(x) AS n FROM isnan_input").collect()] == [False, True]
+        assert [r.n for r in df.select(df.x.isNaN().alias("n")).collect()] == [False, True]
+    finally:
+        spark.catalog.dropTempView("isnan_input")
 
 
 # getItem / getField / withField / dropFields ------------------------------------

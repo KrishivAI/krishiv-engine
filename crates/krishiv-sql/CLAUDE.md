@@ -67,6 +67,7 @@ Paths are relative to this crate.
 
 ## Tests
 `cargo nextest run -p krishiv-sql --no-tests=pass` · `cargo clippy -p krishiv-sql --all-targets -- -D warnings`
-· corpus: `cargo nextest run -p krishiv-testkit --test sql_parse` · parse rate:
+· corpus: `cargo nextest run -p krishiv-testkit --test sql_parse` (DDL/DML slice 1:
+`--test ddl_commands_parse`) · parse rate:
 `cargo xtask golden --engine sql-parse` · fuzz: `cd fuzz && cargo +nightly fuzz run sql_parse`
 · bench: `cargo bench -p krishiv-sql --bench parse` / `--bench lower`

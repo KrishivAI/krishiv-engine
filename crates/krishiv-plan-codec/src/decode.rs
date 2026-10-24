@@ -4,7 +4,7 @@
 //! entry may be used once (nodes) and counts must agree. The tables are
 //! flat, so nothing here recurses and protobuf nesting stays shallow.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue};
@@ -31,25 +31,34 @@ use krishiv_types::{DataType, DecimalType};
 
 use crate::arrow::{schema_from, type_from};
 use crate::error::{CodecError, Result, corrupt};
+use crate::features::{Feature, ReaderFeatures, legacy_level, plan_features};
 use crate::proto as pb;
-use crate::{FORMAT_VERSION, Limits};
+use crate::{EPOCH, FORMAT_VERSION, Limits};
 
-/// Decodes `krishiv.plan.v1` bytes under the default [`Limits`].
+/// Decodes `krishiv.plan.v1` bytes under the default [`Limits`], with every
+/// feature this build implements.
 ///
 /// # Errors
-/// [`CodecError::Corrupt`] for bytes that are not a valid plan,
-/// [`CodecError::TooNew`] for a plan that needs a newer reader,
+/// [`CodecError::Corrupt`] for bytes that are not a valid plan (a header
+/// that does not match the plan's constructs included),
+/// [`CodecError::UnsupportedEpoch`] and [`CodecError::UnsupportedFeatures`]
+/// for a plan this reader cannot read, [`CodecError::TooNew`] for a plan
+/// written before the feature header that needs a newer reader,
 /// [`CodecError::Limit`] for a plan beyond the limits.
 pub fn decode(bytes: &[u8]) -> Result<PhysicalPlan> {
-    decode_with(bytes, &Limits::default())
+    decode_with(bytes, &Limits::default(), &ReaderFeatures::all())
 }
 
-/// [`decode`] under `limits`.
+/// [`decode`] under `limits`, as a reader that implements `reader`.
 ///
 /// # Errors
 /// As [`decode`].
-pub fn decode_with(bytes: &[u8], limits: &Limits) -> Result<PhysicalPlan> {
-    use prost::Message as _;
+pub fn decode_with(bytes: &[u8], limits: &Limits, reader: &ReaderFeatures) -> Result<PhysicalPlan> {
+    check_size(bytes, limits)?;
+    from_message(&parse(bytes)?, limits, reader)
+}
+
+fn check_size(bytes: &[u8], limits: &Limits) -> Result<()> {
     if bytes.len() > limits.max_bytes {
         return Err(CodecError::Limit(format!(
             "{} bytes (at most {})",
@@ -57,30 +66,170 @@ pub fn decode_with(bytes: &[u8], limits: &Limits) -> Result<PhysicalPlan> {
             limits.max_bytes
         )));
     }
+    Ok(())
+}
+
+fn parse<M: prost::Message + Default>(bytes: &[u8]) -> Result<M> {
     // The messages are flat tables: protobuf nesting stays under a dozen
     // levels, whatever the plan's depth, so prost's recursion is bounded.
     #[expect(
         clippy::disallowed_methods,
         reason = "the plan format has constant nesting depth (flat tables)"
     )]
-    let message = pb::PhysicalPlan::decode(bytes).map_err(|_| corrupt("malformed protobuf"))?;
-    from_message(&message, limits)
+    M::decode(bytes).map_err(|_| corrupt("malformed protobuf"))
+}
+
+/// The features an encoded plan needs, from its header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanFeatures {
+    /// The plan's wire epoch.
+    pub epoch: u32,
+    /// The ids of the features it uses, sorted.
+    pub features: Vec<String>,
+}
+
+impl PlanFeatures {
+    /// The features `reader` lacks to read the plan.
+    #[must_use]
+    pub fn missing(&self, reader: &ReaderFeatures) -> Vec<String> {
+        reader.missing(self.features.iter().map(String::as_str))
+    }
+}
+
+/// The epoch and features of an encoded plan, read from its header without
+/// decoding the plan (the header is checked against the plan on decode, so
+/// it can be trusted). A plan written before the header existed is decoded
+/// under the default [`Limits`] to find its features.
+///
+/// # Errors
+/// [`CodecError::Corrupt`] for a malformed header,
+/// [`CodecError::UnsupportedEpoch`] for an epoch this build does not know,
+/// and for an older plan, as [`decode`].
+pub fn features_of(bytes: &[u8]) -> Result<PlanFeatures> {
+    check_size(bytes, &Limits::default())?;
+    let h: pb::PlanHeader = parse(bytes)?;
+    let features = match header(h.format_version, h.min_reader_version, h.epoch, &h.features)? {
+        Header::Current => h.features,
+        Header::Legacy => plan_features(&decode(bytes)?)
+            .iter()
+            .map(|f| f.id().to_owned())
+            .collect(),
+    };
+    Ok(PlanFeatures {
+        epoch: EPOCH,
+        features,
+    })
+}
+
+/// What a valid header says about the rest of the plan.
+enum Header {
+    /// A plan with a feature header: the ids are well formed and sorted.
+    Current,
+    /// A plan written before the feature header: its features follow from
+    /// its content.
+    Legacy,
+}
+
+/// The longest feature id a reader accepts.
+const MAX_FEATURE_ID: usize = 64;
+
+/// The most feature ids a header may list.
+const MAX_FEATURES: usize = 256;
+
+fn header(format_version: u32, min_reader: u32, epoch: u32, ids: &[String]) -> Result<Header> {
+    if format_version == 0 {
+        return Err(corrupt("no format version"));
+    }
+    if epoch == 0 {
+        if !ids.is_empty() {
+            return Err(corrupt("a feature list without an epoch"));
+        }
+        if min_reader > FORMAT_VERSION {
+            return Err(CodecError::TooNew {
+                required: min_reader,
+                supported: FORMAT_VERSION,
+            });
+        }
+        return Ok(Header::Legacy);
+    }
+    if epoch != EPOCH {
+        return Err(CodecError::UnsupportedEpoch {
+            epoch,
+            supported: EPOCH,
+        });
+    }
+    if ids.len() > MAX_FEATURES {
+        return Err(corrupt("more feature ids than any plan uses"));
+    }
+    for id in ids {
+        let well_formed = id.len() <= MAX_FEATURE_ID
+            && id.starts_with(|c: char| c.is_ascii_lowercase())
+            && id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+        if !well_formed {
+            return Err(corrupt("a malformed feature id"));
+        }
+    }
+    if ids.windows(2).any(|w| w[0] >= w[1]) {
+        return Err(corrupt("feature ids that are not sorted or repeat"));
+    }
+    Ok(Header::Current)
 }
 
 /// [`decode_with`] from a parsed message.
 ///
 /// # Errors
 /// As [`decode`].
-pub fn from_message(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
-    if m.format_version == 0 {
-        return Err(corrupt("no format version"));
+pub fn from_message(
+    m: &pb::PhysicalPlan,
+    limits: &Limits,
+    reader: &ReaderFeatures,
+) -> Result<PhysicalPlan> {
+    let kind = header(m.format_version, m.min_reader_version, m.epoch, &m.features)?;
+    if let Header::Current = kind {
+        // Before any node is read.
+        let missing = reader.missing(m.features.iter().map(String::as_str));
+        if !missing.is_empty() {
+            return Err(CodecError::UnsupportedFeatures { missing });
+        }
     }
-    if m.min_reader_version > FORMAT_VERSION {
-        return Err(CodecError::TooNew {
-            required: m.min_reader_version,
-            supported: FORMAT_VERSION,
-        });
+    let plan = plan(m, limits)?;
+    let used = plan_features(&plan);
+    match kind {
+        Header::Current => {
+            let declared: BTreeSet<Feature> = m
+                .features
+                .iter()
+                .filter_map(|id| Feature::from_id(id))
+                .collect();
+            if declared != used {
+                return Err(corrupt(
+                    "the feature header does not match the plan's constructs",
+                ));
+            }
+            if m.min_reader_version != legacy_level(&used) {
+                return Err(corrupt("a reader version that does not match the features"));
+            }
+        }
+        Header::Legacy => {
+            if used.iter().any(|f| f.legacy_level() > m.min_reader_version) {
+                return Err(corrupt("a construct newer than the plan's reader version"));
+            }
+            let missing: Vec<String> = used
+                .iter()
+                .filter(|f| !reader.contains(**f))
+                .map(|f| f.id().to_owned())
+                .collect();
+            if !missing.is_empty() {
+                return Err(CodecError::UnsupportedFeatures { missing });
+            }
+        }
     }
+    Ok(plan)
+}
+
+fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
     for (what, n, max) in [
         ("nodes", m.nodes.len(), limits.max_nodes),
         ("explain nodes", m.explain.len(), limits.max_nodes),
@@ -186,7 +335,7 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
         Some(Kind::Cast(c)) => (Some(c.expr), &[]),
         Some(Kind::Alias(a)) => (Some(a.expr), &[]),
         Some(Kind::Function(f)) => (f.filter, &f.args),
-        _ => (None, &[]),
+        Some(Kind::Literal(_) | Kind::Column(_) | Kind::OuterColumn(_)) | None => (None, &[]),
     };
     one.into_iter().chain(many.iter().copied())
 }
@@ -219,11 +368,13 @@ fn required<'a, T>(field: &'a Option<T>, what: &str) -> Result<&'a T> {
         .ok_or_else(|| corrupt(format!("{what} is missing")))
 }
 
-macro_rules! enum_of {
-    ($ty:ty, $value:expr, $what:literal) => {
+/// Maps a protobuf enum value with an exhaustive match: a value added to the
+/// schema does not compile here until it is mapped.
+macro_rules! enum_map {
+    ($ty:ty, $value:expr, $what:literal, { $($from:ident => $to:expr),+ $(,)? }) => {
         match <$ty>::try_from($value) {
+            $(Ok(<$ty>::$from) => Ok($to),)+
             Ok(<$ty>::Unspecified) | Err(_) => Err(corrupt(concat!("an unknown ", $what))),
-            Ok(v) => Ok(v),
         }
     };
 }
@@ -356,10 +507,10 @@ impl Decoder {
             .map(|s| {
                 Ok(SubqueryPlan {
                     id: SubqueryId(s.id),
-                    kind: match enum_of!(pb::SubqueryValueKind, s.kind, "subquery kind")? {
-                        pb::SubqueryValueKind::Exists => SubqueryValueKind::Exists,
-                        _ => SubqueryValueKind::Scalar,
-                    },
+                    kind: enum_map!(pb::SubqueryValueKind, s.kind, "subquery kind", {
+                        Scalar => SubqueryValueKind::Scalar,
+                        Exists => SubqueryValueKind::Exists,
+                    })?,
                     data_type: type_from(&s.data_type)?,
                     plan: self.take(s.plan, self.slots.len())?,
                 })
@@ -478,11 +629,11 @@ impl Decoder {
             Kind::Cast(c) => ExprNode::Cast {
                 expr: self.expr_ref(c.expr)?,
                 to: spark_type(required(&c.to, "a cast type")?)?,
-                mode: match enum_of!(pb::CastMode, c.mode, "cast mode")? {
-                    pb::CastMode::Legacy => CastMode::Legacy,
-                    pb::CastMode::Ansi => CastMode::Ansi,
-                    _ => CastMode::Try,
-                },
+                mode: enum_map!(pb::CastMode, c.mode, "cast mode", {
+                    Legacy => CastMode::Legacy,
+                    Ansi => CastMode::Ansi,
+                    Try => CastMode::Try,
+                })?,
             },
             Kind::Alias(a) => ExprNode::Resolved(ResolvedExpr::Alias {
                 expr: self.expr_ref(a.expr)?,
@@ -514,12 +665,12 @@ impl Decoder {
         };
         Ok(ResolvedFunction {
             id,
-            kind: match enum_of!(pb::FunctionKind, f.kind, "function kind")? {
-                pb::FunctionKind::Scalar => FunctionKind::Scalar,
-                pb::FunctionKind::Aggregate => FunctionKind::Aggregate,
-                pb::FunctionKind::Window => FunctionKind::Window,
-                _ => FunctionKind::Generator,
-            },
+            kind: enum_map!(pb::FunctionKind, f.kind, "function kind", {
+                Scalar => FunctionKind::Scalar,
+                Aggregate => FunctionKind::Aggregate,
+                Window => FunctionKind::Window,
+                Generator => FunctionKind::Generator,
+            })?,
             args: self.exprs_of(&f.args)?,
             distinct: f.distinct,
             filter: f.filter.map(|i| self.expr_ref(i)).transpose()?,
@@ -556,10 +707,10 @@ fn aggregate(a: &pb::AggregateNode) -> Result<AggregatePlan> {
             .map(aggregate_expr)
             .collect::<Result<_>>()?,
         distinct: a.distinct.clone(),
-        output: match enum_of!(pb::AggregateOutput, a.output, "aggregate output")? {
-            pb::AggregateOutput::Final => AggregateOutput::Final,
-            _ => AggregateOutput::Partial,
-        },
+        output: enum_map!(pb::AggregateOutput, a.output, "aggregate output", {
+            Final => AggregateOutput::Final,
+            Partial => AggregateOutput::Partial,
+        })?,
     })
 }
 
@@ -610,19 +761,19 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
     };
     let frame = required(&f.frame, "a window frame")?;
     let bound = |b: i32| {
-        Ok(match enum_of!(pb::FrameBound, b, "window frame bound")? {
-            pb::FrameBound::UnboundedPreceding => FrameBound::UnboundedPreceding,
-            pb::FrameBound::CurrentRow => FrameBound::CurrentRow,
-            _ => FrameBound::UnboundedFollowing,
+        enum_map!(pb::FrameBound, b, "window frame bound", {
+            UnboundedPreceding => FrameBound::UnboundedPreceding,
+            CurrentRow => FrameBound::CurrentRow,
+            UnboundedFollowing => FrameBound::UnboundedFollowing,
         })
     };
     Ok(WindowFunctionPlan {
         function,
         frame: WindowFrame {
-            units: match enum_of!(pb::FrameUnits, frame.units, "window frame unit")? {
-                pb::FrameUnits::Rows => FrameUnits::Rows,
-                _ => FrameUnits::Range,
-            },
+            units: enum_map!(pb::FrameUnits, frame.units, "window frame unit", {
+                Rows => FrameUnits::Rows,
+                Range => FrameUnits::Range,
+            })?,
             lower: bound(frame.lower)?,
             upper: bound(frame.upper)?,
         },
@@ -634,39 +785,41 @@ fn window_function(f: &pb::WindowFunctionPlan) -> Result<WindowFunctionPlan> {
 fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
     use pb::AggregateFunction as F;
     let ignore = a.ignore_nulls;
-    let function = match enum_of!(F, a.function, "aggregate function")? {
-        F::First => AggregateFunction::First {
-            ignore_nulls: ignore,
-        },
-        F::Last => AggregateFunction::Last {
-            ignore_nulls: ignore,
-        },
-        _ if ignore => return Err(corrupt("`ignore_nulls` on a function without it")),
-        F::Sum => AggregateFunction::Sum,
-        F::Avg => AggregateFunction::Avg,
-        F::Min => AggregateFunction::Min,
-        F::Max => AggregateFunction::Max,
-        _ => AggregateFunction::Count,
-    };
+    let function = enum_map!(F, a.function, "aggregate function", {
+        Count => AggregateFunction::Count,
+        Sum => AggregateFunction::Sum,
+        Avg => AggregateFunction::Avg,
+        Min => AggregateFunction::Min,
+        Max => AggregateFunction::Max,
+        First => AggregateFunction::First { ignore_nulls: ignore },
+        Last => AggregateFunction::Last { ignore_nulls: ignore },
+    })?;
+    let takes_ignore = matches!(
+        function,
+        AggregateFunction::First { .. } | AggregateFunction::Last { .. }
+    );
+    if ignore && !takes_ignore {
+        return Err(corrupt("`ignore_nulls` on a function without it"));
+    }
     Ok(AggregateExpr {
         function,
         args: usizes(&a.args)?,
-        input: match enum_of!(pb::AggregateInput, a.input, "aggregate input")? {
-            pb::AggregateInput::Raw => AggInput::Raw,
-            _ => AggInput::State,
-        },
+        input: enum_map!(pb::AggregateInput, a.input, "aggregate input", {
+            Raw => AggInput::Raw,
+            State => AggInput::State,
+        })?,
         arg_type: type_from(&a.arg_type)?,
         name: a.name.clone(),
     })
 }
 
 fn join_type(t: i32) -> Result<JoinType> {
-    Ok(match enum_of!(pb::JoinType, t, "join type")? {
-        pb::JoinType::Inner => JoinType::Inner,
-        pb::JoinType::LeftOuter => JoinType::LeftOuter,
-        pb::JoinType::LeftSemi => JoinType::LeftSemi,
-        pb::JoinType::LeftAnti => JoinType::LeftAnti,
-        _ => JoinType::NullAwareAnti,
+    enum_map!(pb::JoinType, t, "join type", {
+        Inner => JoinType::Inner,
+        LeftOuter => JoinType::LeftOuter,
+        LeftSemi => JoinType::LeftSemi,
+        LeftAnti => JoinType::LeftAnti,
+        NullAwareAnti => JoinType::NullAwareAnti,
     })
 }
 
@@ -755,26 +908,26 @@ fn option(m: &pb::OptionValue) -> Result<OptionValue> {
 
 fn spark_type(t: &pb::DataType) -> Result<DataType> {
     use pb::data_type::Kind;
-    let kind = enum_of!(Kind, t.kind, "type")?;
-    if kind != Kind::Decimal && (t.precision != 0 || t.scale != 0) {
+    let data_type = enum_map!(Kind, t.kind, "type", {
+        Null => DataType::Null,
+        Boolean => DataType::Boolean,
+        Byte => DataType::Byte,
+        Short => DataType::Short,
+        Integer => DataType::Integer,
+        Long => DataType::Long,
+        Float => DataType::Float,
+        Double => DataType::Double,
+        String => DataType::String,
+        Binary => DataType::Binary,
+        Decimal => DataType::Decimal(decimal(t)?),
+        Date => DataType::Date,
+        Timestamp => DataType::Timestamp,
+        TimestampNtz => DataType::TimestampNtz,
+    })?;
+    if !matches!(data_type, DataType::Decimal(_)) && (t.precision != 0 || t.scale != 0) {
         return Err(corrupt("a precision or scale on a type that has none"));
     }
-    Ok(match kind {
-        Kind::Boolean => DataType::Boolean,
-        Kind::Byte => DataType::Byte,
-        Kind::Short => DataType::Short,
-        Kind::Integer => DataType::Integer,
-        Kind::Long => DataType::Long,
-        Kind::Float => DataType::Float,
-        Kind::Double => DataType::Double,
-        Kind::String => DataType::String,
-        Kind::Binary => DataType::Binary,
-        Kind::Decimal => DataType::Decimal(decimal(t)?),
-        Kind::Date => DataType::Date,
-        Kind::Timestamp => DataType::Timestamp,
-        Kind::TimestampNtz => DataType::TimestampNtz,
-        _ => DataType::Null,
-    })
+    Ok(data_type)
 }
 
 fn decimal(t: &pb::DataType) -> Result<DecimalType> {
@@ -832,17 +985,17 @@ fn literal(l: &pb::Literal) -> Result<Literal> {
 }
 
 fn year_month_field(v: i32) -> Result<YearMonthField> {
-    Ok(match enum_of!(pb::YearMonthField, v, "interval field")? {
-        pb::YearMonthField::Year => YearMonthField::Year,
-        _ => YearMonthField::Month,
+    enum_map!(pb::YearMonthField, v, "interval field", {
+        Year => YearMonthField::Year,
+        Month => YearMonthField::Month,
     })
 }
 
 fn day_time_field(v: i32) -> Result<DayTimeField> {
-    Ok(match enum_of!(pb::DayTimeField, v, "interval field")? {
-        pb::DayTimeField::Day => DayTimeField::Day,
-        pb::DayTimeField::Hour => DayTimeField::Hour,
-        pb::DayTimeField::Minute => DayTimeField::Minute,
-        _ => DayTimeField::Second,
+    enum_map!(pb::DayTimeField, v, "interval field", {
+        Day => DayTimeField::Day,
+        Hour => DayTimeField::Hour,
+        Minute => DayTimeField::Minute,
+        Second => DayTimeField::Second,
     })
 }
