@@ -222,6 +222,17 @@ fn the_threshold_and_bounded_inputs() {
     assert!(!has(Some("-1")));
     // Spark refuses values below -1; they turn the rule off here.
     assert!(!has(Some("-5")));
+    // Krishiv's own key works as Spark's does.
+    let mut config = Config::new();
+    config
+        .set("krishiv.sql.optimizer.windowGroupLimitThreshold", "1")
+        .unwrap();
+    let cx = PlanningContext::new(Arc::clone(&env.tables) as _, Arc::new(config));
+    let optimized = krishiv_optimizer::optimize(&env.analyze(&sql)).unwrap();
+    let plan = DefaultPlanner.plan(&optimized, &cx).unwrap();
+    let mut out = Vec::new();
+    names(plan.explain(), &mut out);
+    assert!(!out.iter().any(|n| n == "WindowGroupLimit"), "{out:?}");
     // An input of at most `k` rows: nothing to drop.
     let bounded = |n: u32| {
         group_limit(
