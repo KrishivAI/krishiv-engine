@@ -181,6 +181,35 @@ uv run krishiv-bench report --suite h2o-groupby --size 5gb
   timings and the dataset digest. `reproduce` and `ab` use the same checksum comparison before their interleaved timing (`abba` supports the TPC suites
   and ClickBench only).
 
+## Many-join suite (`dsb`, P2-T141)
+
+DSB (Microsoft; derived from TPC-DS, with correlated and skewed data) replaces JOB/IMDB for the join-enumerator decision: the IMDb data terms are
+non-commercial. 52 query templates (`agg`, `mb` multi-block, `spj` classes), many with 8 or more relations.
+
+```bash
+uv run krishiv-datasets dsb --sf 1                    # needs git, gcc, make; sf is an integer (dsdgen), single process
+uv run krishiv-datasets dsb-verify "$KRISHIV_DATA/dsb/sf1-dbgen-v1"
+uv run krishiv-bench run --engine duckdb --suite dsb --sf 1 --dataset dsb@v1
+```
+
+* **Licence.** The `microsoft/dsb` repository is MIT, but its generator (`dsdgen`/`dsqgen`, from the TPC-DS tools) and query templates are governed by the
+  TPC End User License Agreement v2.2 (`code/TPC_DS_EULA.txt`): use on systems you control, no redistribution of the materials except with the EULA, and
+  performance results must be identified as not comparable to TPC results. This repository therefore contains none of them. The harness checks out the
+  pinned upstream commit (`dsb.COMMIT`) under `$KRISHIV_DATA/cache/dsb/<commit>/`, builds the tools there (gcc and make only), and writes the instantiated
+  queries into the dataset directory. Results are DSB results, not TPC-DS results. Evidence: `research/2026-10-24-join-benchmark-licences.md` in the
+  internal docs repository; the licences are also recorded in each dataset's `MANIFEST.json`.
+* **Dataset** `$KRISHIV_DATA/dsb/sf<N>-dbgen-v1/` (the `-dbgen-` infix is the shared versioned-dataset naming): 24 `<table>.parquet`, `queries/<id>.sql` (ids
+  `agg_q013`, `mb_q001`, `spj_q013`: class and upstream template number, PostgreSQL dialect, `--seed` 1), `oracle.rows.json.gz` and `MANIFEST.json`. Immutable;
+  `$KRISHIV_DATA/manifests/dsb-sf<N>-dbgen-v1.sha256` is the sha256sum-style list.
+* **Oracle.** The DuckDB answers to every query are stored with the dataset (typed rows). `krishiv-bench run --suite dsb` compares each engine's rows with them
+  (`answer_check`); the cross-engine comparison in `report` is unchanged. A query DuckDB cannot run is recorded with its error and has no oracle. At SF1, 16 of the 52 queries return no rows and 26 return one (the templates are selective), so the row-for-row check is strongest at larger scales.
+* **Checksums.** The manifest holds the SHA-256 of every raw `dsdgen` file (identity independent of DuckDB), of every Parquet file (also tied to the DuckDB version,
+  recorded; Parquet is written with one thread), an order-independent row hash per table and the SHA-256 of each query and of the oracle file. The upstream C code
+  reads uninitialised locals, so the tools are built with `-ftrivial-auto-var-init=zero`: without it the data differs between optimisation levels.
+* `relation_count_distribution` in the manifest is the number of base-table references per query (a repeated table counts each time).
+* Scope: `run` supports the suite; `reproduce`, `abba` and `ab` do not yet. Full scale on the benchmark server: `uv run krishiv-datasets dsb --sf 10` (the
+  conversion is single-threaded and `dsdgen` is single-process: about 3.5 min per unit on a laptop).
+
 ## Reference engines, two methods (`reproduce`, P2-T156)
 ```bash
 uv run krishiv-bench reproduce --suite tpch --sf 10 --reps 3        # tpch | tpcds | clickbench; --engines, --methods ours,theirs
@@ -224,6 +253,7 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   `tpch-dbgen` (`--dataset tpch-dbgen`); runs on `tpch` list the answer check as not performed (cross-engine comparison still runs).
 - **TPC-DS** SF via DuckDB `tpcds` extension (`dsdgen`) -> Parquet (SF1 took ~1 min). Harness query files for all 99 are vendored,
   but only TPC-H has been run end-to-end / verified; no TPC-DS expected-row files yet.
+- **DSB**: `krishiv-datasets dsb --sf N` (see the many-join suite above).
 - **ClickBench**: `gen.sh clickbench --yes` downloads `hits.parquet` (~14 GB) or `--partitioned` (100 files). Not downloaded.
 - **Nexmark**: simplified Python generator (person/auction/bid, default 2/6/92% mix, hot-key skew) producing batch Parquet. E05/E08 may need
   the reference generator or a Rust port (planned in P2); this one is for smoke/relative use.
