@@ -47,6 +47,12 @@ _TEMPLATES = {
         "Numeric aggregation function can only be applied on numeric columns, got <invalid_columns>."
     ),
     "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
+    "NEGATIVE_VALUE": "Value for `<arg_name>` must be greater than or equal to 0, got '<arg_value>'.",
+    "ARGUMENT_REQUIRED": "Argument `<arg_name>` is required when <condition>.",
+    "MIXED_TYPE_REPLACEMENT": "Mixed type replacements are not supported.",
+    "LENGTH_SHOULD_BE_THE_SAME": (
+        "<arg1> and <arg2> should be of the same length, got <arg1_length> and <arg2_length>."
+    ),
     "VALUE_NOT_ALLOWED": "Value for `<arg_name>` has to be amongst the following values: <allowed_values>.",
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
     "UNSUPPORTED_DATA_TYPE": "Unsupported DataType `<data_type>`.",
