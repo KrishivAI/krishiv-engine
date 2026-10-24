@@ -28,7 +28,7 @@ cargo machete                                    # unused deps
 cargo hack check --each-feature --workspace --locked   # features stay additive
 cargo xtask layering                             # L0–L7 layer rule (xtask/layers.toml)
 cargo xtask docs-config | docs-errors            # regenerate config / error-class docs
-cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets (budgets.json)
+cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets; PRs are gated against CI's measurement of main, `budgets.json` is only a reference record / fallback
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace   # docs gate
 (cd bench && uv run pytest)                      # bench harness tests
 (cd python && uv run ruff check && uv run ruff format --check && uv run ty check)   # python-quality gate (also bench/, tests/scripts/)
@@ -57,7 +57,7 @@ they need user approval; pushes use `git push -u origin p<n>/<branch>`.
 
 ## Layout
 - `crates/` — the workspace (layers below). `xtask/` — repo tooling. `.github/workflows/` — ci, nightly-bench, compat.
-- `deny.toml`, `budgets.json`, `renovate.json` — dependency and size gates.
+- `deny.toml`, `budgets.json`, `renovate.json` — dependency and size gates. `budgets.json` is a reference record (and the fallback when main has no measurement); the authoritative baseline is the measurement CI makes on every push to main (`main-measure.yml`: `budgets-main`, `wheel-sizes-main` artifacts), picked by `.github/scripts/main-baseline.sh`. A PR's own `budgets.json` is never read by the gate.
 - `bench/` (uv harness; baselines in `bench/baselines/`, see `bench/README.md`), `tests/` (`spark-golden/` vendored
   Spark goldens + Krishiv-authored goldens, `fixtures/spark-<ver>/` hash fixtures, `sqllogictest/`, `scripts/`),
   `python/` (maturin package), `ui/` (Svelte source; built assets are committed in `crates/krishiv-ui-assets`).

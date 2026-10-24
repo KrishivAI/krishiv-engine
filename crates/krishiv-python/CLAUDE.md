@@ -6,6 +6,18 @@
 ## Purpose
 Python bindings (PyO3) and the PyCapsule Arrow bridge; Python UDF runtime.
 
+## Key files
+Paths are relative to this crate.
+- `src/lib.rs` module wiring of the extension module
+- `src/session.rs` `Session` handle; `src/dataframe.rs` `DataFrame` and `GroupedData`; `src/column.rs` `Column`
+- `src/errors.rs` `block_on` (GIL released) and the `KrishivError` to `krishiv.errors` mapping
+- `src/stream.rs` PyCapsule Arrow bridge; `src/stream/ffi.rs` pyo3-free C-level bridge code
+- `src/stream/tests.rs` bridge tests (the Miri target)
+
+## Extension points
+- New DataFrame or Column method: a pyo3 handle method delegating to `krishiv-session`; the PySpark-shaped surface is in `python/krishiv/sql`.
+- New error mapping: `src/errors.rs`.
+
 ## Invariants
 - Own PyCapsule bridge via `arrow::ffi`; no `pyo3-arrow`/`arrow-pyarrow`.
 - abi3-py311 + free-threaded wheels.
@@ -25,7 +37,7 @@ Python bindings (PyO3) and the PyCapsule Arrow bridge; Python UDF runtime.
 ## ADRs (in `../krishiv-internal/adr/`)
 0005, 0022, 0028
 
-## Test
+## Tests
 `krishiv-python` sets `test = false` for its lib (the extension module cannot link a test binary); Python tests are under
 `python/` (`maturin develop` then `pytest`). `cargo nextest run -p krishiv-python` runs `src/stream/tests.rs` ·
 `cargo +nightly-2026-08-12 miri test -p krishiv-python --test stream_ffi` · `cargo clippy -p krishiv-python --all-targets -- -D warnings`

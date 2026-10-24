@@ -79,6 +79,7 @@ mod metrics;
 mod morsel;
 mod operator;
 mod operators;
+mod output_spill;
 pub mod physical;
 mod pipeline;
 pub mod planner;
@@ -126,4 +127,4 @@ pub use runner::{QueryRunner, Scheduler};
 mod tests;
 
 #[cfg(all(test, loom))]
-mod loom_tests;
+mod loom_model;
