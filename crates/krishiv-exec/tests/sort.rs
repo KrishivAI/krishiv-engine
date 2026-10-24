@@ -830,6 +830,17 @@ async fn hash_buckets_keep_each_key_together_and_in_order() {
         let m = sort.metrics();
         let want = if on && drivers > 1 { 16 } else { 1 };
         assert_eq!(m.buckets, want, "{limit:?} {drivers}: {m:?}");
+        // `EXPLAIN ANALYZE` shows a bucketed sort's buckets.
+        let sink = q
+            .metrics()
+            .operators
+            .into_values()
+            .find(|e| e.name == "Sort")
+            .unwrap();
+        assert_eq!(
+            sink.extra("buckets"),
+            Some(&krishiv_exec::Metric::Max(want)),
+        );
         if want == 1 {
             check_sorted(rows, &out, true);
         } else {

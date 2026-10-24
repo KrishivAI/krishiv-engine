@@ -1134,6 +1134,17 @@ impl Sink for Sort {
             Ok(freed)
         })
     }
+
+    fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
+        if !self.bucketed() {
+            return Vec::new();
+        }
+        let buckets = self.counters.buckets.load(Ordering::Relaxed);
+        vec![(
+            std::borrow::Cow::Borrowed("buckets"),
+            crate::metrics::Metric::Max(buckets),
+        )]
+    }
 }
 
 /// Bytes held by the buffers among `parts`.

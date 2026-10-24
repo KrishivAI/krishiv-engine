@@ -32,7 +32,8 @@ sink (also the runtime filter producer, P2-T163: per-driver partials, published 
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model.
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a
-`Sort` below it; `planner/window.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
+`Sort` below it; `planner/window.rs`; over a hash exchange that sort splits its rows into hash buckets merged and read
+by several drivers, `operators/sort/sort.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
 partition, evaluates complete partitions), `eval.rs` boundaries, ranking functions, frame aggregates (through the
 aggregate `Accumulator`, one row at a time in Spark's order; decimal `sum`/`avg` exact in `i256`, checked when
 evaluated), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
