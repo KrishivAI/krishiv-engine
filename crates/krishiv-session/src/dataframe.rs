@@ -478,10 +478,20 @@ impl DataFrame {
 
     /// Analyzes the plan in `env` and keeps the result.
     pub(crate) async fn analyzed_in(&self, env: QueryEnv) -> Result<Arc<Analysis>, KrishivError> {
+        self.analyzed_in_with_text(env, None).await
+    }
+
+    /// As [`Self::analyzed_in`], with `text` the redacted query the plan
+    /// came from, so an analysis error carries its SQL span as context.
+    pub(crate) async fn analyzed_in_with_text(
+        &self,
+        env: QueryEnv,
+        text: Option<&krishiv_common::redact::RedactedSql>,
+    ) -> Result<Arc<Analysis>, KrishivError> {
         if let Some(e) = &self.invalid {
             return Err(e.clone());
         }
-        let analyzed = self.session.analyze_in(&self.plan, &env).await?;
+        let analyzed = self.session.analyze_in(&self.plan, &env, text).await?;
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),

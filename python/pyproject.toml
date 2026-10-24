@@ -69,7 +69,7 @@ python-version = "3.11"
 [tool.ty.analysis]
 # The compiled extension only exists after `maturin develop`; when it is missing
 # (or its stub is), the import is allowed to stay unresolved.
-allowed-unresolved-imports = ["krishiv._native"]
+allowed-unresolved-imports = ["krishiv._native", "pandas"]
 
 [tool.mypy]
 python_version = "3.11"

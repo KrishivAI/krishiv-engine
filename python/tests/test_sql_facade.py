@@ -270,9 +270,8 @@ def test_session_tables_and_reader(spark: SparkSession, df: DataFrame, tmp_path:
     with pytest.raises(errors.PySparkNotImplementedError):
         spark.sql("SELECT :a", args={"a": 1})
     with pytest.raises(errors.PySparkNotImplementedError):
-        spark.createDataFrame([(1, "a")])
-    with pytest.raises(errors.PySparkNotImplementedError):
         spark.createDataFrame(pa.table({"a": [1]}), schema="a int")
+    assert spark.createDataFrame([(1, "a")], ["x", "y"]).orderBy("x").collect() == [Row(x=1, y="a")]
     with pytest.raises(errors.PySparkTypeError):
         spark.read.load()
     reader = spark.read.format("parquet").option("mergeSchema", True).options(x="y")

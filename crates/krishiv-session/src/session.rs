@@ -14,8 +14,9 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    ColumnAlreadyExists, InternalError, KrishivError, KrishivUnsupportedFeature,
+    ColumnAlreadyExists, ErrorQueryContext, InternalError, KrishivError, KrishivUnsupportedFeature,
 };
+use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
 use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
@@ -30,9 +31,10 @@ use krishiv_exec::{
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
+use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
-    AllowAll, AnalysisContext, AnalyzedPlan, Analyzer as _, BuiltinFunctions, DefaultAnalyzer,
-    FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
+    AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, BuiltinFunctions,
+    DefaultAnalyzer, FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -336,12 +338,15 @@ impl Session {
 
     async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let statement = krishiv_sql::parse_statement(query, &env.parser).map_err(|e| e.error)?;
+        let redacted = krishiv_sql::redact_sql(query);
+        let statement = krishiv_sql::parse_statement(query, &env.parser)
+            .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
         match statement {
             Statement::Query(q) => {
-                let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
+                let plan = krishiv_sql::lower(&q, SourceId(0))
+                    .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-                df.analyzed_in(env).await?;
+                df.analyzed_in_with_text(env, Some(&redacted)).await?;
                 Ok(df)
             }
             Statement::Explain(e) => self.explain_statement(&e).await,
@@ -577,11 +582,14 @@ impl Session {
         }
     }
 
-    /// Analyzes `plan`.
+    /// Analyzes `plan` (`text` is the redacted query the plan came
+    /// from, if it came from SQL text: analysis errors carry its span
+    /// as their query context).
     pub(crate) async fn analyze_in(
         &self,
         plan: &Arc<LogicalPlan>,
         env: &QueryEnv,
+        text: Option<&RedactedSql>,
     ) -> Result<AnalyzedPlan, KrishivError> {
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
@@ -594,7 +602,7 @@ impl Session {
         DefaultAnalyzer
             .analyze(&plan, &env.analysis)
             .await
-            .map_err(|e| e.error)
+            .map_err(|e| attach_analysis(e, text))
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -912,6 +920,52 @@ fn unsupported_statement(what: &str) -> KrishivError {
         feature: format!("{what} in sessions"),
     }
     .into()
+}
+
+/// An empty redaction, for analyses with no SQL text (DataFrame errors
+/// carry a DataFrame context, which needs no text).
+fn empty_redacted() -> RedactedSql {
+    RedactedSql::opaque("")
+}
+
+/// `error` with the SQL span `start..end` of `text` attached as its
+/// query context (`stop` is inclusive, as Spark reports it).
+fn sql_context(error: KrishivError, text: &RedactedSql, start: usize, end: usize) -> KrishivError {
+    error.with_query_context(ErrorQueryContext::sql(
+        text.fragment(start..end),
+        start,
+        end.saturating_sub(1),
+    ))
+}
+
+/// An analysis error with its query context attached: the SQL span of
+/// `text`, or the DataFrame operation that raised it. With no text, a
+/// SQL span has no fragment to attach, so only DataFrame contexts cross.
+fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> KrishivError {
+    let empty;
+    let redacted = match text {
+        Some(t) => t,
+        None => {
+            empty = empty_redacted();
+            &empty
+        }
+    };
+    match e.query_context(redacted) {
+        Some(PlanQueryContext::Sql {
+            start,
+            stop,
+            fragment,
+        }) if text.is_some() => e
+            .error
+            .with_query_context(ErrorQueryContext::sql(fragment, start, stop)),
+        Some(PlanQueryContext::DataFrame { .. }) => {
+            e.error.with_query_context(ErrorQueryContext::dataframe())
+        }
+        // A DataFrame action with no origin (e.g. an unbound `col("x")`):
+        // the error still arose from a DataFrame operation.
+        None if text.is_none() => e.error.with_query_context(ErrorQueryContext::dataframe()),
+        _ => e.error,
+    }
 }
 
 /// The parser options `config` sets.
