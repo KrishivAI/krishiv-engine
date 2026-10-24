@@ -295,6 +295,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             // A feature added after the freeze: above every frozen version.
             "window_group_limit" | "nested_types" => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
+            "window_frames" | "window_offset_values" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");
@@ -321,7 +322,12 @@ fn a_legacy_plan_decodes_by_its_content() {
 
 #[test]
 fn a_window_plan_survives_the_wire_with_every_field() {
-    for name in ["window_ranking", "window_aggregates"] {
+    for name in [
+        "window_ranking",
+        "window_aggregates",
+        "window_frames",
+        "window_offset_values",
+    ] {
         let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
         assert_eq!(round_trip(&plan), plan, "{name}");
     }
