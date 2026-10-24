@@ -93,10 +93,15 @@ class DataFrameStatFunctions:
             fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
         """
         _check_names(col1=col1, col2=col2)
-        if method and method != "pearson":
+        # PySpark (``classic/dataframe.py``) treats every falsy ``method`` as the default:
+        # ``if not method: method = "pearson"``. Only a truthy non-``"pearson"`` method fails,
+        # with ``VALUE_NOT_PEARSON`` (not ``VALUE_NOT_ALLOWED``).
+        if not method:
+            method = "pearson"
+        if method != "pearson":
             raise PySparkValueError(
-                errorClass="VALUE_NOT_ALLOWED",
-                messageParameters={"arg_name": "method", "allowed_values": "['pearson']"},
+                errorClass="VALUE_NOT_PEARSON",
+                messageParameters={"arg_name": "method", "arg_value": method},
             )
         raise unsupported_feature("DataFrame.corr")
 
@@ -147,6 +152,9 @@ class DataFrameStatFunctions:
         .. note:: The engine has no frequent-items sketch yet: after checking its arguments this
             fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
         """
+        # Like PySpark (``classic/dataframe.py``): only the ``cols`` container type is checked
+        # client-side (a bad ``support`` or non-string column just falls through to the engine,
+        # where it would fail); here everything past the check is the unsupported sketch.
         if not isinstance(cols, list | tuple):
             raise not_expected_type("cols", "list or tuple", cols)
         raise unsupported_feature("DataFrame.freqItems")

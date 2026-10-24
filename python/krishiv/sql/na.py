@@ -8,6 +8,10 @@ engine's analysis error if it resolves to nothing (or to several columns), and w
 ``KRISHIV_UNSUPPORTED_FEATURE`` if it is a qualified or nested reference, which these methods do not
 handle yet. A DataFrame with duplicate column names (a join's result) works: its columns are renamed
 by position while the expressions are built, and the result has the original names.
+
+String columns are Arrow ``string_view`` columns in the tests: the engine cannot yet compare or
+coalesce a ``Utf8`` column built from Python rows with a string literal (``Utf8`` against
+``Utf8View``), so string ``fill`` and ``replace`` examples need ``string_view`` columns.
 """
 
 from __future__ import annotations
@@ -83,7 +87,7 @@ class _Schema:
         self.dtypes = df.dtypes
         self.names = [name for name, _ in self.dtypes]
         self.case_sensitive = _case_sensitive(df.sparkSession)
-        self.renamed = _has_duplicates(self.names)
+        self.renamed = _has_duplicates(self.names, self.case_sensitive)
         self.refs = [f"__krishiv_na_{i}" for i in range(len(self.names))] if self.renamed else self.names
         self.base = df.toDF(*self.refs) if self.renamed else df
 
@@ -140,13 +144,13 @@ def _filled(ref: Column, name: str, dtype: str, value: Any) -> Column:
     return F.coalesce(ref, F.lit(value).cast(dtype)).alias(name)
 
 
-def _replaced(ref: Column, name: str, dtype: str, mapping: dict[Any, Any], kind: str | None) -> Column:
+def _replaced(ref: Column, name: str, dtype: str, mapping: dict[Any, Any]) -> Column:
     """The column with each key of ``mapping`` replaced by its value cast to the column's type."""
+    # No float() detour: PySpark hands the JVM the ints as ints (``classic/dataframe.py`` passes
+    # the ``rep_dict`` straight to ``_jmap``), so an int stays an int and keys past 2**53
+    # still match exactly (``F.lit`` keeps them as 64-bit integers).
 
-    def literal(value: Any) -> Column:
-        return F.lit(float(value) if kind == "num" and value is not None else value)
-
-    (first, *rest) = [(ref == literal(old), literal(new).cast(dtype)) for old, new in mapping.items()]
+    (first, *rest) = [(ref == F.lit(old), F.lit(new).cast(dtype)) for old, new in mapping.items()]
     case = F.when(*first)
     for condition, new in rest:
         case = case.when(condition, new)
@@ -236,6 +240,9 @@ class DataFrameNaFunctions:
                     "arg2_length": str(len(value)),
                 },
             )
+        # Like PySpark (``classic/dataframe.py`` checks lengths only when both are sequences,
+        # then builds ``dict(zip(...))`` without ``strict``): a scalar ``to_replace`` with a
+        # longer ``value`` list keeps the first pair instead of erroring.
         if subset is not None and not isinstance(subset, list | tuple | str):
             raise not_expected_type("subset", "list, str or tuple", subset)
         if isinstance(to_replace, bool | float | int | str):
@@ -258,7 +265,7 @@ class DataFrameNaFunctions:
         (kind,) = {_kind(k) for k in mapping}
         return schema.project(
             {
-                i: _replaced(schema.ref(i), name, dtype, mapping, kind)
+                i: _replaced(schema.ref(i), name, dtype, mapping)
                 for i, (name, dtype) in enumerate(schema.dtypes)
                 if (targets is None or i in targets) and _accepts(kind, dtype)
             }

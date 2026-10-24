@@ -93,9 +93,10 @@ def _same(left: str, right: str, case_sensitive: bool) -> bool:
     return left == right if case_sensitive else left.lower() == right.lower()
 
 
-def _has_duplicates(columns: list[str]) -> bool:
-    """Whether two output columns share a name (as a join can leave them)."""
-    return len({c.lower() for c in columns}) != len(columns)
+def _has_duplicates(columns: list[str], case_sensitive: bool) -> bool:
+    """Whether two output columns share a name (as a join can leave them), under the session's
+    case sensitivity: ``["A", "a"]`` collides only when matching is case-insensitive."""
+    return len({c if case_sensitive else c.lower() for c in columns}) != len(columns)
 
 
 def _check_partitions(count: int) -> None:
@@ -486,7 +487,7 @@ class DataFrame:
         if not doomed:
             return self._new(self._df)
         columns = self.columns
-        if _has_duplicates(columns):
+        if _has_duplicates(columns, case_sensitive):
             # A name select would be ambiguous: give every column a unique name by
             # position, keep the survivors, and restore their names.
             staged = self.toDF(*[f"_{i}" for i in range(len(columns))])
@@ -618,7 +619,7 @@ class DataFrame:
                     return v
             return c
 
-        if _has_duplicates(self.columns):
+        if _has_duplicates(self.columns, case_sensitive):
             # A name select would be ambiguous: rename by position.
             return self.toDF(*[renamed(c) for c in self.columns])
         return self.select([_quoted(c).alias(renamed(c)) for c in self.columns])
@@ -1026,6 +1027,10 @@ class DataFrame:
         :class:`DataFrame`
             DataFrame with replaced null values.
 
+        .. note:: The string examples need string columns the engine can compare with
+            a string literal (Arrow ``string_view``); ``Utf8`` columns built from
+            Python rows do not match yet.
+
         Examples
         --------
         >>> df = spark.createDataFrame([
@@ -1122,6 +1127,10 @@ class DataFrame:
         -------
         :class:`DataFrame`
             DataFrame with replaced values.
+
+        .. note:: The string examples need string columns the engine can compare with
+            a string literal (Arrow ``string_view``); ``Utf8`` columns built from
+            Python rows do not match yet.
 
         Examples
         --------

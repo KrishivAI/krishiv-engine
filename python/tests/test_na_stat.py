@@ -488,9 +488,14 @@ def test_fillna_all_null_columns_and_empty_dataframes(spark: SparkSession) -> No
 
 
 def test_fillna_takes_integers_as_doubles(spark: SparkSession) -> None:
-    # As PySpark: an int is converted to a float first, so one beyond 64 bits still fills a double column.
+    # As PySpark (``classic/dataframe.py``: ``value = float(value)`` for non-bool ints), so one
+    # beyond 64 bits still fills a double column ...
     df = frame(spark, {"d": [None, 1.0]})
     assert rows(df.fillna(2**70)) == [(1.0,), (2.0**70,)]
+    # ... and a non-representable int on an integer column rounds the way Spark's
+    # double-to-long cast does.
+    big = frame(spark, {"n": [None, 1]}, n=pa.int64())
+    assert rows(big.fillna(2**62 + 1)) == [(1,), (2**62,)]
 
 
 def test_names_with_backquotes(spark: SparkSession) -> None:
@@ -565,6 +570,15 @@ def test_na_functions_on_a_join_with_duplicate_column_names(spark: SparkSession)
         with pytest.raises(errors.AnalysisException) as info:
             call()
         assert info.value.getCondition() == "AMBIGUOUS_REFERENCE"
+
+
+def test_has_duplicates_follows_the_session_case_sensitivity() -> None:
+    from krishiv.sql.dataframe import _has_duplicates
+
+    assert _has_duplicates(["A", "a"], False)
+    assert not _has_duplicates(["A", "a"], True)
+    assert not _has_duplicates(["A", "b"], False)
+    assert _has_duplicates(["k", "v", "k"], True)
 
 
 # replace / na.replace -----------------------------------------------------------------------
@@ -654,8 +668,21 @@ def test_replace_with_sequences(typed: DataFrame) -> None:
     assert rows(typed.replace((1, 3), (100, 300), subset=("i",)).select("i")) == rows(by_list.select("i"))
     # One value for every item of the list.
     assert rows(typed.replace([1, 3], 0, subset="i").select("i")) == [(0,), (0,), (None,)]
+    # A scalar `to_replace` with a longer `value` list keeps the first pair, as PySpark's
+    # `dict(zip(...))` does (lengths are only checked when both are sequences).
+    assert rows(typed.replace(1, [100, 300], subset="i").select("i")) == rows(
+        typed.replace(1, 100, subset="i").select("i")
+    )
     assert rows(typed.replace(["a", "c"], None).select("s")) == [(None,), (None,), (None,)]
     assert rows(typed.replace([], [], subset="i")) == rows(typed)
+
+
+def test_replace_keeps_large_integers_exact(spark: SparkSession) -> None:
+    # 2**62 + 1 is not exactly representable as a double: a float() detour would round the
+    # key to 2**62 and replace both rows, where Spark (ints stay ints) replaces one.
+    df = frame(spark, {"x": [2**62 + 1, 2**62, None]}, x=pa.int64())
+    assert rows(df.replace(2**62 + 1, 0)) == [(0,), (2**62,), (None,)]
+    assert rows(df.replace(2**62, 2**62 + 1)) == [(2**62 + 1,), (2**62 + 1,), (None,)]
 
 
 def test_replace_casts_the_new_value_to_the_column_type(typed: DataFrame) -> None:
@@ -811,6 +838,7 @@ def test_crosstab_of_an_empty_dataframe_has_only_the_key_column(spark: SparkSess
 
 def test_crosstab_with_a_label_named_like_the_key_column_keeps_both(spark: SparkSession) -> None:
     # The first column is ``a_b`` and so is the column of the value ``a_b``: neither is dropped or renamed.
+    # Spark's own behavior here is unverified (no spark-golden coverage); this pins the facade's choice.
     df = frame(spark, {"a": ["u", "v"], "b": ["a_b", "w"]})
     out = df.crosstab("a", "b")
     assert out.columns == ["a_b", "a_b", "w"]
@@ -1013,8 +1041,9 @@ def test_corr_and_cov_argument_errors(spark: SparkSession) -> None:
         df.corr(1, "c2")  # ty: ignore[invalid-argument-type]
     with fails(errors.PySparkTypeError, "NOT_EXPECTED_TYPE", arg_name="col2", expected_type="str", arg_type="list"):
         df.cov("c1", ["c2"])  # ty: ignore[invalid-argument-type]
-    with fails(errors.PySparkValueError, "VALUE_NOT_ALLOWED", arg_name="method", allowed_values="['pearson']"):
+    with fails(errors.PySparkValueError, "VALUE_NOT_PEARSON", arg_name="method", arg_value="spearman"):
         df.corr("c1", "c2", "spearman")
+    # A falsy method is the default "pearson" (as PySpark's `if not method`), so "" reaches the engine.
     with unsupported("DataFrame.corr"):
         df.corr("c1", "c2", "")
 
@@ -1029,6 +1058,19 @@ def test_freq_items_example_fails_with_the_engines_error(spark: SparkSession) ->
         errors.PySparkTypeError, "NOT_EXPECTED_TYPE", arg_name="cols", expected_type="list or tuple", arg_type="str"
     ):
         df.freqItems("c1")  # ty: ignore[invalid-argument-type]
+
+
+def test_freq_items_bad_support_and_columns_reach_the_engines_error(spark: SparkSession) -> None:
+    # PySpark checks only the `cols` container client-side and hands the rest to the engine
+    # (`if not support: support = 0.01`), so with no sketch every call past the check fails
+    # with the engine's own error.
+    df = spark.createDataFrame([(1, 11), (1, 11)], ["c1", "c2"])
+    with unsupported("DataFrame.freqItems"):
+        df.freqItems(["c1"], "x")  # ty: ignore[invalid-argument-type]
+    with unsupported("DataFrame.freqItems"):
+        df.freqItems(["c1"], -1)
+    with unsupported("DataFrame.freqItems"):
+        df.freqItems(["c1", 1])  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.parametrize(
@@ -1111,6 +1153,10 @@ def test_error_messages_are_pysparks(typed: DataFrame) -> None:
         (
             lambda: typed.approxQuantile("i", [0.5], -1),
             "[NEGATIVE_VALUE] Value for `relativeError` must be greater than or equal to 0, got '-1'.",
+        ),
+        (
+            lambda: typed.corr("i", "t", "spearman"),
+            "[VALUE_NOT_PEARSON] Value for `method` only supports 'pearson', got 'spearman'.",
         ),
         (
             lambda: typed.dropna(how="some"),

@@ -17,8 +17,10 @@ from collections.abc import Iterable
 from enum import Enum
 from typing import Any
 
-# The message templates of the client-side errors this package raises (the wording of
-# PySpark 4.2's error classes of the same names).
+# The message templates of the client-side errors this package raises: the wording of the
+# same-named classes in PySpark 4.2.0's `pyspark/errors/error-conditions.json` (the client-side
+# file; the JVM `error-conditions.json` vendored in krishiv-common carries none of these,
+# not even the pre-existing ones like `NOT_EXPECTED_TYPE`).
 _TEMPLATES = {
     "NOT_IMPLEMENTED": "<feature> is not implemented.",
     "CANNOT_SET_TOGETHER": "<arg_list> should not be set together.",
@@ -54,6 +56,7 @@ _TEMPLATES = {
         "<arg1> and <arg2> should be of the same length, got <arg1_length> and <arg2_length>."
     ),
     "VALUE_NOT_ALLOWED": "Value for `<arg_name>` has to be amongst the following values: <allowed_values>.",
+    "VALUE_NOT_PEARSON": "Value for `<arg_name>` only supports 'pearson', got '<arg_value>'.",
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
     "UNSUPPORTED_DATA_TYPE": "Unsupported DataType `<data_type>`.",
     "DIFFERENT_ROWS": "<error_msg>",
