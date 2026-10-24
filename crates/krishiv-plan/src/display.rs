@@ -513,6 +513,15 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Owned(format!("{}{id}", Name(&c.name))));
         }
         ExprNode::Literal(v) => out.push(Piece::Owned(literal_text(v))),
+        ExprNode::TypedLiteral { kind, value } => {
+            let keyword = match kind {
+                crate::TypedLiteralKind::Date => "DATE",
+                crate::TypedLiteralKind::Timestamp => "TIMESTAMP",
+                crate::TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
+                crate::TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+            };
+            out.push(Piece::Owned(format!("{keyword} '{value}'")));
+        }
         ExprNode::Star(s) => {
             let q = if s.qualifier.is_empty() {
                 String::new()

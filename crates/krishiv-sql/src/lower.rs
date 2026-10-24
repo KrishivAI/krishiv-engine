@@ -25,8 +25,8 @@ use krishiv_plan::{
     Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FrameBound as IrFrameBound,
     FrameUnits as IrFrameUnits, FunctionCall, Grouping, JoinCondition, JoinKind as IrJoin,
     Literal as IrLiteral, LogicalPlan, Origin, Plan, PlanNode, ReadSource, SortOrder, SourceId,
-    Star, SubqueryKind, WindowExpr, WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec,
-    WindowSpecRef,
+    Star, SubqueryKind, TypedLiteralKind as IrTypedKind, WindowExpr, WindowFrame as IrWindowFrame,
+    WindowSpec as IrWindowSpec, WindowSpecRef,
 };
 use krishiv_types::DecimalType;
 
@@ -46,6 +46,11 @@ type R<T> = Result<T, ParseError>;
 const MAX_GROUPING_SETS: usize = 1 << 16;
 
 /// Parses and lowers one query; spans index `source`.
+///
+/// Typed datetime literals (`TIMESTAMP '...'`, `TIMESTAMP_LTZ '...'`,
+/// `TIMESTAMP_NTZ '...'`, `DATE '...'`) lower to an unresolved
+/// [`ExprNode::TypedLiteral`] (the type keyword and the raw string): the
+/// analyzer resolves them with the session's time zone and timestamp type.
 ///
 /// # Errors
 /// A [`ParseError`]: the parser's, or a lowering error with its span.
@@ -915,7 +920,7 @@ impl Lowerer {
     fn expr_inner(&mut self, e: &Expr) -> R<IrExpr> {
         let sp = e.span;
         Ok(match &e.kind {
-            ExprKind::Literal(v) => self.ex(ExprNode::Literal(literal(v, sp)?), sp),
+            ExprKind::Literal(v) => self.ex(literal(v, sp)?, sp),
             ExprKind::Keyword(k) => {
                 self.ex(ExprNode::Literal(IrLiteral::String(k.value.clone())), sp)
             }
@@ -1315,21 +1320,34 @@ fn is_path(s: &str) -> bool {
     s.contains('/') || s.contains(':')
 }
 
-fn literal(v: &Literal, sp: Span) -> R<IrLiteral> {
+fn literal(v: &Literal, sp: Span) -> R<ExprNode> {
     Ok(match v {
-        Literal::Null => IrLiteral::Null(None),
-        Literal::Boolean(b) => IrLiteral::Boolean(*b),
-        Literal::String(s) => IrLiteral::String(s.clone()),
-        Literal::Number { text, kind } => number(text, *kind, sp)?,
+        Literal::Null => ExprNode::Literal(IrLiteral::Null(None)),
+        Literal::Boolean(b) => ExprNode::Literal(IrLiteral::Boolean(*b)),
+        Literal::String(s) => ExprNode::Literal(IrLiteral::String(s.clone())),
+        Literal::Number { text, kind } => ExprNode::Literal(number(text, *kind, sp)?),
         Literal::Typed { type_name, value } => {
             let kind = TypedKind::of(&type_name.value, type_name.quoted).map_err(|e| err(e, sp))?;
             match kind {
-                TypedKind::Date => IrLiteral::Date(
-                    literal::date(value).ok_or_else(|| err(kind.invalid(value), sp))?,
-                ),
-                TypedKind::Binary => IrLiteral::Binary(
+                TypedKind::Date => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Date,
+                    value: value.clone(),
+                },
+                TypedKind::Timestamp => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::Timestamp,
+                    value: value.clone(),
+                },
+                TypedKind::TimestampNtz => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::TimestampNtz,
+                    value: value.clone(),
+                },
+                TypedKind::TimestampLtz => ExprNode::TypedLiteral {
+                    kind: IrTypedKind::TimestampLtz,
+                    value: value.clone(),
+                },
+                TypedKind::Binary => ExprNode::Literal(IrLiteral::Binary(
                     literal::hex(value).ok_or_else(|| err(kind.invalid(value), sp))?,
-                ),
+                )),
                 _ => {
                     let t = type_name.value.to_ascii_uppercase();
                     return Err(unsupported(&format!("{t} literals"), sp));

@@ -336,13 +336,14 @@ impl Resolver<'_> {
             return Ok(b);
         }
         let shown = b.shown();
+        let zone = self.ctx.conf.session_zone;
         let name = match &shown.node {
             ExprNode::Cast { expr, .. }
                 if matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_))) =>
             {
-                pretty(expr)
+                pretty(expr, zone)
             }
-            _ => pretty(&lateral_refs(&shown, &b.lateral)),
+            _ => pretty(&lateral_refs(&shown, &b.lateral), zone),
         };
         let output = self.attr(&name, &b.ty);
         let origin = b.expr.origin;
@@ -492,7 +493,7 @@ impl Resolver<'_> {
         if b.agg.is_some() {
             return Err(AnalysisError::new(
                 InvalidWhereCondition {
-                    condition: format!("\"{}\"", pretty(&b.shown())),
+                    condition: format!("\"{}\"", pretty(&b.shown(), self.ctx.conf.session_zone)),
                     expression_list: aggregate_sql(&b.expr, &wide.out),
                 },
                 p.origin,
@@ -820,7 +821,7 @@ impl Resolver<'_> {
                                 data_type: Some(f.data_type.clone()),
                                 nullable: f.nullable,
                             };
-                            let output = self.attr(&pretty(&x), &ty);
+                            let output = self.attr(&pretty(&x, self.ctx.conf.session_zone), &ty);
                             grown.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
                                 ResolvedExpr::Alias {
                                     expr: Arc::clone(&x),
@@ -941,7 +942,7 @@ impl Resolver<'_> {
                 let a = match st.known.iter().find(|(k, _)| *k == key) {
                     Some((_, a)) => a.clone(),
                     None => {
-                        let output = self.attr(&pretty(&b.expr), &b.ty);
+                        let output = self.attr(&pretty(&b.expr, self.ctx.conf.session_zone), &b.ty);
                         st.grown
                             .aggregates
                             .push(Arc::new(Expr::new(ExprNode::Resolved(
@@ -1133,7 +1134,7 @@ impl Resolver<'_> {
             if has_aggregate(&b.expr) {
                 return Err(AnalysisError::new(
                     GroupByAggregate {
-                        sql_expr: pretty(&b.expr),
+                        sql_expr: pretty(&b.expr, self.ctx.conf.session_zone),
                     },
                     b.expr.origin,
                 ));
@@ -1182,7 +1183,7 @@ impl Resolver<'_> {
         if let (Some(_), ExprNode::Resolved(ResolvedExpr::Alias { expr, output })) =
             (item.agg, &item.expr.node)
         {
-            let text = pretty(&qualified(expr, &c.out));
+            let text = pretty(&qualified(expr, &c.out), self.ctx.conf.session_zone);
             return Err(AnalysisError::new(
                 GroupByPosAggregate {
                     index: n.to_string(),
@@ -1349,7 +1350,7 @@ impl Resolver<'_> {
                 return Err(AnalysisError::new(MissingGroupBy {}, l.origin));
             }
             (None, ExprNode::Resolved(ResolvedExpr::Column(_))) => {
-                let text = pretty(&x);
+                let text = pretty(&x, self.ctx.conf.session_zone);
                 return Err(AnalysisError::new(
                     MissingAggregation {
                         expression: format!("\"{text}\""),
@@ -1382,7 +1383,7 @@ impl Resolver<'_> {
                 a
             }
             (None, None) => {
-                let output = self.attr(&pretty(&x), &ty);
+                let output = self.attr(&pretty(&x, self.ctx.conf.session_zone), &ty);
                 info.aggregates.push(Arc::new(Expr::new(ExprNode::Resolved(
                     ResolvedExpr::Alias {
                         expr: Arc::clone(&x),
@@ -1426,7 +1427,7 @@ impl Resolver<'_> {
                         return Err(AnalysisError::new(MissingGroupBy {}, origin));
                     }
                     ExprNode::Resolved(ResolvedExpr::Column(_)) => {
-                        let text = pretty(&x);
+                        let text = pretty(&x, self.ctx.conf.session_zone);
                         return Err(AnalysisError::new(
                             MissingAggregation {
                                 expression: format!("\"{text}\""),
@@ -1489,7 +1490,10 @@ impl Resolver<'_> {
                 if b.ty.data_type != Some(krishiv_types::DataType::Boolean) {
                     return Err(AnalysisError::new(
                         JoinConditionIsNotBooleanType {
-                            join_condition: format!("\"{}\"", pretty(&b.shown())),
+                            join_condition: format!(
+                                "\"{}\"",
+                                pretty(&b.shown(), self.ctx.conf.session_zone)
+                            ),
                             condition_type: quoted_type(b.ty.data_type.as_ref()),
                         },
                         p.origin,
@@ -1728,7 +1732,7 @@ impl Resolver<'_> {
         if !unfoldable && b.ty.data_type != Some(krishiv_types::DataType::Integer) {
             return Err(AnalysisError::new(
                 InvalidLimitLikeExpressionDataType {
-                    expr: format!("\"{}\"", pretty(&b.shown())),
+                    expr: format!("\"{}\"", pretty(&b.shown(), self.ctx.conf.session_zone)),
                     name: name.to_owned(),
                     data_type: quoted_type(b.ty.data_type.as_ref()),
                 },
@@ -1947,7 +1951,7 @@ fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
         _ => Attr {
             col: BoundColumn {
                 id: AttrId(u64::MAX),
-                name: pretty(&b.expr),
+                name: pretty(&b.expr, None),
                 data_type: krishiv_types::DataType::Boolean,
                 nullable: true,
             },
@@ -1962,7 +1966,7 @@ pub(super) fn boolean_filter(b: &Bound, origin: Origin) -> Result<(), AnalysisEr
     if b.ty.data_type == Some(krishiv_types::DataType::Boolean) {
         return Ok(());
     }
-    let text = format!("\"{}\"", pretty(&b.shown()));
+    let text = format!("\"{}\"", pretty(&b.shown(), None));
     Err(AnalysisError::new(
         DatatypeMismatchFilterNotBoolean {
             sql_expr: text.clone(),
@@ -2072,7 +2076,10 @@ fn in_aggregate_call(b: &Bound) -> Result<(), AnalysisError> {
                 {
                     return Err(AnalysisError::new(
                         UnsupportedFeatureLateralColumnAliasInAggregateFunc {
-                            agg_func: format!("\"{}\"", pretty(&lateral_refs(&x, &b.lateral))),
+                            agg_func: format!(
+                                "\"{}\"",
+                                pretty(&lateral_refs(&x, &b.lateral), None)
+                            ),
                             lca: quoted(std::slice::from_ref(&c.name)),
                         },
                         Origin::UNKNOWN,
@@ -2100,7 +2107,7 @@ fn aggregate_sql(e: &Arc<Expr>, scope: &[Attr]) -> String {
         if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node
             && f.kind == FunctionKind::Aggregate
         {
-            found.push(pretty(&qualified(&x, scope)));
+            found.push(pretty(&qualified(&x, scope), None));
             continue;
         }
         x.for_each_child(&mut |k| stack.push(Arc::clone(k)));

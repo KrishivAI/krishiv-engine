@@ -122,7 +122,7 @@ pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
     AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall,
     NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind,
-    WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
+    TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
 };
 pub use function::{Builtin, FunctionId, FunctionKind};
 pub use literal::{DayTimeField, Literal, YearMonthField};

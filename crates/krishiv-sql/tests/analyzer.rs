@@ -20,7 +20,7 @@ use krishiv_plan::analyzer::{
     ResolutionConf, TableColumn,
 };
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, LogicalPlan,
+    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, Literal, LogicalPlan,
     NullOrdering, PlanNode, ResolvedExpr, SortDirection, SourceId,
 };
 use krishiv_sql::{ParserOptions, parse_and_lower, redact_sql};
@@ -759,6 +759,153 @@ fn window_goldens_resolve_to_a_fixed_point() {
     assert_eq!(pending, ["rows_sliding", "range_offset"]);
     assert_eq!(resolved, 67);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Typed datetime literals resolve in the analyzer with the session zone
+/// and timestamp type: plain `TIMESTAMP` follows
+/// `spark.sql.timestampType` (and a zone in the value), and instants
+/// without a zone read `spark.sql.session.timeZone`. The golden files
+/// (`literals.sql`, `timestamp.sql`, `timestampNTZ/timestamp.sql`,
+/// `datetime-*.sql`) record these names, rows and `INVALID_TYPED_LITERAL`
+/// errors.
+#[test]
+fn typed_timestamp_literals_resolve_like_spark() {
+    let g = goldens();
+    let analyze_with = |sql: &str, timestamp_ntz: bool, zone: Option<i32>| {
+        let conf = ResolutionConf {
+            timestamp_ntz,
+            session_zone: zone,
+            ..ResolutionConf::default()
+        };
+        let plan = parse_and_lower(sql, &ParserOptions::default(), SourceId(0)).map_err(|e| {
+            AnalysisError {
+                error: e.error,
+                origin: krishiv_plan::Origin::UNKNOWN,
+            }
+        })?;
+        block_on(DefaultAnalyzer.analyze(&plan, &context(catalog(&g), conf)))
+    };
+    let utc = Some(0);
+    // Plain `TIMESTAMP` is an instant by default, wall-clock under `TIMESTAMP_NTZ`.
+    let a = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", false, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 10:00:00'");
+    let a = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", true, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp_ntz");
+    assert_eq!(a.output[0].name, "TIMESTAMP_NTZ '2024-01-01 10:00:00'");
+    // ... unless the value names a zone, which stays an instant.
+    let a = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", true, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    // The session zone moves instants without a zone (`+05:30` is 04:30 UTC):
+    // Spark 4.2 gives 1_704_103_200_000_000 µs in UTC and
+    // 1_704_083_400_000_000 µs in +05:30.
+    let utc_plan = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", false, utc).unwrap();
+    let plus_plan = analyze_with(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00'",
+        false,
+        Some(19_800),
+    )
+    .unwrap();
+    let micros_of = |plan: &LogicalPlan| {
+        let PlanNode::Project { exprs, .. } = &plan.node else {
+            panic!("not a project: {plan}");
+        };
+        let inner = match &exprs[0].node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+            ExprNode::Literal(_) => &exprs[0],
+            other => panic!("not a literal: {other:?}"),
+        };
+        match &inner.node {
+            ExprNode::Literal(Literal::Timestamp(v)) => *v,
+            other => panic!("not a timestamp: {other:?}"),
+        }
+    };
+    assert_eq!(micros_of(utc_plan.plan.root()), 1_704_103_200_000_000);
+    assert_eq!(micros_of(plus_plan.plan.root()), 1_704_083_400_000_000);
+    // `TIMESTAMP_LTZ` and `TIMESTAMP_NTZ` keep their types.
+    let a = analyze_with("SELECT TIMESTAMP_LTZ '2024-01-01 10:00:00'", true, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    let a = analyze_with("SELECT TIMESTAMP_NTZ '2024-01-01 10:00:00'", false, utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp_ntz");
+    // The session zone is unset by default (UTC): plain `TIMESTAMP` works.
+    let a = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", false, Some(0)).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    // An explicit zone renders in a non-UTC session zone, not in UTC:
+    // 10:00 UTC is 15:30 in +05:30.
+    let a = analyze_with(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00+00:00'",
+        false,
+        Some(19_800),
+    )
+    .unwrap();
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 15:30:00'");
+    // Spark's golden statements (`literals.sql`, `timestamp.sql`).
+    for (sql, name, ty) in [
+        (
+            "select tImEstAmp '2016-03-11 20:54:00.000'",
+            "TIMESTAMP '2016-03-11 20:54:00'",
+            "timestamp",
+        ),
+        (
+            "select timestamp '2019-01-01\t'",
+            "TIMESTAMP '2019-01-01 00:00:00'",
+            "timestamp",
+        ),
+        ("select dAte '2016-03-12'", "DATE '2016-03-12'", "date"),
+    ] {
+        let a = analyze_with(sql, false, utc).unwrap();
+        assert_eq!(a.output[0].name, name, "{sql}");
+        assert_eq!(a.output[0].data_type.simple_string(), ty, "{sql}");
+    }
+    // Invalid text is `INVALID_TYPED_LITERAL` at the literal.
+    for sql in [
+        "SELECT TIMESTAMP '2024-13-01 10:00:00'",
+        "SELECT TIMESTAMP_NTZ '10:00'",
+        "SELECT DATE '2020-02-30'",
+        "SELECT DATE '10:00'",
+    ] {
+        let e = analyze_with(sql, false, utc).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            krishiv_common::error::ErrorClass::InvalidTypedLiteral,
+            "{sql}"
+        );
+    }
+    // Clock-dependent spellings need the query clock.
+    for sql in [
+        "SELECT TIMESTAMP 'now'",
+        "SELECT TIMESTAMP_LTZ '10:00'",
+        "SELECT TIMESTAMP '10:00'",
+    ] {
+        let e = analyze_with(sql, false, utc).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+        assert!(e.error.to_string().contains("query clock"), "{sql}: {e}");
+    }
+    // A region session zone serves explicit offsets but not wall-clock time.
+    let e = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'", false, None).unwrap();
+    assert_eq!(e.output[0].data_type.simple_string(), "timestamp");
+    let e = analyze_with("SELECT TIMESTAMP '2024-01-01 10:00:00'", false, None).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+        "region session without zone"
+    );
+    // A region id in the value needs the time-zone database.
+    let e = analyze_with(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00 America/Los_Angeles'",
+        false,
+        utc,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+        "region value"
+    );
 }
 
 /// Foldable expressions the analyzer evaluates for typing: casts to string

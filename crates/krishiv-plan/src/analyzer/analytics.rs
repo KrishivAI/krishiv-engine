@@ -204,10 +204,10 @@ fn bound_of(col: &BoundColumn) -> Bound {
 
 /// Spark's text for an expression in a grouping error: a column carries its
 /// attribute id.
-fn with_id(e: &Expr) -> String {
+fn with_id(e: &Expr, zone: Option<i32>) -> String {
     match &e.node {
         ExprNode::Resolved(ResolvedExpr::Column(c)) => format!("{}#{}", c.name, c.id.0),
-        _ => pretty(e),
+        _ => pretty(e, zone),
     }
 }
 
@@ -471,7 +471,7 @@ impl Resolver<'_> {
             };
             let name = match &column {
                 Some(a) => a.col.name.clone(),
-                None => pretty(&b.shown()),
+                None => pretty(&b.shown(), self.ctx.conf.session_zone),
             };
             let v = match &column {
                 Some(a) => a.col.clone(),
@@ -708,6 +708,7 @@ impl Resolver<'_> {
         memo: &mut HashMap<usize, u128>,
     ) -> Result<Arc<Expr>, AnalysisError> {
         let n = an.exprs.len();
+        let zone = self.ctx.conf.session_zone;
         let id = match &an.gid {
             Some(g) => col_expr(&g.col, Origin::UNKNOWN),
             None => literal(Literal::Long(0)),
@@ -723,7 +724,7 @@ impl Resolver<'_> {
                             grouping_id_column: f
                                 .args
                                 .iter()
-                                .map(|a| with_id(a))
+                                .map(|a| with_id(a, zone))
                                 .collect::<Vec<_>>()
                                 .join(","),
                             group_by_columns: an
@@ -742,7 +743,7 @@ impl Resolver<'_> {
                 let (Some(_), Some(Some(j))) = (f.args.first(), positions.first()) else {
                     return Err(AnalysisError::new(
                         GroupingColumnMismatch {
-                            grouping: f.args.first().map(|a| with_id(a)).unwrap_or_default(),
+                            grouping: f.args.first().map(|a| with_id(a, zone)).unwrap_or_default(),
                             grouping_columns: an
                                 .exprs
                                 .iter()
