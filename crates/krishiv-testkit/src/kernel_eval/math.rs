@@ -39,6 +39,10 @@ pub(super) enum MathFn {
     },
     Pmod,
     Extremum(Extremum),
+    /// `bin(x)`: a `bigint` in binary.
+    Bin,
+    /// `conv(num, from_base, to_base)`.
+    Conv,
 }
 
 fn unary_fn(name: &str) -> Option<UnaryFn> {
@@ -159,6 +163,8 @@ impl Binder<'_> {
                     | "least"
                     | "pi"
                     | "e"
+                    | "bin"
+                    | "conv"
             );
         known.then(|| self.math_call(name, args))
     }
@@ -292,6 +298,32 @@ impl Binder<'_> {
                     (t, _) => t.clone(),
                 };
                 Ok(Node::Math(MathFn::Pmod, vec![l, r], ty))
+            }
+            "bin" => {
+                arity(args.len() == 1)?;
+                let x = self.bind(args[0])?;
+                let x = match x.ty() {
+                    DataType::Int64 => x,
+                    DataType::Null
+                    | DataType::Utf8
+                    | DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Float32
+                    | DataType::Float64
+                    | DataType::Decimal128(..) => self.implicit(x, &DataType::Int64),
+                    t => return Err(format!("analysis: bin of {}", simple_string(&t))),
+                };
+                Ok(Node::Math(MathFn::Bin, vec![x], DataType::Utf8))
+            }
+            "conv" => {
+                arity(args.len() == 3)?;
+                let num = self.to_string_node(self.bind(args[0])?)?;
+                Ok(Node::Math(
+                    MathFn::Conv,
+                    vec![num, self.int_arg(args[1])?, self.int_arg(args[2])?],
+                    DataType::Utf8,
+                ))
             }
             _ => {
                 arity(args.len() >= 2)?;
@@ -445,6 +477,25 @@ impl Evaluator<'_> {
             }
             MathFn::Pmod => self.pmod(a, &v[1])?,
             MathFn::Extremum(kind) => extremum(kind, &v)?,
+            MathFn::Bin => {
+                let a = a.as_primitive::<Int64Type>();
+                let owned: Vec<Option<String>> = a
+                    .iter()
+                    .map(|v| v.map(krishiv_kernels::number_format::bin_long))
+                    .collect();
+                let refs: Vec<Option<&str>> = owned.iter().map(|o| o.as_deref()).collect();
+                Arc::new(arrow_array::StringArray::from(refs))
+            }
+            MathFn::Conv => {
+                let (num, from, to) = (
+                    v[0].as_string::<i32>().clone(),
+                    v[1].as_primitive::<Int32Type>().clone(),
+                    v[2].as_primitive::<Int32Type>().clone(),
+                );
+                Arc::new(krishiv_kernels::number_format::convert::conv(
+                    &num, &from, &to, self.ansi,
+                )?)
+            }
         })
     }
 

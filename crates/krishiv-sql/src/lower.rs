@@ -998,9 +998,9 @@ impl Lowerer {
                     BinaryOp::BitAnd => "&",
                     BinaryOp::BitOr => "|",
                     BinaryOp::BitXor => "^",
-                    BinaryOp::ShiftLeft => "shiftleft",
-                    BinaryOp::ShiftRight => "shiftright",
-                    BinaryOp::ShiftRightUnsigned => "shiftrightunsigned",
+                    BinaryOp::ShiftLeft => "<<",
+                    BinaryOp::ShiftRight => ">>",
+                    BinaryOp::ShiftRightUnsigned => ">>>",
                 };
                 self.call(name, vec![arc(l), arc(r)], sp)
             }
