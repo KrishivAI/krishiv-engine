@@ -20,6 +20,7 @@
 //! | `a IN (x, y)` | `in(a, x, y)` |
 //! | `a BETWEEN x AND y` | `between(a, x, y)` |
 //! | `a LIKE p`, `ILIKE`, `RLIKE` | `like(a, p)`, `ilike`, `rlike` |
+//! | `a [NOT] LIKE ANY (p, ...)` and kin | one `*_any`/`*_all` call each, rewritten to `AND`/`OR` |
 //! | `CASE WHEN c THEN v ... ELSE e END` | `when(c, v, ..., e)` |
 //! | `a \|\| b` | `concat(a, b)` |
 //!
@@ -80,6 +81,22 @@ pub enum Builtin {
     ILike,
     /// `rlike`.
     RLike,
+    /// `x LIKE ANY (...)`: an OR of `LIKE`s, as the analyzer rewrites it.
+    LikeAny,
+    /// `x LIKE ALL (...)`: an AND of `LIKE`s, as the analyzer rewrites it.
+    LikeAll,
+    /// `x NOT LIKE ANY (...)`: an OR of `NOT LIKE`s.
+    NotLikeAny,
+    /// `x NOT LIKE ALL (...)`: an AND of `NOT LIKE`s.
+    NotLikeAll,
+    /// `x ILIKE ANY (...)`: an OR of `ILIKE`s (lowered `LIKE`s).
+    ILikeAny,
+    /// `x ILIKE ALL (...)`: an AND of `ILIKE`s (lowered `LIKE`s).
+    ILikeAll,
+    /// `x NOT ILIKE ANY (...)`: an OR of `NOT ILIKE`s.
+    NotILikeAny,
+    /// `x NOT ILIKE ALL (...)`: an AND of `NOT ILIKE`s.
+    NotILikeAll,
     /// `when`: condition/value pairs, then an optional `ELSE` value.
     When,
     /// `concat`.
@@ -88,7 +105,7 @@ pub enum Builtin {
 
 impl Builtin {
     /// Every operator, in declaration order.
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 33] = [
         Self::Eq,
         Self::EqNullSafe,
         Self::Lt,
@@ -112,6 +129,14 @@ impl Builtin {
         Self::Like,
         Self::ILike,
         Self::RLike,
+        Self::LikeAny,
+        Self::LikeAll,
+        Self::NotLikeAny,
+        Self::NotLikeAll,
+        Self::ILikeAny,
+        Self::ILikeAll,
+        Self::NotILikeAny,
+        Self::NotILikeAll,
         Self::When,
         Self::Concat,
     ];
@@ -143,6 +168,14 @@ impl Builtin {
             Self::Like => "like",
             Self::ILike => "ilike",
             Self::RLike => "rlike",
+            Self::LikeAny => "like_any",
+            Self::LikeAll => "like_all",
+            Self::NotLikeAny => "not_like_any",
+            Self::NotLikeAll => "not_like_all",
+            Self::ILikeAny => "ilike_any",
+            Self::ILikeAll => "ilike_all",
+            Self::NotILikeAny => "not_ilike_any",
+            Self::NotILikeAll => "not_ilike_all",
             Self::When => "when",
             Self::Concat => "concat",
         }

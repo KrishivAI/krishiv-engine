@@ -459,6 +459,65 @@ pub fn match_binary<O: OffsetSizeTrait>(
 
 // ---- replace ----
 
+/// Whether `c` is a decimal digit: ASCII digits, and other numeric
+/// characters that are not alphabetic. This approximates Java's
+/// `DECIMAL_DIGIT_NUMBER`: letter numbers such as `Ⅷ` are alphabetic and
+/// count as other characters, but `No` numbers such as `²` count as digits
+/// here while Spark counts them as other characters.
+fn is_digit(c: char) -> bool {
+    c.is_ascii_digit() || (!c.is_alphabetic() && c.is_numeric())
+}
+
+/// `mask(str[, upperChar[, lowerChar[, digitChar[, otherChar]]]])`: an
+/// uppercase letter becomes `upperChar`, a lowercase letter `lowerChar`, a
+/// digit `digitChar`, any other character `otherChar`; a NULL replacement
+/// retains the character. A NULL input is NULL.
+///
+/// # Errors
+/// `INTERNAL_ERROR` for operands of different lengths;
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+pub fn mask<O: OffsetSizeTrait>(
+    input: StrOperand<'_, O>,
+    upper: StrOperand<'_, O>,
+    lower: StrOperand<'_, O>,
+    digit: StrOperand<'_, O>,
+    other: StrOperand<'_, O>,
+) -> Result<GenericStringArray<O>, KernelError> {
+    let slots: [&dyn Slot; 5] = [&input, &upper, &lower, &digit, &other];
+    let rows = row_count(&slots)?;
+    let mut sink = StrSink::new(rows, 0);
+    let mut scratch = String::new();
+    let first =
+        |op: StrOperand<'_, O>, i: usize| op.is_valid(i).then(|| op.at(i).chars().next()).flatten();
+    for i in 0..rows {
+        if !input.is_valid(i) {
+            sink.push_null();
+            continue;
+        }
+        let (u, l, d, o) = (
+            first(upper, i),
+            first(lower, i),
+            first(digit, i),
+            first(other, i),
+        );
+        scratch.clear();
+        for c in input.at(i).chars() {
+            let replacement = if c.is_uppercase() {
+                u
+            } else if c.is_lowercase() {
+                l
+            } else if is_digit(c) {
+                d
+            } else {
+                o
+            };
+            scratch.push(replacement.unwrap_or(c));
+        }
+        sink.push(&scratch)?;
+    }
+    Ok(sink.finish())
+}
+
 /// `replace(str, search, replacement)`: every non-overlapping occurrence,
 /// left to right; an empty `search` replaces nothing.
 ///

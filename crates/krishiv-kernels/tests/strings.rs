@@ -524,3 +524,55 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn mask_replaces_each_class_or_retains_on_null() {
+    use krishiv_kernels::string::mask;
+    let input = strs(&[Some("AbCD123-@$#"), Some(""), None, Some("aB3!éÉ")]);
+    let all = |u: Option<&str>, l: Option<&str>, d: Option<&str>, o: Option<&str>| {
+        mask(
+            S::Array(&input),
+            S::Scalar(u),
+            S::Scalar(l),
+            S::Scalar(d),
+            S::Scalar(o),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        rows(&all(Some("Q"), Some("q"), Some("d"), Some("o"))),
+        [
+            Some("QqQQdddoooo".to_owned()),
+            Some(String::new()),
+            None,
+            Some("qQdoqQ".to_owned()),
+        ]
+    );
+    // A NULL replacement retains the character.
+    assert_eq!(
+        rows(&all(Some("Q"), Some("q"), Some("d"), None))[..2],
+        [Some("QqQQddd-@$#".to_owned()), Some(String::new())]
+    );
+    assert_eq!(
+        rows(&all(None, None, None, None))[0],
+        Some("AbCD123-@$#".to_owned())
+    );
+    // A NULL input is NULL whatever the replacements.
+    assert_eq!(
+        rows(&all(Some("Q"), Some("q"), Some("d"), Some("o")))[2],
+        None
+    );
+    // Column replacements broadcast over a literal input.
+    let out = mask(
+        S::Scalar(Some("aB1!")),
+        S::Array(&strs(&[Some("X"), None])),
+        S::Scalar(Some("l")),
+        S::Scalar(Some("d")),
+        S::Scalar(Some("o")),
+    )
+    .unwrap();
+    assert_eq!(
+        rows(&out),
+        [Some("lXdo".to_owned()), Some("lBdo".to_owned())]
+    );
+}

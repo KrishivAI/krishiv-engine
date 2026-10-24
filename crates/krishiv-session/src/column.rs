@@ -303,6 +303,8 @@ impl Column {
     pub(crate) fn function(name: &str, args: Vec<Self>, distinct: bool) -> Self {
         Self::new(Expr::new(ExprNode::Function(FunctionCall {
             name: name.to_owned(),
+            qualifier: Vec::new(),
+            arg_names: Vec::new(),
             args: args.into_iter().map(|c| Arc::new(c.expr)).collect(),
             distinct,
             filter: None,

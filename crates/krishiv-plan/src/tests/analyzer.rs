@@ -526,6 +526,8 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
             default,
             t().project(vec![Expr::new(ExprNode::Function(crate::FunctionCall {
                 name: "count".to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args: vec![Arc::new(c("a"))],
                 distinct: false,
                 filter: Some(Arc::new(eq(c("b"), s("x")))),
@@ -615,6 +617,8 @@ fn shared_expressions_stay_linear() {
         (0..30).fold(Arc::new(c("a")), |e, _| {
             Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
                 name: "+".to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args: vec![Arc::clone(&e), e],
                 distinct: false,
                 filter: None,
@@ -1598,6 +1602,8 @@ fn shared_subexpressions_in_rewrites() {
         let x = Arc::new(c(name));
         Expr::new(ExprNode::Function(crate::FunctionCall {
             name: "+".to_owned(),
+            qualifier: Vec::new(),
+            arg_names: Vec::new(),
             args: vec![Arc::clone(&x), x],
             distinct: false,
             filter: None,
@@ -2087,6 +2093,8 @@ fn conditional_with_filter_names_the_filter_once() {
     let ctx = ctx();
     let call = Expr::new(ExprNode::Function(crate::FunctionCall {
         name: "nvl".to_owned(),
+        qualifier: Vec::new(),
+        arg_names: Vec::new(),
         args: vec![Arc::new(c("a")), Arc::new(int(1))],
         distinct: false,
         filter: Some(Arc::new(eq(c("b"), s("x")))),

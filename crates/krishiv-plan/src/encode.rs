@@ -70,7 +70,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 3;
+pub const ENCODING_VERSION: u16 = 4;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -926,12 +926,25 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             ExprNode::Function(FunctionCall {
                 name,
+                qualifier,
                 args,
+                arg_names,
                 distinct,
                 filter,
             }) => {
                 self.u8(4);
                 self.str(name);
+                self.strs(qualifier);
+                self.len(arg_names.len());
+                for n in arg_names {
+                    match n {
+                        None => self.u8(0),
+                        Some(n) => {
+                            self.u8(1);
+                            self.str(n);
+                        }
+                    }
+                }
                 self.call(args, *distinct, filter.as_ref());
             }
             ExprNode::Cast { expr, to, mode } => {

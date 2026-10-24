@@ -188,7 +188,9 @@ impl Gen<'_> {
                 let (args, distinct, filter) = self.args(d);
                 ExprNode::Function(FunctionCall {
                     name,
+                    qualifier: Vec::new(),
                     args,
+                    arg_names: Vec::new(),
                     distinct,
                     filter,
                 })
@@ -209,7 +211,11 @@ impl Gen<'_> {
             },
             8 => {
                 let id = if self.flag() {
-                    FunctionId::Builtin(Builtin::ALL[usize::from(self.pick(25))])
+                    FunctionId::Builtin(
+                        Builtin::ALL[usize::from(
+                            self.pick(u8::try_from(Builtin::ALL.len()).unwrap_or(u8::MAX)),
+                        )],
+                    )
                 } else {
                     FunctionId::Registry {
                         name: self.name(),
@@ -682,7 +688,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         ExprNode::Star(Star { qualifier, .. }) => m_strings(qualifier, w),
         ExprNode::Function(FunctionCall {
             name,
+            qualifier: _,
             args,
+            arg_names: _,
             distinct,
             filter,
         }) => {

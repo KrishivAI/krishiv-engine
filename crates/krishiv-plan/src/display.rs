@@ -504,6 +504,24 @@ fn list<'a>(args: &'a [std::sync::Arc<Expr>], out: &mut Vec<Piece<'a>>) {
     }
 }
 
+/// Appends `args` separated by `, `, each with its `name => ` prefix when
+/// `arg_names[i]` is one.
+fn named_list<'a>(
+    args: &'a [std::sync::Arc<Expr>],
+    arg_names: &'a [Option<String>],
+    out: &mut Vec<Piece<'a>>,
+) {
+    for (i, e) in args.iter().enumerate() {
+        if i > 0 {
+            out.push(Piece::Str(", "));
+        }
+        if let Some(n) = arg_names.get(i).and_then(Option::as_ref) {
+            out.push(Piece::Owned(format!("{n} => ")));
+        }
+        out.push(Piece::Expr(e));
+    }
+}
+
 /// Appends the pieces of one expression node, its children as
 /// `Piece::Expr`.
 fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
@@ -533,17 +551,27 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
         }
         ExprNode::Function(FunctionCall {
             name,
+            qualifier,
             args,
+            arg_names,
             distinct,
             filter,
-        }) => call(
-            name,
-            Builtin::from_name(name),
-            args,
-            *distinct,
-            filter.as_deref(),
-            out,
-        ),
+        }) => {
+            let qualified = if qualifier.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{name}", Name(qualifier))
+            };
+            call(
+                &qualified,
+                Builtin::from_name(name),
+                args,
+                arg_names,
+                *distinct,
+                filter.as_deref(),
+                out,
+            );
+        }
         ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
             id,
             args,
@@ -555,7 +583,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 FunctionId::Builtin(b) => Some(*b),
                 FunctionId::Registry { .. } => None,
             };
-            call(id.name(), op, args, *distinct, filter.as_deref(), out);
+            call(id.name(), op, args, &[], *distinct, filter.as_deref(), out);
         }
         ExprNode::Cast { expr, to, mode } => {
             out.push(Piece::Str(match mode {
@@ -669,17 +697,40 @@ const fn order_suffix(o: &SortOrder) -> &'static str {
 }
 
 /// Appends a call: operators infix or in their SQL form, others as
-/// `name(args)`.
+/// `name(args)`. A named argument prints as `name => value`; a quantified
+/// `LIKE`/`ILIKE` prints in its SQL form (`a LIKE ANY (p, ...)`).
 fn call<'a>(
     name: &str,
     op: Option<Builtin>,
     args: &'a [std::sync::Arc<Expr>],
+    arg_names: &'a [Option<String>],
     distinct: bool,
     filter: Option<&'a Expr>,
     out: &mut Vec<Piece<'a>>,
 ) {
     let arg = |i: usize| Piece::Expr(&args[i]);
+    // `a [NOT] LIKE|ILIKE ANY|SOME|ALL (p, ...)`, as Spark writes the form.
+    let mut quantified = |negated: bool, insensitive: bool, all: bool| {
+        out.extend([
+            Piece::Expr(&args[0]),
+            Piece::Str(if negated { " NOT " } else { " " }),
+        ]);
+        out.extend([
+            Piece::Str(if insensitive { "ILIKE " } else { "LIKE " }),
+            Piece::Str(if all { "ALL (" } else { "ANY (" }),
+        ]);
+        list(&args[1..], out);
+        out.push(Piece::Str(")"));
+    };
     match (op, args.len()) {
+        (Some(Builtin::LikeAny), n) if n >= 1 => quantified(false, false, false),
+        (Some(Builtin::LikeAll), n) if n >= 1 => quantified(false, false, true),
+        (Some(Builtin::NotLikeAny), n) if n >= 1 => quantified(true, false, false),
+        (Some(Builtin::NotLikeAll), n) if n >= 1 => quantified(true, false, true),
+        (Some(Builtin::ILikeAny), n) if n >= 1 => quantified(false, true, false),
+        (Some(Builtin::ILikeAll), n) if n >= 1 => quantified(false, true, true),
+        (Some(Builtin::NotILikeAny), n) if n >= 1 => quantified(true, true, false),
+        (Some(Builtin::NotILikeAll), n) if n >= 1 => quantified(true, true, true),
         (Some(op), 2) if is_infix(op) && !distinct => {
             out.extend([Piece::Str("("), arg(0), Piece::Str(" ")]);
             out.extend([
@@ -728,7 +779,7 @@ fn call<'a>(
             if distinct {
                 out.push(Piece::Str("DISTINCT "));
             }
-            list(args, out);
+            named_list(args, arg_names, out);
             out.push(Piece::Str(")"));
         }
     }
