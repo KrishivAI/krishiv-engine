@@ -21,35 +21,124 @@ use krishiv_types::batch::{Batch, Weights};
 use super::keys::KeyEncoder;
 use crate::context::QueryContext;
 use crate::error::{Result, internal};
+use crate::hash::HashSeed;
 
 /// A sunk batch with its key rows and its sorted row order (ties in row
-/// order). Shared, so a spill can merge it while the sink still owns it.
+/// order), grouped by bucket when the sort has buckets ([`Bucketing`]):
+/// `order[bounds[b]..bounds[b + 1]]` are bucket `b`'s rows, sorted. Shared,
+/// so a spill can merge it while the sink still owns it.
 #[derive(Debug)]
 pub(crate) struct SortedBatch {
     pub(crate) batch: Batch,
     pub(crate) rows: Rows,
     pub(crate) order: Vec<u32>,
+    /// Where each bucket's rows start in `order`, and the end: one bucket
+    /// (`[0, rows]`) without buckets.
+    pub(crate) bounds: Vec<u32>,
+}
+
+/// A sort's split of its rows into `2^bits` buckets by the hash of their
+/// partitioning keys (a prefix of the sort keys): the top bits of the
+/// seedless hash `h` of the keys' normalized rows. Rows with equal
+/// partitioning keys share a bucket, so each bucket sorts and merges on
+/// its own, and in parallel.
+#[derive(Debug)]
+pub(crate) struct Bucketing {
+    keys: Arc<KeyEncoder>,
+    bits: u32,
+}
+
+/// The seed of the bucket hash: none, so equal keys share a bucket in every
+/// process (design P2-T171 §5.1).
+const SEEDLESS: u64 = 0;
+
+impl Bucketing {
+    /// Buckets by `keys` (encoded as the sort orders them), `2^bits` of
+    /// them.
+    pub(crate) fn new(keys: Arc<KeyEncoder>, bits: u32) -> Self {
+        Self { keys, bits }
+    }
+
+    /// The number of buckets.
+    pub(crate) fn buckets(&self) -> usize {
+        1 << self.bits
+    }
+
+    /// Each row's bucket.
+    fn of(&self, batch: &RecordBatch) -> Result<Vec<u32>> {
+        let rows = self.keys.encode(batch)?;
+        let h = HashSeed::new(Some(SEEDLESS));
+        let shift = 64 - self.bits;
+        Ok((0..rows.num_rows())
+            .map(|i| {
+                let bucket = h.hash(rows.row(i).data()).checked_shr(shift).unwrap_or(0);
+                u32::try_from(bucket).unwrap_or(0)
+            })
+            .collect())
+    }
 }
 
 impl SortedBatch {
-    /// Encodes and sorts `batch`.
-    pub(crate) fn new(batch: Batch, keys: &KeyEncoder) -> Result<Self> {
+    /// Encodes and sorts `batch`, bucket by bucket with `buckets`.
+    pub(crate) fn new(
+        batch: Batch,
+        keys: &KeyEncoder,
+        buckets: Option<&Bucketing>,
+    ) -> Result<Self> {
         let rows = keys.encode(batch.data())?;
         let n = u32::try_from(batch.num_rows())
             .map_err(|_| internal("a batch has more than u32::MAX rows".to_owned()))?;
-        let mut keyed: Vec<(u64, u32)> = (0..n)
-            .map(|i| (prefix(rows.row(i as usize).data()), i))
-            .collect();
+        let mut keyed: Vec<(u64, u32)> = Vec::with_capacity(n as usize);
+        let bounds = match buckets.filter(|b| b.bits > 0) {
+            None => {
+                keyed.extend((0..n).map(|i| (prefix(rows.row(i as usize).data()), i)));
+                vec![0, n]
+            }
+            Some(b) => {
+                // A counting sort by bucket, then each bucket by key.
+                let of = b.of(batch.data())?;
+                let mut bounds = vec![0_u32; b.buckets() + 1];
+                for &x in &of {
+                    bounds[x as usize + 1] += 1;
+                }
+                for i in 1..bounds.len() {
+                    bounds[i] += bounds[i - 1];
+                }
+                let mut at = bounds.clone();
+                keyed.resize(n as usize, (0, 0));
+                for (i, &x) in (0..n).zip(&of) {
+                    let slot = &mut at[x as usize];
+                    keyed[*slot as usize] = (prefix(rows.row(i as usize).data()), i);
+                    *slot += 1;
+                }
+                bounds
+            }
+        };
         // Unstable sort plus the row index as tie-break: a stable order
         // without the stable sort's scratch buffer. Most comparisons end at
         // the 8-byte key prefix.
-        keyed.sort_unstable_by(|&(pa, a), &(pb, b)| {
-            pa.cmp(&pb)
-                .then_with(|| rows.row(a as usize).cmp(&rows.row(b as usize)))
-                .then(a.cmp(&b))
-        });
+        for w in bounds.windows(2) {
+            keyed[w[0] as usize..w[1] as usize].sort_unstable_by(|&(pa, a), &(pb, b)| {
+                pa.cmp(&pb)
+                    .then_with(|| rows.row(a as usize).cmp(&rows.row(b as usize)))
+                    .then(a.cmp(&b))
+            });
+        }
         let order = keyed.into_iter().map(|(_, i)| i).collect();
-        Ok(Self { batch, rows, order })
+        Ok(Self {
+            batch,
+            rows,
+            order,
+            bounds,
+        })
+    }
+
+    /// The positions in `order` of bucket `b`'s rows.
+    pub(crate) fn bucket(&self, b: usize) -> std::ops::Range<usize> {
+        match (self.bounds.get(b), self.bounds.get(b + 1)) {
+            (Some(&lo), Some(&hi)) => lo as usize..hi as usize,
+            _ => 0..0,
+        }
     }
 
     /// Bytes this batch holds: data, key rows and order.
@@ -57,7 +146,18 @@ impl SortedBatch {
         self.batch.data().get_array_memory_size()
             + self.batch.num_rows() * (size_of::<u32>() + weight_bytes(&self.batch))
             + self.rows.size()
+            + self.bounds.len() * size_of::<u32>()
     }
+}
+
+/// The first 16 bytes of a key row, big-endian (zero-padded), as
+/// [`prefix`]: a sort merge compares many rows of one partition, whose
+/// first 8 bytes are mostly the partitioning key.
+fn wide_prefix(row: &[u8]) -> u128 {
+    let mut bytes = [0u8; 16];
+    let n = row.len().min(16);
+    bytes[..n].copy_from_slice(&row[..n]);
+    u128::from_be_bytes(bytes)
 }
 
 /// The first 8 bytes of a key row, big-endian (zero-padded): comparing
@@ -195,6 +295,11 @@ pub(crate) fn metadata_bytes(sources: usize) -> usize {
     sources.saturating_mul(size_of::<u64>().saturating_add(size_of::<u32>()))
 }
 
+/// Bytes per row of a sort merge's keyed rows (16-byte prefix, slice, row).
+const KEYED_ROW_BYTES: usize = size_of::<(u128, u32, u32)>();
+/// Bytes per row of a sort merge's output order.
+const ORDER_ROW_BYTES: usize = size_of::<(u32, u32)>();
+
 /// A k-way merge of sorted runs.
 pub(crate) struct Merger {
     schema: SchemaRef,
@@ -215,7 +320,26 @@ pub(crate) struct Merger {
     /// A 64-bit count of output batches: it never wraps.
     stamp: Vec<u64>,
     generation: u64,
+    /// A merge of many in-memory slices done as one sort of their rows
+    /// (see [`Merger::bucket`]): no cursors, the rows in output order.
+    sorted: Option<SortedRows>,
 }
+
+/// The rows of a sorted merge, in output order, and the memory they hold.
+struct SortedRows {
+    /// `(source, row)` in output order.
+    order: Vec<(u32, u32)>,
+    /// The next row of `order` to emit.
+    pos: usize,
+    /// Accounts `order` (and, while sorting, its keyed form).
+    _scratch: Reservation,
+}
+
+/// In-memory slices above which a bucket's merge sorts its rows instead of
+/// running a loser tree: with many small slices each tree step is a chain
+/// of cache misses, while one sort of the rows' key prefixes stays in
+/// cache (most comparisons end at a 16-byte prefix).
+const SORT_MIN_SLICES: usize = 64;
 
 impl Merger {
     /// A merge of `memory` runs followed by `spilled` runs (in that run
@@ -229,13 +353,110 @@ impl Merger {
         spilled: &[SpillRun],
         handle: &Arc<ConsumerHandle>,
     ) -> Result<Self> {
+        let memory = memory
+            .into_iter()
+            .map(|s| {
+                let all = 0..s.order.len();
+                (s, all)
+            })
+            .collect();
+        Self::slices(schema, encoder, memory, spilled, handle)
+    }
+
+    /// A merge of bucket `bucket` of each of `memory`'s batches.
+    pub(crate) fn bucket(
+        schema: SchemaRef,
+        encoder: Arc<KeyEncoder>,
+        memory: &[Arc<SortedBatch>],
+        bucket: usize,
+        handle: &Arc<ConsumerHandle>,
+    ) -> Result<Self> {
+        let memory: Vec<_> = memory
+            .iter()
+            .map(|s| (Arc::clone(s), s.bucket(bucket)))
+            .filter(|(_, r)| !r.is_empty())
+            .collect();
+        if memory.len() > SORT_MIN_SLICES {
+            let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
+            let mut scratch = handle.reservation();
+            // Without the memory for the keyed rows, the loser tree (which
+            // needs none) merges them.
+            if scratch
+                .try_grow(rows.saturating_mul(KEYED_ROW_BYTES + ORDER_ROW_BYTES))
+                .is_ok()
+            {
+                return Self::sorted(schema, encoder, &memory, scratch);
+            }
+        }
+        Self::slices(schema, encoder, memory, &[], handle)
+    }
+
+    /// The merge of `memory`'s slices as one stable sort of their rows by
+    /// `(key, slice, position)`, `scratch` holding its memory.
+    fn sorted(
+        schema: SchemaRef,
+        encoder: Arc<KeyEncoder>,
+        memory: &[(Arc<SortedBatch>, std::ops::Range<usize>)],
+        mut scratch: Reservation,
+    ) -> Result<Self> {
+        let too_many = || internal("a sort merge of more than u32::MAX rows".to_owned());
+        let rows: usize = memory.iter().map(|(_, r)| r.len()).sum();
+        let mut keyed: Vec<(u128, u32, u32)> = Vec::with_capacity(rows);
+        for (i, (s, range)) in memory.iter().enumerate() {
+            let i = u32::try_from(i).map_err(|_| too_many())?;
+            keyed.extend(
+                s.order[range.clone()]
+                    .iter()
+                    .map(|&r| (wide_prefix(s.rows.row(r as usize).data()), i, r)),
+            );
+        }
+        // Ties in a slice keep its order (its own ties are in row order),
+        // and slices keep their run order: the merge's stable order.
+        keyed.sort_unstable_by(|&(pa, sa, ra), &(pb, sb, rb)| {
+            pa.cmp(&pb)
+                .then_with(|| {
+                    let a = memory[sa as usize].0.rows.row(ra as usize);
+                    let b = memory[sb as usize].0.rows.row(rb as usize);
+                    a.cmp(&b)
+                })
+                .then((sa, ra).cmp(&(sb, rb)))
+        });
+        let order: Vec<(u32, u32)> = keyed.into_iter().map(|(_, s, r)| (s, r)).collect();
+        scratch.shrink(scratch.size().saturating_sub(order.len() * ORDER_ROW_BYTES));
+        let sources = memory.iter().map(|(s, _)| s.batch.clone()).collect();
+        Ok(Self {
+            schema,
+            encoder,
+            cursors: Vec::new(),
+            tree: Vec::new(),
+            sources,
+            retired: false,
+            slot: Vec::new(),
+            stamp: Vec::new(),
+            generation: 0,
+            sorted: Some(SortedRows {
+                order,
+                pos: 0,
+                _scratch: scratch,
+            }),
+        })
+    }
+
+    /// A merge of the `order` ranges of `memory` followed by `spilled`
+    /// runs.
+    fn slices(
+        schema: SchemaRef,
+        encoder: Arc<KeyEncoder>,
+        memory: Vec<(Arc<SortedBatch>, std::ops::Range<usize>)>,
+        spilled: &[SpillRun],
+        handle: &Arc<ConsumerHandle>,
+    ) -> Result<Self> {
         let mut cursors = Vec::with_capacity(memory.len() + spilled.len());
-        for s in memory {
-            let len = s.order.len();
+        for (s, range) in memory {
             cursors.push(Cursor {
                 input: Input::Memory(s),
-                pos: 0,
-                len,
+                pos: range.start,
+                len: range.end,
                 source: cursors.len(),
                 prefix: 0,
             });
@@ -274,6 +495,7 @@ impl Merger {
             slot: Vec::new(),
             stamp: Vec::new(),
             generation: 0,
+            sorted: None,
         };
         for i in 0..merger.cursors.len() {
             // Plays `i` up until it meets an empty node (initial build).
@@ -346,7 +568,16 @@ impl Merger {
     /// I/O.
     pub(crate) fn next(&mut self, max_rows: usize) -> Result<Option<Batch>> {
         let mut out = Vec::with_capacity(max_rows.min(1 << 16));
-        while out.len() < max_rows.max(1) {
+        if let Some(sorted) = &mut self.sorted {
+            let end = sorted.order.len().min(sorted.pos + max_rows.max(1));
+            out.extend(
+                sorted.order[sorted.pos..end]
+                    .iter()
+                    .map(|&(s, r)| (s as usize, r as usize)),
+            );
+            sorted.pos = end;
+        }
+        while self.sorted.is_none() && out.len() < max_rows.max(1) {
             let Some(&top) = self.tree.first() else {
                 break;
             };

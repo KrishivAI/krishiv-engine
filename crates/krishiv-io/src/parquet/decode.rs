@@ -122,10 +122,17 @@ pub(crate) struct ParquetDecoder {
     fetching: Option<usize>,
     /// Planned row groups, in order.
     planned: Vec<Unit>,
+    /// The column chunk ranges of every unit planned at the start, sorted
+    /// by start: what [`Self::check_page_headers`] looks pushed ranges up
+    /// in (pruned units may stay; checking their chunks is harmless).
+    chunk_ranges: Vec<Range<u64>>,
     meta: Arc<ParquetMetadata>,
     /// Runtime filters (file level) and the generation each had when the
     /// remaining units were last pruned with it.
     dynamic: Vec<(ScanFilter, u64)>,
+    /// Whether the row filter may evaluate the runtime filters
+    /// ([`crate::RowLevel::runtime_filters`]).
+    dynamic_rows: bool,
     projection: Vec<ColumnPath>,
     output: SchemaRef,
     row_index: bool,
@@ -260,7 +267,10 @@ impl ParquetDecoder {
             (RowFilterPolicy::Auto, Some("off")) => RowFilterPolicy::Off,
             (p, _) => p,
         };
-        let kept = req.predicate.as_ref().and_then(|p| {
+        // Rows are dropped only by what the request allows at row level
+        // (`RowLevel`); pruning below uses the whole predicate.
+        let row_predicate = req.row_level.predicate(req.predicate.as_ref());
+        let kept = row_predicate.and_then(|p| {
             let p = p.to_nnf();
             let (mut rows, mut kept) = (0f64, 0f64);
             for u in &planned {
@@ -274,7 +284,7 @@ impl ParquetDecoder {
         });
         let mut late = LateMaterialization::new(
             policy,
-            req.predicate.as_ref(),
+            row_predicate,
             widen.then_some(widen_column as super::row_filter::Widen),
             !row_index && guard.is_empty(),
             kept,
@@ -282,6 +292,7 @@ impl ParquetDecoder {
         let dynamic: Vec<PushdownExpr> = req
             .dynamic
             .iter()
+            .filter(|_| req.row_level.runtime_filters())
             .filter_map(crate::ScanFilter::predicate)
             .collect();
         let mut late_leaves = Vec::new();
@@ -303,12 +314,18 @@ impl ParquetDecoder {
             units_pruned: pruned,
             ..ScanUnitMetrics::default()
         };
+        let mut chunk_ranges: Vec<Range<u64>> = planned
+            .iter()
+            .flat_map(|u| u.chunks.iter().cloned())
+            .collect();
+        chunk_ranges.sort_by_key(|r| (r.start, r.end));
         Ok(Self {
             decoder: Some(decoder),
             reader: None,
             reading: 0,
             fetching: None,
             planned,
+            chunk_ranges,
             meta: Arc::clone(meta),
             // The units were planned with these generations' filters.
             dynamic: req
@@ -316,6 +333,7 @@ impl ParquetDecoder {
                 .iter()
                 .map(|d| (d.clone(), d.generation()))
                 .collect(),
+            dynamic_rows: req.row_level.runtime_filters(),
             projection: req.projection.clone(),
             output,
             row_index,
@@ -502,12 +520,43 @@ impl ParquetDecoder {
         Ok(())
     }
 
-    /// The current runtime filters as file-level predicates.
+    /// The current runtime filters as file-level predicates, for the row
+    /// filter (none when the request does not allow them at row level).
     fn dynamic_predicates(&self) -> Vec<PushdownExpr> {
         self.dynamic
             .iter()
+            .filter(|_| self.dynamic_rows)
             .filter_map(|(f, _)| f.predicate())
             .collect()
+    }
+
+    /// Walks the page headers of every planned column chunk that `ranges`
+    /// hold before arrow-rs reads them ([`super::thrift_guard::check_pages`]).
+    ///
+    /// The push decoder asks for whole column chunks: the footer is read
+    /// without the page index (`PageIndexPolicy::Skip` in `meta.rs`), and
+    /// only an offset index lets arrow-rs fetch part of a chunk. Loading the
+    /// page index would need this check to handle partial ranges.
+    fn check_page_headers(&self, ranges: &[Range<u64>], bytes: &[Bytes]) -> FormatResult<()> {
+        for (range, held) in ranges.iter().zip(bytes) {
+            let first = self.chunk_ranges.partition_point(|c| c.start < range.start);
+            let inside = self.chunk_ranges[first..]
+                .iter()
+                .take_while(|c| c.start < range.end)
+                .filter(|c| c.end <= range.end);
+            for c in inside {
+                let at = |offset: u64| usize::try_from(offset - range.start).ok();
+                if let Some(chunk) = at(c.start)
+                    .zip(at(c.end))
+                    .and_then(|(from, to)| held.get(from..to))
+                {
+                    super::thrift_guard::check_pages(chunk).map_err(|why| {
+                        FormatError::Corrupt(format!("a page header is malformed: {why}"))
+                    })?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn step_inner(&mut self) -> FormatResult<Step> {
@@ -583,6 +632,10 @@ impl Decoder for ParquetDecoder {
     fn push(&mut self, data: Vec<(Range<u64>, Bytes)>) -> FormatResult<()> {
         let (ranges, bytes): (Vec<_>, Vec<_>) = data.into_iter().unzip();
         self.metrics.bytes_pushed += bytes.iter().map(|b| b.len() as u64).sum::<u64>();
+        if let Err(e) = self.check_page_headers(&ranges, &bytes) {
+            self.poisoned = true;
+            return Err(e);
+        }
         let decoder = self.decoder()?;
         let result = super::contain("buffering", FormatError::Corrupt, || {
             decoder

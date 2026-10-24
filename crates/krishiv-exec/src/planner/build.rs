@@ -258,7 +258,10 @@ impl<'a> Planner<'a> {
                     let window = self.window(below, exprs, partition_by, order_by, limit)?;
                     return self.filter(window, predicate);
                 }
-                let input = self.plan(input)?;
+                let mut input = self.plan(input)?;
+                if matches!(input.node, PhysNode::Scan(_)) {
+                    self.no_runtime_filters_before(&mut input, predicate);
+                }
                 self.filter(input, predicate)
             }
             PlanNode::Project { input, exprs } => {
@@ -665,6 +668,26 @@ impl<'a> Planner<'a> {
         krishiv_optimizer::estimated_rows(plan, &stats)
     }
 
+    /// Whether every table `plan` reads reports statistics, so its estimate
+    /// does not rest on default row counts. A `WITH` reference counts as
+    /// default-sized, as the estimator treats it.
+    pub(crate) fn has_statistics(&self, plan: &Arc<LogicalPlan>) -> bool {
+        use krishiv_optimizer::Statistics as _;
+        let stats = super::ProviderStatistics(Arc::clone(&self.cx.tables));
+        let mut stack = vec![plan];
+        while let Some(p) = stack.pop() {
+            match &p.node {
+                PlanNode::Scan(scan) if stats.table(scan).is_none() => return false,
+                // The estimator reads a reference to a `WITH` definition
+                // as a default-sized relation, not through its definition.
+                PlanNode::CteRef(_) => return false,
+                _ => {}
+            }
+            p.for_each_child(&mut |c| stack.push(c));
+        }
+        true
+    }
+
     fn scan(
         &mut self,
         plan: &Arc<LogicalPlan>,
@@ -736,7 +759,7 @@ impl<'a> Planner<'a> {
             Vec::new()
         };
         let exact = scan_filter_plan.as_ref().is_some_and(|f| f.exact);
-        let planned = Planned {
+        let mut planned = Planned {
             schema,
             node: PhysNode::Scan(ScanNode {
                 id,
@@ -751,9 +774,24 @@ impl<'a> Planner<'a> {
             sites,
             placement: Placement::Unknown,
         };
+        if let Some(predicate) = filter {
+            self.no_runtime_filters_before(&mut planned, predicate);
+        }
         match filter {
             Some(predicate) if !exact => self.filter(planned, predicate),
             _ => Ok(planned),
+        }
+    }
+
+    /// A scan whose filter has a conjunct that may raise gets no runtime
+    /// filter: Spark evaluates its runtime filter as the last conjunct of
+    /// the filter over the scan, so it never keeps that conjunct from
+    /// seeing a row (it raises on a row whose key matches nothing, even
+    /// alone in its file). Dropping the scan's sites keeps joins above from
+    /// targeting it.
+    fn no_runtime_filters_before(&self, scan: &mut Planned, predicate: &Expr) {
+        if krishiv_plan::may_raise(predicate, self.env.ansi) {
+            scan.sites.clear();
         }
     }
 

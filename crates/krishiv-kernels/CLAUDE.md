@@ -27,7 +27,9 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   the slow path (measured: `div` with 10% NULLs 302 -> 262 µs, = the no-NULL time; decimal `/` with 10% NULLs is
   1.08x of the 90%-rows bound, so no kernel takes the `by_nulls` axis: below the 1.2x bar).
 - `string` (P2-T023a): Spark string functions on `Utf8`/`LargeUtf8` (and `Binary` where Spark defines them): `upper`/`lower`
-  (ASCII fast path; Unicode data keyed by `SparkVersion`: the 56 Unicode 17 additions are unmapped before 4.2),
+  (ASCII fast path; Unicode data keyed by `SparkVersion`: the 56 Unicode 17 additions are unmapped before 4.2; std maps only
+  the code points of `string/case_table.rs`, generated from the Spark 4.2 fixture by `tests/scripts/gen_case_table.py`, so a
+  toolchain with newer Unicode data does not change the output),
   `char_length`/`byte_length`, `trim` (spaces only by default), `match_str`/`match_binary` (`startswith`/`endswith`/
   `contains`), `replace`, `pad`/`pad_binary`, `substring`/`substring_binary`, `concat`, `like` (`string/like.rs`:
   literal-shaped patterns take string comparisons, the rest a linear backtracking matcher; errors only on non-NULL rows)

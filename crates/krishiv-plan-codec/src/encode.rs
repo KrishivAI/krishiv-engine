@@ -532,6 +532,9 @@ fn join_type(t: JoinType) -> pb::JoinType {
         JoinType::LeftSemi => pb::JoinType::LeftSemi,
         JoinType::LeftAnti => pb::JoinType::LeftAnti,
         JoinType::NullAwareAnti => pb::JoinType::NullAwareAnti,
+        JoinType::RightSemi => pb::JoinType::RightSemi,
+        JoinType::RightAnti => pb::JoinType::RightAnti,
+        JoinType::RightOuter => pb::JoinType::RightOuter,
     }
 }
 
@@ -609,6 +612,34 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
         WindowFunction::CumeDist => Function::CumeDist(pb::Empty {}),
         WindowFunction::Ntile(buckets) => Function::Ntile(*buckets),
         WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a)),
+        WindowFunction::Offset {
+            input,
+            offset,
+            default,
+            ignore_nulls,
+            data_type,
+        } => Function::OffsetValue(pb::OffsetFunction {
+            input: *input as u64,
+            offset: *offset,
+            default: default.map(|c| c as u64),
+            ignore_nulls: *ignore_nulls,
+            data_type: type_bytes(data_type),
+        }),
+        WindowFunction::NthValue {
+            input,
+            n,
+            ignore_nulls,
+            data_type,
+        } => Function::NthValue(pb::NthValueFunction {
+            input: *input as u64,
+            n: *n,
+            ignore_nulls: *ignore_nulls,
+            data_type: type_bytes(data_type),
+        }),
+    };
+    let offset = |b: FrameBound| match b {
+        FrameBound::Offset(k) => k,
+        _ => 0,
     };
     Ok(pb::WindowFunctionPlan {
         function: Some(function),
@@ -619,6 +650,8 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
             } as i32,
             lower: frame_bound(f.frame.lower)? as i32,
             upper: frame_bound(f.frame.upper)? as i32,
+            lower_offset: offset(f.frame.lower),
+            upper_offset: offset(f.frame.upper),
         }),
         filter: f.filter.map(|c| c as u64),
         name: f.name.clone(),
@@ -630,6 +663,7 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
         FrameBound::UnboundedPreceding => Ok(pb::FrameBound::UnboundedPreceding),
         FrameBound::CurrentRow => Ok(pb::FrameBound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(pb::FrameBound::UnboundedFollowing),
+        FrameBound::Offset(_) => Ok(pb::FrameBound::Offset),
         // `FrameBound` is `#[non_exhaustive]`: a bound added later needs a
         // codec change, not a silently wrong frame.
         _ => Err(CodecError::Unsupported(
