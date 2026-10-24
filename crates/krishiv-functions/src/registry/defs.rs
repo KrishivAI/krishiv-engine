@@ -116,19 +116,14 @@ fn date(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Date, c)
 }
 
-/// Whether Spark's legacy string-to-`int` cast reads `s` (surrounding
-/// whitespace, a sign, digits and a fraction it truncates).
+/// Whether Spark's `date_add`/`date_sub` accepts `s` as a day count with
+/// ANSI off: surrounding whitespace, a sign and digits that parse as an
+/// `int`. A fraction, exponent or anything else is
+/// `SECOND_FUNCTION_ARGUMENT_NOT_INTEGER`, not a truncation.
 fn legacy_int(s: &str) -> bool {
     let t = s.trim();
     let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
-    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
-    !whole.is_empty()
-        && whole.bytes().all(|b| b.is_ascii_digit())
-        && fraction.bytes().all(|b| b.is_ascii_digit())
-        && t.split('.')
-            .next()
-            .and_then(|w| w.parse::<i32>().ok())
-            .is_some()
+    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) && t.parse::<i32>().is_ok()
 }
 
 /// `date_add`/`date_sub` with ANSI off: a string literal day count that is

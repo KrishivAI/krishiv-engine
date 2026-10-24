@@ -13,14 +13,42 @@ use crate::{
     Builtin, Expr, JoinCondition, JoinKind, LogicalPlan, MAX_DEPTH, Plan, PlanNode, check_depth,
 };
 
-/// A thread with a 2 MiB stack, the size of a tokio worker's.
+/// Stack of a tokio worker.
+const WORKER_STACK: usize = 2 << 20;
+
+/// Instrumented builds (`cargo llvm-cov` sets `LLVM_PROFILE_FILE` for the test
+/// binary) spill counters and keep more locals live, so each resolver frame is
+/// several times larger. The depth limit is a property of the uninstrumented
+/// frame size; scale the stack so the same nesting fits.
+const INSTRUMENTED_STACK: usize = 16 << 20;
+
+/// The stack size [`on_small_stack`] uses given the profile-file variable.
+pub(super) fn small_stack_size(profile_file: Option<&std::ffi::OsStr>) -> usize {
+    if profile_file.is_some() {
+        INSTRUMENTED_STACK
+    } else {
+        WORKER_STACK
+    }
+}
+
+/// A thread with a tokio worker's 2 MiB stack (larger under coverage
+/// instrumentation, see [`INSTRUMENTED_STACK`]).
 pub(super) fn on_small_stack(f: impl FnOnce() + Send + 'static) {
     thread::Builder::new()
-        .stack_size(2 << 20)
+        .stack_size(small_stack_size(
+            std::env::var_os("LLVM_PROFILE_FILE").as_deref(),
+        ))
         .spawn(f)
         .unwrap()
         .join()
         .unwrap();
+}
+
+#[test]
+fn instrumented_builds_get_a_larger_stack() {
+    use std::ffi::OsStr;
+    assert_eq!(small_stack_size(None), 2 << 20);
+    assert_eq!(small_stack_size(Some(OsStr::new("x.profraw"))), 16 << 20);
 }
 
 /// A chain of `n` filters over a table: depth `n + 1`.

@@ -100,6 +100,14 @@ pub enum Statement {
     Query(Box<Query>),
     /// `EXPLAIN [mode] statement`.
     Explain(Explain),
+    /// `SET`, `SET -v`, `SET key` or `SET key = value`.
+    Set(Set),
+    /// `RESET` or `RESET key`.
+    Reset(Reset),
+    /// `CREATE [OR REPLACE] TEMPORARY VIEW name [(columns)] AS query`.
+    CreateView(CreateView),
+    /// `DROP VIEW [IF EXISTS] name`.
+    DropView(DropView),
 }
 
 /// `EXPLAIN [EXTENDED | FORMATTED | CODEGEN | COST] statement`.
@@ -133,6 +141,116 @@ pub enum ExplainMode {
     /// `VERBOSE` (a Krishiv extension): the logical plan after each
     /// optimizer rule that changed it, then the physical plan.
     Verbose,
+}
+
+/// `SET`, `SET -v`, `SET key`, `SET key = value` or `SET TIME ZONE ...`:
+/// the key of an assignment or lookup is decoded only when backquoted,
+/// and the value of an assignment is the raw rest of the statement,
+/// trimmed (decoded only when it is one backquoted token).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Set {
+    /// What it is.
+    pub kind: SetKind,
+    /// Source text, from `SET` to the end of the statement.
+    pub span: Span,
+}
+
+/// The kinds of [`Set`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SetKind {
+    /// `SET`: every explicitly set key.
+    All,
+    /// `SET -v`: every key with its meaning and version.
+    Verbose,
+    /// `SET key`: the one row of `key`.
+    Show {
+        /// The key, decoded when backquoted.
+        key: String,
+        /// The key as written.
+        key_span: Span,
+    },
+    /// `SET key = value`.
+    Assign {
+        /// The key, decoded when backquoted.
+        key: String,
+        /// The key as written.
+        key_span: Span,
+        /// The value: the raw rest of the statement, trimmed, or the
+        /// decoded value when it is one backquoted token.
+        value: String,
+        /// The value as written (trimmed).
+        value_span: Span,
+    },
+    /// `SET TIME ZONE ...`: the zone to use.
+    TimeZone {
+        /// The zone.
+        zone: TimeZone,
+        /// The zone as written.
+        zone_span: Span,
+    },
+}
+
+/// `SET TIME ZONE LOCAL` or `SET TIME ZONE '<zone id>'`: the zone to use.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TimeZone {
+    /// `LOCAL`: the system's time zone.
+    Local,
+    /// A zone id as written (unescaped).
+    Named(String),
+}
+
+/// `RESET` or `RESET key`: the key is decoded when backquoted, and a bare
+/// key holds no whitespace.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Reset {
+    /// The key to reset; `None` resets every key the session set.
+    pub key: Option<String>,
+    /// The key as written.
+    pub key_span: Option<Span>,
+    /// Source text, from `RESET` to the end of the statement.
+    pub span: Span,
+}
+
+/// `CREATE [OR REPLACE] TEMPORARY VIEW name [(columns)] AS query`
+/// (`TEMP` for `TEMPORARY`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateView {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// `IF NOT EXISTS`.
+    pub if_not_exists: bool,
+    /// The view name (temporary views take one part).
+    pub name: Ident,
+    /// The declared column aliases; empty for none.
+    pub columns: Vec<ViewColumn>,
+    /// The query.
+    pub query: Box<Query>,
+    /// Source text, from `CREATE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `name [COMMENT '...']` in a `CREATE VIEW` column list.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ViewColumn {
+    /// The column alias.
+    pub name: Ident,
+    /// Its comment, if written.
+    pub comment: Option<String>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `DROP VIEW [IF EXISTS] name`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropView {
+    /// `IF EXISTS`.
+    pub if_exists: bool,
+    /// The view name (temporary views take one part).
+    pub name: Ident,
+    /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
 }
 
 /// A query: `[WITH ...] body [ORDER BY ...] [LIMIT ...] [OFFSET ...]`.

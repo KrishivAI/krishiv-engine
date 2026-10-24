@@ -325,7 +325,7 @@ fn legacy_day_counts_and_binary_predicates() {
         let consts = [None, s(v)[0].clone()];
         (def(name).result)(&CallTypes::new(&args, &consts).with_ansi(false))
     };
-    for ok in ["1", " -2 ", "+3", "1.9", "7."] {
+    for ok in ["1", " -2 ", "+3", "007"] {
         assert!(legacy("date_add", ok).is_ok(), "{ok}");
     }
     for (name, shown) in [
@@ -343,7 +343,15 @@ fn legacy_day_counts_and_binary_predicates() {
             "{err}"
         );
     }
-    for bad in ["", ".5", "1e3", "99999999999", "1-"] {
+    // Spark rejects a fractional string even with ANSI off: the day count
+    // must parse as an `int`, not truncate.
+    for bad in ["1.2", "1.9", "7.", "", ".5", "1e3", "99999999999", "1-"] {
+        let err = legacy("date_add", bad).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::SecondFunctionArgumentNotInteger,
+            "{bad}"
+        );
         assert!(legacy("date_sub", bad).is_err(), "{bad}");
     }
     // ANSI on: the cast fails at run time instead.

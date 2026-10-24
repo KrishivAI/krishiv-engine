@@ -176,9 +176,41 @@ fn ci_policy_wiring() {
         "  budgets-measure:\n",
         "cargo xtask budgets --build-time --measure-only",
         "name: budgets-current",
+        // The commit the measurement was built on, for the baseline selection.
+        "git rev-parse HEAD^1 > target/measured-base-sha",
+        // HEAD^1 needs the parent: the default depth-1 checkout has none.
+        "fetch-depth: 2",
+        // Main is measured by main-measure.yml, so ci.yml builds no wheels there.
+        "github.event_name != 'push'",
     ] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
     }
+    assert!(
+        ci.contains(
+            "if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'"
+        ),
+        "budgets-measure is for pull requests"
+    );
+    // Main measurement: every commit, never cancelled, 90 days.
+    let main_measure = read(".github/workflows/main-measure.yml");
+    for needle in [
+        "branches: [main]",
+        "group: main-measure-${{ github.sha }}",
+        "cancel-in-progress: false",
+        "cargo xtask budgets --build-time --measure-only",
+        "name: budgets-main",
+        "retention-days: 90",
+        "uses: $/.github/workflows/wheels.yml",
+        "actions: read",
+        // The drift report never fails the run.
+        "continue-on-error: true",
+    ] {
+        assert!(
+            main_measure.contains(needle),
+            "main-measure.yml lacks {needle:?}"
+        );
+    }
+    assert!(!main_measure.contains("pull_request"));
     for label in ["budget-approved", "unsafe-reviewed", "size-approved"] {
         assert!(
             !ci.contains(&format!("approval-label.sh {label}")),
@@ -188,12 +220,78 @@ fn ci_policy_wiring() {
     for needle in [
         "  budgets:\n",
         ".github/scripts/budgets-measurement.sh",
-        "git show FETCH_HEAD:budgets.json > budgets.json",
+        ".github/scripts/main-baseline.sh",
+        "ARTIFACT: budgets-main",
         "approval-label.sh budget-approved",
         "approval-label.sh unsafe-reviewed",
-        "cargo xtask budgets --compare",
+        "cargo xtask budgets --compare \"$MEASURED\" --baseline \"$BASELINE\"",
     ] {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
+    }
+    // The baseline is main's measurement: the gates never take it from the PR's
+    // checkout (a PR must not raise its own baseline), and the selection reads
+    // the base commit's file only as the fallback.
+    assert!(
+        !policy.contains("git show FETCH_HEAD")
+            && policy.contains(
+                "if [ \"$MODE\" = main ]; then\n            cargo xtask budgets --compare"
+            ),
+        "the budgets gate must compare with an explicit baseline (legacy base aside)"
+    );
+    let select = read(".github/scripts/main-baseline.sh");
+    for needle in [
+        "TARGET_SHA_FILE",
+        "git show \"$BASE_SHA:$fallback_path\"",
+        "--event push",
+        "--branch \"$branch\"",
+    ] {
+        assert!(select.contains(needle), "main-baseline.sh lacks {needle:?}");
+    }
+    // The selection runs on a full history and with the least privilege that
+    // can list and download artifacts (`actions: read`).
+    let at = |job: &str| policy.find(job).unwrap();
+    let (budgets_at, wheels_at) = (at("  budgets:\n"), at("  wheel-sizes:\n"));
+    for (job, body) in [
+        ("budgets", &policy[budgets_at..wheels_at]),
+        ("wheel-sizes", &policy[wheels_at..]),
+    ] {
+        assert!(body.contains("fetch-depth: 0"), "{job} needs full history");
+        // The gate runs the base commit's scripts and xtask, never the PR's:
+        // the only checkout is of the base sha, before anything is executed.
+        assert_eq!(
+            body.matches("actions/checkout@").count(),
+            1,
+            "{job} has one checkout"
+        );
+        let checkout = body.find("actions/checkout@").unwrap();
+        let first_run = body.find("run:").unwrap();
+        assert!(checkout < first_run);
+        assert!(
+            body[checkout..first_run].contains("ref: ${{ github.event.pull_request.base.sha }}"),
+            "{job} must check out the base commit, not the pull request"
+        );
+        assert!(
+            !body.contains("head.ref") && !body.contains("refs/pull/"),
+            "{job} must not check out or run pull request code"
+        );
+        assert!(
+            body.contains("TARGET_SHA_FILE"),
+            "{job} selects by the measured base"
+        );
+        assert!(body.contains("actions: read"), "{job} needs actions: read");
+        // Bootstrap: a base without the selection script or `--baseline` is
+        // judged by its own old gate (committed budgets.json), and the
+        // selection is skipped. No rust-cache, so a PR cannot seed the build.
+        assert!(
+            body.contains("id: gate")
+                && body.contains("[ -f .github/scripts/main-baseline.sh ]")
+                && body.contains("grep -qF '\"--baseline\"' xtask/src/budgets.rs")
+                && body.contains("mode=legacy")
+                && body.contains("steps.gate.outputs.mode == 'main'"),
+            "{job} must fall back to the base's own gate when it lacks --baseline"
+        );
+        assert!(!body.contains("rust-cache"), "{job} must not use a cache");
+        assert!(!body.contains("actions: write") && !body.contains("contents: write"));
     }
     // The gate finds the measurement by job and artifact name.
     let fetch = read(".github/scripts/budgets-measurement.sh");
@@ -210,11 +308,24 @@ fn ci_policy_wiring() {
     }
     // Wheel sizes: wheels.yml only measures on a pull request (and reads no
     // label); the label-aware gate in pr-policy.yml compares the measurement.
+    let ci = read(".github/workflows/ci.yml");
+    assert!(
+        ci.contains("github.event_name != 'push' && github.event_name != 'merge_group'"),
+        "wheels-targets is skipped on push and in the merge queue"
+    );
     let wheels = read(".github/workflows/wheels.yml");
     for needle in [
         "cargo xtask wheel-sizes dist --measure-only",
-        "name: wheel-sizes",
-        "if: github.event_name != 'pull_request'",
+        "'wheel-sizes-main' || 'wheel-sizes'",
+        "retention-days: ${{ github.event_name == 'push' && 90 || 14 }}",
+        "git rev-parse HEAD^1 > \"$RUNNER_TEMP/wheel-sizes/measured-base-sha\"",
+        "fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}",
+        // Nightly and manual runs are gated on main's measurement; a push
+        // only reports the drift.
+        "WORKFLOW: main-measure.yml",
+        "git merge-base HEAD origin/main",
+        "continue-on-error: ${{ github.event_name == 'push' }}",
+        "actions: read",
     ] {
         assert!(wheels.contains(needle), "wheels.yml lacks {needle:?}");
     }
@@ -228,7 +339,8 @@ fn ci_policy_wiring() {
         "SKIP_JOB: wheels-targets",
         "approval-label.sh budget-approved",
         "cargo xtask wheel-sizes --compare",
-        "--budgets \"$RUNNER_TEMP/base-budgets.json\"",
+        "ARTIFACT: wheel-sizes-main",
+        "flag=--baseline; else flag=--budgets",
     ] {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
     }
@@ -266,6 +378,18 @@ fn ci_policy_wiring() {
 #[test]
 fn budgets_measurement_script_waits_and_fetches() {
     let script = root().join(".github/scripts/test-budgets-measurement.sh");
+    let out = Command::new("bash").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn main_baseline_script_selects_the_merge_base_measurement() {
+    let script = root().join(".github/scripts/test-main-baseline.sh");
     let out = Command::new("bash").arg(&script).output().unwrap();
     assert!(
         out.status.success(),
@@ -658,5 +782,110 @@ fn release_publishing_is_manual_and_gated() {
     assert!(
         read(".github/scripts/quickstart-test.sh").contains("TMPDIR=\"$work\""),
         "quickstart-test.sh must run Python with TMPDIR=\"$work\""
+    );
+}
+
+/// The `cargo test` commands of a loom job that do not select exactly the
+/// `loom_model` modules (`--lib`, filter `loom_model::`). The `run:` value
+/// is YAML-quoted (a trailing `::` is not a valid plain scalar), so
+/// surrounding quotes are stripped before matching.
+fn loom_steps_off_the_models(loom_job: &str) -> Vec<String> {
+    loom_job
+        .lines()
+        .map(|l| l.trim().trim_start_matches("- "))
+        .filter_map(|l| l.strip_prefix("run: "))
+        .map(|cmd| {
+            cmd.trim()
+                .trim_matches(|c| c == '"' || c == '\'')
+                .trim()
+                .to_owned()
+        })
+        .filter(|cmd| cmd.starts_with("cargo test"))
+        .filter(|cmd| {
+            let words: Vec<&str> = cmd.split_whitespace().collect();
+            let last = words
+                .last()
+                .map(|w| w.trim_matches(|c| c == '"' || c == '\''));
+            !(words.contains(&"--lib") && last == Some("loom_model::"))
+        })
+        .collect()
+}
+
+/// The crates whose sources build a `loom::model`, each checked to keep its
+/// models in a module named `loom_model`.
+fn crates_with_loom_models() -> Vec<String> {
+    fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, files);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    let mut crates = Vec::new();
+    for entry in std::fs::read_dir(root().join("crates")).unwrap() {
+        let krate = entry.unwrap().path();
+        let src = krate.join("src");
+        if !src.is_dir() {
+            continue;
+        }
+        let mut files = Vec::new();
+        walk(&src, &mut files);
+        for file in files {
+            let text = std::fs::read_to_string(&file).unwrap();
+            if !text.contains("loom::model") {
+                continue;
+            }
+            assert!(
+                file.file_stem().is_some_and(|s| s == "loom_model")
+                    || text.contains("mod loom_model {"),
+                "{} builds a loom model outside a `loom_model` module",
+                file.display()
+            );
+            let name = krate.file_name().unwrap().to_string_lossy().into_owned();
+            if !crates.contains(&name) {
+                crates.push(name);
+            }
+        }
+    }
+    crates.sort();
+    crates
+}
+
+/// A loom primitive used outside `loom::model` panics, so the nightly loom
+/// steps select only the `loom_model` modules, and every crate with loom
+/// models has a step.
+#[test]
+fn loom_steps_select_only_loom_models() {
+    let nightly = read(".github/workflows/nightly.yml");
+    let loom = job(&nightly, "loom");
+    assert_eq!(loom_steps_off_the_models(loom), Vec::<String>::new());
+    let crates = crates_with_loom_models();
+    assert!(!crates.is_empty(), "no loom models found");
+    for krate in crates {
+        let step = format!("run: \"cargo test -p {krate} --lib --release --locked loom_model::\"");
+        assert!(loom.contains(&step), "the nightly loom job lacks {step:?}");
+    }
+}
+
+#[test]
+fn loom_step_check_rejects_name_filters_and_whole_crates() {
+    let job = "    steps:\n      - run: rustup show\n      \
+               - run: cargo test -p a --lib --release --locked runtime_filter\n      \
+               - run: cargo test -p b --lib --release --locked\n      \
+               - run: cargo test -p c --release --locked loom_model::\n      \
+               - run: cargo test -p d --lib --release --locked loom_model::\n      \
+               - run: \"cargo test -p e --lib --release --locked loom_model::\"\n      \
+               - run: 'cargo test -p f --lib --release --locked loom_model::'\n      \
+               - run: cargo test -p g --lib --release --locked \"loom_model::\"\n";
+    assert_eq!(
+        loom_steps_off_the_models(job),
+        [
+            "cargo test -p a --lib --release --locked runtime_filter",
+            "cargo test -p b --lib --release --locked",
+            "cargo test -p c --release --locked loom_model::",
+        ]
     );
 }
