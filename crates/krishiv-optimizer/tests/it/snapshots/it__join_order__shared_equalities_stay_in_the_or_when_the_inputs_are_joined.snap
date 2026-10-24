@@ -1,0 +1,13 @@
+---
+source: crates/krishiv-optimizer/tests/it/join_order.rs
+expression: text
+---
+Aggregate [], [count(1) AS count(1)#33]
++- Project [l_orderkey#0]
+   +- Join Inner, ((((o_orderpriority#21 == c_mktsegment#31) and (l_quantity#4 > 10.00)) or ((o_orderpriority#21 == c_mktsegment#31) and (l_quantity#4 < 5.00))) and (l_orderkey#0 == o_orderkey#16))
+      :- Filter ((l_quantity#4 > 10.00) or (l_quantity#4 < 5.00))
+      :  +- Scan spark_catalog.default.lineitem [l_orderkey#0, l_quantity#4]
+      +- Project [o_orderkey#16, o_orderpriority#21, c_mktsegment#31]
+         +- Join Inner, (o_custkey#17 == c_custkey#25)
+            :- Scan spark_catalog.default.orders [o_orderkey#16, o_custkey#17, o_orderpriority#21]
+            +- Scan spark_catalog.default.customer [c_custkey#25, c_mktsegment#31]
