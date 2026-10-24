@@ -212,11 +212,31 @@ impl From<StructType> for DataType {
     }
 }
 
+/// Java's `String.equalsIgnoreCase`, which Spark compares field names
+/// with: as many UTF-16 units, and each character equal, equal upper-cased
+/// or equal lower-cased after upper-casing, by Java's simple (one character)
+/// case mapping.
+pub fn equals_ignore_case(a: &str, b: &str) -> bool {
+    // Rust's mappings are the full ones; one that is not a single character
+    // (`ß` to `SS`) leaves the character as Java's simple mapping does.
+    fn simple(mut m: impl Iterator<Item = char>, c: char) -> char {
+        match (m.next(), m.next()) {
+            (Some(x), None) => x,
+            _ => c,
+        }
+    }
+    let upper = |c: char| simple(c.to_uppercase(), c);
+    let lower = |c: char| simple(c.to_lowercase(), c);
+    a.encode_utf16().count() == b.encode_utf16().count()
+        && a.chars()
+            .zip(b.chars())
+            .all(|(x, y)| x == y || upper(x) == upper(y) || lower(upper(x)) == lower(upper(y)))
+}
+
 /// How two types are compared.
 #[derive(Clone, Copy)]
 struct Loose {
-    /// Field names compared ASCII case-insensitively (Spark's
-    /// `equalsIgnoreCase*` lower-cases with `Locale.ROOT`).
+    /// Field names compared case-insensitively ([`equals_ignore_case`]).
     ignore_case: bool,
     /// Field names not compared at all.
     ignore_names: bool,
@@ -302,7 +322,7 @@ impl DataType {
                     && a.fields.iter().zip(b.fields.iter()).all(|(x, y)| {
                         let names = how.ignore_names
                             || if how.ignore_case {
-                                x.name.eq_ignore_ascii_case(&y.name)
+                                equals_ignore_case(&x.name, &y.name)
                             } else {
                                 x.name == y.name
                             };

@@ -19,7 +19,7 @@ mod nested;
 pub use data_type::{DataType, DecimalStorage, DecimalType};
 pub use ddl::parse_data_type;
 pub use json::parse_metadata;
-pub use nested::{ArrayType, MapType, Metadata, StructField, StructType};
+pub use nested::{ArrayType, MapType, Metadata, StructField, StructType, equals_ignore_case};
 
 #[cfg(test)]
 mod tests;

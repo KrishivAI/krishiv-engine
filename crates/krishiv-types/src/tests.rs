@@ -594,3 +594,29 @@ fn metadata_prints_with_sorted_keys() {
         t.json()
     );
 }
+
+#[test]
+fn field_names_compare_as_java_ignores_case() {
+    use crate::equals_ignore_case as eq;
+    assert!(eq("abc", "ABC") && eq("é", "É") && eq("straße", "STRAßE"));
+    assert!(!eq("straße", "STRASSE") && !eq("a", "b") && !eq("a", "aa"));
+    let t = ty("struct<`é`:int>");
+    assert!(t.equals_ignore_case_and_nullability(&ty("struct<`É`:int>")));
+}
+
+#[test]
+fn a_type_tag_counts_towards_the_nesting_limit() {
+    let inner = format!(
+        "{}int{}",
+        "array<".repeat(DataType::MAX_NESTING_DEPTH),
+        ">".repeat(DataType::MAX_NESTING_DEPTH)
+    );
+    let tagged = Field::new("element", ArrowType::Int32, true).with_metadata(
+        std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), inner)]),
+    );
+    let outer = ArrowType::List(Arc::new(tagged));
+    assert_eq!(
+        DataType::from_arrow(&outer).map_err(|e| e.error_class()),
+        Err(ErrorClass::FailedToParseTooComplex)
+    );
+}

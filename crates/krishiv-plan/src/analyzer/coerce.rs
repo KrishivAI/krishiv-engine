@@ -1052,6 +1052,10 @@ pub(super) fn can_cast(
     if *to == T::Null {
         return Err(BadCast::Without);
     }
+    // A NULL of type `void` (an `array(NULL)` element) casts to anything.
+    if *from == T::Null {
+        return Ok(());
+    }
     if from.is_nested() || to.is_nested() {
         // `TRY_CAST` of a nested type follows the legacy rules (Spark 4.2:
         // `TRY_CAST(array(true) AS array<timestamp>)` resolves), and Spark
@@ -1756,6 +1760,8 @@ mod tests {
                 Err(BadCast::Without),
                 Err(BadCast::Without),
             ),
+            (t("array<void>"), t("array<date>"), Ok(()), Ok(())),
+            (t("array<void>"), t("array<array<int>>"), Ok(()), Ok(())),
         ];
         for (from, to, ansi, legacy) in cases {
             assert_eq!(

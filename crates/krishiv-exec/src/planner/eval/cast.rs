@@ -96,6 +96,10 @@ impl CastParts {
 
 /// `a` through `p`.
 pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
+    // Every value of a `void` array is NULL, of any type.
+    if a.data_type() == &ArrowType::Null {
+        return Ok(arrow_array::new_null_array(&p.to, a.len()));
+    }
     if nested_cast::is_nested(a.data_type()) || nested_cast::is_nested(&p.to) {
         return nested_cast::cast(p, a);
     }

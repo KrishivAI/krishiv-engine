@@ -245,6 +245,9 @@ impl DataType {
             None => Self::from_arrow_at(field.data_type(), depth),
             Some(tag) => {
                 let t = crate::parse_data_type(tag)?;
+                if depth + t.nesting_depth() > Self::MAX_NESTING_DEPTH {
+                    return Err(error::too_deep());
+                }
                 if t.is_valid_storage(field.data_type()) {
                     Ok(t)
                 } else {
