@@ -45,6 +45,10 @@ enum Command {
     /// Run SQL from `-e`, `-f` or stdin and print the result.
     Sql(sql::SqlArgs),
     /// Collect a redacted diagnostic archive.
+    ///
+    /// Per-statement failures are recorded in the bundle and the exit status
+    /// stays 0; only I/O or setup failures exit non-zero (unlike
+    /// `krishiv sql`, which exits 1 on a query error).
     #[command(name = "debug-bundle")]
     DebugBundle(bundle::BundleArgs),
     /// Serve the web UI and admin API.

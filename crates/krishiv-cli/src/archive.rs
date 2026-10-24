@@ -3,8 +3,10 @@
 //!
 //! No new dependency: both formats are small enough to emit directly. The
 //! writers are deterministic (sorted entries, fixed timestamps, fixed modes)
-//! so two runs over the same input are byte-identical. Readers for both
-//! formats live here too, for the tests.
+//! so two runs over the same input on the same machine are byte-identical
+//! (environment facts such as CPU count are recorded, and row counts and
+//! resource counters are kept). Readers for both formats live here too, for
+//! the tests.
 
 use std::collections::BTreeMap;
 
@@ -32,9 +34,11 @@ impl Redacted {
         Self(mask_literals(&redacted))
     }
 
-    /// Content already known to hold no secrets (fixed markers, numbers the
-    /// engine produced): still run through the pattern redaction so every
-    /// archived string went through it.
+    /// Content whose free-text secrets were already scrubbed by typed handling
+    /// (config classification, numeric normalization, fixed markers): still
+    /// run through the pattern redaction so every archived string went
+    /// through it. Callers must scrub user values first; this is not a
+    /// no-redaction escape.
     #[must_use]
     pub(crate) fn vetted(raw: &str, subs: &[PathSub]) -> Self {
         Self::new(raw, subs)
@@ -126,20 +130,88 @@ fn apply_paths(text: &str, subs: &[PathSub]) -> String {
             // Skip single-component placeholders' own digits: patterns never
             // match `<path-N>`.
             if out.contains(pat.as_str()) {
-                out = out.replace(pat.as_str(), &sub.placeholder);
+                out = replace_bounded(&out, pat, &sub.placeholder);
             }
         }
     }
     out
 }
 
+/// `haystack` with every `pat` occurrence bounded by non-word characters
+/// replaced. A bare `str::replace` would rewrite `database` for a path
+/// component `data` and could match inside the `<path-N>` placeholders this
+/// function itself introduces; requiring a word boundary on both sides keeps
+/// full paths, file names and `/`-separated directory names matching while
+/// leaving unrelated identifiers alone.
+fn replace_bounded(haystack: &str, pat: &str, replacement: &str) -> String {
+    if pat.is_empty() || !haystack.contains(pat) {
+        return haystack.to_owned();
+    }
+    let mut out = String::with_capacity(haystack.len());
+    let mut i = 0;
+    while let Some(rel) = haystack[i..].find(pat) {
+        let s = i + rel;
+        let e = s + pat.len();
+        let before = haystack[..s].chars().next_back();
+        let after = haystack[e..].chars().next();
+        if is_word_boundary(before) && is_word_boundary(after) {
+            out.push_str(&haystack[i..s]);
+            out.push_str(replacement);
+        } else {
+            out.push_str(&haystack[i..e]);
+        }
+        i = e;
+    }
+    out.push_str(&haystack[i..]);
+    out
+}
+
+/// Word-like characters that must not touch a component match: without this,
+/// a component `data` would rewrite `database`, and a directory named `path`
+/// would rewrite the `<path-N>` placeholders.
+fn is_word_boundary(c: Option<char>) -> bool {
+    match c {
+        None => true,
+        Some(c) => !(c.is_alphanumeric() || c == '_' || c == '-'),
+    }
+}
+
 fn apply_redact(text: &str) -> String {
     krishiv_common::redact::redact(text).into_owned()
 }
 
+/// Length of the `<path-N>` placeholder starting at byte `at`, if any.
+/// Only this shape (and never generic `<...>` text) survives literal masking.
+fn placeholder_len_at(text: &str, at: usize) -> Option<usize> {
+    let rest = text.get(at..)?.strip_prefix("<path-")?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    (rest.as_bytes().get(digits) == Some(&b'>')).then(|| "<path-".len() + digits + 1)
+}
+
+/// Whether `s` holds a `<path-N>` placeholder.
+fn contains_placeholder(s: &str) -> bool {
+    let mut i = 0;
+    while i < s.len() {
+        match s[i..].find("<path-") {
+            Some(rel) => {
+                let at = i + rel;
+                if placeholder_len_at(s, at).is_some() {
+                    return true;
+                }
+                i = at + "<path-".len();
+            }
+            None => return false,
+        }
+    }
+    false
+}
+
 /// Masks single-quoted string contents with `?` and standalone digit runs
-/// with `0`, skipping `<...>` placeholders. Deterministic and idempotent
-/// over its own output.
+/// with `0`, skipping only `<path-N>` placeholders (never generic `<...>`
+/// text such as `a < b`). Deterministic and idempotent over its own output.
 fn mask_literals(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let bytes = text.as_bytes();
@@ -147,9 +219,9 @@ fn mask_literals(text: &str) -> String {
     while i < bytes.len() {
         let c = bytes[i];
         if c == b'<' {
-            if let Some(end) = text[i..].find('>') {
-                out.push_str(&text[i..i + end + 1]);
-                i += end + 1;
+            if let Some(len) = placeholder_len_at(text, i) {
+                out.push_str(&text[i..i + len]);
+                i += len;
                 continue;
             }
             out.push('<');
@@ -179,7 +251,7 @@ fn mask_literals(text: &str) -> String {
             }
             let end = if closed { j + 1 } else { bytes.len() };
             let literal = &text[i..end];
-            if literal.contains("<path-") || literal.contains(krishiv_common::secret::REDACTED) {
+            if contains_placeholder(literal) || literal.contains(krishiv_common::secret::REDACTED) {
                 out.push_str(literal);
             } else {
                 out.push_str("'?'");
@@ -634,5 +706,38 @@ mod tests {
     #[test]
     fn crc32_matches_known_vector() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
+    }
+
+    #[test]
+    fn common_word_components_do_not_rewrite_identifiers() {
+        let subs = PathSub::for_tables(&["/x/data/file.parquet".to_owned()]);
+        // `data` is a path component, but `database` is unrelated.
+        let r = Redacted::new("database and data", &subs);
+        assert!(r.as_str().contains("database"), "{}", r.as_str());
+        let r = Redacted::new("read /x/data/file.parquet now", &subs);
+        assert!(
+            !r.as_str().contains("/x/data/file.parquet"),
+            "{}",
+            r.as_str()
+        );
+        assert!(r.as_str().contains("<path-1>"), "{}", r.as_str());
+        // Directory names still match when `/`-bounded.
+        let subs = PathSub::for_tables(&["/x/secret-dir/file.parquet".to_owned()]);
+        let r = Redacted::new("dir /x/secret-dir/file.parquet end", &subs);
+        assert!(!r.as_str().contains("secret-dir"), "{}", r.as_str());
+    }
+
+    #[test]
+    fn mask_literals_only_skips_placeholders() {
+        assert_eq!(mask_literals("select 123 < 456 > 789"), "select 0 < 0 > 0");
+        assert_eq!(mask_literals("select foo<'bar'>"), "select foo<'?'>");
+        assert_eq!(
+            mask_literals("select '<path-12>' and 'secret'"),
+            "select '<path-12>' and '?'"
+        );
+        assert_eq!(
+            mask_literals("select <path-2> and 42"),
+            "select <path-2> and 0"
+        );
     }
 }

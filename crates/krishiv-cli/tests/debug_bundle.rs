@@ -10,13 +10,20 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
 fn krishiv(args: &[&str], stdin: Option<&str>) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_krishiv"))
+    krishiv_in(None, args, stdin)
+}
+
+fn krishiv_in(cwd: Option<&std::path::Path>, args: &[&str], stdin: Option<&str>) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_krishiv"));
+    child
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn krishiv");
+        .stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        child.current_dir(dir);
+    }
+    let mut child = child.spawn().expect("spawn krishiv");
     let mut pipe = child.stdin.take().expect("stdin");
     if let Some(s) = stdin {
         pipe.write_all(s.as_bytes()).expect("write stdin");
@@ -201,6 +208,80 @@ fn redaction_hides_literals_secrets_and_paths() {
     let env = std::str::from_utf8(&files["environment.json"]).expect("utf-8");
     assert!(env.contains(std::env::consts::OS), "{env}");
     assert!(!env.contains("HOME"), "{env}");
+}
+
+#[test]
+fn direct_parquet_path_without_table_is_redacted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (_name, path) = staged_table(dir.path());
+    let query = format!("select count(*) as n from parquet.`{path}`");
+    let out = dir.path().join("direct.tar");
+    let o = krishiv(
+        &[
+            "debug-bundle",
+            "-e",
+            &query,
+            "-o",
+            out.to_str().expect("utf-8"),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let files = read_bundle(&out);
+    let all: Vec<u8> = files.values().flatten().copied().collect();
+    let all_text = String::from_utf8_lossy(&all);
+    for secret in ["recognizable-7f3a9c-dir", "sensitive-7f3a9c-data"] {
+        assert!(
+            !all_text.contains(secret),
+            "bundle leaks {secret}: {}",
+            &all_text[..all_text.len().min(2000)]
+        );
+    }
+    let plan = std::str::from_utf8(&files["queries/001.plan.json"]).expect("utf-8");
+    assert!(plan.contains("<path-1>"), "{plan}");
+}
+
+#[test]
+fn relative_table_spelling_is_redacted() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (name, _abs) = staged_table(dir.path());
+    let work = dir.path().join("work-subdir-9f3a");
+    std::fs::create_dir(&work).expect("mkdir");
+    // Relative spellings with `./`/`../` segments, resolved against the
+    // process working directory (which may textually differ from its
+    // canonical form when symlinked). The second statement scans the file
+    // directly, so plans print the absolute path.
+    let rel = "./../recognizable-7f3a9c-dir/./sensitive-7f3a9c-data.parquet";
+    let out = dir.path().join("rel.tar");
+    let o = krishiv_in(
+        Some(&work),
+        &[
+            "debug-bundle",
+            "-e",
+            &format!("select count(*) as n from t; select count(*) as n from parquet.`{rel}`"),
+            "--table",
+            &format!("{name}={rel}"),
+            "-o",
+            out.to_str().expect("utf-8"),
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let files = read_bundle(&out);
+    let all: Vec<u8> = files.values().flatten().copied().collect();
+    let all_text = String::from_utf8_lossy(&all);
+    for secret in ["recognizable-7f3a9c-dir", "sensitive-7f3a9c-data"] {
+        assert!(
+            !all_text.contains(secret),
+            "bundle leaks {secret}: {}",
+            &all_text[..all_text.len().min(2000)]
+        );
+    }
+    let plan = std::str::from_utf8(&files["queries/002.plan.json"]).expect("utf-8");
+    assert!(
+        plan.contains("<path-"),
+        "direct-scan plan must hide the path: {plan}"
+    );
 }
 
 #[test]

@@ -25,6 +25,11 @@ pub(crate) enum BundleFormat {
 }
 
 /// Arguments of `krishiv debug-bundle`.
+///
+/// Per-statement failures are recorded in the bundle (as `error_class` JSON
+/// documents) and the exit status stays 0; only I/O or setup failures (bad
+/// flags, unreadable input, unregistered config) exit non-zero. This differs
+/// from `krishiv sql`, which exits 1 on a query error.
 #[derive(Args, Debug)]
 pub(crate) struct BundleArgs {
     /// SQL to run (one or more `;`-separated statements).
@@ -52,7 +57,8 @@ pub(crate) struct BundleArgs {
     output: PathBuf,
 }
 
-/// Runs the command; the process exit code (0 ok, 1 I/O or setup error).
+/// Runs the command: 0 when the bundle was written (even when individual
+/// statements failed and were recorded in it), 1 on I/O or setup error.
 pub(crate) fn run(args: &BundleArgs) -> i32 {
     match run_inner(args) {
         Ok(()) => 0,
@@ -67,8 +73,24 @@ fn run_inner(args: &BundleArgs) -> Result<(), String> {
     let input = read_input(args.execute.as_ref(), args.file.as_ref())?;
     let session = build_session(&args.conf, &args.table)?;
     let table_paths: Vec<String> = args.table.iter().map(|(_, p)| p.clone()).collect();
-    let subs = PathSub::for_table_spellings(&table_spellings(&table_paths));
     let statements = split_statements(&input);
+    let mut groups = table_spellings(&table_paths);
+    let inline: Vec<String> = direct_parquet_paths(
+        &statements
+            .iter()
+            .map(|(_, s)| s.clone())
+            .collect::<Vec<_>>(),
+    );
+    for p in inline {
+        if table_paths.iter().any(|t| t == &p) {
+            continue;
+        }
+        if groups.iter().any(|g| g.first() == Some(&p)) {
+            continue;
+        }
+        groups.push(absolute_spellings(&p));
+    }
+    let subs = PathSub::for_table_spellings(&groups);
 
     let mut archive = BundleArchive::new();
     let mut names: Vec<String> = Vec::new();
@@ -112,29 +134,157 @@ fn run_inner(args: &BundleArgs) -> Result<(), String> {
     write_atomically(&args.output, &bytes)
 }
 
-/// Every spelling of each `--table` path: as given and absolute (plans
-/// print the absolute path, SQL text the given one), so neither the path
-/// nor the working directory it reveals survives.
+/// Every spelling of each `--table` path: as given plus the absolute form
+/// plans print, so neither the path nor the working directory it reveals
+/// survives.
 fn table_spellings(paths: &[String]) -> Vec<Vec<String>> {
-    paths
-        .iter()
-        .map(|p| {
-            let mut spellings = vec![p.clone()];
-            if let Some(abs) = absolute_spelling(p) {
-                spellings.push(abs);
-            }
-            spellings
-        })
-        .collect()
+    paths.iter().map(|p| absolute_spellings(p)).collect()
 }
 
-/// The absolute form of a relative `--table` path.
-fn absolute_spelling(p: &str) -> Option<String> {
-    if !std::path::Path::new(p).is_relative() {
-        return None;
+/// Every spelling of one path: as given, the absolute form plans print
+/// (normalized against the canonical working directory, so a symlinked cwd
+/// such as macOS `/tmp` -> `/private/tmp` and `./`/`../` segments cannot leak
+/// the real location), plus the fully canonicalized form when the target
+/// exists.
+fn absolute_spellings(p: &str) -> Vec<String> {
+    let mut out = vec![p.to_owned()];
+    let path = Path::new(p);
+    let joined = if path.is_relative() {
+        let Some(cwd) = std::env::current_dir().ok() else {
+            return out;
+        };
+        let base = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+        base.join(path)
+    } else {
+        path.to_path_buf()
+    };
+    if let Some(s) = lexical_normalize(&joined).to_str()
+        && !out.contains(&s.to_owned())
+    {
+        out.push(s.to_owned());
     }
-    let abs = std::env::current_dir().ok()?.join(p);
-    abs.to_str().map(str::to_owned)
+    if let Ok(canonical) = std::fs::canonicalize(&joined)
+        && let Some(s) = canonical.to_str()
+        && !out.contains(&s.to_owned())
+    {
+        out.push(s.to_owned());
+    }
+    out
+}
+
+/// `path` with `.` dropped and `..` resolved lexically (no filesystem
+/// access), so spellings compare equal regardless of redundant segments.
+fn lexical_normalize(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Paths referenced inline as `parquet.'<path>'` (any quote style, any case)
+/// in the SQL text. These bypass `--table`, but plans still print them, so
+/// each gets its own `<path-N>` placeholder.
+fn direct_parquet_paths(statements: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for stmt in statements {
+        for p in parquet_paths_in(stmt) {
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Quoted paths after `parquet.` in one statement.
+fn parquet_paths_in(stmt: &str) -> Vec<String> {
+    let bytes = stmt.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let is_parquet = stmt
+            .get(i..i + 7)
+            .is_some_and(|s| s.eq_ignore_ascii_case("parquet"));
+        if is_parquet {
+            let mut j = i + 7;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if bytes.get(j) == Some(&b'.') {
+                j += 1;
+                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if let Some(&q) = bytes.get(j)
+                    && (q == b'\'' || q == b'"' || q == b'`')
+                {
+                    let (path, next) = read_quoted(stmt, j, q);
+                    if !path.is_empty() && !out.contains(&path) {
+                        out.push(path);
+                    }
+                    i = next;
+                    continue;
+                }
+            }
+        }
+        let ch = stmt[i..].chars().next().unwrap_or('\u{FFFD}');
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// The quoted string opening at byte `open` (quote `q`): its contents and the
+/// byte index just past the closing quote. Handles `` `` `` inside backticks,
+/// `''` inside single quotes and `\` escapes inside single/double quotes;
+/// unclosed quotes yield no path.
+fn read_quoted(stmt: &str, open: usize, q: u8) -> (String, usize) {
+    let bytes = stmt.as_bytes();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut j = open + 1;
+    while j < bytes.len() {
+        let b = bytes[j];
+        if q == b'`' {
+            if b == b'`' {
+                if bytes.get(j + 1) == Some(&b'`') {
+                    buf.push(b'`');
+                    j += 2;
+                    continue;
+                }
+                return (String::from_utf8(buf).unwrap_or_default(), j + 1);
+            }
+            buf.push(b);
+            j += 1;
+        } else {
+            if b == b'\\' {
+                if let Some(&n) = bytes.get(j + 1) {
+                    buf.push(n);
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+                continue;
+            }
+            if b == q {
+                if q == b'\'' && bytes.get(j + 1) == Some(&b'\'') {
+                    buf.push(b'\'');
+                    j += 2;
+                    continue;
+                }
+                return (String::from_utf8(buf).unwrap_or_default(), j + 1);
+            }
+            buf.push(b);
+            j += 1;
+        }
+    }
+    (String::new(), bytes.len())
 }
 
 /// Runs one statement, returning its redacted plan and profile documents.
@@ -360,8 +510,8 @@ fn manifest_json(files: &[String]) -> String {
 }
 
 /// Redacts every string in a JSON document (plan/profile). Wall-clock
-/// fields (`*_ns`, `yields`, `stalls`) are zeroed so two runs over the
-/// same input are byte-identical; counts are kept.
+/// fields (`*_ns`, `yields`, `stalls`) are zeroed so two runs over the same
+/// input on the same machine are byte-identical; counts are kept.
 fn scrub_json_value(text: &str, subs: &[PathSub]) -> String {
     let mut value: serde_json::Value = match serde_json::from_str(text) {
         Ok(v) => v,
@@ -467,13 +617,95 @@ mod tests {
     use super::*;
 
     #[test]
-    fn error_json_redacts_message() {
+    fn error_json_redacts_paths_and_keeps_class() {
         let subs = PathSub::for_tables(&["/secret/dir".to_owned()]);
-        let err = krishiv_common::error::DivideByZero {
-            config: "\"spark.sql.ansi.enabled\"".to_owned(),
-        };
-        let doc = error_json(&err.into(), &subs);
-        assert!(doc.contains("DIVIDE_BY_ZERO"));
+        let err: krishiv::Error = krishiv_common::error::TableOrViewNotFound {
+            relation_name: "`/secret/dir/missing_table`".to_owned(),
+            search_path: "[`a`, `/secret/dir/other`]".to_owned(),
+        }
+        .into();
+        let doc = error_json(&err, &subs);
+        assert!(doc.contains("TABLE_OR_VIEW_NOT_FOUND"), "{doc}");
+        assert!(doc.contains("error_class"), "{doc}");
+        assert!(!doc.contains("/secret/dir"), "{doc}");
+        assert!(!doc.contains("secret"), "{doc}");
+        assert!(doc.contains("<path-1>"), "{doc}");
+        // A secret-bearing DivideByZero parameter is redacted too.
+        let err: krishiv::Error = krishiv_common::error::DivideByZero {
+            config: "\"/secret/dir\"".to_owned(),
+        }
+        .into();
+        let doc = error_json(&err, &subs);
+        assert!(doc.contains("DIVIDE_BY_ZERO"), "{doc}");
+        assert!(!doc.contains("/secret/dir"), "{doc}");
+    }
+
+    #[test]
+    fn relative_spellings_normalize_dot_segments() {
+        assert_eq!(
+            lexical_normalize(std::path::Path::new("/a/./b/../c")),
+            std::path::PathBuf::from("/a/c")
+        );
+        assert_eq!(
+            lexical_normalize(std::path::Path::new("/a/b/../../c")),
+            std::path::PathBuf::from("/c")
+        );
+        // Absolute spellings never keep `.`/`..` segments, so a plan printing
+        // the normalized path still matches the substitution.
+        let spellings = absolute_spellings("./sub/../tbl.parquet");
+        assert!(spellings.first() == Some(&"./sub/../tbl.parquet".to_owned()));
+        assert!(spellings.len() >= 2, "{spellings:?}");
+        assert!(
+            spellings[1..]
+                .iter()
+                .all(|s| !s.split('/').any(|seg| seg == "." || seg == "..")),
+            "{spellings:?}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn absolute_spellings_follow_symlinks() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real-dir-9f3a");
+        std::fs::create_dir(&real).expect("mkdir");
+        let file = real.join("tbl-9f3a.parquet");
+        std::fs::write(&file, b"parquet").expect("write");
+        symlink(&real, dir.path().join("link-dir-9f3a")).expect("symlink");
+        // A spelling through the symlink canonicalizes to the real location,
+        // so a plan printing the canonical path still matches.
+        let via_link = format!(
+            "{}/link-dir-9f3a/tbl-9f3a.parquet",
+            dir.path().to_str().expect("utf-8")
+        );
+        let spellings = absolute_spellings(&via_link);
+        let canonical = std::fs::canonicalize(&file)
+            .expect("canonicalize")
+            .to_str()
+            .expect("utf-8")
+            .to_owned();
+        assert!(spellings.contains(&via_link), "{spellings:?}");
+        assert!(spellings.contains(&canonical), "{spellings:?}");
+    }
+
+    #[test]
+    fn inline_parquet_paths_are_found_in_any_quote_or_case() {
+        let stmts = vec![
+            "select * from parquet.`/a/b.parquet`".to_owned(),
+            "SELECT * FROM PARQUET.'/c/d.parquet'".to_owned(),
+            "select * from parquet . \"/e/f.parquet\"".to_owned(),
+        ];
+        let paths = direct_parquet_paths(&stmts);
+        assert_eq!(
+            paths,
+            vec![
+                "/a/b.parquet".to_owned(),
+                "/c/d.parquet".to_owned(),
+                "/e/f.parquet".to_owned(),
+            ]
+        );
+        assert!(direct_parquet_paths(&["select 1".to_owned()]).is_empty());
     }
 
     #[test]
