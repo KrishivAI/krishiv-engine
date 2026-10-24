@@ -408,8 +408,9 @@ fn a_q21_shaped_spilling_join_stays_within_the_bound() {
     );
     // Every thread that allocates keeps freed memory in its own allocator heap, so their number
     // is bounded: compute workers, as many blocking threads, the I/O runtime's workers and as
-    // many blocking threads (its default of two each), and the main and memory-timer threads.
-    let allowed = 2 * LI_THREADS + 2 * 2 + 2;
+    // many blocking threads (its default of two each), the main and memory-timer threads, and the
+    // heap sampler of a `heap-stats` build.
+    let allowed = 2 * LI_THREADS + 2 * 2 + 2 + u64::from(cfg!(feature = "heap-stats"));
     assert!(
         u64::try_from(threads).unwrap() <= allowed,
         "{threads} threads, at most {allowed} allocate"
