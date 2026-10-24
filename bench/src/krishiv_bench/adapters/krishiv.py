@@ -231,12 +231,17 @@ class KrishivEngine(Engine):
         rows, secs, detail = self._command(f"PROFILE {_enc(self._sql_file(query))}").split(" ", 2)
         return {"rows": int(rows), "seconds": float(secs), **json.loads(detail)}
 
+    def dump(self, query: Query, out: Path) -> tuple[int, float]:
+        """Executes to completion and writes the result as Parquet to ``out``; returns the rows and runner seconds."""
+        rows, secs = self._command(f"DUMP {_enc(self._sql_file(query))} {_enc(out)}").split()
+        return int(rows), float(secs)
+
     def run(self, query: Query) -> list[tuple]:
         import pyarrow.parquet as pq
 
         out = self._tmp / f"{query.id}.out"
         shutil.rmtree(out, ignore_errors=True)
-        self._command(f"DUMP {_enc(self._sql_file(query))} {_enc(out)}")
+        self.dump(query, out)
         parts = sorted(out.glob("*.parquet")) if out.is_dir() else [out]
         rows: list[tuple] = []
         for part in parts:

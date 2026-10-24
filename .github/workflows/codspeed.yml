@@ -1,9 +1,9 @@
 name: CodSpeed
 
 on:
+  # No merge_group trigger: CodSpeed rejects that event ("Event merge_group is not
+  # supported by CodSpeed"), so its check is not required on main; PRs still get the report.
   pull_request:
-  merge_group:
-    types: [checks_requested]
   push:
     branches: [main]
   workflow_dispatch:
