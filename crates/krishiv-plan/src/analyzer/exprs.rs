@@ -599,7 +599,7 @@ impl Resolver<'_> {
                 {
                     return Err(super::windows::window_in_filter(filter, e.origin));
                 }
-                if let Some(op) = Builtin::from_name(&f.name) {
+                if let Some(op) = builtin_op(&f.name, n) {
                     return self.operator_call(op, e.origin, &kids[..n]);
                 }
                 let entry = match self
@@ -1840,6 +1840,21 @@ fn call_checks(
     Ok(())
 }
 
+/// The canonical operator for an unresolved call, if it is one.
+///
+/// Unary `-` (lowered as `"-"` with one argument) is `Negative`; the
+/// function `negative(x)` is not an operator but a registry function (as
+/// Spark's `UnaryMinus` with alias `negative` is), so it never maps here.
+fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
+    if name == "-" && arity == 1 {
+        return Some(crate::Builtin::Negative);
+    }
+    if name.eq_ignore_ascii_case("negative") {
+        return None;
+    }
+    crate::Builtin::from_name(name)
+}
+
 /// Spark's generated name for an unaliased expression (`toPrettySQL`):
 /// `(a + 1)`, `count(1)`, `CASE WHEN ... END`. Built bottom-up with an
 /// explicit stack, once per distinct node.
@@ -1935,15 +1950,15 @@ fn pretty_node(x: &Expr, k: &[&str]) -> String {
         ExprNode::Star(_) => "*".to_owned(),
         ExprNode::Window(w) => pretty_window(w, k),
         ExprNode::Function(FunctionCall { name, distinct, .. }) => {
-            call(name, Builtin::from_name(name), *distinct, k)
+            call(name, Builtin::from_name(name), *distinct, k, None)
         }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),
-                FunctionId::Registry { name, .. } => Builtin::from_name(name),
+                FunctionId::Registry { name, .. } => builtin_op(name, f.args.len()),
             };
             let n = f.args.len().min(k.len());
-            let text = call(f.id.name(), op, f.distinct, &k[..n]);
+            let text = call(f.id.name(), op, f.distinct, &k[..n], Some(&f.data_type));
             match k.get(n) {
                 Some(filter) => format!("{text} FILTER (WHERE {filter})"),
                 None => text,
@@ -2030,7 +2045,13 @@ pub(super) const fn order_sql(o: &crate::SortOrder) -> &'static str {
     }
 }
 
-fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
+fn call(
+    name: &str,
+    op: Option<Builtin>,
+    distinct: bool,
+    k: &[&str],
+    data_type: Option<&DataType>,
+) -> String {
     let infix = |sym: &str| format!("({} {sym} {})", k[0], k[1]);
     match (op, k.len()) {
         (Some(Builtin::Eq), 2) => infix("="),
@@ -2064,14 +2085,90 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
             }
             s + " END"
         }
-        // Spark's own spellings of `if`, `positive` and `mod`.
+        // Spark's own spellings of `if` and `positive`.
         _ if name.eq_ignore_ascii_case("if") && k.len() == 3 => {
             format!("(IF({}, {}, {}))", k[0], k[1], k[2])
         }
         _ if name.eq_ignore_ascii_case("positive") && k.len() == 1 => format!("(+ {})", k[0]),
-        _ if name.eq_ignore_ascii_case("mod") && k.len() == 2 => infix("%"),
         _ if name.eq_ignore_ascii_case("extract") && k.len() == 2 => {
             format!("extract({} FROM {})", k[0], k[1])
+        }
+        // `trim` family: one argument is `trim(src)` / `ltrim(src)` /
+        // `rtrim(src)` / `btrim(...)`; two are Spark's `TRIM(...)` form.
+        // The analyzer keeps `trim(trimStr, src)` (characters first, as
+        // Spark's two-parameter call is) and `btrim(src, chars)` last.
+        _ if name.eq_ignore_ascii_case("trim") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("trim({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("trim") && k.len() == 2 => {
+            format!("TRIM(BOTH {} FROM {})", k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("ltrim") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("ltrim({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("ltrim") && k.len() == 2 => {
+            format!("TRIM(LEADING {} FROM {})", k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("rtrim") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("rtrim({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("rtrim") && k.len() == 2 => {
+            format!("TRIM(TRAILING {} FROM {})", k[0], k[1])
+        }
+        // Spark fills in the missing arguments: `substr(s, p)` is
+        // `substr(s, p, 2147483647)`, `lpad(s, n)` is `lpad(s, n, ' ')`
+        // (`X'00'` for binary), `replace(s, search)` is
+        // `replace(s, search, '')`, `round(x)` is `round(x, 0)` and `log(x)`
+        // is `LOG(E(), x)`.
+        _ if name.eq_ignore_ascii_case("substr") && k.len() == 2 => {
+            format!("substr({}, {}, 2147483647)", k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("substring") && k.len() == 2 => {
+            format!("substring({}, {}, 2147483647)", k[0], k[1])
+        }
+        _ if (name.eq_ignore_ascii_case("lpad") || name.eq_ignore_ascii_case("rpad"))
+            && k.len() == 2 =>
+        {
+            let pad = if data_type == Some(&DataType::Binary) {
+                "X'00'"
+            } else {
+                " "
+            };
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{}, {}, {pad})", name.to_lowercase(), k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("replace") && k.len() == 2 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("replace({d}{}, {}, )", k[0], k[1])
+        }
+        _ if (name.eq_ignore_ascii_case("round") || name.eq_ignore_ascii_case("bround"))
+            && k.len() == 1 =>
+        {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{}, 0)", name.to_lowercase(), k[0])
+        }
+        _ if name.eq_ignore_ascii_case("ceil") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("CEIL({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("floor") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("FLOOR({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("log") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("LOG({d}E(), {})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("log") && k.len() == 2 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("LOG({d}{}, {})", k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("ln") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("ln({d}{})", k[0])
         }
         // Spark's name of `first(x, ignoreNulls)` leaves the flag out.
         _ if k.len() == 2
@@ -2083,6 +2180,14 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{})", name.to_lowercase(), k[0])
         }
+        // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
+        // two-argument math (`power`, `atan2`, `hypot`) print upper case,
+        // as Spark's `UnaryMathExpression` / `BinaryMathExpression` do;
+        // aliases (`pow`, `sign`) and the rest print lower case.
+        _ if is_upper_math(name) => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{})", name.to_uppercase(), k.join(", "))
+        }
         _ => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{})", name.to_lowercase(), k.join(", "))
@@ -2090,20 +2195,90 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
     }
 }
 
+/// Whether Spark prints `name` upper case: the `UnaryMathExpression` /
+/// `BinaryMathExpression` functions without an alias (`sec` is `SEC`,
+/// `power` is `POWER`), while aliases (`pow`, `sign`) and `ln` stay lower.
+fn is_upper_math(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "sqrt"
+            | "cbrt"
+            | "exp"
+            | "expm1"
+            | "log10"
+            | "log2"
+            | "log1p"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "asinh"
+            | "acosh"
+            | "atanh"
+            | "cot"
+            | "csc"
+            | "sec"
+            | "degrees"
+            | "radians"
+            | "rint"
+            | "signum"
+            | "power"
+            | "atan2"
+            | "hypot"
+            | "log"
+            | "pi"
+            | "e"
+    )
+}
+
 fn pretty_literal(v: &Literal) -> String {
-    let text = v.to_string();
     match v {
         // A URL's credentials never reach a name (ADR 0038).
         Literal::String(s) => krishiv_common::secret::SecretUrl::parse(s)
             .map_or_else(|| s.clone(), |url| url.to_string()),
         Literal::Null(_) => "NULL".to_owned(),
-        Literal::Byte(_) | Literal::Short(_) | Literal::Long(_) => {
-            text.trim_end_matches(['Y', 'S', 'L']).to_owned()
+        Literal::Boolean(v) => v.to_string(),
+        Literal::Byte(v) => v.to_string(),
+        Literal::Short(v) => v.to_string(),
+        Literal::Integer(v) => v.to_string(),
+        Literal::Long(v) => v.to_string(),
+        Literal::Float(v) if v.is_finite() => crate::spark_fmt::float(*v),
+        Literal::Float(v) => format!("CAST('{}' AS FLOAT)", special_float(f64::from(*v))),
+        Literal::Double(v) if v.is_finite() => crate::spark_fmt::double(*v),
+        Literal::Double(v) => format!("CAST('{}' AS DOUBLE)", special_float(*v)),
+        Literal::Decimal {
+            unscaled,
+            data_type,
+        } => crate::spark_fmt::decimal(*unscaled, u32::from(data_type.scale())),
+        Literal::Binary(b) => {
+            use std::fmt::Write as _;
+            let mut out = String::from("X'");
+            for byte in b {
+                let _ = write!(out, "{byte:02X}");
+            }
+            out.push('\'');
+            out
         }
-        Literal::Float(x) => format!("{x:?}"),
-        Literal::Double(x) => format!("{x:?}"),
-        Literal::Decimal { .. } => text.trim_end_matches("BD").to_owned(),
-        _ => text,
+        Literal::Date(days) => crate::spark_fmt::date(*days),
+        Literal::Timestamp(us) => crate::spark_fmt::timestamp(*us, false),
+        Literal::TimestampNtz(us) => crate::spark_fmt::timestamp(*us, true),
+        _ => v.to_string(),
+    }
+}
+
+/// `NaN`, `Infinity` or `-Infinity`, as Spark spells them in a name.
+fn special_float(v: f64) -> &'static str {
+    if v.is_nan() {
+        "NaN"
+    } else if v > 0.0 {
+        "Infinity"
+    } else {
+        "-Infinity"
     }
 }
 
