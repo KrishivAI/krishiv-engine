@@ -72,6 +72,8 @@ message Node {
     // v5: a plan with an expand (ROLLUP, CUBE, GROUPING SETS) needs a v5
     // reader.
     ExpandNode expand = 16;
+    // v6: a plan with a window group limit needs a v6 reader.
+    WindowGroupLimitNode window_group_limit = 17;
   }
 }
 
@@ -189,6 +191,24 @@ message WindowNode {
   repeated uint64 partition_by = 2;
   repeated SortKey order_by = 3;
   repeated WindowFunctionPlan functions = 4;
+}
+
+// v6: the rows of each partition a rank-like function ranks at most
+// `limit`, over an input sorted as a window's (Spark's WindowGroupLimit).
+message WindowGroupLimitNode {
+  uint32 input = 1;
+  repeated uint64 partition_by = 2;
+  repeated SortKey order_by = 3;
+  RankLikeFunction function = 4;
+  // At least one.
+  uint64 limit = 5;
+}
+
+enum RankLikeFunction {
+  RANK_LIKE_FUNCTION_UNSPECIFIED = 0;
+  RANK_LIKE_FUNCTION_ROW_NUMBER = 1;
+  RANK_LIKE_FUNCTION_RANK = 2;
+  RANK_LIKE_FUNCTION_DENSE_RANK = 3;
 }
 
 message WindowFunctionPlan {

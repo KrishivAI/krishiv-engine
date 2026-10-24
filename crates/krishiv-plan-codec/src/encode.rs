@@ -15,7 +15,7 @@ use krishiv_exec::physical::{
     ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
-use krishiv_exec::window::{FrameBound, FrameUnits, WindowFunction, WindowFunctionPlan};
+use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, KeyFilterOptions};
 use krishiv_plan::{
@@ -160,6 +160,22 @@ impl Encoder {
                         .iter()
                         .map(window_function)
                         .collect::<Result<_>>()?,
+                })
+            }
+            PhysNode::WindowGroupLimit { input, limit } => {
+                // An older reader has no `WindowGroupLimit` node to read.
+                self.min_reader = self.min_reader.max(6);
+                Kind::WindowGroupLimit(pb::WindowGroupLimitNode {
+                    input: self.node_index(input)?,
+                    partition_by: indexes(&limit.partition_by),
+                    order_by: limit.order_by.iter().map(sort_key).collect(),
+                    function: match limit.function {
+                        RankLike::RowNumber => pb::RankLikeFunction::RowNumber,
+                        RankLike::Rank => pb::RankLikeFunction::Rank,
+                        RankLike::DenseRank => pb::RankLikeFunction::DenseRank,
+                    }
+                    .into(),
+                    limit: limit.limit,
                 })
             }
             PhysNode::Scan(scan) => Kind::Scan(self.scan(scan)?),

@@ -56,6 +56,7 @@ use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, SourceNode};
 use crate::planner::subquery::{Slot, SubquerySink, SubqueryValue, WithSubqueries};
+use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
 /// Creates the spill scope of one instantiation: the query's own spill
 /// directory on this worker, removed when the scope's last holder (the
@@ -332,6 +333,22 @@ impl Instantiation<'_> {
                     self.spill.clone(),
                 )?;
                 Ok(operator(input, Arc::new(op)))
+            }
+            PhysNode::WindowGroupLimit { input, limit } => {
+                // Directly over its sort, the sort also prunes each sorted
+                // batch (the limit's `Partial` mode).
+                let input = match input.as_ref() {
+                    PhysNode::Sort { input, keys } if limit.sorted_by(keys) => {
+                        let input = self.node(input)?;
+                        let sort = Sort::new(Arc::clone(&input.schema), keys, self.spill.clone())?
+                            .with_group_limit(keys, limit)?;
+                        let sort = Arc::new(sort);
+                        breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort)
+                    }
+                    other => self.node(other)?,
+                };
+                let op = group_limit_op(&input.schema, limit)?;
+                Ok(operator(input, op))
             }
             PhysNode::TopN { input, keys, limit } => {
                 let input = self.node(input)?;
@@ -632,6 +649,17 @@ pub(crate) fn replicate_op(
         Arc::clone(schema),
         Arc::new(Compiled(e)),
     ))
+}
+
+/// The exact window group limit `plan` over batches of `schema`.
+pub(crate) fn group_limit_op(
+    schema: &SchemaRef,
+    plan: &GroupLimitPlan,
+) -> Result<Arc<WindowGroupLimit>> {
+    Ok(Arc::new(WindowGroupLimit::new(
+        Arc::clone(schema),
+        plan.clone(),
+    )?))
 }
 
 pub(crate) fn sort_op(

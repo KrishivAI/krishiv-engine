@@ -44,6 +44,7 @@ variants!(
     Sort,
     TopN,
     Window,
+    WindowGroupLimit,
     Aggregate,
     HashJoin,
     NestedLoopJoin,
@@ -64,6 +65,7 @@ fn variant_of(node: &PhysNode) -> Variant {
         PhysNode::Sort { .. } => Variant::Sort,
         PhysNode::TopN { .. } => Variant::TopN,
         PhysNode::Window { .. } => Variant::Window,
+        PhysNode::WindowGroupLimit { .. } => Variant::WindowGroupLimit,
         PhysNode::Aggregate { .. } => Variant::Aggregate,
         PhysNode::HashJoin(_) => Variant::HashJoin,
         PhysNode::NestedLoopJoin(_) => Variant::NestedLoopJoin,
@@ -341,16 +343,50 @@ fn an_expand_needs_a_v5_reader() {
     // An `Expand` node (and the `NullOf` item inside it) sets
     // `min_reader_version` to 5: an older reader has neither. Plans
     // without one keep the older minimum, and a v4 reader still reads them.
-    assert_eq!(FORMAT_VERSION, 5);
+    const { assert!(FORMAT_VERSION >= 5) };
     for name in ["expand_rollup", "expand_single", "expand_subquery"] {
         assert_eq!(message(name).min_reader_version, 5, "{name}");
     }
     for (name, plan) in cases() {
-        if !name.starts_with("expand") {
+        if !name.starts_with("expand") && name != "window_group_limit" {
             let m = to_message(&plan).unwrap();
             assert!(m.min_reader_version <= 4, "{name} needs a newer reader");
         }
     }
+}
+
+#[test]
+fn a_window_group_limit_needs_a_v6_reader() {
+    // Only a plan with a `WindowGroupLimit` node needs a v6 reader.
+    assert_eq!(FORMAT_VERSION, 6);
+    assert_eq!(message("window_group_limit").min_reader_version, 6);
+    for (name, plan) in cases() {
+        if name != "window_group_limit" {
+            assert!(to_message(&plan).unwrap().min_reader_version <= 5, "{name}");
+        }
+    }
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "window_group_limit")
+        .unwrap();
+    assert_eq!(round_trip(&plan), plan);
+}
+
+#[test]
+fn a_corrupt_window_group_limit_is_refused() {
+    use pb::node::Kind;
+    let edit = |f: &dyn Fn(&mut pb::WindowGroupLimitNode)| {
+        let mut m = message("window_group_limit");
+        for node in &mut m.nodes {
+            if let Some(Kind::WindowGroupLimit(g)) = &mut node.kind {
+                f(g);
+            }
+        }
+        m
+    };
+    corrupt(&edit(&|g| g.limit = 0), "window group limit of 0 rows");
+    corrupt(&edit(&|g| g.function = 0), "unknown rank-like function");
+    corrupt(&edit(&|g| g.function = 9), "unknown rank-like function");
 }
 
 #[test]

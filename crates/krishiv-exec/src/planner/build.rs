@@ -241,6 +241,23 @@ impl<'a> Planner<'a> {
                 {
                     return self.scan(p, scan, Some(predicate));
                 }
+                if let PlanNode::Window {
+                    input: below,
+                    exprs,
+                    partition_by,
+                    order_by,
+                } = &input.node
+                {
+                    // Spark's window group limit (`InferWindowGroupLimit`).
+                    let limit = krishiv_optimizer::infer_window_group_limit(
+                        predicate,
+                        input,
+                        self.window_group_limit_threshold(),
+                    );
+                    let below = self.plan(below)?;
+                    let window = self.window(below, exprs, partition_by, order_by, limit)?;
+                    return self.filter(window, predicate);
+                }
                 let input = self.plan(input)?;
                 self.filter(input, predicate)
             }
@@ -378,7 +395,7 @@ impl<'a> Planner<'a> {
                 order_by,
             } => {
                 let input = self.plan(input)?;
-                self.window(input, exprs, partition_by, order_by)
+                self.window(input, exprs, partition_by, order_by, None)
             }
             PlanNode::OneRowRelation => Ok(one_row()),
             _ => {
@@ -1076,7 +1093,7 @@ impl<'a> Planner<'a> {
     }
 
     /// `input` cut to `n` rows in each partition.
-    fn local_limit(input: Planned, n: u64) -> Planned {
+    pub(crate) fn local_limit(input: Planned, n: u64) -> Planned {
         let schema = Arc::clone(&input.schema);
         let layout = input.layout.clone();
         let mut local = input.wrap(
