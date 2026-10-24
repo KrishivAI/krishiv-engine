@@ -1343,9 +1343,9 @@ fn scatter(
 
 /// Loom models of the grace phase's claims and waits (no I/O: tasks with
 /// no rows). `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib
-/// --release`.
+/// --release loom_model::`.
 #[cfg(all(test, loom))]
-mod loom_tests {
+mod loom_model {
     use loom::future::block_on;
     use loom::thread;
 
