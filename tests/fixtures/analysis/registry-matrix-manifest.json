@@ -1690,14 +1690,6 @@
       "reason": "SELECT date_part('YEAR', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "date_part#47300ca097a2/ansi_off",
-      "reason": "SELECT date_part(CAST(NULL AS string), TIMESTAMP '2019-08-12 01:00:00.123456') | NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "date_part#47300ca097a2/ansi_on",
-      "reason": "SELECT date_part(CAST(NULL AS string), TIMESTAMP '2019-08-12 01:00:00.123456') | NON_FOLDABLE_ARGUMENT"
-    },
-    {
       "id": "date_part#4e04c424a4c6/ansi_off",
       "reason": "SELECT date_part('MINUTE', CAST(NULL AS interval day to second)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
     },
@@ -10202,7 +10194,7 @@
     {
       "cases": 134,
       "function": "date_part",
-      "pass": 94
+      "pass": 96
     },
     {
       "cases": 100,
@@ -10655,5 +10647,5 @@
       "pass": 40
     }
   ],
-  "pass": 6756
+  "pass": 6758
 }
