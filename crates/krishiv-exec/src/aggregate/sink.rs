@@ -36,7 +36,7 @@ use krishiv_memory::{
 };
 use krishiv_types::batch::{Batch, Weights};
 
-use super::rowtable::{Mode, RowTable};
+use super::rowtable::{Mode, RowTable, WIDEN_GROUPS};
 use super::table::{AggCore, AggTable, Table};
 use super::{AggregateSpec, unsupported};
 use crate::context::{QueryContext, TaskContext};
@@ -109,6 +109,9 @@ pub struct HashAggregate {
     /// Overrides the thread-local row tables' index mode (tests force
     /// abandons).
     row_mode: Option<Mode>,
+    /// Groups at which thread-local row tables widen to their radix
+    /// partitions (tests widen early).
+    widen_at: usize,
     /// Tests: once this many final-phase tasks finished, no further task
     /// gets its memory (forces the flush and spill paths).
     #[cfg(test)]
@@ -129,6 +132,7 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: None,
+            widen_at: WIDEN_GROUPS,
             #[cfg(test)]
             stall_after: None,
             #[cfg(test)]
@@ -145,6 +149,8 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: Some(mode),
+            // Small test inputs widen too.
+            widen_at: 64,
             stall_after: None,
             output_gate: None,
         }))
@@ -162,6 +168,8 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: Some(mode),
+            // Small test inputs widen too.
+            widen_at: 64,
             stall_after: Some(finished),
             output_gate: None,
         }))
@@ -178,6 +186,7 @@ impl HashAggregate {
             core: Arc::new(AggCore::new(spec)?),
             counters: Arc::default(),
             row_mode: None,
+            widen_at: WIDEN_GROUPS,
             stall_after: None,
             output_gate: Some(gate),
         }))
@@ -200,14 +209,17 @@ impl HashAggregate {
     fn new_table(&self, g: &Global, local: bool) -> Result<Table> {
         Ok(match g.rows {
             Some(mode) => {
-                // Merge tables of the disk phase need no radix partitions.
-                let (mode, bits) = if local {
+                // A thread-local table starts with one partition and widens
+                // to the radix partitions once large; merge tables of the
+                // disk phase need none.
+                let (mode, widen) = if local {
                     (mode, g.row_bits)
                 } else {
                     (Mode::Grow, 0)
                 };
                 Table::Rows(
-                    RowTable::new(&self.core, &g.seed, mode, local, bits)?
+                    RowTable::new(&self.core, &g.seed, mode, local, 0)?
+                        .widening(widen, self.widen_at)
                         .with_abandons(Arc::clone(&self.counters.row_abandons)),
                 )
             }
@@ -1259,6 +1271,9 @@ impl Sink for HashAggregate {
             return Ok(SinkStatus::NeedMemory { bytes });
         }
         l.table.apply(&p)?;
+        // Widening is a cost choice: only with memory to spare.
+        let r = &mut l.reservation;
+        l.table.widen_if(|bytes| r.try_grow(bytes).is_ok())?;
         shrink_to(&mut l.reservation, l.table.memory_size() + self.headroom());
         if self.core.spec.spill.is_some() {
             let combined = global(&l.global)?.combined.load(AtomicOrdering::Relaxed);
