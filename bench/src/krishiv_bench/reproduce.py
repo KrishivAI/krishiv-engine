@@ -60,18 +60,28 @@ PUBLISHED: dict[str, dict[str, Any]] = {
     "clickbench": {"runs": 3, "timeout_s": 300.0, "source": "ClickBench: 3 runs, first cold; 300 s limit is ours"},
     "h2o-groupby": {"runs": 2, "timeout_s": 600.0, "source": "db-benchmark: each question twice; 600 s limit is ours"},
     "h2o-join": {"runs": 2, "timeout_s": 600.0, "source": "db-benchmark: each question twice; 600 s limit is ours"},
+    "micro": {"runs": 2, "timeout_s": 300.0, "source": "operator microbenchmarks: ours; no published method"},
 }
 LIBS = ["duckdb", "polars", "datafusion", "pysail", "pyspark", "pyarrow", "chdb"]
 
 
 def resolve_dataset(suite: str, dataset: str | None, sf: float) -> Dataset:
     name = dataset or SUITE_DATASET[suite]
-    # clickbench and the h2o suites name a directory relative to $KRISHIV_DATA (h2o: h2o/<version>/<label>)
-    root = data_root() / name if suite == "clickbench" or is_h2o(suite) else dataset_dir(name, sf)
+    # clickbench, the h2o suites and micro name a directory relative to $KRISHIV_DATA (h2o: h2o/<version>/<label>)
+    root = data_root() / name if suite in ("clickbench", "micro") or is_h2o(suite) else dataset_dir(name, sf)
     tables = discover_tables(root)
     if not tables:
         raise SystemExit(f"no dataset at {root}")
     return Dataset(name, sf, root, tables)
+
+
+def suite_queries(suite: str, ds: Dataset, engine: str, only: list[str] | None) -> list[Query]:
+    """The suite's queries for ``engine``; the micro suite derives them from the dataset it runs on."""
+    if suite == "micro":
+        from . import micro
+
+        return micro.load_queries(ds.root, engine, only)
+    return load_queries(suite, engine, only)
 
 
 def _fail(status: str, e: Exception | str) -> dict:
@@ -244,6 +254,7 @@ def run_reproduce(
     runs: int | None = None,
     their_timeout_s: float | None = None,
     profile: bool = False,
+    record_extra: Mapping[str, Any] | None = None,
 ) -> Path:
     names = engines or DEFAULT_ENGINES
     if REFERENCE not in names:
@@ -254,7 +265,7 @@ def run_reproduce(
     pub = PUBLISHED[suite]
     runs = runs or pub["runs"]
     their_timeout_s = their_timeout_s or pub["timeout_s"]
-    per_engine = {n: {q.id: q for q in load_queries(suite, n, only)} for n in names}
+    per_engine = {n: {q.id: q for q in suite_queries(suite, ds, n, only)} for n in names}
     queries = [{n: per_engine[n][qid] for n in names} for qid in per_engine[REFERENCE]]
     lock_path = data_root() / ".bench.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -283,6 +294,7 @@ def run_reproduce(
             "load_at_start": loadavg(),
             "engines": {},
             "queries": {},
+            **(record_extra or {}),
         }
         engs: dict[str, Engine] = {n: ProcessEngine(n, threads, memory_gb, timeout_s) for n in names}
         try:
