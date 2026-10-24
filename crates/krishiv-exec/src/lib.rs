@@ -79,6 +79,7 @@ mod metrics;
 mod morsel;
 mod operator;
 mod operators;
+mod output_spill;
 pub mod physical;
 mod pipeline;
 pub mod planner;
@@ -90,6 +91,7 @@ pub mod rows;
 mod runner;
 mod sync;
 pub mod testing;
+pub mod window;
 
 pub use cancel::CancellationToken;
 pub use context::{

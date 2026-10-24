@@ -27,16 +27,16 @@ use crate::{
     MetadataNeeds, ScanOptions, ScanRequest, ScanStream, StoreId,
 };
 
-struct Env {
-    rt: tokio::runtime::Runtime,
-    io: IoContext,
+pub(super) struct Env {
+    pub(super) rt: tokio::runtime::Runtime,
+    pub(super) io: IoContext,
     store: Arc<InMemory>,
 }
 
 const STORE: &str = "memory://pq";
 
 impl Env {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self::with_config(IoConfig::default())
     }
 
@@ -59,7 +59,7 @@ impl Env {
         }
     }
 
-    fn put(&self, name: &str, bytes: Vec<u8>) -> FileRef {
+    pub(super) fn put(&self, name: &str, bytes: Vec<u8>) -> FileRef {
         self.rt.block_on(async {
             let path = Path::from(name);
             object_store::ObjectStoreExt::put(self.store.as_ref(), &path, bytes.into())
@@ -72,7 +72,18 @@ impl Env {
         })
     }
 
-    fn options(&self, kv: &[(&str, &str)]) -> FormatOptions {
+    pub(super) fn options(&self, kv: &[(&str, &str)]) -> FormatOptions {
+        self.options_over(&[], kv)
+    }
+
+    /// The options of `kv` over a session that holds `session`.
+    pub(super) fn options_over(
+        &self,
+        session: &[(&str, &str)],
+        kv: &[(&str, &str)],
+    ) -> FormatOptions {
+        let (conf, _) =
+            krishiv_common::config::Config::from_pairs(session.iter().copied()).unwrap();
         let user = kv
             .iter()
             .map(|(k, v)| {
@@ -82,14 +93,10 @@ impl Env {
                 )
             })
             .collect();
-        ParquetFormat
-            .options()
-            .parse(&user, &krishiv_common::config::Config::new())
-            .unwrap()
-            .0
+        ParquetFormat.options().parse(&user, &conf).unwrap().0
     }
 
-    fn scan(
+    pub(super) fn scan(
         &self,
         file: &FileRef,
         req: &ScanRequest,
@@ -119,7 +126,7 @@ impl Env {
     }
 }
 
-fn write(batches: &[RecordBatch], props: WriterProperties) -> Vec<u8> {
+pub(super) fn write(batches: &[RecordBatch], props: WriterProperties) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut w = ArrowWriter::try_new(&mut buf, batches[0].schema(), Some(props)).unwrap();
     for b in batches {
@@ -129,7 +136,7 @@ fn write(batches: &[RecordBatch], props: WriterProperties) -> Vec<u8> {
     buf
 }
 
-fn rows(batches: &[RecordBatch]) -> usize {
+pub(super) fn rows(batches: &[RecordBatch]) -> usize {
     batches.iter().map(RecordBatch::num_rows).sum()
 }
 
@@ -616,6 +623,54 @@ fn corrupt_footers_are_errors() {
     }
 }
 
+/// Files the `parquet_read` fuzz target flagged: footers whose Thrift lists
+/// declare billions of elements in a few bytes, or whose bytes the decoder
+/// misreads. The footer guard must reject each for the reason in the
+/// fixture's third column, before arrow-rs decodes it (no loop over the
+/// declared count, no allocation sized by it), and the read reports a footer
+/// error.
+#[test]
+fn fuzz_artifacts_are_footer_errors_from_the_guard() {
+    let env = Env::new();
+    let o = env.options(&[]);
+    let mut seen = 0;
+    for line in include_str!("../../tests/fixtures/fuzz/parquet_read.hex").lines() {
+        let mut columns = line.splitn(3, ' ');
+        let (Some(name), Some(hex), Some(reason)) = (
+            columns.next().filter(|_| !line.starts_with('#')),
+            columns.next(),
+            columns.next(),
+        ) else {
+            continue;
+        };
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        let n = bytes.len();
+        let footer_len = u32::from_le_bytes(bytes[n - 8..n - 4].try_into().unwrap()) as usize;
+        assert_eq!(
+            super::thrift_guard::check(&bytes[n - 8 - footer_len..n - 8]),
+            Err(reason),
+            "{name}"
+        );
+        let f = env.put(name, bytes);
+        let r =
+            env.rt.block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+            );
+        let e = r.map(|_| ()).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::FailedReadFileCannotReadFileFooter,
+            "{name}: {e}"
+        );
+        seen += 1;
+    }
+    assert_eq!(seen, 7);
+}
+
 /// A table field without an id matches its file column by name even when
 /// another table field claims the same column by id (both read the value;
 /// Spark 4.2's vectorized reader returns 0 for one of them).
@@ -1058,4 +1113,26 @@ fn runtime_filters_prune_row_groups_at_open_and_at_boundaries() {
     });
     assert_eq!(read, (3000, 97));
     assert_eq!(late.stats().counts().units_pruned, 97);
+}
+
+/// `lateMaterialization` is the session's `krishiv.io.lateMaterialization`
+/// unless the read sets it; anything but `auto`, `on` and `off` is refused.
+#[test]
+fn late_materialization_defaults_to_the_session_setting() {
+    let env = Env::new();
+    let key = "krishiv.io.lateMaterialization";
+    let policy = |session: &[(&str, &str)], read: &[(&str, &str)]| {
+        env.options_over(session, read)
+            .str("lateMaterialization")
+            .map(str::to_owned)
+    };
+    assert_eq!(policy(&[], &[]).as_deref(), Some("auto"));
+    assert_eq!(policy(&[(key, "off")], &[]).as_deref(), Some("off"));
+    assert_eq!(policy(&[(key, "on")], &[]).as_deref(), Some("on"));
+    assert_eq!(
+        policy(&[(key, "off")], &[("lateMaterialization", "on")]).as_deref(),
+        Some("on")
+    );
+    let bad = krishiv_common::config::Config::from_pairs([(key, "sometimes")]);
+    assert!(bad.is_err(), "{bad:?}");
 }

@@ -31,6 +31,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Join { .. } => "PlanNode::Join",
         PlanNode::Sort { .. } => "PlanNode::Sort",
         PlanNode::Limit { .. } => "PlanNode::Limit",
+        PlanNode::Offset { .. } => "PlanNode::Offset",
         PlanNode::SubqueryAlias { .. } => "PlanNode::SubqueryAlias",
         PlanNode::WithCte { .. } => "PlanNode::WithCte",
         PlanNode::CteRef(_) => "PlanNode::CteRef",
@@ -41,6 +42,7 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
+        PlanNode::Window { .. } => "PlanNode::Window",
     });
     plan.for_each_expr(&mut |e| expr_kinds(e, out));
     plan.for_each_child(&mut |c| kinds(c, out));
@@ -55,6 +57,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::Cast { .. } => "ExprNode::Cast",
         ExprNode::Alias { .. } => "ExprNode::Alias",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",
+        ExprNode::Window(_) => "ExprNode::Window",
         ExprNode::Resolved(ResolvedExpr::Column(_)) => "ResolvedExpr::Column",
         ExprNode::Resolved(ResolvedExpr::OuterColumn(_)) => "ResolvedExpr::OuterColumn",
         ExprNode::Resolved(ResolvedExpr::Function(_)) => "ResolvedExpr::Function",
@@ -169,6 +172,7 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
         ("orderBy", df(1).sort(vec![SortOrder::asc(c("a"))])),
         ("sort", df(1).sort(vec![SortOrder::asc(c("a"))])),
         ("limit", df(1).limit(int(1))),
+        ("offset", df(1).offset(int(1))),
         ("df.alias", df(1).alias("x")),
         ("col", df(1).project(vec![c("a")])),
         ("df[\"a\"]", df(1).project(vec![df_col])),

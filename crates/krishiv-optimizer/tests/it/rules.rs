@@ -559,3 +559,51 @@ fn shared_expressions_stay_linear() {
     assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
     assert!(matches!(optimized.root().node, PlanNode::Filter { .. }));
 }
+
+/// Windows nobody reads are dropped (Spark's `ColumnPruning`), the others
+/// keep only the columns they need below them; a filter on a window's
+/// result stays above it, one on its partitioning columns goes below. Results through the optimizer are checked end to
+/// end against Spark in `krishiv-session`'s `window_goldens`.
+#[test]
+fn windows_are_pruned() {
+    fn windows(p: &krishiv_plan::LogicalPlan) -> usize {
+        let mut n = usize::from(matches!(p.node, krishiv_plan::PlanNode::Window { .. }));
+        p.for_each_child(&mut |c| n += windows(c));
+        n
+    }
+    let ctx = support::ctx();
+    for (name, sql, kept) in [
+        (
+            "prune_window_unused",
+            "SELECT a FROM (SELECT a, rank() OVER (ORDER BY c) AS r FROM t)",
+            0,
+        ),
+        (
+            "prune_window_some",
+            "SELECT r FROM (SELECT a, b, rank() OVER (ORDER BY c) AS r, sum(c) OVER () AS s FROM t)",
+            1,
+        ),
+        (
+            "window_filter_on_partition_key_below",
+            "SELECT a FROM (SELECT a, b, rank() OVER (PARTITION BY a ORDER BY c) AS r FROM t) WHERE r = 1 AND a > 0",
+            1,
+        ),
+        (
+            "window_filter_on_expression_partition_stays",
+            "SELECT k, r FROM (SELECT a + 1 AS k, rank() OVER (PARTITION BY a + 1 ORDER BY c) AS r FROM t) WHERE k > 0",
+            1,
+        ),
+    ] {
+        let plan = support::resolve(sql, &ctx);
+        let optimized = optimize(&plan).unwrap();
+        assert_eq!(
+            optimized.root().resolved_output(),
+            plan.root().resolved_output(),
+            "{name} keeps its output"
+        );
+        let again = optimize(&optimized).unwrap();
+        assert!(again.structurally_eq(&optimized), "{name} is a fixed point");
+        assert_eq!(windows(optimized.root()), kept, "{name}");
+        insta::assert_snapshot!(name, optimized.root().to_string(), sql);
+    }
+}

@@ -716,18 +716,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::Sort { order, global, .. } => {
                 self.u8(9);
                 self.bool(*global);
-                self.len(order.len());
-                for o in order {
-                    self.u8(match o.direction {
-                        SortDirection::Ascending => 1,
-                        SortDirection::Descending => 2,
-                    });
-                    self.u8(match o.nulls {
-                        NullOrdering::NullsFirst => 1,
-                        NullOrdering::NullsLast => 2,
-                    });
-                    self.expr(&o.expr);
-                }
+                self.orders(order);
             }
             PlanNode::Limit { limit, .. } => {
                 self.u8(10);
@@ -790,6 +779,48 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::ReplicateRows { count, .. } => {
                 self.u8(21);
                 self.expr(count);
+            }
+            PlanNode::Offset { offset, .. } => {
+                self.u8(22);
+                self.expr(offset);
+            }
+            PlanNode::Window {
+                exprs,
+                partition_by,
+                order_by,
+                ..
+            } => {
+                self.u8(23);
+                self.exprs(exprs);
+                self.exprs(partition_by);
+                self.orders(order_by);
+            }
+        }
+    }
+
+    fn orders(&mut self, order: &'a [crate::SortOrder]) {
+        self.len(order.len());
+        for o in order {
+            self.u8(match o.direction {
+                SortDirection::Ascending => 1,
+                SortDirection::Descending => 2,
+            });
+            self.u8(match o.nulls {
+                NullOrdering::NullsFirst => 1,
+                NullOrdering::NullsLast => 2,
+            });
+            self.expr(&o.expr);
+        }
+    }
+
+    fn frame_bound(&mut self, b: &'a crate::FrameBound) {
+        match b {
+            crate::FrameBound::UnboundedPreceding => self.u8(1),
+            crate::FrameBound::CurrentRow => self.u8(2),
+            crate::FrameBound::UnboundedFollowing => self.u8(3),
+            crate::FrameBound::Offset(e) => {
+                self.u8(4);
+                self.expr(e);
             }
         }
     }
@@ -960,6 +991,32 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(11);
                 self.bound(output);
                 self.expr(expr);
+            }
+            ExprNode::Window(crate::WindowExpr { function, window }) => {
+                self.u8(12);
+                self.expr(function);
+                match window {
+                    crate::WindowSpecRef::Named(name) => {
+                        self.u8(1);
+                        self.str(name);
+                    }
+                    crate::WindowSpecRef::Spec(spec) => {
+                        self.u8(2);
+                        self.exprs(&spec.partition_by);
+                        self.orders(&spec.order_by);
+                        match &spec.frame {
+                            None => self.u8(0),
+                            Some(f) => {
+                                self.u8(match f.units {
+                                    crate::FrameUnits::Rows => 1,
+                                    crate::FrameUnits::Range => 2,
+                                });
+                                self.frame_bound(&f.lower);
+                                self.frame_bound(&f.upper);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

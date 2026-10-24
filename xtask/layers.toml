@@ -19,6 +19,7 @@ krishiv-sql = 3
 krishiv-plan = 3
 krishiv-optimizer = 3
 krishiv-exec = 4
+krishiv-plan-codec = 4
 krishiv-state = 4
 krishiv-stream = 4
 krishiv-shuffle = 5

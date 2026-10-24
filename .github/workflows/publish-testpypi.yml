@@ -1,0 +1,68 @@
+name: Publish to TestPyPI
+
+# P2-T147. MANUAL ONLY: this workflow runs when the maintainer dispatches it
+# (Actions tab, "Run workflow") and at no other time: never on push, merge,
+# tag or schedule (xtask/tests/policy.rs keeps it that way). RELEASING.md has
+# the procedure; publishing is a hard stop that needs the owner's explicit go.
+#
+# Two gates stand between a dispatch and an upload:
+#   1. the `testpypi` environment: its required reviewers (repository
+#      settings, Environments) must approve the run before the `publish` job
+#      starts, and its deployment branches/tags must be limited to main and
+#      `v*` tags. The environment's rules are not in this file: until the
+#      owner creates the environment with reviewers, the job cannot be
+#      approved and does not publish.
+#   2. the ref check below: only main or a `v*` tag may publish.
+# Uploading uses PyPI trusted publishing (OIDC), so there is no API token
+# anywhere in this repository; the trusted publisher is configured on
+# test.pypi.org for this workflow file and the `testpypi` environment.
+#
+# The wheels are built and tested by wheels.yml in this same run, then
+# uploaded unchanged: the `krishiv` wheels and the `krishiv-compat` wheel.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-testpypi
+  cancel-in-progress: false
+
+jobs:
+  wheels:
+    if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    permissions:
+      contents: read
+      actions: read
+    uses: $/.github/workflows/wheels.yml
+
+  publish:
+    needs: wheels
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/krishiv
+    permissions:
+      contents: read
+      id-token: write # trusted publishing to TestPyPI
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "{wheels-*,compat-wheel-*}"
+          path: dist
+          merge-multiple: true
+      - name: Wheels to upload
+        run: |
+          ls -l dist
+          test "$(ls dist/*.whl | wc -l)" -ge 9
+      - name: Upload to TestPyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist

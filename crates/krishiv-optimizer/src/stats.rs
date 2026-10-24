@@ -236,6 +236,8 @@ impl<'a> Estimator<'a> {
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::WithCte { input, .. }
             | PlanNode::JoinHint { input, .. }
+            // A window adds columns (without statistics), never rows.
+            | PlanNode::Window { input, .. }
             // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
             // no count is known, the input's rows bound it from below.
             | PlanNode::ReplicateRows { input, .. } => Est::clone(&self.plan(input)),
@@ -247,6 +249,12 @@ impl<'a> Estimator<'a> {
                 let est = Est::clone(&self.plan(input));
                 let n = limit_value(limit).map_or(est.rows, to_f64);
                 let rows = est.rows.min(n);
+                est.with_rows(rows)
+            }
+            PlanNode::Offset { input, offset } => {
+                let est = Est::clone(&self.plan(input));
+                let skipped = limit_value(offset).map_or(0.0, to_f64);
+                let rows = (est.rows - skipped).max(0.0);
                 est.with_rows(rows)
             }
             PlanNode::Shift { input, offset } => {

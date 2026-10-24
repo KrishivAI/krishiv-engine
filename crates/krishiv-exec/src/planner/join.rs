@@ -398,6 +398,7 @@ impl Planner<'_> {
                 | PlanNode::Aggregate { input, .. }
                 | PlanNode::Sort { input, .. }
                 | PlanNode::Limit { input, .. }
+                | PlanNode::Offset { input, .. }
                 | PlanNode::SubqueryAlias { input, .. }
                 | PlanNode::Shift { input, .. } => cur = input,
                 _ => return found,

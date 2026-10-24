@@ -19,7 +19,7 @@ SELECT * FROM range(3)
 SELECT a FROM t LATERAL VIEW explode(b) x AS y
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL VIEW is not supported by Krishiv yet. SQLSTATE: 0A000 @ 9..46
 SELECT row_number() OVER (ORDER BY a) FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature window functions is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..37
+  => Project [row_number() OVER (ORDER BY a ASC NULLS FIRST)] | +- Read t | 
 SELECT a FROM t GROUP BY ROLLUP (a)
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature ROLLUP, CUBE and GROUPING SETS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 25..35
 SELECT a FROM t GROUP BY a WITH CUBE
@@ -35,17 +35,17 @@ SELECT a FROM t CLUSTER BY a
 SELECT a FROM t DISTRIBUTE BY a
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature DISTRIBUTE BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..31
 SELECT a FROM t LIMIT 1 OFFSET 2
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature OFFSET is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..32
+  => Limit 1 | +- Offset 2 |    +- Project [a] |       +- Read t | 
 FROM t SELECT a LIMIT 1 OFFSET 2
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature OFFSET is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..32
+  => Limit 1 | +- Offset 2 |    +- Project [a] |       +- Read t | 
 FROM t SELECT a CLUSTER BY a
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature CLUSTER BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..28
 FROM t SELECT a DISTRIBUTE BY a
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature DISTRIBUTE BY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..31
 FROM t SELECT a WINDOW w AS (ORDER BY a)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature WINDOW clauses is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..40
+  => Project [a] | +- Read t | 
 SELECT a FROM t WINDOW w AS (ORDER BY a)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature WINDOW clauses is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..40
+  => Project [a] | +- Read t | 
 SELECT a FROM t QUALIFY a > 1
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature QUALIFY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..29
 WITH RECURSIVE r AS (SELECT a FROM t) SELECT * FROM r

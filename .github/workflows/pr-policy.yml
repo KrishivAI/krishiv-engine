@@ -1,6 +1,6 @@
 name: PR policy
 
-# Label-dependent repository policy (DCO, PR size cap with the `size-approved`
+# Label-dependent repository policy (DCO, AI-attribution ban, PR size cap with the `size-approved`
 # label; budget and wheel-size gates with the `budget-approved` and
 # `unsafe-reviewed` labels).
 # Kept out of ci.yml so that label changes re-run only these small jobs
@@ -10,6 +10,8 @@ name: PR policy
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
 
@@ -65,6 +67,14 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: cargo xtask dco --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: No AI attribution (every commit, PR title and body; owner rule)
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: .github/scripts/check-ai-attribution.sh "$BASE_SHA" "$HEAD_SHA"
       # The `size-approved` label only counts when the configured approver
       # (repository variable SIZE_APPROVER, the maintainer) applied it after
       # the current head arrived (.github/scripts/approval-label.sh).
@@ -86,20 +96,28 @@ jobs:
         run: cargo xtask pr-size --base "$BASE_SHA" --head "$HEAD_SHA"
 
   # Budget gate (pull requests only): compares the measurement made by ci.yml's
-  # `budgets-measure` job for this head with the base branch's budgets.json.
+  # `budgets-measure` job for this head with the measurement main-measure.yml
+  # made on main for the commit that measurement was built on top of (the
+  # first parent of the merge commit, recorded as `measured-base-sha`; see
+  # .github/scripts/main-baseline.sh), so a PR is charged only for its own
+  # diff. The committed budgets.json at the base commit is used only while main
+  # has recorded no measurement at all; afterwards a missing one fails the job
+  # with the reason. The PR's own budgets.json is never read: a PR must not
+  # raise its own baseline.
+  # The gate's scripts and xtask are those of the base commit, not the PR's
+  # (checkout of the base sha), so a PR cannot edit the rules it is judged by;
+  # a change to the gate takes effect once it has merged.
   # Growth beyond the budget needs `budget-approved`, new unsafe sites need
   # `unsafe-reviewed` (same approval rule as `size-approved`). Adding a label
   # re-runs only this job; it waits for the measurement while CI is still
-  # running. On growth the PR author refreshes the baseline with
-  #   cargo xtask budgets --write-baseline
-  # and commits budgets.json (see the job summary). Compared with the base
-  # branch's baseline, not the PR's: a PR that refreshes budgets.json must not
-  # approve its own growth.
+  # running. Nothing needs recording after a merge: main's next measurement
+  # is the next baseline.
   budgets:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # Longer than the wait below, which covers CI queueing plus the
-    # 45-minute limit of budgets-measure.
+    # Longer than the two waits (4200 s for the measurement, CI queueing plus
+    # the 45-minute limit of budgets-measure, and 600 s for main's run) plus
+    # setup, so a wait ends with its own message before the job is killed.
     timeout-minutes: 90
     permissions:
       contents: read
@@ -111,9 +129,26 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      # The gate itself (these scripts and xtask) comes from the base commit,
+      # not from the pull request, so a PR cannot edit the rules it is judged
+      # by. Only the measurement files come from the PR's CI run.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
+          fetch-depth: 0
+      # A base that predates the main-measurement design has neither the
+      # selection script nor `--baseline`: it is judged entirely by its own
+      # (old) gate, still without running any pull request code.
+      - name: Choose the gate
+        id: gate
+        run: |
+          if [ -f .github/scripts/main-baseline.sh ] && grep -qF '"--baseline"' xtask/src/budgets.rs; then
+            echo "mode=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=legacy" >> "$GITHUB_OUTPUT"
+            echo "The base commit predates the main-measurement gate; compared with its committed budgets.json as before." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Wait for the CI measurement
         id: measure
         env:
@@ -121,25 +156,31 @@ jobs:
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           OUT_DIR: ${{ runner.temp }}/budgets
-          WAIT_SECS: 4500
+          WAIT_SECS: 4200
         # Assign first: a failing command substitution inside `echo` would not
         # fail the step.
         run: |
           result=$(.github/scripts/budgets-measurement.sh)
           echo "result=$result" >> "$GITHUB_OUTPUT"
-      - name: Use the base branch baseline
-        if: steps.measure.outputs.result == 'measured'
+      - name: Select the main baseline
+        id: baseline
+        if: steps.measure.outputs.result == 'measured' && steps.gate.outputs.mode == 'main'
         env:
-          BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          TARGET_SHA_FILE: ${{ runner.temp }}/budgets/measured-base-sha
+          ARTIFACT: budgets-main
+          FILE: budgets-current.json
+          OUT_DIR: ${{ runner.temp }}/budgets-main
+          WAIT_SECS: 600
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          git show FETCH_HEAD:budgets.json > budgets.json
+          source=$(.github/scripts/main-baseline.sh)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.measure.outputs.result == 'measured'
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         if: steps.measure.outputs.result == 'measured'
       - name: Resolve budget-approved label
@@ -166,24 +207,33 @@ jobs:
         if: steps.measure.outputs.result == 'measured'
         env:
           MEASURED: ${{ runner.temp }}/budgets/budgets-current.json
-        run: cargo xtask budgets --compare "$MEASURED"
+          BASELINE: ${{ runner.temp }}/budgets-main/baseline.json
+          MODE: ${{ steps.gate.outputs.mode }}
+        run: |
+          if [ "$MODE" = main ]; then
+            cargo xtask budgets --compare "$MEASURED" --baseline "$BASELINE"
+          else
+            cargo xtask budgets --compare "$MEASURED"
+          fi
       - name: Nothing measured
         if: steps.measure.outputs.result == 'skipped'
         run: echo "No Rust change in this PR; budgets-measure was skipped." >> "$GITHUB_STEP_SUMMARY"
 
   # Wheel-size gate (pull requests only): compares the sizes measured by the
   # `sizes` job of wheels.yml (called by ci.yml as `wheels-targets`) for this
-  # head with the base branch's budgets.json (`wheel_bytes`). Growth past the
-  # budget, or a wheel without a recorded size, needs `budget-approved` (same
-  # approval rule as `size-approved`). Adding a label re-runs only this job.
-  # The base branch's budgets are used, not the PR's: a PR that refreshes
-  # budgets.json must not approve its own growth. This replaces the gate that
-  # used to run inside wheels.yml, which read the label from the stale event
-  # payload of the CI run.
+  # head with the sizes that job measured on main (main-measure.yml,
+  # `wheel-sizes-main`) for the commit the PR's measurement was built on,
+  # chosen as for `budgets` above. Growth past the budget, or a wheel without a
+  # recorded size, needs `budget-approved` (same approval rule as
+  # `size-approved`). The PR's own budgets.json is never read, and the gate
+  # code comes from the base commit as in `budgets`. Adding a label re-runs
+  # only this job. This replaces the gate that used to run inside wheels.yml,
+  # which read the label from the stale event payload of the CI run.
   wheel-sizes:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # Longer than the wait below: CI queueing plus the 60-minute wheel builds.
+    # Longer than the two waits (6000 s for the measurement, CI queueing plus
+    # the 60-minute wheel builds, and 600 s for main's run) plus setup.
     timeout-minutes: 120
     permissions:
       contents: read
@@ -195,9 +245,26 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      # The gate itself (these scripts and xtask) comes from the base commit,
+      # not from the pull request, so a PR cannot edit the rules it is judged
+      # by. Only the measurement files come from the PR's CI run.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
+          fetch-depth: 0
+      # A base that predates the main-measurement design has neither the
+      # selection script nor `--baseline`: it is judged entirely by its own
+      # (old) gate, still without running any pull request code.
+      - name: Choose the gate
+        id: gate
+        run: |
+          if [ -f .github/scripts/main-baseline.sh ] && grep -qF '"--baseline"' xtask/src/budgets.rs; then
+            echo "mode=main" >> "$GITHUB_OUTPUT"
+          else
+            echo "mode=legacy" >> "$GITHUB_OUTPUT"
+            echo "The base commit predates the main-measurement gate; compared with its committed budgets.json as before." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Wait for the wheel measurement
         id: measure
         env:
@@ -208,23 +275,29 @@ jobs:
           JOB: wheels-targets / sizes
           ARTIFACT: wheel-sizes
           SKIP_JOB: wheels-targets
-          WAIT_SECS: 6300
+          WAIT_SECS: 6000
         run: |
           result=$(.github/scripts/budgets-measurement.sh)
           echo "result=$result" >> "$GITHUB_OUTPUT"
-      - name: Use the base branch budgets
-        if: steps.measure.outputs.result == 'measured'
+      - name: Select the main baseline
+        id: baseline
+        if: steps.measure.outputs.result == 'measured' && steps.gate.outputs.mode == 'main'
         env:
-          BASE_REF: ${{ github.base_ref }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          TARGET_SHA_FILE: ${{ runner.temp }}/wheel-sizes/measured-base-sha
+          ARTIFACT: wheel-sizes-main
+          FILE: wheel-sizes.json
+          OUT_DIR: ${{ runner.temp }}/wheel-sizes-main
+          WAIT_SECS: 600
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_REF"
-          git show FETCH_HEAD:budgets.json > "$RUNNER_TEMP/base-budgets.json"
+          source=$(.github/scripts/main-baseline.sh)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         if: steps.measure.outputs.result == 'measured'
         with:
           toolchain: 1.99.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.measure.outputs.result == 'measured'
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         if: steps.measure.outputs.result == 'measured'
       - name: Resolve budget-approved label
@@ -239,7 +312,19 @@ jobs:
         run: echo "BUDGET_APPROVED=$(.github/scripts/approval-label.sh budget-approved)" >> "$GITHUB_ENV"
       - name: Compare with the budgets
         if: steps.measure.outputs.result == 'measured'
-        run: cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" --budgets "$RUNNER_TEMP/base-budgets.json"
+        env:
+          SOURCE: ${{ steps.baseline.outputs.source }}
+          MODE: ${{ steps.gate.outputs.mode }}
+        # The main measurement is a plain size map; the committed fallback is
+        # a budgets.json. A legacy base reads its own committed budgets.json.
+        run: |
+          if [ "$MODE" = legacy ]; then
+            cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" --budgets budgets.json
+            exit
+          fi
+          if [ "$SOURCE" = main ]; then flag=--baseline; else flag=--budgets; fi
+          cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" \
+            "$flag" "$RUNNER_TEMP/wheel-sizes-main/baseline.json"
       - name: Nothing measured
         if: steps.measure.outputs.result == 'skipped'
         run: echo "No Python or packaging change in this PR; the wheels were not built." >> "$GITHUB_STEP_SUMMARY"

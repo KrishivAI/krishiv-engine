@@ -296,15 +296,33 @@ impl Instantiation<'_> {
             } => self.with_subqueries(input, subqueries, |input, v| {
                 replicate_op(input, layout, count, v)
             }),
-            PhysNode::Limit { input, limit } => {
+            PhysNode::Limit {
+                input,
+                offset,
+                limit,
+            } => {
                 let input = self.node(input)?;
-                let op = crate::operators::Limit::new(Arc::clone(&input.schema), *limit);
+                let op = crate::operators::Limit::with_offset(
+                    Arc::clone(&input.schema),
+                    *offset,
+                    *limit,
+                );
                 Ok(operator(input, op))
             }
             PhysNode::Sort { input, keys } => {
                 let input = self.node(input)?;
                 let sort = sort_op(&input.schema, keys, self.spill.clone())?;
                 Ok(breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort))
+            }
+            PhysNode::Window { input, window } => {
+                let input = self.node(input)?;
+                let op = crate::window::Window::new(
+                    Arc::clone(&input.schema),
+                    window.clone(),
+                    self.env.ansi,
+                    self.spill.clone(),
+                )?;
+                Ok(operator(input, Arc::new(op)))
             }
             PhysNode::TopN { input, keys, limit } => {
                 let input = self.node(input)?;

@@ -13,6 +13,8 @@ name: Security
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   schedule:
@@ -80,7 +82,7 @@ jobs:
 
   # Main and the schedule: report to code scanning.
   zizmor-sarif:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

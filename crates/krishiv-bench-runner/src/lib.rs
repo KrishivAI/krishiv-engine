@@ -21,6 +21,10 @@
 //!   kernel's high-water mark, reset before the query through `/proc/self/clear_refs`), `null` where
 //!   unavailable. The peak covers everything the process holds (allocator retention, untracked buffers),
 //!   which is what a memory cap enforces; it starts from what the process already held.
+//!   `"peak_heap_bytes"` is the live heap's peak during the query in a build with the `heap-stats`
+//!   feature (`null` otherwise; the resident set above it is what the allocator keeps), and
+//!   `"peak_untracked_bytes"` the most the live heap grew beyond what the memory pool reserved,
+//!   both counted from the query's start and sampled every millisecond: heap the pool does not see.
 //! * `DUMP <query.sql> <out-dir>`: as `RUN`, then writes the result as Parquet to `out-dir`
 //!   (replacing it). The write is not in the reported seconds.
 //! * `QUIT`: exits.
@@ -100,13 +104,16 @@ pub const RSS_FLOOR_PER_THREAD: u64 = 16 << 20;
 ///
 /// It holds for a process whose global allocator is configured for it: mimalloc with
 /// `krishiv_alloc` (this runner and the CLI, when the limit is known at process start: an argument or
-/// `KRISHIV_MEMORY_LIMIT`). Memory an allocator retains is outside the
+/// `KRISHIV_MEMORY_LIMIT`), for a limit below `krishiv_alloc::GENEROUS_MIN` (4 GiB). A generous
+/// limit keeps mimalloc's faster defaults instead, and a process that fills it can hold up to about
+/// twice the limit (`krishiv_alloc::is_generous`). Memory an allocator retains is outside the
 /// pools' control, so an embedding host with another allocator, or without a release hook
 /// (`krishiv_memory::set_release_hook`), can exceed it by what its allocator keeps.
 ///
-/// Known limitation: the row group a Parquet scan driver decodes is not reserved; the per-thread
-/// floor covers row groups of a few MiB (TPC-H as generated), not files written with 128 MiB row
-/// groups, which can exceed the bound by about one row group per driver.
+/// A Parquet scan's decode working sets (the row group being decoded, its pages and batch) are
+/// reserved through the query's `krishiv_io::ScanGate`. When nothing can be spilled for them they go
+/// on without a reservation, which the gate's admission keeps to about a quarter of the limit (or one
+/// row group, if larger): part of what the 25% allows for.
 #[must_use]
 pub fn rss_bound(limit: u64, threads: u64) -> u64 {
     limit
@@ -351,12 +358,17 @@ impl Runner {
                 let sql = read_sql(&decode_path(file)?)?;
                 let before = rss().map(|(now, _)| now);
                 let reset = reset_peak_rss();
-                let (batches, t, _, metrics) = self.execute_timed(&sql, true)?;
+                let heap = HeapWatch::start(&self.session);
+                let executed = self.execute_timed(&sql, true);
+                let (peak_heap, peak_untracked) = heap.stop();
+                let (batches, t, _, metrics) = executed?;
                 let peak = rss().filter(|_| reset).map(|(_, hwm)| hwm);
                 let memory = Memory {
                     limit: self.limit,
                     rss_before: before,
                     peak_rss: peak,
+                    peak_heap,
+                    peak_untracked,
                 };
                 Ok(format!(
                     "OK {} {:.6} {}",
@@ -397,6 +409,71 @@ struct Memory {
     limit: Option<u64>,
     rss_before: Option<u64>,
     peak_rss: Option<u64>,
+    peak_heap: Option<u64>,
+    peak_untracked: Option<u64>,
+}
+
+/// Watches the live heap during a query (`heap-stats` builds; nothing otherwise): its peak, and the
+/// most it grew beyond the memory pool's reservations, sampled every millisecond.
+struct HeapWatch {
+    #[cfg(feature = "heap-stats")]
+    sampler: Option<(
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+        std::thread::JoinHandle<u64>,
+    )>,
+}
+
+impl HeapWatch {
+    #[cfg(feature = "heap-stats")]
+    fn start(session: &Session) -> Self {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        krishiv_alloc::heap::reset_peak();
+        let session = session.clone();
+        let stop = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&stop);
+        let heap0 = krishiv_alloc::heap::live();
+        let pool0 = session.memory_reserved();
+        let handle = std::thread::spawn(move || {
+            let mut worst = 0usize;
+            loop {
+                let heap = krishiv_alloc::heap::live().saturating_sub(heap0);
+                let pool = session.memory_reserved().saturating_sub(pool0);
+                worst = worst.max(heap.saturating_sub(pool));
+                if done.load(Ordering::Acquire) {
+                    return worst as u64;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        });
+        Self {
+            sampler: Some((stop, handle)),
+        }
+    }
+
+    #[cfg(not(feature = "heap-stats"))]
+    fn start(_: &Session) -> Self {
+        Self {}
+    }
+
+    /// `(peak heap, peak untracked)`, `None` without `heap-stats`.
+    #[cfg(feature = "heap-stats")]
+    fn stop(mut self) -> (Option<u64>, Option<u64>) {
+        let untracked = self.sampler.take().and_then(|(stop, handle)| {
+            stop.store(true, std::sync::atomic::Ordering::Release);
+            handle.join().ok()
+        });
+        (Some(krishiv_alloc::heap::peak() as u64), untracked)
+    }
+
+    #[cfg(not(feature = "heap-stats"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the heap-stats build consumes the watch"
+    )]
+    fn stop(self) -> (Option<u64>, Option<u64>) {
+        (None, None)
+    }
 }
 
 /// `v` as JSON (`null` for `None`).
@@ -455,13 +532,15 @@ impl Timing {
         let spill_files = ops.clone().map(|o| o.map(|m| m.spill_files).sum::<u64>());
         let spill_bytes = ops.map(|o| o.map(|m| m.spill_write_bytes).sum::<u64>());
         let mem = format!(
-            ",\"memory\":{{\"limit_bytes\":{},\"peak_reserved_bytes\":{},\"spill_files\":{},\"spill_bytes\":{},\"rss_before_bytes\":{},\"peak_rss_bytes\":{}}}",
+            ",\"memory\":{{\"limit_bytes\":{},\"peak_reserved_bytes\":{},\"spill_files\":{},\"spill_bytes\":{},\"rss_before_bytes\":{},\"peak_rss_bytes\":{},\"peak_heap_bytes\":{},\"peak_untracked_bytes\":{}}}",
             json_opt(memory.limit),
             json_opt(metrics.map(|m| m.memory.peak_reserved)),
             json_opt(spill_files),
             json_opt(spill_bytes),
             json_opt(memory.rss_before),
             json_opt(memory.peak_rss),
+            json_opt(memory.peak_heap),
+            json_opt(memory.peak_untracked),
         );
         format!(
             "{{\"phases\":[{{\"name\":\"parse_analyze\",\"seconds\":{:.6}}},{{\"name\":\"plan_execute\",\"seconds\":{:.6}}}]{operators}{mem}}}",

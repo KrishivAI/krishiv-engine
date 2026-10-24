@@ -7,6 +7,19 @@
 Spark Connect (protocols 3.5, 4.0, 4.1, 4.2): the vendored protocol types and the translation of a Connect plan into
 the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends this decoder; it does not replace it.
 
+## Key files
+- `src/wire.rs` the only decode path (`wire::decode_*`): size, count, depth and field-version checks
+- `src/proto/mod.rs` versioned generated protos; `src/proto/v4_2/spark.connect.pb.rs` generated messages (do not edit)
+- `src/translate/mod.rs` `translate_*` entry points; `src/translate/relation.rs` and `expression.rs` (IR building)
+- `src/translate/literal.rs` literals; `src/translate/names.rs` names and plan-id origins
+- `src/translate/errors.rs` `KRISHIV_UNSUPPORTED_FEATURE` and `CONNECT_INVALID_PLAN.*` errors
+- `tests/fuzz_regressions.rs` fuzz findings (inputs that once ran out of memory) must end in a typed error
+- `tests/goldens.rs` golden runner over `tests/snapshots/` and `tests/fixtures/pyspark-4.2/`
+
+## Extension points
+- New relation or expression: a translation arm in `src/translate/relation.rs` or `expression.rs` building an existing IR node.
+- New protocol version: the generator in `tools/connect-protogen` (repository root), then a new `src/proto/v<ver>/`.
+
 ## Invariants
 - Protos are vendored per tag, verbatim, under `proto/spark-connect/<ver>/` at the repository root (ADR 0003; only
   4.2 so far; on the PR-size allowlist). Behaviour is gated on the client's declared version (P3-T010).
@@ -31,7 +44,7 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
   with zeros before it drops the message (`Scrub`, `scrub.pb.rs`); a proto built in Rust and passed to `translate_*`
   stays the caller's to wipe.
 - SQL expression strings (`selectExpr`, `where("...")`, `expr()`) are unsupported until the analyzer lowers the SQL
-  parser's syntax tree into the IR (P2-T071a); `ToDF`, `OneRowRelation` (a `Project` without input), `Offset`, set
+  parser's syntax tree into the IR (P2-T071a); `ToDF`, `OneRowRelation` (a `Project` without input), set
   operations, pivots, user schemas and nested-type literals wait for IR nodes that do not exist yet.
 - Anything outside the supported subset fails with `KRISHIV_UNSUPPORTED_FEATURE` naming the proto message and field,
   or with Spark's own `CONNECT_INVALID_PLAN.*` class for an invalid plan; never a silent approximation.
@@ -42,7 +55,7 @@ the logical-plan IR of `krishiv-plan`. The server (P3-T011, P3-T012) extends thi
 ## ADRs (in `../krishiv-internal/adr/`)
 0003, 0005, 0038
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-connect --no-tests=pass` · `cargo clippy -p krishiv-connect --all-targets -- -D warnings`
 · goldens: `tests/fixtures/pyspark-4.2/*.json` come from real PySpark 4.2 client calls
 (`tests/scripts/gen_connect_goldens.py`) · fuzz: `cd fuzz && cargo +nightly fuzz run connect_decode`

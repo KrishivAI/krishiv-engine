@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT r FROM (SELECT a, b, rank() OVER (ORDER BY c) AS r, sum(c) OVER () AS s FROM t)"
+---
+Project [_we0#5 AS r#3]
++- Window [rank() OVER (ORDER BY c#2 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#5], [], [c#2 ASC NULLS FIRST]
+   +- Scan spark_catalog.default.t [c#2]

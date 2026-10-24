@@ -9,16 +9,24 @@ use std::process::ExitCode;
 
 use krishiv_bench_runner::{Runner, RunnerConfig, serve};
 
+#[cfg(not(feature = "heap-stats"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// A measurement build: mimalloc with its live heap counted.
+#[cfg(feature = "heap-stats")]
+#[global_allocator]
+static GLOBAL: krishiv_alloc::heap::Counting<mimalloc::MiMalloc> =
+    krishiv_alloc::heap::Counting(mimalloc::MiMalloc);
 
 fn main() -> ExitCode {
     // First, so a CPU older than the build targets gets a message instead of SIGILL.
     // `run` holds everything else (see `krishiv_common::cpu`).
     krishiv_common::cpu::check_or_exit();
     // Allocator policy is this binary's (it owns the global allocator): with a
-    // configured limit mimalloc purges promptly (set before `main`, see
-    // `krishiv_alloc`), and under memory pressure threads return freed memory.
+    // configured limit that is not generous, mimalloc purges promptly (set
+    // before `main`, see `krishiv_alloc`), and under memory pressure threads
+    // return freed memory.
     krishiv_memory::set_release_hook(krishiv_alloc::install());
     run()
 }

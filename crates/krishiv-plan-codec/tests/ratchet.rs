@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The round-trip ratchet (P2-T173, design P2-T171 section 8.1): every
+//! physical plan the planner produces for the TPC-H and TPC-DS queries
+//! must encode to `krishiv.plan.v1` and decode to an equal plan, and the
+//! decoded TPC-H plans must instantiate on a worker. There is no
+//! allowlist of plans that may fail to round-trip: a node, expression or
+//! option the codec cannot carry fails this test. CI runs it on every pull
+//! request.
+#![expect(clippy::unwrap_used, clippy::panic, reason = "test code")]
+
+#[path = "common/suites.rs"]
+mod suites;
+
+use krishiv_exec::physical::{PhysicalPlan, WorkerContext, instantiate};
+use krishiv_plan_codec::{decode, encode};
+
+use suites::{Suite, queries};
+
+/// TPC-DS queries the engine cannot plan yet (not a codec limit: they fail
+/// before a physical plan exists). The list may only shrink: the test
+/// fails when a query on it plans, so its entry is removed in the change
+/// that makes it plan.
+const TPCDS_NOT_PLANNED: &[&str] = &[
+    "q05", "q10", "q14", "q16", "q17", "q18", "q22", "q30", "q32", "q35", "q39", "q40", "q41",
+    "q45", "q49", "q50", "q51", "q62", "q67", "q70", "q72", "q75", "q77", "q78", "q80", "q84",
+    "q86", "q92", "q94", "q95", "q97", "q99",
+];
+
+fn assert_round_trips(name: &str, plan: &PhysicalPlan) -> Vec<u8> {
+    let bytes = encode(plan).unwrap_or_else(|e| panic!("{name}: encode: {e}"));
+    let back = decode(&bytes).unwrap_or_else(|e| panic!("{name}: decode: {e}"));
+    assert!(back == *plan, "{name}: decode(encode(plan)) != plan");
+    assert_eq!(encode(&back).unwrap(), bytes, "{name}: re-encoding differs");
+    bytes
+}
+
+#[test]
+fn tpch_plans_round_trip_and_instantiate() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let suite = Suite::tpch(&rt);
+    let all = queries("tpch");
+    assert_eq!(all.len(), 22);
+    for (name, sql) in all {
+        let plan = suite
+            .plan(&sql)
+            .unwrap_or_else(|e| panic!("tpch {name}: {e}"));
+        let bytes = assert_round_trips(&format!("tpch {name}"), &plan);
+        let back = decode(&bytes).unwrap();
+        // The worker side: the decoded plan instantiates against the
+        // worker's own tables.
+        let worker = WorkerContext::new(suite.tables());
+        instantiate(&back, &worker).unwrap_or_else(|e| panic!("tpch {name}: instantiate: {e}"));
+    }
+}
+
+#[test]
+fn tpcds_plans_round_trip() {
+    let suite = Suite::tpcds();
+    let all = queries("tpcds");
+    assert_eq!(all.len(), 99);
+    let mut not_planned = Vec::new();
+    for (name, sql) in &all {
+        match suite.plan(sql) {
+            Ok(plan) => {
+                assert_round_trips(&format!("tpcds {name}"), &plan);
+            }
+            Err(_) => not_planned.push(name.as_str()),
+        }
+    }
+    assert_eq!(
+        not_planned, TPCDS_NOT_PLANNED,
+        "the TPC-DS queries that do not plan changed: update TPCDS_NOT_PLANNED (it may only shrink)"
+    );
+}

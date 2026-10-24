@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use arrow_array::RecordBatch;
 use arrow_schema::{Schema, SchemaRef};
 use futures::StreamExt;
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::KrishivError;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
 use krishiv_plan::{
@@ -383,6 +383,22 @@ impl DataFrame {
         })
     }
 
+    /// This DataFrame without its first `n` rows (PySpark's `offset`);
+    /// `df.offset(m).limit(n)` is `LIMIT n OFFSET m`.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.table("t").offset(10).limit(5);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn offset(&self, n: i32) -> Self {
+        self.derive(PlanNode::Offset {
+            input: Arc::clone(&self.plan),
+            offset: Arc::new(Expr::literal(Literal::Integer(n))),
+        })
+    }
+
     /// This DataFrame under the name `alias`, for qualified column names
     /// (PySpark's `alias`).
     ///
@@ -701,7 +717,8 @@ impl DataFrame {
 
     /// Registers this DataFrame as the temporary view `name`, replacing any
     /// table or view of that name (PySpark's `createOrReplaceTempView`).
-    /// Views over reads by path are supported so far.
+    /// A view over a read by path lists its files again at every query;
+    /// any other view inlines its plan as a subquery wherever it is read.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -711,8 +728,9 @@ impl DataFrame {
     /// ```
     ///
     /// # Errors
-    /// Analysis errors; `KRISHIV_UNSUPPORTED_FEATURE` for a DataFrame other
-    /// than a read by path.
+    /// Analysis errors, and `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name`
+    /// starts with the reserved snapshot prefix `` `__krishiv_snapshot_` ``
+    /// (in any letter case), which [`Session::sql`] cannot spell either.
     pub async fn create_or_replace_temp_view(&self, name: &str) -> Result<(), KrishivError> {
         let (df, name) = (self.clone(), name.to_owned());
         self.session
@@ -721,30 +739,47 @@ impl DataFrame {
     }
 
     async fn temp_view_here(&self, name: &str) -> Result<(), KrishivError> {
+        if crate::catalog::is_hidden_name(name) {
+            return Err(crate::catalog::reserved_temp_view_name(name));
+        }
         // Spark analyzes the view's plan first: its errors come first.
         let analysis = self.analysis().await?;
-        let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node else {
-            return Err(KrishivUnsupportedFeature {
-                feature: "temporary views other than reads by path".to_owned(),
-            }
-            .into());
-        };
-        self.session.state.catalog.put(
-            name,
-            TempTable::Files {
-                source: source.clone(),
-                columns: analysis
-                    .analyzed
-                    .output
-                    .iter()
-                    .map(|c| TableColumn {
-                        name: c.name.clone(),
-                        data_type: c.data_type.clone(),
-                        nullable: c.nullable,
-                    })
-                    .collect(),
-            },
-        );
+        let columns: Vec<TableColumn> = analysis
+            .analyzed
+            .output
+            .iter()
+            .map(|c| TableColumn {
+                name: c.name.clone(),
+                data_type: c.data_type.clone(),
+                nullable: c.nullable,
+            })
+            .collect();
+        // A view over files keeps listing them: files added or changed
+        // later show up in the next query.
+        if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
+            self.session.state.catalog.put(
+                name,
+                TempTable::Files {
+                    source: source.clone(),
+                    columns,
+                },
+            );
+            return Ok(());
+        }
+        // Any other view snapshots its input: the analyzed plan is stored,
+        // with the temporary tables it reads pinned under hidden names, so
+        // a view built from itself reads the old definition, as in Spark.
+        // (SQL `CREATE VIEW` keeps the unresolved query instead, so it
+        // follows the tables it reads.)
+        let (expanded, pins, new_pins) = crate::catalog::pin_temp_tables(
+            &self.session.state.catalog,
+            analysis.analyzed.plan.root(),
+            analysis.env.analysis.conf.case_sensitive,
+        )?;
+        self.session
+            .state
+            .catalog
+            .put_view(name, expanded, columns, pins, new_pins);
         Ok(())
     }
 }

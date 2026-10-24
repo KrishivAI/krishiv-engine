@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::RecordBatch;
@@ -43,6 +43,7 @@ use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
+use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
 
@@ -105,6 +106,11 @@ pub(crate) struct SessionState {
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
     query_ids: AtomicU64,
+    /// SQL source ids handed to view lowerings: every `CREATE TEMPORARY
+    /// VIEW` lowers its query with an id of its own, so errors raised
+    /// while expanding a view point into the view's text, not the outer
+    /// statement's (`SourceId(0)` stays the outer statement's).
+    sql_sources: AtomicU32,
 }
 
 /// Builds a [`Session`].
@@ -248,6 +254,7 @@ impl SessionBuilder {
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
                 query_ids: AtomicU64::new(0),
+                sql_sources: AtomicU32::new(1),
             }),
         })
     }
@@ -283,6 +290,13 @@ impl Session {
         Self::builder().build()
     }
 
+    /// Bytes the session's memory pool holds now, across its queries: what
+    /// `krishiv.memory.limit` is checked against (for memory measurements).
+    #[must_use]
+    pub fn memory_reserved(&self) -> usize {
+        self.state.memory.reserved()
+    }
+
     /// The runtime configuration.
     ///
     /// ```
@@ -313,7 +327,7 @@ impl Session {
     ///
     /// # Errors
     /// Spark's parse and analysis errors; `KRISHIV_UNSUPPORTED_FEATURE`
-    /// for statements other than queries.
+    /// for statements other than queries and commands.
     pub async fn sql(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let (session, query) = (self.clone(), query.to_owned());
         self.on_executor(async move { session.sql_here(&query).await })
@@ -323,15 +337,20 @@ impl Session {
     async fn sql_here(&self, query: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let statement = krishiv_sql::parse_statement(query, &env.parser).map_err(|e| e.error)?;
-        let q = match statement {
-            Statement::Query(q) => q,
-            Statement::Explain(e) => return self.explain_statement(&e).await,
-            _ => return Err(unsupported_statement("statements other than queries")),
-        };
-        let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
-        let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-        df.analyzed_in(env).await?;
-        Ok(df)
+        match statement {
+            Statement::Query(q) => {
+                let plan = krishiv_sql::lower(&q, SourceId(0)).map_err(|e| e.error)?;
+                let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+                df.analyzed_in(env).await?;
+                Ok(df)
+            }
+            Statement::Explain(e) => self.explain_statement(&e).await,
+            Statement::Set(s) => self.exec_set(&s).await,
+            Statement::Reset(r) => self.exec_reset(&r).await,
+            Statement::CreateView(v) => self.exec_create_view(&v).await,
+            Statement::DropView(v) => self.exec_drop_view(&v).await,
+            _ => Err(unsupported_statement("statements other than queries")),
+        }
     }
 
     /// The table or view `name`, lazily (Spark Connect's `spark.table`: an
@@ -393,13 +412,19 @@ impl Session {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no
-    /// equivalent of; `INTERNAL_ERROR` when a batch does not have `schema`.
+    /// equivalent of; `INTERNAL_ERROR` when a batch does not have `schema`;
+    /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with the
+    /// reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any letter
+    /// case), which queries cannot spell either.
     pub fn register_batches(
         &self,
         name: &str,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
     ) -> Result<(), KrishivError> {
+        if is_hidden_name(name) {
+            return Err(reserved_temp_view_name(name));
+        }
         let columns = schema
             .fields()
             .iter()
@@ -442,7 +467,9 @@ impl Session {
     }
 
     /// Drops the temporary table or view `name`; whether it existed
-    /// (Spark's `spark.catalog.dropTempView`).
+    /// (Spark's `spark.catalog.dropTempView`). Dropping a view also
+    /// removes the snapshot pins it owned that no other live view still
+    /// owns. Hidden snapshot names never exist for this call.
     ///
     /// ```
     /// # let session = krishiv_session::Session::new()?;
@@ -492,6 +519,11 @@ impl Session {
     /// A fresh DataFrame plan id.
     pub(crate) fn next_plan_id(&self) -> PlanId {
         PlanId(self.state.plan_ids.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// A fresh SQL source id for a view lowering (see `sql_sources`).
+    pub(crate) fn next_source_id(&self) -> SourceId {
+        SourceId(self.state.sql_sources.fetch_add(1, Ordering::Relaxed))
     }
 
     /// The analysis inputs of one query.
@@ -551,7 +583,14 @@ impl Session {
         plan: &Arc<LogicalPlan>,
         env: &QueryEnv,
     ) -> Result<AnalyzedPlan, KrishivError> {
-        let plan = Plan::try_new(Arc::clone(plan))?;
+        // Temporary views over queries inline as subqueries, so the
+        // analyzer sees one plan however the view was made.
+        let plan = crate::catalog::expand_temp_views(
+            &self.state.catalog,
+            plan,
+            env.analysis.conf.case_sensitive,
+        )?;
+        let plan = Plan::try_new(plan)?;
         DefaultAnalyzer
             .analyze(&plan, &env.analysis)
             .await

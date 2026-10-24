@@ -1063,122 +1063,62 @@
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast('1' as binary) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast('1' as binary)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast('2017-12-11 09:30:00' as date) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast('2017-12-11 09:30:00' as date)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast('2017-12-11 09:30:00.0' as timestamp) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast('2017-12-11 09:30:00.0' as timestamp)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as bigint) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as bigint)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as boolean) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as boolean)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as decimal(10, 0)) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as decimal(10, 0))) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as double) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as double)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as float) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as float)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as int) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as int)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as smallint) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as smallint)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as string) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as string)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     },
     {
       "file": "typeCoercion/native/windowFrameCoercion",
       "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as tinyint) DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
-    },
-    {
-      "file": "typeCoercion/native/windowFrameCoercion",
-      "query": "SELECT COUNT(*) OVER (PARTITION BY 1 ORDER BY cast(1 as tinyint)) FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: window frames with value bounds"
     }
   ],
   "format_version": 1

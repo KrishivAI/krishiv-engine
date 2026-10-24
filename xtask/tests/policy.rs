@@ -105,11 +105,44 @@ fn deny_toml_guards_object_store_coupling() {
     assert!(cargo.contains("object_store = { version = \"=0.14.2\""));
 }
 
+/// The text of the top-level job `name` of a workflow: from its key to the
+/// next job's key (or the end).
+fn job<'a>(workflow: &'a str, name: &str) -> &'a str {
+    let key = format!("\n  {name}:\n");
+    let start = workflow
+        .find(&key)
+        .unwrap_or_else(|| panic!("no job {name:?}"))
+        + 1;
+    let rest = &workflow[start..];
+    let end = rest
+        .match_indices('\n')
+        .map(|(i, _)| i + 1)
+        .find(|&i| {
+            let line = rest[i..].lines().next().unwrap_or_default();
+            line.starts_with("  ") && !line.starts_with("   ") && !line.starts_with("  #")
+        })
+        .unwrap_or(rest.len());
+    &rest[..end]
+}
+
 #[test]
 fn ci_policy_wiring() {
     let ci = read(".github/workflows/ci.yml");
     for needle in ["cargo xtask changes", "cargo hack check --each-feature"] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+    }
+    // The fuzz targets are built by their own job, on every Rust change.
+    let fuzz_build = job(&ci, "fuzz-build");
+    for needle in [
+        "    needs: changes\n",
+        "    if: needs.changes.outputs.rust == 'true'\n",
+        "        run: cargo \"+$NIGHTLY\" fuzz build --target x86_64-unknown-linux-gnu\n",
+    ] {
+        // Whole lines: a deeper-indented step-level `if:` or `run:` must not match.
+        assert!(
+            fuzz_build.lines().any(|line| line == needle.trim_end()),
+            "fuzz-build lacks {needle:?}"
+        );
     }
     // Label-dependent policy lives in its own workflow so label changes never
     // restart (and cancel) the full CI run; the job name is a required check.
@@ -143,9 +176,41 @@ fn ci_policy_wiring() {
         "  budgets-measure:\n",
         "cargo xtask budgets --build-time --measure-only",
         "name: budgets-current",
+        // The commit the measurement was built on, for the baseline selection.
+        "git rev-parse HEAD^1 > target/measured-base-sha",
+        // HEAD^1 needs the parent: the default depth-1 checkout has none.
+        "fetch-depth: 2",
+        // Main is measured by main-measure.yml, so ci.yml builds no wheels there.
+        "github.event_name != 'push'",
     ] {
         assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
     }
+    assert!(
+        ci.contains(
+            "if: github.event_name == 'pull_request' && needs.changes.outputs.rust == 'true'"
+        ),
+        "budgets-measure is for pull requests"
+    );
+    // Main measurement: every commit, never cancelled, 90 days.
+    let main_measure = read(".github/workflows/main-measure.yml");
+    for needle in [
+        "branches: [main]",
+        "group: main-measure-${{ github.sha }}",
+        "cancel-in-progress: false",
+        "cargo xtask budgets --build-time --measure-only",
+        "name: budgets-main",
+        "retention-days: 90",
+        "uses: $/.github/workflows/wheels.yml",
+        "actions: read",
+        // The drift report never fails the run.
+        "continue-on-error: true",
+    ] {
+        assert!(
+            main_measure.contains(needle),
+            "main-measure.yml lacks {needle:?}"
+        );
+    }
+    assert!(!main_measure.contains("pull_request"));
     for label in ["budget-approved", "unsafe-reviewed", "size-approved"] {
         assert!(
             !ci.contains(&format!("approval-label.sh {label}")),
@@ -155,12 +220,78 @@ fn ci_policy_wiring() {
     for needle in [
         "  budgets:\n",
         ".github/scripts/budgets-measurement.sh",
-        "git show FETCH_HEAD:budgets.json > budgets.json",
+        ".github/scripts/main-baseline.sh",
+        "ARTIFACT: budgets-main",
         "approval-label.sh budget-approved",
         "approval-label.sh unsafe-reviewed",
-        "cargo xtask budgets --compare",
+        "cargo xtask budgets --compare \"$MEASURED\" --baseline \"$BASELINE\"",
     ] {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
+    }
+    // The baseline is main's measurement: the gates never take it from the PR's
+    // checkout (a PR must not raise its own baseline), and the selection reads
+    // the base commit's file only as the fallback.
+    assert!(
+        !policy.contains("git show FETCH_HEAD")
+            && policy.contains(
+                "if [ \"$MODE\" = main ]; then\n            cargo xtask budgets --compare"
+            ),
+        "the budgets gate must compare with an explicit baseline (legacy base aside)"
+    );
+    let select = read(".github/scripts/main-baseline.sh");
+    for needle in [
+        "TARGET_SHA_FILE",
+        "git show \"$BASE_SHA:$fallback_path\"",
+        "--event push",
+        "--branch \"$branch\"",
+    ] {
+        assert!(select.contains(needle), "main-baseline.sh lacks {needle:?}");
+    }
+    // The selection runs on a full history and with the least privilege that
+    // can list and download artifacts (`actions: read`).
+    let at = |job: &str| policy.find(job).unwrap();
+    let (budgets_at, wheels_at) = (at("  budgets:\n"), at("  wheel-sizes:\n"));
+    for (job, body) in [
+        ("budgets", &policy[budgets_at..wheels_at]),
+        ("wheel-sizes", &policy[wheels_at..]),
+    ] {
+        assert!(body.contains("fetch-depth: 0"), "{job} needs full history");
+        // The gate runs the base commit's scripts and xtask, never the PR's:
+        // the only checkout is of the base sha, before anything is executed.
+        assert_eq!(
+            body.matches("actions/checkout@").count(),
+            1,
+            "{job} has one checkout"
+        );
+        let checkout = body.find("actions/checkout@").unwrap();
+        let first_run = body.find("run:").unwrap();
+        assert!(checkout < first_run);
+        assert!(
+            body[checkout..first_run].contains("ref: ${{ github.event.pull_request.base.sha }}"),
+            "{job} must check out the base commit, not the pull request"
+        );
+        assert!(
+            !body.contains("head.ref") && !body.contains("refs/pull/"),
+            "{job} must not check out or run pull request code"
+        );
+        assert!(
+            body.contains("TARGET_SHA_FILE"),
+            "{job} selects by the measured base"
+        );
+        assert!(body.contains("actions: read"), "{job} needs actions: read");
+        // Bootstrap: a base without the selection script or `--baseline` is
+        // judged by its own old gate (committed budgets.json), and the
+        // selection is skipped. No rust-cache, so a PR cannot seed the build.
+        assert!(
+            body.contains("id: gate")
+                && body.contains("[ -f .github/scripts/main-baseline.sh ]")
+                && body.contains("grep -qF '\"--baseline\"' xtask/src/budgets.rs")
+                && body.contains("mode=legacy")
+                && body.contains("steps.gate.outputs.mode == 'main'"),
+            "{job} must fall back to the base's own gate when it lacks --baseline"
+        );
+        assert!(!body.contains("rust-cache"), "{job} must not use a cache");
+        assert!(!body.contains("actions: write") && !body.contains("contents: write"));
     }
     // The gate finds the measurement by job and artifact name.
     let fetch = read(".github/scripts/budgets-measurement.sh");
@@ -177,11 +308,24 @@ fn ci_policy_wiring() {
     }
     // Wheel sizes: wheels.yml only measures on a pull request (and reads no
     // label); the label-aware gate in pr-policy.yml compares the measurement.
+    let ci = read(".github/workflows/ci.yml");
+    assert!(
+        ci.contains("github.event_name != 'push' && github.event_name != 'merge_group'"),
+        "wheels-targets is skipped on push and in the merge queue"
+    );
     let wheels = read(".github/workflows/wheels.yml");
     for needle in [
         "cargo xtask wheel-sizes dist --measure-only",
-        "name: wheel-sizes",
-        "if: github.event_name != 'pull_request'",
+        "'wheel-sizes-main' || 'wheel-sizes'",
+        "retention-days: ${{ github.event_name == 'push' && 90 || 14 }}",
+        "git rev-parse HEAD^1 > \"$RUNNER_TEMP/wheel-sizes/measured-base-sha\"",
+        "fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}",
+        // Nightly and manual runs are gated on main's measurement; a push
+        // only reports the drift.
+        "WORKFLOW: main-measure.yml",
+        "git merge-base HEAD origin/main",
+        "continue-on-error: ${{ github.event_name == 'push' }}",
+        "actions: read",
     ] {
         assert!(wheels.contains(needle), "wheels.yml lacks {needle:?}");
     }
@@ -195,7 +339,8 @@ fn ci_policy_wiring() {
         "SKIP_JOB: wheels-targets",
         "approval-label.sh budget-approved",
         "cargo xtask wheel-sizes --compare",
-        "--budgets \"$RUNNER_TEMP/base-budgets.json\"",
+        "ARTIFACT: wheel-sizes-main",
+        "flag=--baseline; else flag=--budgets",
     ] {
         assert!(policy.contains(needle), "pr-policy.yml lacks {needle:?}");
     }
@@ -243,6 +388,18 @@ fn budgets_measurement_script_waits_and_fetches() {
 }
 
 #[test]
+fn main_baseline_script_selects_the_merge_base_measurement() {
+    let script = root().join(".github/scripts/test-main-baseline.sh");
+    let out = Command::new("bash").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn large_file_guard_rejects_new_large_files() {
     let script = root().join(".github/scripts/test-check-large-files.sh");
     let out = Command::new("bash").arg(&script).output().unwrap();
@@ -255,6 +412,25 @@ fn large_file_guard_rejects_new_large_files() {
     let policy = read(".github/workflows/pr-policy.yml");
     assert!(policy.contains(".github/scripts/check-large-files.sh"));
     assert!(read(".githooks/pre-commit").contains("check-large-files.sh"));
+}
+
+#[test]
+fn ai_attribution_guard_passes_its_tests_and_is_wired() {
+    let script = root().join(".github/scripts/test-check-ai-attribution.sh");
+    let out = Command::new("bash").arg(&script).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let policy = read(".github/workflows/pr-policy.yml");
+    assert!(
+        policy.contains("run: .github/scripts/check-ai-attribution.sh \"$BASE_SHA\" \"$HEAD_SHA\""),
+        "pr-policy.yml must run the attribution gate (a mention of the script is not enough)"
+    );
+    assert!(policy.contains("PR_BODY: ${{ github.event.pull_request.body }}"));
+    assert!(read(".githooks/commit-msg").contains("check-ai-attribution.sh"));
 }
 
 /// Every job that runs steps starts with Harden-Runner (audit mode), and
@@ -399,13 +575,212 @@ fn security_workflows_are_wired() {
         "the CI-only rust-cache exception is missing"
     );
     let osv = read(".github/workflows/osv-scanner.yml");
-    for lock in ["Cargo.lock", "python/uv.lock", "bench/uv.lock"] {
-        assert!(
-            osv.contains(&format!("--lockfile={lock}")),
-            "osv lacks {lock}"
-        );
+    // The scan walks the tree instead of listing lock files, so a lock
+    // file a pull request adds does not fail the base scan.
+    let blocks: Vec<&str> = osv.split("scan-args: |-").skip(1).collect();
+    assert_eq!(
+        blocks.len(),
+        2,
+        "osv-scanner.yml must have a scan-pr and a scan job"
+    );
+    for block in &blocks {
+        for needle in ["--recursive", "--experimental-exclude=ui", "./"] {
+            assert!(
+                block.contains(needle),
+                "osv scan job lacks {needle:?}: {block}"
+            );
+        }
     }
+    assert!(
+        !osv.contains("--lockfile="),
+        "osv-scanner.yml must not list lock files"
+    );
     assert!(osv.contains("osv-scanner-reusable-pr.yml@"));
     assert!(osv.contains("osv-scanner-reusable.yml@"));
     assert!(osv.contains("schedule:"));
+}
+
+/// Commands and actions that publish or release something.
+const PUBLISH_MARKERS: [&str; 10] = [
+    "gh-action-pypi-publish",
+    "twine",
+    "maturin publish",
+    "maturin upload",
+    "uv publish",
+    "release-plz release",
+    "action-gh-release",
+    "gh release",
+    "npm publish",
+    "pnpm publish",
+];
+
+/// Nothing publishes on merge or on a tag (P2-T147, RELEASING.md): the only
+/// publishing path is the TestPyPI workflow, which runs on manual dispatch
+/// alone and waits for an approved environment; the release switches stay off
+/// and every crate stays unpublishable.
+#[test]
+fn release_publishing_is_manual_and_gated() {
+    let dir = root().join(".github");
+    let mut files = Vec::new();
+    for sub in ["workflows", "scripts"] {
+        for entry in std::fs::read_dir(dir.join(sub)).unwrap() {
+            files.push(entry.unwrap().path());
+        }
+    }
+    let mut publishers = Vec::new();
+    for path in &files {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        let text = std::fs::read_to_string(path).unwrap();
+        // Comments may talk about publishing; code may not.
+        let code: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect();
+        for line in &code {
+            // A dry run packages and verifies and never uploads.
+            if line.contains("cargo publish") {
+                assert!(
+                    line.contains("--dry-run") && name == "publish-dry-run.sh",
+                    "{name}: `cargo publish` outside the dry-run script or without --dry-run: {line}"
+                );
+            }
+            if PUBLISH_MARKERS.iter().any(|m| line.contains(m)) {
+                publishers.push(name.clone());
+            }
+        }
+    }
+    publishers.sort();
+    publishers.dedup();
+    assert_eq!(
+        publishers,
+        ["publish-testpypi.yml"],
+        "only the gated TestPyPI workflow may publish"
+    );
+
+    let wf = read(".github/workflows/publish-testpypi.yml");
+    let triggers: Vec<&str> = wf
+        .lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| l.starts_with(' '))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        triggers,
+        ["workflow_dispatch:"],
+        "the TestPyPI workflow must run on manual dispatch only"
+    );
+    // Scope the gate assertions to the `publish` job: a match anywhere else
+    // in the file (another job, a comment) must not satisfy them.
+    let publish = wf
+        .find("\n  publish:\n")
+        .map(|i| &wf[i..])
+        .expect("publish-testpypi.yml has a `publish` job");
+    let env = publish
+        .find("environment:\n      name: testpypi")
+        .expect("the publish job must declare the testpypi environment");
+    let upload = publish
+        .find("uses: pypa/gh-action-pypi-publish@")
+        .expect("the publish job must upload via gh-action-pypi-publish");
+    assert!(
+        env < upload,
+        "the publish job must declare the testpypi environment before the upload step"
+    );
+    assert!(wf.contains("github.ref == 'refs/heads/main'") && wf.contains("refs/tags/v"));
+    // The upload step's effective `repository-url` must be TestPyPI: scoping
+    // to the step's `with:` block keeps a production URL anywhere else (or
+    // next to the TestPyPI one) from passing.
+    let after_upload = &publish[upload..];
+    let with_off = after_upload
+        .find("\n        with:\n")
+        .expect("the upload step must have a `with:` block");
+    let with_block: Vec<&str> = after_upload[with_off..]
+        .lines()
+        .skip_while(|l| l.trim() != "with:")
+        .skip(1)
+        .take_while(|l| l.trim().is_empty() || l.starts_with("          "))
+        .collect();
+    let urls: Vec<&&str> = with_block
+        .iter()
+        .filter(|l| l.contains("repository-url:"))
+        .collect();
+    assert_eq!(
+        urls.len(),
+        1,
+        "the upload step must set exactly one repository-url, got: {with_block:?}"
+    );
+    assert_eq!(
+        urls[0].trim(),
+        "repository-url: https://test.pypi.org/legacy/",
+        "the upload step must target TestPyPI"
+    );
+    assert!(
+        !publish.contains("//pypi.org/legacy/") && !publish.contains("upload.pypi.org"),
+        "the publish job must not reference production PyPI"
+    );
+    assert!(
+        !wf.contains("secrets."),
+        "upload is by trusted publishing, no token"
+    );
+
+    // release-plz stays a dry run until the owner changes it.
+    let plz = read("release-plz.toml");
+    let code: Vec<&str> = plz
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect();
+    for off in [
+        "release = false",
+        "publish = false",
+        "git_release_enable = false",
+        "git_tag_enable = false",
+    ] {
+        assert!(
+            code.iter()
+                .any(|l| l.split('#').next().unwrap().trim() == off),
+            "release-plz.toml must keep `{off}`"
+        );
+    }
+    for on in [
+        "release = true",
+        "publish = true",
+        "git_release_enable = true",
+        "git_tag_enable = true",
+        "release_always = true",
+    ] {
+        assert!(
+            !code.iter().any(|l| l.trim().starts_with(on)),
+            "release-plz.toml turns on `{on}`"
+        );
+    }
+
+    // No crate can be published from this repository.
+    let mut manifests = vec![root().join("xtask/Cargo.toml")];
+    for entry in std::fs::read_dir(root().join("crates")).unwrap() {
+        manifests.push(entry.unwrap().path().join("Cargo.toml"));
+    }
+    for m in manifests.iter().filter(|m| m.exists()) {
+        let text = std::fs::read_to_string(m).unwrap();
+        assert!(
+            text.lines().any(|l| l.trim() == "publish = false"),
+            "{} must keep `publish = false`",
+            m.display()
+        );
+    }
+
+    // The dry run and the quickstart are wired into CI.
+    let ci = read(".github/workflows/ci.yml");
+    for needle in [
+        "publish-dry-run.sh",
+        "quickstart-test.sh",
+        "  release-dry-run:\n",
+    ] {
+        assert!(ci.contains(needle), "ci.yml lacks {needle:?}");
+    }
+    // The README fixture uses `tempfile.mkdtemp()`; the script must point it
+    // inside the scratch directory so the exit trap removes it.
+    assert!(
+        read(".github/scripts/quickstart-test.sh").contains("TMPDIR=\"$work\""),
+        "quickstart-test.sh must run Python with TMPDIR=\"$work\""
+    );
 }

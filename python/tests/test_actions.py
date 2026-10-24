@@ -310,14 +310,14 @@ def test_duckdb_reads_operator_output(spark: SparkSession, big: Any) -> None:
     duckdb = pytest.importorskip("duckdb")
     con = duckdb.connect()
     relation = con.from_arrow(spark.createDataFrame(big).select("id", "name"))
-    assert relation.aggregate("sum(id), count(distinct name)").fetchone() == (sum(range(big.num_rows)), 1000)
+    assert relation.aggregate("sum(id), count(distinct name)").fetchall() == [(sum(range(big.num_rows)), 1000)]
 
 
 def test_dataframe_is_a_stream_for_duckdb_twice(df: DataFrame) -> None:
     duckdb = pytest.importorskip("duckdb")
     con = duckdb.connect()
     for _ in range(2):  # each scan executes the query again
-        assert con.from_arrow(df).aggregate("sum(id)").fetchone() == (6,)
+        assert con.from_arrow(df).aggregate("sum(id)").fetchall() == [(6,)]
 
 
 def test_requested_schema_and_capsule(df: DataFrame) -> None:
@@ -379,9 +379,12 @@ def test_create_or_replace_temp_view(spark: SparkSession, parquet_file: str, tmp
         spark.read.parquet(parquet_file).createOrReplaceTempView(1)  # ty: ignore[invalid-argument-type]
 
 
-def test_temp_view_of_a_computed_dataframe_is_not_supported_yet(df: DataFrame) -> None:
-    with pytest.raises(errors.UnsupportedOperationException, match="temporary views other than reads by path"):
-        df.createOrReplaceTempView("v")
+def test_temp_view_of_a_computed_dataframe_snapshots_its_input(spark: SparkSession, df: DataFrame) -> None:
+    df.createOrReplaceTempView("v")
+    assert spark.sql("select sum(id) as s from v").collect() == [Row(s=6)]
+    # A view built from itself reads the snapshot it replaces, as in Spark.
+    spark.sql("select id + 10 as id from v").createOrReplaceTempView("v")
+    assert spark.sql("select sum(id) as s from v").collect() == [Row(s=36)]
 
 
 def test_string_expressions_are_listed_as_not_implemented(df: DataFrame) -> None:

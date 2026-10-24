@@ -6,6 +6,20 @@
 ## Purpose
 Memory management: pools, reservations, the memory arbitrator and spill accounting, and spill files (`src/spillfile/`: Arrow IPC + LZ4/ZSTD on local disk with a byte cap, ADR 0007).
 
+## Key files
+Paths are relative to this crate.
+- `src/lib.rs` public surface: pools, reservations, release hook
+- `src/pool.rs` memory pools; `src/reservation.rs` reservation handles; `src/consumer.rs` memory consumers
+- `src/arbitrate.rs` memory arbitrator; `src/limit.rs` memory-limit detection (cgroup and meminfo fixtures)
+- `src/spill.rs` spill scopes and spill accounting
+- `src/spillfile/format.rs` on-disk spill format; `src/spillfile/writer.rs` and `reader.rs` frame I/O
+- `src/spillfile/dir.rs` spill directory, advisory lock and crash reclaim
+- `src/loom_tests.rs` loom models; `src/sync.rs` loom/std primitive switch
+
+## Extension points
+- New memory consumer: take a `Reservation` from the pool and grow it with `try_grow`; do not allocate unaccounted.
+- On-disk spill format change: bump its version in `src/spillfile/format.rs` and keep reading the previous version (ADR 0029: version N reads N-1). Today only version 1 exists, so the reader accepts exactly it.
+
 ## Invariants
 - Every operator allocation is accounted through reservations; pools are empty at query end (tested).
 - Arbitration and OOM paths return typed errors or trigger spill; never panic.
@@ -21,6 +35,6 @@ Memory management: pools, reservations, the memory arbitrator and spill accounti
 ## ADRs (in `../krishiv-internal/adr/`)
 0007, 0006, 0029
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-memory --no-tests=pass` · `cargo clippy -p krishiv-memory --all-targets -- -D warnings` ·
 loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-memory --lib --release` (use a separate target dir)

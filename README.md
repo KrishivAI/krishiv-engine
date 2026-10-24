@@ -23,14 +23,16 @@
 
 <h3 align="center">Your Spark code. No JVM. One engine for batch, streaming and always-fresh views.</h3>
 
-**Krishiv** is a Rust-native, Spark-compatible compute engine we are building for the agentic era. Keep the PySpark
+**Krishiv** is a Rust-native, Apache Spark™-compatible compute engine we are building for the agentic era. Keep the PySpark
 and Spark SQL you already write, and run it on a vectorized, Arrow-native engine that handles **batch SQL**,
 **streaming** and **incrementally maintained materialized views** with the same semantics. Start in-process on a
 laptop, and take the same code to a single server or a cluster.
 
 > [!WARNING]
-> **Pre-alpha: under active construction, not usable yet.** There is no working query engine, no release and no
-> stable API. Everything below describes what we are building, not what exists today.
+> **Alpha (`0.1.0-alpha`): the embedded core runs, the rest is being built.** You can run SQL and DataFrames
+> in-process from Python today (see the [Quickstart](#quickstart)); there is no stable API yet, and nothing has been
+> published to PyPI or crates.io. The sections after the Quickstart describe what we are building, not what exists
+> today.
 
 <p align="center">
   <b>⭐ Star the repo and 👀 Watch → Custom → Releases to follow development from the first commit to 1.0.</b>
@@ -94,9 +96,8 @@ musllinux compat build is provided:
 
 ## Status and roadmap at a glance
 
-Krishiv is in **pre-alpha**. The workspace layout, CI quality gates, Spark error-class and config registries, a test
-kit with Spark golden fixtures, and the Python package skeleton are in place. The query engine itself is being built
-now.
+Krishiv is at **`0.1.0-alpha`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
+streaming, incremental views, Spark Connect and distributed execution are still being built.
 
 | Milestone | Focus | Status |
 |---|---|---|
@@ -108,6 +109,80 @@ now.
 | 6. 1.0 | Stable APIs and formats | ⏳ Planned |
 
 Watch **Releases** to hear when the first alpha lands.
+
+## Quickstart
+
+The embedded core runs in your process: no server, no JVM. Needs Python 3.11 or newer. Nothing is published yet, so
+until the first release is out, build the wheel from this repository (`maturin build`, see
+[python/README.md](python/README.md)) and install that file instead of the name below.
+
+<!-- quickstart:begin (CI runs every block below from a clean venv against the built wheel: .github/scripts/quickstart-test.sh) -->
+
+Install, with pyarrow for the Arrow results:
+
+```bash
+pip install "krishiv[pyarrow]"
+```
+
+SQL and DataFrames:
+
+```python
+import tempfile
+from pathlib import Path
+
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+import krishiv
+from krishiv.sql import functions as F
+
+spark = krishiv.session()  # a PySpark-style SparkSession, in process
+
+# SQL.
+spark.sql("SELECT 1 AS answer").show()
+
+# DataFrames over a Parquet file; the same file is also a temp view for SQL.
+path = str(Path(tempfile.mkdtemp()) / "orders.parquet")
+pq.write_table(
+    pa.table(
+        {
+            "region": ["east", "west", "east", "north", "west"],
+            "amount": [10.0, 20.0, 5.5, 7.25, 30.0],
+        }
+    ),
+    path,
+)
+orders = spark.read.parquet(path)
+orders.createOrReplaceTempView("orders")
+
+by_region = (
+    orders.filter(F.col("amount") > 6)
+    .groupBy("region")
+    .agg(F.sum("amount").alias("revenue"))
+    .orderBy("region")
+)
+by_region.show()
+print(by_region.toArrow())  # a pyarrow.Table; also pa.table(by_region), polars.DataFrame(by_region)
+
+same = spark.sql("SELECT region, sum(amount) AS revenue FROM orders WHERE amount > 6 GROUP BY region ORDER BY region")
+assert same.collect() == by_region.collect()
+```
+
+`EXPLAIN` and `EXPLAIN ANALYZE` (per-operator rows, time, peak memory and spill bytes):
+
+```python
+by_region.explain()  # the physical plan
+by_region.explain(analyze=True)  # runs the query and prints each operator's metrics
+
+plan = spark.sql("EXPLAIN ANALYZE SELECT region, sum(amount) FROM orders GROUP BY region").collect()[0][0]
+assert plan.startswith("== Physical Plan (analyzed) ==")
+```
+
+<!-- quickstart:end -->
+
+Krishiv follows Spark's SQL and DataFrame semantics and error classes; the differences that remain are listed as
+they are found. "Spark-compatible" describes that goal and the API shape, not a certification: Krishiv is not Apache
+Spark.
 
 ## What it will look like
 
@@ -176,5 +251,7 @@ require a DCO sign-off (`git commit -s`).
 
 ## Trademarks
 
-Apache Spark, Apache Arrow and Apache Iceberg are trademarks of the Apache Software Foundation. Krishiv is an
-independent project and is not affiliated with or endorsed by the Apache Software Foundation.
+Apache Spark, Apache Arrow and Apache Iceberg are trademarks of the Apache Software Foundation. Delta Lake is a
+trademark of LF Projects, LLC. Krishiv is an independent project and is not affiliated with or endorsed by the Apache
+Software Foundation or LF Projects. "Spark-compatible" describes API compatibility with Apache Spark; Krishiv is not
+Apache Spark.

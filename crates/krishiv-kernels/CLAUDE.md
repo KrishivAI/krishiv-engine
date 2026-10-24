@@ -54,6 +54,21 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   `krishiv-testkit` holds that bound.
 - `reference`: row-at-a-time oracle for property tests (`tests/props.rs`), the fuzz target (`fuzz/`) and benches.
 
+## Key files
+Paths are relative to this crate.
+- `src/lib.rs` module map and crate docs
+- `src/chunk.rs` generic 64-row chunk engine; `src/policy.rs` overflow policies (wrap, NULL, raise)
+- `src/dispatch.rs` `Target` and `KernelCtx`; `src/unsafe_dispatch.rs` the only `unsafe` module
+- `src/integer.rs`, `src/decimal.rs`, `src/float.rs` arithmetic kernels; `src/compare.rs` comparisons
+- `src/cast.rs` Spark CAST on Arrow carriers; `src/string.rs` string kernels
+- `src/hash.rs` and `src/hash/murmur3.rs` Murmur3 (seed 42), `src/hash/xxh64.rs` xxhash64
+- `src/datetime.rs` date and timestamp kernels; `src/math.rs` double functions, `src/math/fdlibm.rs` ports
+- `src/reference.rs` row-at-a-time oracle for property tests
+
+## Extension points
+- New kernel: a module with a `reference` oracle entry, a property test in `tests/props.rs`, and a bench in `benches/`.
+- New CPU-specific path: the `unsafe` clone goes in `src/unsafe_dispatch.rs` only, with a `// SAFETY:` comment.
+
 ## Invariants
 - Spark float ordering (NaN, -0.0) in every compare/sort/hash kernel, nested types included.
 - Murmur3_x86_32 seed 42 implemented in-house; fast hash (foldhash/xxh3) only where not observable.
@@ -67,7 +82,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 ## ADRs (in `../krishiv-internal/adr/`)
 0008, 0009, 0010, 0011, 0029, 0034
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-kernels --no-tests=pass` · `cargo clippy -p krishiv-kernels --all-targets -- -D warnings`
 `KRISHIV_REQUIRE_TARGETS=baseline,x86_64v3` makes a skipped CPU target a test failure (set in CI) ·
 `cargo +nightly miri test -p krishiv-kernels` · `cargo bench -p krishiv-kernels` ·

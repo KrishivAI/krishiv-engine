@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_common::error::FailedToParseTooComplex;
-use krishiv_common::stack::{STEP, on_big_stack};
+use krishiv_common::stack::on_big_stack;
 
 use super::bind::{Bindings, addr, same, unsupported};
 use super::exprs::{Bound, Cx};
@@ -15,6 +15,18 @@ use crate::{
     AttrId, BoundColumn, Cte, Expr, ExprNode, LogicalPlan, Origin, Plan, PlanId, PlanNode,
     ReadSource,
 };
+
+/// Relations resolved on the caller's stack before hopping to a fresh one.
+///
+/// Each nesting level keeps the frames of `rel`, `rel_on_stack`, `node`,
+/// the operator helper, `bind`, `expr` and `expr_node` alive at once, and
+/// debug and coverage-instrumented builds inflate those frames well past
+/// their release size: 64 levels overflow a 2 MiB stack in debug builds and
+/// abort under `cargo llvm-cov`. Hopping every 16 levels keeps at most 16
+/// levels on the caller's stack; deeper levels run on fresh 64 MiB
+/// segments. The test thread stays at 2 MiB, so deep plans are still proven
+/// to resolve on a small stack.
+const RESOLVE_STEP: usize = 16;
 
 /// An attribute in scope: the column, its qualifier and, for a table
 /// column, the securable it belongs to and its catalog name.
@@ -35,10 +47,22 @@ pub(super) struct AggInfo {
     pub(super) out: Vec<Attr>,
     /// The grouping attributes, as attributes of the input.
     pub(super) keys: Vec<Attr>,
-    /// Select items that use lateral column aliases make projections
-    /// above the aggregate: every select item, over the aggregate's output
-    /// (`None` when no item does).
+    /// Select items that use lateral column aliases or windows make
+    /// projections (and window relations) above the aggregate: every
+    /// select item, over the aggregate's output (`None` when no item
+    /// does).
     pub(super) top: Option<Arc<[Bound]>>,
+    /// With windows: the `HAVING` filtering the aggregate below them.
+    pub(super) having: Option<Arc<Expr>>,
+}
+
+impl AggInfo {
+    /// Whether the select list holds windows.
+    pub(super) fn has_windows(&self) -> bool {
+        self.top
+            .as_ref()
+            .is_some_and(|t| t.iter().any(|b| b.win.is_some()))
+    }
 }
 
 /// How a relation gets back columns it dropped: Spark adds the attributes
@@ -200,6 +224,10 @@ fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64, u64)> {
     }
 }
 
+/// A CTE scope: every visible CTE (outer ones as `None`, this level's as
+/// `Some(index)`); inner `WITH` names shadow as `None`.
+type CteScope = Vec<(String, Option<usize>)>;
+
 impl Resolver<'_> {
     pub(super) fn fresh(&mut self) -> AttrId {
         self.next_id += 1;
@@ -273,15 +301,15 @@ impl Resolver<'_> {
             .unwrap_or_else(|| Arc::clone(p))
     }
 
-    /// Resolves the relation `root` in `env`, every `STEP` nested calls on
-    /// a fresh stack.
+    /// Resolves the relation `root` in `env`, every [`RESOLVE_STEP`]
+    /// nested calls on a fresh stack.
     pub(super) fn rel(
         &mut self,
         root: &Arc<LogicalPlan>,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         self.depth += 1;
-        let r = if self.depth.is_multiple_of(STEP) {
+        let r = if self.depth.is_multiple_of(RESOLVE_STEP) {
             on_big_stack(|| self.rel_on_stack(root, env))
                 .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, root.origin)))
         } else {
@@ -346,52 +374,6 @@ impl Resolver<'_> {
             .get(&(addr(&*root), env.id))
             .cloned()
             .ok_or_else(|| unsupported("a plan shape", root.origin))
-    }
-
-    /// Spark's `checkLimitLikeClause` on a bound `LIMIT` count: it must be
-    /// foldable, then an `INT`, and its folded value must be neither NULL
-    /// nor negative. A foldable count that does not fold here (for example
-    /// an overflowing `+`) stays accepted, as before.
-    /// Kept out of the resolver's recursive match so its locals do not
-    /// grow every frame of a deep plan.
-    #[inline(never)]
-    fn check_limit(&self, b: &Bound, origin: Origin) -> Result<(), AnalysisError> {
-        let expr = || format!("\"{}\"", super::exprs::pretty(&b.shown()));
-        let name = "limit".to_owned();
-        if !super::fold::is_foldable(&b.expr) {
-            return Err(AnalysisError::new(
-                krishiv_common::error::InvalidLimitLikeExpressionIsUnfoldable {
-                    expr: expr(),
-                    name,
-                },
-                origin,
-            ));
-        }
-        if b.ty.data_type != Some(krishiv_types::DataType::Integer) {
-            return Err(AnalysisError::new(
-                krishiv_common::error::InvalidLimitLikeExpressionDataType {
-                    expr: expr(),
-                    name,
-                    data_type: super::coerce::quoted_type(b.ty.data_type.as_ref()),
-                },
-                origin,
-            ));
-        }
-        match super::fold::constant(&b.expr, self.ctx.conf.ansi) {
-            Some(super::Constant::Null) => Err(AnalysisError::new(
-                krishiv_common::error::InvalidLimitLikeExpressionIsNull { expr: expr(), name },
-                origin,
-            )),
-            Some(super::Constant::Integral(v)) if v < 0 => Err(AnalysisError::new(
-                krishiv_common::error::InvalidLimitLikeExpressionIsNegative {
-                    expr: expr(),
-                    name,
-                    v: v.to_string(),
-                },
-                origin,
-            )),
-            _ => Ok(()),
-        }
     }
 
     pub(super) fn child(&self, c: &Arc<LogicalPlan>, env: &Env) -> Result<Rel, AnalysisError> {
@@ -494,6 +476,7 @@ impl Resolver<'_> {
             agg_scope: None,
             lenient: false,
             outer: true,
+            windows: super::exprs::WindowUse::Other,
             env,
             op,
         }
@@ -501,8 +484,78 @@ impl Resolver<'_> {
 
     fn node(&mut self, p: &Arc<LogicalPlan>, env: &Arc<Env>) -> Result<Rel, AnalysisError> {
         let o = p.origin;
+        // The arms that recurse into children stay here; the others are
+        // out of line in `leaf_node`, so this frame (on the recursion path
+        // of nested subqueries) stays small.
         match &p.node {
             PlanNode::Read(ReadSource::Table { name, options }) => self.read(p, name, options, env),
+            PlanNode::OneRowRelation => Ok(self.wrap(Arc::clone(p), o.plan_id, Vec::new(), &[])),
+            PlanNode::Project { input, exprs } => self.project(p, input, exprs, env),
+            PlanNode::Filter { input, predicate } => self.filter(p, input, predicate, env),
+            PlanNode::Aggregate {
+                input,
+                grouping,
+                aggregates,
+            } => self.aggregate(p, input, grouping, aggregates, env),
+            PlanNode::Join {
+                left,
+                right,
+                kind,
+                condition,
+            } => self.join(p, left, right, *kind, condition, env),
+            PlanNode::Sort {
+                input,
+                order,
+                global,
+            } => self.sort(p, input, order, *global, env),
+            PlanNode::SubqueryAlias {
+                input,
+                alias,
+                columns,
+            } => self.subquery_alias(p, input, alias, columns, env),
+            PlanNode::Union {
+                inputs,
+                by_name,
+                allow_missing_columns,
+            } => self.union(p, inputs, *by_name, *allow_missing_columns, env),
+            PlanNode::SetOp {
+                left,
+                right,
+                op,
+                all,
+            } => self.set_op(p, left, right, *op, *all, env),
+            PlanNode::WithColumns { input, columns } => self.with_columns(p, input, columns, env),
+            PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
+            PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
+            PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
+            PlanNode::Distinct { input } => self.distinct(p, input, env),
+            PlanNode::Window {
+                input,
+                exprs,
+                partition_by,
+                order_by,
+            } => self.window_rel(p, input, exprs, partition_by, order_by, env),
+            PlanNode::Hint {
+                input,
+                name,
+                params,
+            } => self.hint(p, input, name, params, env),
+            // Listed, not wildcarded: a new `PlanNode` variant must be
+            // placed here or in `leaf_node` to compile.
+            PlanNode::Read(ReadSource::Files { .. })
+            | PlanNode::Sql { .. }
+            | PlanNode::Scan(_)
+            | PlanNode::CteRef(_)
+            | PlanNode::Shift { .. }
+            | PlanNode::ReplicateRows { .. }
+            | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
+        }
+    }
+
+    #[inline(never)]
+    fn leaf_node(&mut self, p: &Arc<LogicalPlan>, env: &Arc<Env>) -> Result<Rel, AnalysisError> {
+        let o = p.origin;
+        match &p.node {
             PlanNode::Read(source @ ReadSource::Files { .. }) => {
                 match self.b.files.iter().position(|f| f.source == *source) {
                     Some(i) => Ok(self.files(p, i)),
@@ -517,7 +570,6 @@ impl Resolver<'_> {
                     _ => Err(unsupported("SQL text", o)),
                 }
             }
-            PlanNode::OneRowRelation => Ok(self.wrap(Arc::clone(p), o.plan_id, Vec::new(), &[])),
             PlanNode::Scan(s) => {
                 let name = match &s.source {
                     ReadSource::Table { name, .. } => name.clone(),
@@ -570,87 +622,6 @@ impl Resolver<'_> {
                 }
                 self.shifted(&c, *offset, Some(Arc::clone(p)))
             }
-            PlanNode::Project { input, exprs } => self.project(p, input, exprs, env),
-            PlanNode::WithColumns { input, columns } => {
-                let c = self.child(input, env)?;
-                let rels = [&c];
-                let cx = Self::cx(&c.out, &rels, env, "Project");
-                let mut news: Vec<(String, Bound)> = Vec::new();
-                for (name, e) in columns {
-                    news.push((name.clone(), self.bind(e, &cx)?));
-                }
-                let cs = self.ctx.conf.case_sensitive;
-                let mut exprs = Vec::new();
-                let mut taken = HashSet::new();
-                for a in c.out.iter() {
-                    match news.iter().rposition(|(n, _)| same(n, &a.col.name, cs)) {
-                        Some(i) => {
-                            taken.insert(i);
-                            exprs.push(Arc::new(Expr::new(ExprNode::Alias {
-                                expr: Arc::clone(&news[i].1.expr),
-                                name: news[i].0.clone(),
-                            })));
-                        }
-                        None => exprs.push(col_expr(&a.col, Origin::UNKNOWN)),
-                    }
-                }
-                for (i, (name, b)) in news.iter().enumerate() {
-                    let later = news[i + 1..].iter().any(|(n, _)| same(n, name, cs));
-                    if !taken.contains(&i) && !later {
-                        exprs.push(Arc::new(Expr::new(ExprNode::Alias {
-                            expr: Arc::clone(&b.expr),
-                            name: name.clone(),
-                        })));
-                    }
-                }
-                self.project_items(p, &c, &exprs, env)
-            }
-            PlanNode::Filter { input, predicate } => self.filter(p, input, predicate, env),
-            PlanNode::Aggregate {
-                input,
-                grouping,
-                aggregates,
-            } => self.aggregate(p, input, grouping, aggregates, env),
-            PlanNode::Join {
-                left,
-                right,
-                kind,
-                condition,
-            } => self.join(p, left, right, *kind, condition, env),
-            PlanNode::Sort {
-                input,
-                order,
-                global,
-            } => self.sort(p, input, order, *global, env),
-            PlanNode::Limit { input, limit } => {
-                let c = self.child(input, env)?;
-                let cx = Self::cx(&[], &[], env, "Limit");
-                let b = self.bind(limit, &cx)?;
-                self.check_limit(&b, limit.origin)?;
-                let node = PlanNode::Limit {
-                    input: Arc::clone(&c.plan),
-                    limit: b.expr,
-                };
-                let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
-                r.widen = Some(Arc::new(Widen::Through { child: c }));
-                Ok(r)
-            }
-            PlanNode::SubqueryAlias {
-                input,
-                alias,
-                columns,
-            } => self.subquery_alias(p, input, alias, columns, env),
-            PlanNode::Union {
-                inputs,
-                by_name,
-                allow_missing_columns,
-            } => self.union(p, inputs, *by_name, *allow_missing_columns, env),
-            PlanNode::SetOp {
-                left,
-                right,
-                op,
-                all,
-            } => self.set_op(p, left, right, *op, *all, env),
             PlanNode::ReplicateRows { input, count } => {
                 let c = self.child(input, env)?;
                 let rels = [&c];
@@ -661,12 +632,6 @@ impl Resolver<'_> {
                 };
                 Ok(self.make(o, node, c.out.to_vec(), &[&c]))
             }
-            PlanNode::Distinct { input } => self.distinct(p, input, env),
-            PlanNode::Hint {
-                input,
-                name,
-                params,
-            } => self.hint(p, input, name, params, env),
             PlanNode::JoinHint { input, strategy } => {
                 let c = self.child(input, env)?;
                 let node = PlanNode::JoinHint {
@@ -677,34 +642,269 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
-            PlanNode::WithCte { input, ctes } => {
-                let mut visible = env.ctes.clone();
-                let mut scope = env.ctes_id;
-                let mut defs = Vec::new();
-                let mut rels = Vec::new();
-                for c in ctes {
-                    let e = self.env(visible.clone(), scope, env.outer.clone());
-                    let r = self.rel(&c.plan, &e)?;
-                    defs.push(Cte {
-                        name: c.name.clone(),
-                        plan: Arc::clone(&r.plan),
-                    });
-                    visible.push((c.name.clone(), r.clone()));
-                    scope = self.ctes_id();
-                    rels.push(r);
+            // Handled in `node`, which never forwards them.
+            PlanNode::Read(ReadSource::Table { .. })
+            | PlanNode::OneRowRelation
+            | PlanNode::Project { .. }
+            | PlanNode::WithColumns { .. }
+            | PlanNode::Filter { .. }
+            | PlanNode::Aggregate { .. }
+            | PlanNode::Join { .. }
+            | PlanNode::Sort { .. }
+            | PlanNode::Limit { .. }
+            | PlanNode::Offset { .. }
+            | PlanNode::SubqueryAlias { .. }
+            | PlanNode::WithCte { .. }
+            | PlanNode::Hint { .. }
+            | PlanNode::Union { .. }
+            | PlanNode::Distinct { .. }
+            | PlanNode::SetOp { .. }
+            | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
+        }
+    }
+
+    /// A `WithColumns` as Spark resolves it: replaced columns keep their
+    /// place, new ones are appended. Out of line: it keeps the recursive
+    /// `node` frame small (deep plans resolve on a small stack).
+    #[inline(never)]
+    fn with_columns(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        columns: &[(String, Arc<Expr>)],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let c = self.child(input, env)?;
+        let rels = [&c];
+        let mut cx = Self::cx(&c.out, &rels, env, "Project");
+        cx.windows = super::exprs::WindowUse::Allowed;
+        let mut news: Vec<(String, Bound)> = Vec::new();
+        for (name, e) in columns {
+            news.push((name.clone(), self.bind(e, &cx)?));
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let mut exprs = Vec::new();
+        let mut taken = HashSet::new();
+        for a in c.out.iter() {
+            match news.iter().rposition(|(n, _)| same(n, &a.col.name, cs)) {
+                Some(i) => {
+                    taken.insert(i);
+                    exprs.push(Arc::new(Expr::new(ExprNode::Alias {
+                        expr: Arc::clone(&news[i].1.expr),
+                        name: news[i].0.clone(),
+                    })));
                 }
-                let e = self.env(visible, scope, env.outer.clone());
-                let i = self.rel(input, &e)?;
-                let node = PlanNode::WithCte {
-                    input: Arc::clone(&i.plan),
-                    ctes: defs,
-                };
-                let mut kids: Vec<&Rel> = rels.iter().collect();
-                kids.push(&i);
-                let mut r = self.make(o, node, i.out.to_vec(), &kids);
-                r.carriers = Arc::clone(&i.carriers);
-                Ok(r)
+                None => exprs.push(col_expr(&a.col, Origin::UNKNOWN)),
             }
         }
+        for (i, (name, b)) in news.iter().enumerate() {
+            let later = news[i + 1..].iter().any(|(n, _)| same(n, name, cs));
+            if !taken.contains(&i) && !later {
+                exprs.push(Arc::new(Expr::new(ExprNode::Alias {
+                    expr: Arc::clone(&b.expr),
+                    name: name.clone(),
+                })));
+            }
+        }
+        self.project_items(p, &c, &exprs, env)
+    }
+
+    /// The CTE definitions resolved in turn, then the input over them. Out
+    /// of line: it keeps the recursive `node` frame small (deep plans
+    /// resolve on a small stack).
+    ///
+    /// Only definitions the input needs (transitively) are resolved:
+    /// Spark does not analyze a CTE the query never references, so an
+    /// unused definition's column errors (like `AMBIGUOUS_REFERENCE`)
+    /// never fail the query. Table existence still fails even when unused,
+    /// but that comes from Bind, which visits every definition.
+    #[inline(never)]
+    fn with_cte(
+        &mut self,
+        p: &Arc<LogicalPlan>,
+        input: &Arc<LogicalPlan>,
+        ctes: &[Cte],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let o = p.origin;
+        let needed = Self::needed_ctes(input, ctes, &env.ctes, self.ctx.conf.case_sensitive);
+        if !needed.iter().any(|b| *b) {
+            return self.rel(input, env);
+        }
+        let mut visible = env.ctes.clone();
+        let mut scope = env.ctes_id;
+        let mut defs = Vec::new();
+        let mut rels = Vec::new();
+        for (c, keep) in ctes.iter().zip(needed.iter()) {
+            if !keep {
+                continue;
+            }
+            let e = self.env(visible.clone(), scope, env.outer.clone());
+            let r = self.rel(&c.plan, &e)?;
+            defs.push(Cte {
+                name: c.name.clone(),
+                plan: Arc::clone(&r.plan),
+            });
+            visible.push((c.name.clone(), r.clone()));
+            scope = self.ctes_id();
+            rels.push(r);
+        }
+        let e = self.env(visible, scope, env.outer.clone());
+        let i = self.rel(input, &e)?;
+        let node = PlanNode::WithCte {
+            input: Arc::clone(&i.plan),
+            ctes: defs,
+        };
+        let mut kids: Vec<&Rel> = rels.iter().collect();
+        kids.push(&i);
+        let mut r = self.make(o, node, i.out.to_vec(), &kids);
+        r.carriers = Arc::clone(&i.carriers);
+        Ok(r)
+    }
+
+    /// Which definitions of `ctes` the input needs, transitively: a
+    /// definition is needed when the input (or another needed definition)
+    /// reads its name. Reads shadowed by an inner `WITH` never count, and
+    /// a definition's own reads see only the outer CTEs and the earlier
+    /// definitions, so a forward reference never marks a later definition.
+    fn needed_ctes(
+        input: &Arc<LogicalPlan>,
+        ctes: &[Cte],
+        outer: &[(String, Rel)],
+        case_sensitive: bool,
+    ) -> Vec<bool> {
+        let n = ctes.len();
+        let mut needed = vec![false; n];
+        if n == 0 {
+            return needed;
+        }
+        let outer_scope: Vec<(String, Option<usize>)> =
+            outer.iter().map(|(name, _)| (name.clone(), None)).collect();
+        let mut input_scope = outer_scope.clone();
+        input_scope.extend(
+            ctes.iter()
+                .enumerate()
+                .map(|(i, c)| (c.name.clone(), Some(i))),
+        );
+        let mut stack = Self::cte_refs(input, &input_scope, case_sensitive);
+        let mut memo: Vec<Option<Vec<usize>>> = (0..n).map(|_| None).collect();
+        while let Some(i) = stack.pop() {
+            if i >= n || needed[i] {
+                continue;
+            }
+            needed[i] = true;
+            let refs = match &memo[i] {
+                Some(r) => r.clone(),
+                None => {
+                    let mut scope = outer_scope.clone();
+                    scope.extend(
+                        ctes[..i]
+                            .iter()
+                            .enumerate()
+                            .map(|(j, c)| (c.name.clone(), Some(j))),
+                    );
+                    let r = Self::cte_refs(&ctes[i].plan, &scope, case_sensitive);
+                    memo[i] = Some(r.clone());
+                    r
+                }
+            };
+            for j in refs {
+                if j < n && !needed[j] {
+                    stack.push(j);
+                }
+            }
+        }
+        needed
+    }
+
+    /// Indices of this `WITH` level's definitions that `root` reads, with
+    /// `scope` naming every visible CTE (outer ones as `None`, this level's
+    /// as `Some(index)`). A single-part read resolves to the innermost
+    /// scope entry matching its name; only reads resolving to this level
+    /// are reported. Inner `WITH` names shadow as `None`.
+    fn cte_refs(root: &Arc<LogicalPlan>, scope: &CteScope, case_sensitive: bool) -> Vec<usize> {
+        enum Item<'a> {
+            Plan(&'a Arc<LogicalPlan>, CteScope),
+            Expr(&'a Arc<Expr>, CteScope),
+        }
+        let mut out = Vec::new();
+        // Visits are keyed by scope contents, not scope length: the same
+        // plan reached through two inner `WITH` scopes with different names
+        // but equal lengths resolves its reads differently (a shadowing name
+        // hides what the other scope reports), so each scope gets a visit.
+        let mut seen: HashSet<(usize, CteScope)> = HashSet::new();
+        let mut stack = vec![Item::Plan(root, scope.clone())];
+        while let Some(item) = stack.pop() {
+            match item {
+                Item::Plan(p, sc) => {
+                    if !seen.insert((addr(&**p), sc.clone())) {
+                        continue;
+                    }
+                    match &p.node {
+                        PlanNode::Read(ReadSource::Table { name, .. }) => {
+                            if let [n] = name.as_slice() {
+                                for (sname, idx) in sc.iter().rev() {
+                                    if same(sname, n, case_sensitive) {
+                                        if let Some(i) = idx
+                                            && !out.contains(i)
+                                        {
+                                            out.push(*i);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        PlanNode::CteRef(r) => {
+                            // An already-resolved reference: re-analysis
+                            // must keep the definition it names.
+                            for (sname, idx) in sc.iter().rev() {
+                                if same(sname, &r.name, case_sensitive) {
+                                    if let Some(i) = idx
+                                        && !out.contains(i)
+                                    {
+                                        out.push(*i);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        PlanNode::WithCte { input, ctes } => {
+                            let mut ext = sc.clone();
+                            ext.extend(ctes.iter().map(|c| (c.name.clone(), None)));
+                            stack.push(Item::Plan(input, ext));
+                            let mut cur = sc.clone();
+                            for c in ctes {
+                                stack.push(Item::Plan(&c.plan, cur.clone()));
+                                cur.push((c.name.clone(), None));
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    p.for_each_expr(&mut |e| {
+                        stack.push(Item::Expr(e, sc.clone()));
+                    });
+                    // `WithCte` already pushed its children above.
+                    if !matches!(p.node, PlanNode::WithCte { .. }) {
+                        p.for_each_child(&mut |c| {
+                            stack.push(Item::Plan(c, sc.clone()));
+                        });
+                    }
+                }
+                Item::Expr(e, sc) => {
+                    if !seen.insert((addr(&**e), sc.clone())) {
+                        continue;
+                    }
+                    if let ExprNode::Subquery { plan, .. } = &e.node {
+                        stack.push(Item::Plan(plan, sc.clone()));
+                    }
+                    e.for_each_child(&mut |c| {
+                        stack.push(Item::Expr(c, sc.clone()));
+                    });
+                }
+            }
+        }
+        out
     }
 }

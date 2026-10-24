@@ -12,9 +12,25 @@ publish = false
 arrow-array.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
+fancy-regex = { workspace = true, features = ["std"] }
+# Feature selection for the engine fancy-regex delegates to, instead of fancy-regex's all-in
+# `unicode`/`perf` (which add the age and segment tables and aho-corasick). Java needs
+# `\p{..}` categories, scripts and binary properties, `(?u)` case folding and Unicode `\b`.
+regex-automata = { workspace = true, features = [
+    "unicode-bool",
+    "unicode-case",
+    "unicode-gencat",
+    "unicode-perl",
+    "unicode-script",
+    "unicode-word-boundary",
+] }
+regex-syntax = { workspace = true, features = ["unicode-bool", "unicode-case", "unicode-gencat", "unicode-perl", "unicode-script"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-types = { path = "../krishiv-types" }
+
+[package.metadata.cargo-machete]
+ignored = ["regex-automata", "regex-syntax"]
 
 [lints]
 workspace = true
