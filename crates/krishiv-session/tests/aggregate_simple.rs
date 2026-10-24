@@ -439,3 +439,46 @@ fn aliases_run_as_their_aggregate() -> R {
     );
     Ok(())
 }
+
+/// `DISTINCT` on the new aggregates deduplicates the `(x, y)` pairs first
+/// (so it agrees with the plain form where there is no tie); `FILTER` is
+/// not supported.
+#[test]
+fn distinct_and_filter_with_new_aggregates() -> R {
+    let s = session()?;
+    // No tie in `k = 2` or `k = 3`, so the hash order of the `DISTINCT`
+    // first phase cannot change the winner.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT k, max_by(DISTINCT x, y), min_by(DISTINCT x, y) \
+             FROM t WHERE k > 1 GROUP BY k ORDER BY k"
+        )?,
+        ["2|p|p", "3|q|q"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT max_by(DISTINCT x, y), min_by(DISTINCT x, y) \
+             FROM t WHERE k = 2"
+        )?,
+        ["p|p"]
+    );
+    assert_eq!(
+        rows(&s, "SELECT any_value(DISTINCT x) FROM t WHERE k = 3")?,
+        ["q"]
+    );
+    for sql in [
+        "SELECT max_by(x, y) FILTER (WHERE v) FROM t",
+        "SELECT min_by(x, y) FILTER (WHERE v) FROM t",
+        "SELECT any_value(x) FILTER (WHERE v) FROM t",
+    ] {
+        let (class, params) = error(&s, sql)?;
+        assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+        assert!(
+            param(&params, "feature").is_some_and(|m| m.contains("aggregate FILTER")),
+            "{sql}: {params:?}"
+        );
+    }
+    Ok(())
+}

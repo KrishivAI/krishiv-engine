@@ -544,6 +544,14 @@ fn types_states_and_errors() {
     };
     assert_eq!(bad(DataType::Null, DataType::Int64), Err(unsupported));
     assert_eq!(bad(DataType::Int64, DataType::Null), Err(unsupported));
+    // Spark reports these as `DATATYPE_MISMATCH`; the engine has no
+    // ordering for them at all, so they are unsupported here.
+    let interval = DataType::Interval(arrow_schema::IntervalUnit::YearMonth);
+    let array = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+    assert_eq!(bad(interval.clone(), DataType::Int64), Err(unsupported));
+    assert_eq!(bad(DataType::Int64, interval), Err(unsupported));
+    assert_eq!(bad(array.clone(), DataType::Int64), Err(unsupported));
+    assert_eq!(bad(DataType::Int64, array), Err(unsupported));
     assert_eq!(
         AggregateExpr::new(MaxBy, 0, DataType::Int64, "b")
             .result_type()

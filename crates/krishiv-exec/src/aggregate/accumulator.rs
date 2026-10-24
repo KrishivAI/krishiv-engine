@@ -156,6 +156,18 @@ impl Values {
         Ok(())
     }
 
+    /// Clears group `g`'s value (a NULL win), keeping `heap` current.
+    fn clear(&mut self, g: usize, heap: &mut usize) {
+        match self {
+            Self::Int(v) => v[g] = 0,
+            Self::Float(v) => v[g] = 0.0,
+            Self::Bytes(v) => {
+                *heap = heap.saturating_sub(v[g].len());
+                v[g] = Box::default();
+            }
+        }
+    }
+
     /// Copies group `from`'s value to group `to` (a running frame's
     /// snapshot). Byte values are never snapshotted: the copies would not
     /// be accounted for.
@@ -1472,6 +1484,8 @@ impl Accumulator {
                                 null[g] = !valid(i);
                                 if valid(i) {
                                     vals[g] = v[i];
+                                } else {
+                                    vals[g] = 0;
                                 }
                             }
                             snapshot!(i, vals, set, null);
@@ -1486,6 +1500,8 @@ impl Accumulator {
                                 null[g] = !valid(i);
                                 if valid(i) {
                                     vals[g] = v[i];
+                                } else {
+                                    vals[g] = 0.0;
                                 }
                             }
                             snapshot!(i, vals, set, null);
@@ -1501,6 +1517,9 @@ impl Accumulator {
                                 if valid(i) {
                                     *heap = heap.saturating_sub(vals[g].len()) + v[i].len();
                                     vals[g] = v[i].into();
+                                } else {
+                                    *heap = heap.saturating_sub(vals[g].len());
+                                    vals[g] = Box::default();
                                 }
                             }
                         }
@@ -1534,6 +1553,8 @@ impl Accumulator {
                         keys.put(g, &y, i, heap)?;
                         if valid(i) {
                             values.put(g, &x, i, heap)?;
+                        } else {
+                            values.clear(g, heap);
                         }
                         set[g] = true;
                         null[g] = !valid(i);

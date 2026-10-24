@@ -118,16 +118,20 @@ pub enum AggregateFunction {
     },
     /// `any_value(x)`: some row's value of the group; here the first row's,
     /// as `first` (a legal choice); NULL for no value. The input type.
+    /// In-order merges keep the first row in input order; a `DISTINCT`
+    /// first phase groups in hash order.
     AnyValue {
         /// `any_value(x, true)` / `IGNORE NULLS`: the first non-NULL value.
         ignore_nulls: bool,
     },
     /// `max_by(x, y)`: `x` of the row with the largest non-NULL `y` (Spark
-    /// ordering), the first such row on a tie; rows with a NULL `y` are
-    /// ignored and a NULL `x` is a result. NULL for no row. The type of
-    /// `x`. Built with [`AggregateExpr::by`].
+    /// ordering), the first such row on a tie for in-order merges; rows
+    /// with a NULL `y` are ignored and a NULL `x` is a result. NULL for no
+    /// row. The type of `x`. Built with [`AggregateExpr::by`]. A
+    /// `DISTINCT` first phase groups in hash order, so a tie there keeps
+    /// the first row in hash order, not in input order.
     MaxBy,
-    /// `min_by(x, y)`, as `max_by` for the smallest `y`.
+    /// `min_by(x, y)`, as `max_by` for the smallest `y` (same tie caveat).
     MinBy,
 }
 
