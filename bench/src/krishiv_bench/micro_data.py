@@ -33,8 +33,8 @@ content digests (independent of the Parquet encoder), the Parquet file hashes an
 (``h2o_data.verify`` recomputes them). A dataset directory is written under a temporary name and renamed into place;
 an existing one is never touched (a generator change is a new version directory).
 
-Memory: one chunk of the fact table (about 1 GB at the default size set) plus the permutation of the largest key set
-and the Zipf CDFs (8 bytes per key each).
+Memory: one chunk of the fact table (5M rows, about 2 GB at the default size set), the permutation of the fact rows
+and the Zipf CDFs (8 bytes per row or key each; about 2.5 GB more at the full size set).
 """
 
 from __future__ import annotations
@@ -129,8 +129,9 @@ class MicroSizes:
             raise ValueError("pairs must be group counts whose square is at most rows")
 
 
-# ``quick`` is the CI smoke set; ``default`` is sized to finish the whole suite in under 30 minutes on a 12-thread
-# machine; ``full`` reaches the 1e8 end of the ranges (hours, tens of GB) and is run on request only.
+# ``quick`` is the CI smoke set; ``default`` is meant to finish the whole suite in under 30 minutes on a 12-thread
+# machine (an estimate, see bench/README.md); ``full`` reaches the 1e8 end of the ranges (hours, tens of GB) and is
+# run on request only.
 SIZES: dict[str, MicroSizes] = {
     "quick": MicroSizes("quick", 1_000_000, (10**3, 10**5), (10**2, 10**4, 10**6), (10**2,)),
     "default": MicroSizes(
