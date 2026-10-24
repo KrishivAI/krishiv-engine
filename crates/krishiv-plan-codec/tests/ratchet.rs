@@ -21,9 +21,8 @@ use suites::{Suite, queries};
 /// fails when a query on it plans, so its entry is removed in the change
 /// that makes it plan.
 const TPCDS_NOT_PLANNED: &[&str] = &[
-    "q05", "q10", "q14", "q16", "q17", "q18", "q22", "q30", "q32", "q35", "q39", "q40", "q41",
-    "q45", "q49", "q50", "q51", "q62", "q67", "q70", "q72", "q75", "q77", "q78", "q80", "q84",
-    "q86", "q92", "q94", "q95", "q97", "q99",
+    "q10", "q16", "q17", "q30", "q32", "q35", "q39", "q41", "q45", "q50", "q51", "q62", "q70",
+    "q72", "q86", "q92", "q94", "q95", "q97", "q99",
 ];
 
 fn assert_round_trips(name: &str, plan: &PhysicalPlan) -> Vec<u8> {

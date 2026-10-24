@@ -50,8 +50,17 @@ fn every_definition_is_in_sparks_catalog() {
     for d in r.functions() {
         let s = r.spark_function(d.name).unwrap();
         assert_eq!(d.since, s.since, "{}", d.name);
-        assert_eq!(Some(d.deterministic), s.deterministic, "{}", d.name);
-        assert_eq!(s.kind, Some(d.kind), "{}", d.name);
+        // Spark rejected every probe of `raise_error` (it always raises),
+        // so the catalog knows neither its determinism nor its kind; a
+        // raising function is fixed as nondeterministic so the optimizer
+        // never moves it.
+        if d.name == "raise_error" {
+            assert!(s.deterministic.is_none() && s.kind.is_none());
+            assert!(!d.deterministic);
+        } else {
+            assert_eq!(Some(d.deterministic), s.deterministic, "{}", d.name);
+            assert_eq!(s.kind, Some(d.kind), "{}", d.name);
+        }
         let dbg = format!("{d:?}");
         assert!(dbg.contains(d.name), "{dbg}");
     }
@@ -702,4 +711,495 @@ fn session_and_clock_functions() {
         builtins().lookup("current_time", SparkProfile::V4_2),
         Lookup::KnownUnsupported
     ));
+}
+
+#[test]
+fn bitwise_signatures() {
+    let (b, s, i, l) = (
+        ty(DataType::Byte),
+        ty(DataType::Short),
+        ty(DataType::Integer),
+        ty(DataType::Long),
+    );
+    let built =
+        |name: &str, args: &[ArgType]| def(name).inputs.expected(&CallTypes::new(args, &[]));
+    // `&` widens integrals, meets strings as `bigint`, refuses the rest.
+    assert_eq!(
+        built("&", &[b.clone(), s]),
+        Some(vec![
+            InputType::Exact(DataType::Short),
+            InputType::Exact(DataType::Short)
+        ])
+    );
+    assert_eq!(
+        built("|", &[i.clone(), l.clone()]),
+        Some(vec![
+            InputType::Exact(DataType::Long),
+            InputType::Exact(DataType::Long)
+        ])
+    );
+    assert_eq!(
+        result("^", &[i.clone(), i.clone()], &[]).unwrap(),
+        ty(DataType::Integer)
+    );
+    // An untyped `NULL` meets anything as itself (`int` for two nulls).
+    assert_eq!(
+        built("&", &[null_ty(), null_ty()]),
+        Some(vec![
+            InputType::Exact(DataType::Integer),
+            InputType::Exact(DataType::Integer)
+        ])
+    );
+    assert_eq!(
+        built("|", &[null_ty(), l.clone()]),
+        Some(vec![
+            InputType::Exact(DataType::Long),
+            InputType::Exact(DataType::Long)
+        ])
+    );
+    assert_eq!(
+        result("&", &[i.clone(), l.clone()], &[]).unwrap(),
+        ty(DataType::Long)
+    );
+    assert_eq!(
+        result("&", &[nullable(DataType::Long), l.clone()], &[]).unwrap(),
+        nullable(DataType::Long)
+    );
+    // A string meets integrals as `bigint` and non-integral numbers as
+    // `double` (never narrowed through `bigint`), which is then the wrong
+    // type: Spark 4.2 raises BINARY_OP_WRONG_TYPE on DOUBLE for
+    // `'5' & 1.5D`, `'5' & 1.5BD` and `'5' & CAST(1 AS FLOAT)`.
+    assert_eq!(
+        built("&", &[ty(DataType::String), l.clone()]),
+        Some(vec![
+            InputType::Exact(DataType::Long),
+            InputType::Exact(DataType::Long)
+        ])
+    );
+    for t in [DataType::Float, DataType::Double, dec(10, 2)] {
+        assert_eq!(
+            built("&", &[ty(DataType::String), ty(t.clone())]),
+            Some(vec![
+                InputType::Exact(DataType::Double),
+                InputType::Exact(DataType::Double)
+            ])
+        );
+    }
+    // Two operands of one non-integral type are the wrong type, not a
+    // mismatch (Spark 4.2: `1.5D & 2.5D`).
+    let err = result("&", &[ty(DataType::Double), ty(DataType::Double)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchBinaryOpWrongType
+    );
+    assert!(err.to_string().contains("\"DOUBLE\""), "{err}");
+    // `~` keeps its child's type; strings are refused as `INTEGRAL`.
+    assert_eq!(result("~", std::slice::from_ref(&b), &[]).unwrap(), b);
+    assert_eq!(result("~", std::slice::from_ref(&l), &[]).unwrap(), l);
+    assert_eq!(
+        result("~", &[null_ty()], &[]).unwrap(),
+        ArgType::new(DataType::Integer, true)
+    );
+    let err = result("~", &[ty(DataType::String)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"INTEGRAL\""), "{err}");
+    // Shifts keep `int` (or `bigint` for a `bigint`), by an `int`.
+    assert_eq!(
+        result("shiftleft", &[i.clone(), i.clone()], &[]).unwrap(),
+        i
+    );
+    assert_eq!(
+        result(">>", &[l.clone(), i.clone()], &[]).unwrap(),
+        ty(DataType::Long)
+    );
+    // Nullability passes through the result: a nullable operand stays
+    // nullable, as the analyzer records it.
+    assert_eq!(
+        result(">>>", &[nullable(DataType::Integer), i.clone()], &[]).unwrap(),
+        nullable(DataType::Integer)
+    );
+    // A bad left side is refused with `("INT" or "BIGINT")` (checked by
+    // the inputs; the matrix covers the error class end to end).
+    assert_eq!(
+        built("<<", &[ty(DataType::Boolean), i.clone()]),
+        Some(vec![
+            InputType::OneOf(vec![DataType::Integer, DataType::Long]),
+            InputType::Exact(DataType::Integer)
+        ])
+    );
+    // `bit_count` takes integrals and booleans, always an `int`.
+    assert_eq!(
+        result("bit_count", std::slice::from_ref(&b), &[]).unwrap(),
+        i
+    );
+    assert_eq!(
+        result("bit_count", &[ty(DataType::Boolean)], &[]).unwrap(),
+        ty(DataType::Integer)
+    );
+    assert_eq!(
+        result("bit_count", &[null_ty()], &[]).unwrap(),
+        nullable(DataType::Integer)
+    );
+    let err = result("bit_count", &[ty(DataType::Double)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(
+        err.to_string().contains("(\"INTEGRAL\" or \"BOOLEAN\")"),
+        "{err}"
+    );
+    // `bit_get`/`getbit` keep the value's width for the range check and
+    // return a `tinyint`.
+    assert_eq!(
+        result("bit_get", &[l, i.clone()], &[]).unwrap(),
+        ty(DataType::Byte)
+    );
+    assert_eq!(
+        result("getbit", &[i.clone(), i.clone()], &[]).unwrap(),
+        ty(DataType::Byte)
+    );
+    assert_eq!(
+        result("getbit", &[i.clone(), nullable(DataType::Integer)], &[]).unwrap(),
+        nullable(DataType::Byte)
+    );
+    let err = result("getbit", &[ty(DataType::String), i], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"INTEGRAL\""), "{err}");
+}
+
+#[test]
+fn predicate_signatures() {
+    let (i, l, s) = (
+        ty(DataType::Integer),
+        ty(DataType::Long),
+        ty(DataType::String),
+    );
+    // `equal_null` is a boolean, never NULL, whatever the sides.
+    assert_eq!(
+        result("equal_null", &[i.clone(), l], &[]).unwrap(),
+        ty(DataType::Boolean)
+    );
+    assert_eq!(
+        result("equal_null", &[null_ty(), null_ty()], &[]).unwrap(),
+        ty(DataType::Boolean)
+    );
+    // `isnan` takes floats and doubles (anything else Spark casts is a
+    // double), never NULL.
+    assert_eq!(
+        result("isnan", &[ty(DataType::Float)], &[]).unwrap(),
+        ty(DataType::Boolean)
+    );
+    assert_eq!(
+        result("isnan", &[nullable(DataType::Double)], &[]).unwrap(),
+        ty(DataType::Boolean)
+    );
+    let built =
+        |name: &str, args: &[ArgType]| def(name).inputs.expected(&CallTypes::new(args, &[]));
+    assert_eq!(
+        built("isnan", &[ty(DataType::Float)]),
+        Some(vec![InputType::Exact(DataType::Float)])
+    );
+    assert_eq!(
+        built("isnan", std::slice::from_ref(&i)),
+        Some(vec![InputType::Exact(DataType::Double)])
+    );
+    // `isnull`/`isnotnull` are booleans, never NULL.
+    assert_eq!(
+        result("isnull", &[null_ty()], &[]).unwrap(),
+        ty(DataType::Boolean)
+    );
+    assert_eq!(
+        result("isnotnull", std::slice::from_ref(&s), &[]).unwrap(),
+        ty(DataType::Boolean)
+    );
+    // `assert_true` is `void`, always nullable; the condition is strictly
+    // boolean.
+    assert_eq!(
+        result("assert_true", &[ty(DataType::Boolean), s.clone()], &[]).unwrap(),
+        ArgType {
+            data_type: None,
+            nullable: true,
+        }
+    );
+    assert_eq!(
+        def("assert_true").inputs,
+        Inputs::Expects(vec![
+            InputType::Strict(DataType::Boolean),
+            InputType::Exact(DataType::String)
+        ])
+    );
+    // `raise_error` is `void`, always nullable; the message is a string.
+    assert_eq!(
+        result("raise_error", std::slice::from_ref(&s), &[]).unwrap(),
+        ArgType {
+            data_type: None,
+            nullable: true,
+        }
+    );
+    assert_eq!(def("raise_error").execution, Execution::Scalar);
+}
+
+#[test]
+fn number_signatures() {
+    let (s, i, l) = (
+        ty(DataType::String),
+        ty(DataType::Integer),
+        ty(DataType::Long),
+    );
+    // `hex` keeps binaries and strings, takes longs for numbers.
+    let built =
+        |name: &str, args: &[ArgType]| def(name).inputs.expected(&CallTypes::new(args, &[]));
+    assert_eq!(
+        built("hex", std::slice::from_ref(&i)),
+        Some(vec![InputType::Exact(DataType::Long)])
+    );
+    assert_eq!(
+        built("hex", &[ty(DataType::Binary)]),
+        Some(vec![InputType::Exact(DataType::Binary)])
+    );
+    assert_eq!(
+        built("hex", &[ty(DataType::Boolean)]),
+        Some(vec![InputType::Exact(DataType::String)])
+    );
+    assert_eq!(
+        result("hex", std::slice::from_ref(&l), &[]).unwrap(),
+        ty(DataType::String)
+    );
+    assert_eq!(
+        result("hex", &[nullable(DataType::Double)], &[]).unwrap(),
+        nullable(DataType::String)
+    );
+    // `unhex` is binary, always nullable; `bin` is a string.
+    assert_eq!(
+        result("unhex", std::slice::from_ref(&s), &[]).unwrap(),
+        ArgType::new(DataType::Binary, true)
+    );
+    assert_eq!(
+        result("bin", std::slice::from_ref(&l), &[]).unwrap(),
+        ty(DataType::String)
+    );
+    assert_eq!(
+        result("bin", &[nullable(DataType::Double)], &[]).unwrap(),
+        nullable(DataType::String)
+    );
+    // `conv` is a string, always nullable.
+    assert_eq!(
+        result("conv", &[s.clone(), i.clone(), i.clone()], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    // `format_number` is a string, always nullable; the second argument
+    // is an `int` or a string, the first numeric.
+    assert_eq!(
+        result("format_number", &[ty(DataType::Double), i.clone()], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    let err = result("format_number", &[s.clone(), i], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"NUMERIC\""), "{err}");
+    let err = result("format_number", &[ty(DataType::Double), l], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("(\"INT\" or \"STRING\")"), "{err}");
+    // `to_number` types the pattern; `try_to_number` is always nullable.
+    let fmt = |p: &str| [None, Some(Constant::String(p.to_owned()))];
+    let args = [s.clone(), s.clone()];
+    assert_eq!(
+        result("to_number", &args, &fmt("000")).unwrap(),
+        ArgType::new(dec(3, 0), false)
+    );
+    assert_eq!(
+        result("to_number", &args, &fmt("$00.00")).unwrap(),
+        ArgType::new(dec(4, 2), false)
+    );
+    assert_eq!(
+        result("try_to_number", &args, &fmt("000")).unwrap(),
+        ArgType::new(dec(3, 0), true)
+    );
+    assert_eq!(
+        result(
+            "to_number",
+            &[s.clone(), nullable(DataType::String)],
+            &[None, Some(Constant::Null)]
+        )
+        .unwrap(),
+        ArgType::new(dec(10, 0), true)
+    );
+    for bad in ["", "1", "00$00", "00..00"] {
+        let err = result("to_number", &args, &fmt(bad)).unwrap_err();
+        assert!(
+            matches!(
+                err.error_class(),
+                ErrorClass::InvalidFormatEmpty
+                    | ErrorClass::InvalidFormatWrongNumDigit
+                    | ErrorClass::InvalidFormatCurMustBeforeDigit
+                    | ErrorClass::InvalidFormatWrongNumToken
+            ),
+            "{bad}: {err}"
+        );
+    }
+    let err = result("to_number", &args, &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    // `to_char`/`to_varchar` are strings; bad values are `"DECIMAL"`.
+    assert_eq!(
+        result("to_char", &args, &fmt("000")).unwrap(),
+        ty(DataType::String)
+    );
+    let err = result("to_char", &[ty(DataType::Boolean), s.clone()], &fmt("000")).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"DECIMAL\""), "{err}");
+    // A binary `to_char` only takes `base64`/`hex`/`utf-8`.
+    let err = result("to_char", &[ty(DataType::Binary), s], &fmt("999")).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::InvalidParameterValueBinaryFormat
+    );
+}
+
+#[test]
+fn number_formats_render_through_casts() {
+    let s = ty(DataType::String);
+    let args = [ty(DataType::String), s];
+    let at = |sql: &str| {
+        let with_sql = |n: usize| (n == 1).then(|| sql.to_owned());
+        (def("to_number").result)(&CallTypes::new(&args, &[None, None]).with_sql(&with_sql))
+    };
+    // `CAST('999' AS STRING)` renders through the cast.
+    assert_eq!(
+        at("CAST('999' AS STRING)").unwrap(),
+        ArgType::new(dec(3, 0), false)
+    );
+    // Casts of numbers render as Spark casts them to strings (`1.50`,
+    // `1`, `1.5`): none is a valid pattern, and each fails its own way.
+    let err = at("CAST(1.5 AS DECIMAL(10,2))").unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidFormatUnexpectedToken);
+    for sql in [
+        "CAST(1 AS SMALLINT)",
+        "CAST(1 AS TINYINT)",
+        "CAST(1.5 AS FLOAT)",
+    ] {
+        let err = at(sql).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::InvalidFormatWrongNumDigit,
+            "{sql}"
+        );
+    }
+    // Escapes render through the cast.
+    let with_sql = |n: usize| (n == 1).then(|| "CAST('a\\\'b\nc' AS STRING)".to_owned());
+    assert_eq!(
+        (def("to_number").result)(&CallTypes::new(&args, &[None, None]).with_sql(&with_sql))
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::InvalidFormatWrongNumDigit
+    );
+    // A non-foldable, non-literal format is refused.
+    let with_sql = |n: usize| (n == 1).then(|| "concat('9', '9')".to_owned());
+    let err = (def("to_number").result)(&CallTypes::new(&args, &[None, None]).with_sql(&with_sql))
+        .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    // A failing cast propagates its error.
+    let failed = Constant::Error(KrishivError::from(
+        krishiv_common::error::CastInvalidInput {
+            expression: "'abc'".to_owned(),
+            source_type: "\"STRING\"".to_owned(),
+            target_type: "\"INT\"".to_owned(),
+        },
+    ));
+    let with_sql = |n: usize| (n == 1).then(|| "CAST('abc' AS INT)".to_owned());
+    let err = (def("to_number").result)(
+        &CallTypes::new(&args, &[None, Some(failed)]).with_sql(&with_sql),
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::CastInvalidInput);
+    // `hex` of a timestamp renders through the string cast.
+    assert_eq!(
+        result("hex", &[ty(DataType::Timestamp)], &[]).unwrap(),
+        ty(DataType::String)
+    );
+}
+
+/// The regular-expression functions: arities, inputs and result types.
+#[test]
+fn regex_signatures() {
+    let s = ty(DataType::String);
+    let exact = InputType::Exact;
+    let strings = || Inputs::Expects(vec![exact(DataType::String), exact(DataType::String)]);
+    // `regexp` and `regexp_like` take two strings and may be NULL.
+    for name in ["regexp", "regexp_like"] {
+        let d = def(name);
+        assert!(d.arity.accepts(2) && !d.arity.accepts(1) && !d.arity.accepts(3));
+        assert_eq!(d.inputs, strings());
+        assert_eq!(
+            result(name, &[s.clone(), s.clone()], &[]).unwrap(),
+            ty(DataType::Boolean)
+        );
+        assert_eq!(
+            result(
+                name,
+                &[ArgType::new(DataType::String, true), s.clone()],
+                &[]
+            )
+            .unwrap(),
+            ArgType::new(DataType::Boolean, true)
+        );
+    }
+    // The two- and three-argument input shapes.
+    let indexed = || {
+        Inputs::Expects(vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            exact(DataType::Integer),
+        ])
+    };
+    assert_eq!(def("regexp_substr").inputs, strings());
+    assert_eq!(def("regexp_count").inputs, strings());
+    assert_eq!(def("regexp_extract").inputs, indexed());
+    assert_eq!(def("regexp_instr").inputs, indexed());
+    for (name, ty) in [
+        ("regexp_extract", DataType::String),
+        ("regexp_count", DataType::Integer),
+        ("regexp_instr", DataType::Integer),
+    ] {
+        let d = def(name);
+        assert!(d.arity.accepts(2), "{name}");
+        assert_eq!(
+            result(name, &[s.clone(), s.clone()], &[]).unwrap(),
+            ArgType::new(ty, false)
+        );
+    }
+    // `regexp_substr` is nullable whatever its arguments.
+    assert_eq!(
+        result("regexp_substr", &[s.clone(), s.clone()], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    assert!(def("regexp_extract").arity.accepts(3));
+    assert!(!def("regexp_extract").arity.accepts(4));
+    assert!(!def("regexp_substr").arity.accepts(3));
+    assert!(!def("regexp_count").arity.accepts(3));
+    // A NULL string is a NULL result.
+    let r = result("regexp_like", &[null_ty(), s.clone()], &[]).unwrap();
+    assert_eq!(r, ArgType::new(DataType::Boolean, true));
+    let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
+    assert_eq!(r, ArgType::new(DataType::Integer, true));
 }

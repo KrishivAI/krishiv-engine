@@ -96,8 +96,28 @@ impl PyDataFrame {
         self.derive(self.inner.select(columns(cols)))
     }
 
+    /// `SELECT` of SQL expression strings (PySpark's `selectExpr`): each
+    /// string holds one expression with an optional alias, parsed with
+    /// the session's parser options. Parse errors fail here; resolution
+    /// errors fail at the first action.
+    fn select_expr(&self, py: Python<'_>, exprs: Vec<String>) -> PyResult<Self> {
+        let inner = self.inner.select_expr(exprs).map_err(|e| to_py(py, &e))?;
+        Ok(self.derive(inner))
+    }
+
     fn filter(&self, condition: &PyColumn) -> Self {
         self.derive(self.inner.filter(condition.inner.clone()))
+    }
+
+    /// Rows where the SQL expression `condition` is true (PySpark's
+    /// `filter(str)` and `where(str)`), parsed with the session's parser
+    /// options.
+    fn filter_expr(&self, py: Python<'_>, condition: &str) -> PyResult<Self> {
+        let inner = self
+            .inner
+            .filter_expr(condition)
+            .map_err(|e| to_py(py, &e))?;
+        Ok(self.derive(inner))
     }
 
     fn with_column(&self, name: &str, value: &PyColumn) -> Self {
@@ -153,6 +173,69 @@ impl PyDataFrame {
 
     fn limit(&self, n: i32) -> Self {
         self.derive(self.inner.limit(n))
+    }
+
+    fn offset(&self, n: i32) -> Self {
+        self.derive(self.inner.offset(n))
+    }
+
+    fn distinct(&self) -> Self {
+        self.derive(self.inner.distinct())
+    }
+
+    fn union(&self, other: &Self) -> Self {
+        self.derive_with(self.inner.union(&other.inner), other)
+    }
+
+    fn union_by_name(&self, other: &Self, allow_missing_columns: bool) -> Self {
+        self.derive_with(
+            self.inner
+                .union_by_name(&other.inner, allow_missing_columns),
+            other,
+        )
+    }
+
+    fn intersect(&self, other: &Self) -> Self {
+        self.derive_with(self.inner.intersect(&other.inner), other)
+    }
+
+    fn intersect_all(&self, other: &Self) -> Self {
+        self.derive_with(self.inner.intersect_all(&other.inner), other)
+    }
+
+    fn except_all(&self, other: &Self) -> Self {
+        self.derive_with(self.inner.except_all(&other.inner), other)
+    }
+
+    fn subtract(&self, other: &Self) -> Self {
+        self.derive_with(self.inner.subtract(&other.inner), other)
+    }
+
+    fn hint(&self, name: &str, params: Vec<PyColumn>) -> Self {
+        self.derive(self.inner.hint(name, params.into_iter().map(|c| c.inner)))
+    }
+
+    fn to_df(&self, names: Vec<String>) -> Self {
+        self.derive(self.inner.to_df(names))
+    }
+
+    fn sample(&self, with_replacement: bool, fraction: f64, seed: i64) -> Self {
+        self.derive(self.inner.sample(with_replacement, fraction, seed))
+    }
+
+    fn unpivot(
+        &self,
+        ids: Vec<PyColumn>,
+        values: Vec<(String, PyColumn)>,
+        variable: &str,
+        value: &str,
+    ) -> Self {
+        self.derive(self.inner.unpivot(
+            ids.into_iter().map(|c| c.inner),
+            values.into_iter().map(|(label, c)| (label, c.inner)),
+            variable,
+            value,
+        ))
     }
 
     fn alias(&self, alias: &str) -> Self {

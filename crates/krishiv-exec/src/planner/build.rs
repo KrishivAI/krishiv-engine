@@ -41,8 +41,8 @@ use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
     PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
-    SubqueryId, SubqueryPlan, SubqueryValueKind, Values, filter_op, project_op, replicate_op,
-    scan_filter, sort_op, top_n_op,
+    SubqueryId, SubqueryPlan, SubqueryValueKind, Values, expand_op, filter_op, project_op,
+    replicate_op, scan_filter, sort_op, top_n_op,
 };
 
 /// How far above the planner's first fresh attribute subquery ids start:
@@ -241,6 +241,23 @@ impl<'a> Planner<'a> {
                 {
                     return self.scan(p, scan, Some(predicate));
                 }
+                if let PlanNode::Window {
+                    input: below,
+                    exprs,
+                    partition_by,
+                    order_by,
+                } = &input.node
+                {
+                    // Spark's window group limit (`InferWindowGroupLimit`).
+                    let limit = krishiv_optimizer::infer_window_group_limit(
+                        predicate,
+                        input,
+                        self.window_group_limit_threshold(),
+                    );
+                    let below = self.plan(below)?;
+                    let window = self.window(below, exprs, partition_by, order_by, limit)?;
+                    return self.filter(window, predicate);
+                }
                 let input = self.plan(input)?;
                 self.filter(input, predicate)
             }
@@ -363,6 +380,14 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.replicate(input, count)
             }
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => {
+                let input = self.plan(input)?;
+                self.expand(input, projections, output)
+            }
             PlanNode::Window {
                 input,
                 exprs,
@@ -370,7 +395,7 @@ impl<'a> Planner<'a> {
                 order_by,
             } => {
                 let input = self.plan(input)?;
-                self.window(input, exprs, partition_by, order_by)
+                self.window(input, exprs, partition_by, order_by, None)
             }
             PlanNode::OneRowRelation => Ok(one_row()),
             _ => {
@@ -640,6 +665,26 @@ impl<'a> Planner<'a> {
         krishiv_optimizer::estimated_rows(plan, &stats)
     }
 
+    /// Whether every table `plan` reads reports statistics, so its estimate
+    /// does not rest on default row counts. A `WITH` reference counts as
+    /// default-sized, as the estimator treats it.
+    pub(crate) fn has_statistics(&self, plan: &Arc<LogicalPlan>) -> bool {
+        use krishiv_optimizer::Statistics as _;
+        let stats = super::ProviderStatistics(Arc::clone(&self.cx.tables));
+        let mut stack = vec![plan];
+        while let Some(p) = stack.pop() {
+            match &p.node {
+                PlanNode::Scan(scan) if stats.table(scan).is_none() => return false,
+                // The estimator reads a reference to a `WITH` definition
+                // as a default-sized relation, not through its definition.
+                PlanNode::CteRef(_) => return false,
+                _ => {}
+            }
+            p.for_each_child(&mut |c| stack.push(c));
+        }
+        true
+    }
+
     fn scan(
         &mut self,
         plan: &Arc<LogicalPlan>,
@@ -780,6 +825,95 @@ impl<'a> Planner<'a> {
             },
         );
         // The replication count is computed over groups the filter cuts.
+        planned.sites.clear();
+        Ok(planned)
+    }
+
+    /// Each row once per projection (`ROLLUP`, `CUBE`, `GROUPING SETS`):
+    /// plain columns pass through without a copy.
+    fn expand(
+        &mut self,
+        input: Planned,
+        projections: &[Vec<Arc<Expr>>],
+        output: &[BoundColumn],
+    ) -> Result<Planned> {
+        if projections.iter().any(|row| row.len() != output.len()) {
+            return Err(internal("an expansion row of the wrong width"));
+        }
+        // A column an expansion nulls keeps the Arrow type of the column
+        // another projection copies.
+        let copied: Vec<Option<usize>> = (0..output.len())
+            .map(|j| {
+                projections
+                    .iter()
+                    .find_map(|row| row.get(j).and_then(|e| column_of(e)))
+                    .and_then(|c| input.column(c).ok())
+            })
+            .collect();
+        let null_of = |j: usize, e: &Expr| {
+            let null = matches!(&e.node, ExprNode::Literal(Literal::Null(Some(_))));
+            copied.get(j).copied().flatten().filter(|_| null)
+        };
+        let computed: Vec<&Expr> = projections
+            .iter()
+            .flat_map(|row| row.iter().enumerate())
+            .filter(|(j, e)| column_of(e).is_none() && null_of(*j, e).is_none())
+            .map(|(_, e)| e.as_ref())
+            .collect();
+        let prepared = self.prepare(&computed)?;
+        let mut values = prepared.exprs.iter();
+        let mut rows = Vec::with_capacity(projections.len());
+        for row in projections {
+            let mut items = Vec::with_capacity(row.len());
+            for (j, (e, out)) in row.iter().zip(output).enumerate() {
+                let name = out.name.clone();
+                if let Some(c) = column_of(e) {
+                    items.push(ProjectItemPlan::Column {
+                        index: input.column(c)?,
+                        name: Some(name),
+                    });
+                } else if let Some(index) = null_of(j, e) {
+                    items.push(ProjectItemPlan::NullOf { index, name });
+                } else {
+                    let expr = values.next().ok_or_else(|| internal("expansion arity"))?;
+                    items.push(ProjectItemPlan::Expr {
+                        name,
+                        expr: Arc::clone(expr),
+                    });
+                }
+            }
+            rows.push(items);
+        }
+        let nullable: Vec<bool> = output.iter().map(|c| c.nullable).collect();
+        let layout: Vec<AttrId> = output.iter().map(|c| c.id).collect();
+        let op = expand_op(
+            &input.schema,
+            &input.layout,
+            &rows,
+            &nullable,
+            &self.values(&prepared),
+        )?;
+        let names: Vec<&str> = output.iter().map(|c| c.name.as_str()).collect();
+        let text = names.join(", ");
+        let mut planned = Self::attach(
+            input,
+            prepared,
+            op.schema(),
+            layout,
+            (
+                "Expand",
+                format!("{} projections [{text}]", projections.len()),
+            ),
+            |input, layout, subqueries| PhysNode::Expand {
+                input,
+                layout,
+                projections: rows,
+                nullable,
+                subqueries,
+            },
+        );
+        // The rows are repeated with columns nulled: no runtime filter may
+        // reach a scan through the expansion.
         planned.sites.clear();
         Ok(planned)
     }
@@ -978,8 +1112,34 @@ impl<'a> Planner<'a> {
         Ok(planned)
     }
 
+    /// `input` cut to its first `n` rows by `keys` in each partition,
+    /// shown with `detail`.
+    pub(crate) fn local_top_n(
+        input: Planned,
+        keys: &[SortKey],
+        n: u64,
+        detail: String,
+    ) -> Result<Planned> {
+        let schema = top_n_op(&input.schema, keys, n)?.schema();
+        let layout = input.layout.clone();
+        let local = keys.to_vec();
+        let mut local = input.wrap(
+            |input| PhysNode::TopN {
+                input,
+                keys: local,
+                limit: n,
+            },
+            schema,
+            layout,
+            ("LocalTopN", detail),
+        );
+        // A runtime filter below would drop rows the top-N ranks.
+        local.sites.clear();
+        Ok(local)
+    }
+
     /// `input` cut to `n` rows in each partition.
-    fn local_limit(input: Planned, n: u64) -> Planned {
+    pub(crate) fn local_limit(input: Planned, n: u64) -> Planned {
         let schema = Arc::clone(&input.schema);
         let layout = input.layout.clone();
         let mut local = input.wrap(
@@ -1002,21 +1162,7 @@ impl<'a> Planner<'a> {
         let input = if input.placement.satisfies(Distribution::Single) {
             input
         } else {
-            let schema = top_n_op(&input.schema, &keys, n)?.schema();
-            let layout = input.layout.clone();
-            let local = keys.clone();
-            let mut local = input.wrap(
-                |input| PhysNode::TopN {
-                    input,
-                    keys: local,
-                    limit: n,
-                },
-                schema,
-                layout,
-                ("LocalTopN", format!("{n}, {}", orders(order))),
-            );
-            local.sites.clear();
-            local
+            Self::local_top_n(input, &keys, n, format!("{n}, {}", orders(order)))?
         };
         let input = self.require(input, Distribution::Single)?;
         let schema = top_n_op(&input.schema, &keys, n)?.schema();

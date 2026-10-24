@@ -53,11 +53,14 @@ pub(super) enum Fold {
         ansi: bool,
     },
     /// `min`/`max`/`first`/`last` of strings or binaries: the value picked
-    /// (`None` before any row, `Some(None)` for a picked NULL).
+    /// (`None` before any row, `Some(false)` for a picked NULL); `buf`
+    /// holds the picked bytes when valid, its capacity reused for the next
+    /// pick.
     Bytes {
         function: AggregateFunction,
         view: DataType,
-        picked: Option<Option<Vec<u8>>>,
+        picked: Option<bool>,
+        buf: Vec<u8>,
     },
 }
 
@@ -76,6 +79,7 @@ impl Fold {
                 function: a.function,
                 view: view_type(&a.arg_type),
                 picked: None,
+                buf: Vec::new(),
             });
         }
         // The argument columns are passed as they are, in order.
@@ -160,6 +164,7 @@ impl Fold {
                 function,
                 view,
                 picked,
+                buf,
             } => {
                 let col =
                     to_view(args.first().ok_or_else(|| {
@@ -175,13 +180,19 @@ impl Fold {
                 for (i, &s) in snap.iter().enumerate() {
                     if passes(mask, i) {
                         let valid = col.is_valid(i);
-                        let old = picked.as_ref().map(|p| p.as_deref());
+                        let old = (*picked).map(|v| v.then_some(buf.as_slice()));
                         if replaces(*function, old, valid, || value(i))? {
-                            *picked = Some(valid.then(|| value(i).to_vec()));
+                            if valid {
+                                buf.clear();
+                                buf.extend_from_slice(value(i));
+                            } else {
+                                buf.clear();
+                            }
+                            *picked = Some(valid);
                         }
                     }
                     if s {
-                        out.push(picked.as_ref().and_then(|p| p.as_deref()))?;
+                        out.push((*picked).and_then(|v| v.then_some(buf.as_slice())))?;
                     }
                 }
                 Ok(out.finish())
@@ -199,9 +210,11 @@ impl Fold {
                 count,
                 ansi,
             } => decimal_array(a, vec![decimal_value(a, *sum, *count, *ansi)?]),
-            Self::Bytes { view, picked, .. } => {
+            Self::Bytes {
+                view, picked, buf, ..
+            } => {
                 let mut out = BytesOut::new(view);
-                out.push(picked.as_ref().and_then(|p| p.as_deref()))?;
+                out.push((*picked).and_then(|v| v.then_some(buf.as_slice())))?;
                 Ok(out.finish())
             }
         }
@@ -544,6 +557,10 @@ impl Emit {
                     Shape::Whole => (None, None),
                     Shape::RunningRows => (Some(Fold::new(a, env.ansi)?), None),
                     Shape::RunningPeers => (None, Some(Fold::new(a, env.ansi)?)),
+                    // Refused before the copy (`spill.rs`).
+                    Shape::Frame => {
+                        return Err(internal("a frame evaluated from disk".to_owned()));
+                    }
                 },
                 WindowFunction::CumeDist => {
                     lead = true;
@@ -669,6 +686,12 @@ impl Emit {
                         })
                         .collect::<Result<Vec<_>>>()?,
                 )),
+                // Refused before the copy (`spill.rs`).
+                WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+                    return Err(internal(
+                        "an offset function evaluated from disk".to_owned(),
+                    ));
+                }
                 WindowFunction::Aggregate(_) => match f.shape()? {
                     Shape::Whole => {
                         let v = self.disk.whole[j].as_ref().ok_or_else(|| {
@@ -683,6 +706,9 @@ impl Emit {
                             .as_mut()
                             .ok_or_else(|| internal("a running fold missing".to_owned()))?;
                         fold_batch(env, j, fold, &b, &vec![true; n])?
+                    }
+                    Shape::Frame => {
+                        return Err(internal("a frame evaluated from disk".to_owned()));
                     }
                     Shape::RunningPeers => {
                         let lead = self

@@ -4,8 +4,10 @@
 //! [`parse_query`] parses a Spark 4.2 query statement (`SELECT`, `WITH`,
 //! `VALUES`, `TABLE`, `FROM ... SELECT`, set operations) into the syntax tree
 //! of [`ast`], whose nodes carry source spans; [`parse_statement`] also
-//! accepts `EXPLAIN`. [`parse_data_type`], [`parse_table_schema`] and
-//! [`parse_ddl_type`] parse type strings with the same grammar. The parser is hand-written:
+//! accepts commands (`SET`, `RESET`, `CREATE`/`DROP` views, tables and
+//! namespaces, `USE`) and `EXPLAIN`. [`parse_data_type`],
+//! [`parse_table_schema`] and [`parse_ddl_type`] parse type strings with the
+//! same grammar. The parser is hand-written:
 //! a lexer ([`lexer`]) and a recursive-descent parser with precedence
 //! climbing for expressions. Errors are Spark's error classes
 //! ([`ParseError`]).
@@ -42,7 +44,9 @@ mod validate;
 
 pub use error::ParseError;
 pub use frontend::Frontend;
-pub use lower::{lower, parse_and_lower};
+pub use lower::{
+    lower, lower_expression, lower_select_item, parse_and_lower, parse_and_lower_named_expression,
+};
 pub use redact::redact_sql;
 
 /// The deepest tree the parser builds, counted in nested expressions,
@@ -71,6 +75,10 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.bangEqualsNot`: `!` may stand for `NOT` inside a
     /// predicate (`a ! IN (1)`).
     pub legacy_bang_equals_not: bool,
+    /// `spark.sql.legacy.identifierClause`: only the legacy
+    /// `IDENTIFIER(expression)` function syntax is allowed;
+    /// `IDENTIFIER('name')` is not an identifier.
+    pub legacy_identifier_clause: bool,
     /// `spark.sql.legacy.interval.enabled`: an interval literal may mix
     /// year-month and day-time fields.
     pub legacy_interval: bool,
@@ -93,6 +101,7 @@ impl ParserOptions {
             legacy_setops_precedence: on("spark.sql.legacy.setopsPrecedence.enabled", false),
             escaped_string_literals: on("spark.sql.parser.escapedStringLiterals", false),
             legacy_bang_equals_not: on("spark.sql.legacy.bangEqualsNot", false),
+            legacy_identifier_clause: on("spark.sql.legacy.identifierClause", false),
             legacy_interval: on("spark.sql.legacy.interval.enabled", false),
             timestamp_ntz: conf("spark.sql.timestampType")
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
@@ -121,8 +130,10 @@ pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, Par
 }
 
 /// Parses one statement, optionally followed by `;`: a query, `SET`,
-/// `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW`, or `EXPLAIN
-/// [EXTENDED | FORMATTED | CODEGEN | COST]` of a statement.
+/// `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW`, `CREATE TABLE` (or
+/// `CREATE TABLE ... LIKE`), `DROP TABLE`, `CREATE`/`DROP`
+/// `DATABASE`|`SCHEMA`|`NAMESPACE`, `USE`, or `EXPLAIN [EXTENDED |
+/// FORMATTED | CODEGEN | COST]` of a statement.
 ///
 /// ```
 /// use krishiv_sql::ast::{ExplainMode, Statement};
@@ -166,6 +177,38 @@ pub fn parse_multipart_identifier(
     options: &ParserOptions,
 ) -> Result<ast::ObjectName, ParseError> {
     parser::parse_multipart_identifier(sql, *options).map_err(|e| e.redacted_in(sql))
+}
+
+/// Parses one named expression (`namedExpression`), as Spark's
+/// `CatalystSqlParser.parseExpression` does for `F.expr`,
+/// `df.selectExpr("...")` (once per argument string) and
+/// `df.filter("...")`: one expression with an optional alias, then the end
+/// of the input. The expression grammar is that of [`parse_query`] (spans,
+/// the [`MAX_DEPTH`] recursion limit and error classes); a statement or
+/// trailing tokens are a `PARSE_SYNTAX_ERROR`, as in Spark.
+///
+/// ```
+/// use krishiv_sql::{ParserOptions, parse_named_expression};
+///
+/// let d = ParserOptions::default();
+/// let item = parse_named_expression("a AS b", &d).unwrap();
+/// assert!(item.alias.is_some());
+/// let trailing = parse_named_expression("a, b", &d).unwrap_err();
+/// assert_eq!(
+///     trailing.error.to_string(),
+///     "[PARSE_SYNTAX_ERROR] Syntax error at or near ','. SQLSTATE: 42601"
+/// );
+/// ```
+///
+/// # Errors
+/// The syntax errors of [`parse_query`] (`PARSE_EMPTY_STATEMENT` for an
+/// empty string), and the errors Spark raises after parsing (invalid
+/// literals and types, ...) for the expression it sits in.
+pub fn parse_named_expression(
+    sql: &str,
+    options: &ParserOptions,
+) -> Result<ast::SelectItem, ParseError> {
+    parser::parse_named_expression(sql, *options).map_err(|e| e.redacted_in(sql))
 }
 
 /// Parses a data type string, as Spark's `CatalystSqlParser.parseDataType`
@@ -233,6 +276,7 @@ pub fn parse_ddl_type(sql: &str, options: &ParserOptions) -> Result<ast::DataTyp
         let end = columns.last().map_or(sql.len(), |c| c.span.end);
         Ok(ast::DataTypeSpec {
             kind: ast::DataTypeKind::Struct(Some(columns)),
+            collation: None,
             span: ast::Span::new(start, end),
         })
     })

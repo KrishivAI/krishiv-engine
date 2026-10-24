@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT a, grouping(a), grouping_id(a, b), sum(c) FROM t WHERE c > 1 GROUP BY GROUPING SETS ((a), (b), ())"
+---
+Aggregate [a#7, b#8, spark_grouping_id#3], [a#7, CAST(((grouping__id#3 div 2L) % 2L) AS TINYINT) AS grouping(a)#4, grouping__id#3 AS grouping_id(a, b)#5, sum(c#2) AS sum(c)#6]
++- Expand [[c#2, a#0, CAST(NULL AS STRING), 1L], [c#2, CAST(NULL AS INT), b#1, 2L], [c#2, CAST(NULL AS INT), CAST(NULL AS STRING), 3L]], [c#2, a#7, b#8, spark_grouping_id#3]
+   +- Filter (c#2 > 1L)
+      +- Scan spark_catalog.default.t [a#0, b#1, c#2]

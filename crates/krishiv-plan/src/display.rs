@@ -302,6 +302,26 @@ impl Display for NodeLine<'_> {
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
             }
+            // Spark's `Expand [[a, null, 1], [a, b, 0]], [a, b, spark_grouping_id]`.
+            PlanNode::Expand {
+                projections,
+                output,
+                ..
+            } => {
+                f.write_str("Expand [")?;
+                for (i, p) in projections.iter().enumerate() {
+                    write!(f, "{}[", sep(i))?;
+                    for (j, e) in p.iter().enumerate() {
+                        write!(f, "{}{}", sep(j), Text(e))?;
+                    }
+                    f.write_str("]")?;
+                }
+                f.write_str("], [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
+            }
             PlanNode::WithCte { ctes, .. } => {
                 f.write_str("WithCte [")?;
                 for (i, c) in ctes.iter().enumerate() {
@@ -493,6 +513,15 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Owned(format!("{}{id}", Name(&c.name))));
         }
         ExprNode::Literal(v) => out.push(Piece::Owned(literal_text(v))),
+        ExprNode::TypedLiteral { kind, value } => {
+            let keyword = match kind {
+                crate::TypedLiteralKind::Date => "DATE",
+                crate::TypedLiteralKind::Timestamp => "TIMESTAMP",
+                crate::TypedLiteralKind::TimestampNtz => "TIMESTAMP_NTZ",
+                crate::TypedLiteralKind::TimestampLtz => "TIMESTAMP_LTZ",
+            };
+            out.push(Piece::Owned(format!("{keyword} '{value}'")));
+        }
         ExprNode::Star(s) => {
             let q = if s.qualifier.is_empty() {
                 String::new()
@@ -650,6 +679,13 @@ fn call<'a>(
     out: &mut Vec<Piece<'a>>,
 ) {
     let arg = |i: usize| Piece::Expr(&args[i]);
+    // `to_varchar` is Spark's `to_char` under its alias (the goldens show
+    // `to_char(78.12, $99.99)` for `to_varchar(78.12, '$99.99')`).
+    let name = if name == "to_varchar" {
+        "to_char"
+    } else {
+        name
+    };
     match (op, args.len()) {
         (Some(op), 2) if is_infix(op) && !distinct => {
             out.extend([Piece::Str("("), arg(0), Piece::Str(" ")]);
@@ -660,8 +696,28 @@ fn call<'a>(
                 Piece::Str(")"),
             ]);
         }
+        // The bitwise operators are registry functions; Spark still shows
+        // them infix (`(20181117 >> 2)`), `~` prefix.
+        (None, 2) if !distinct => match registry_infix(name) {
+            Some(symbol) => {
+                out.extend([Piece::Str("("), arg(0), Piece::Str(" ")]);
+                out.extend([Piece::Str(symbol), Piece::Str(" "), arg(1), Piece::Str(")")]);
+            }
+            None => {
+                out.push(Piece::Owned(format!("{name}(")));
+                list(args, out);
+                out.push(Piece::Str(")"));
+            }
+        },
+        (None, 1) if name == "~" && !distinct => {
+            out.extend([Piece::Str("~"), arg(0)]);
+        }
         (Some(Builtin::Not), 1) => out.extend([Piece::Str("(NOT "), arg(0), Piece::Str(")")]),
         (Some(Builtin::Negative), 1) => {
+            out.extend([Piece::Str("(- "), arg(0), Piece::Str(")")]);
+        }
+        // Unary `-` lowers as `"-"` with one argument (see `builtin_op`).
+        _ if name == "-" && args.len() == 1 => {
             out.extend([Piece::Str("(- "), arg(0), Piece::Str(")")]);
         }
         (Some(Builtin::In), n) if n >= 1 => {
@@ -722,6 +778,20 @@ impl Display for SortOrder {
     }
 }
 
+/// The infix symbol of a registry bitwise operator (`&`, `|`, `^`,
+/// `<<`, `>>`, `>>>`), if `name` is one.
+fn registry_infix(name: &str) -> Option<&'static str> {
+    match name {
+        "&" => Some("&"),
+        "|" => Some("|"),
+        "^" => Some("^"),
+        "<<" => Some("<<"),
+        ">>" => Some(">>"),
+        ">>>" => Some(">>>"),
+        _ => None,
+    }
+}
+
 /// Whether the pretty-printer writes `op` between its two arguments.
 const fn is_infix(op: Builtin) -> bool {
     matches!(
@@ -759,14 +829,16 @@ impl Display for Literal {
             Self::Short(v) => write!(f, "{v}S"),
             Self::Integer(v) => write!(f, "{v}"),
             Self::Long(v) => write!(f, "{v}L"),
-            Self::Float(v) if v.is_finite() => write!(f, "{v:?}F"),
+            Self::Float(v) if v.is_finite() => write!(f, "{}F", crate::spark_fmt::float(*v)),
             Self::Float(v) => write!(f, "CAST('{}' AS FLOAT)", special(f64::from(*v))),
-            Self::Double(v) if v.is_finite() => write!(f, "{v:?}D"),
+            Self::Double(v) if v.is_finite() => write!(f, "{}D", crate::spark_fmt::double(*v)),
             Self::Double(v) => write!(f, "CAST('{}' AS DOUBLE)", special(*v)),
             Self::Decimal {
                 unscaled,
                 data_type,
-            } => write_decimal(f, *unscaled, data_type.scale()),
+            } => f.write_str(
+                crate::spark_fmt::decimal(*unscaled, u32::from(data_type.scale())).as_str(),
+            ),
             // A URL's credentials never print, even in a literal.
             Self::String(s) => match SecretUrl::parse(s) {
                 Some(url) => write!(f, "'{}'", Escaped(&url.to_string())),
@@ -777,11 +849,7 @@ impl Display for Literal {
                 b.iter().try_for_each(|byte| write!(f, "{byte:02X}"))?;
                 f.write_char('\'')
             }
-            Self::Date(days) => {
-                let (y, m, d) = civil_from_days(i64::from(*days));
-                let sign = if y < 0 { "-" } else { "" };
-                write!(f, "DATE '{sign}{:04}-{m:02}-{d:02}'", y.unsigned_abs())
-            }
+            Self::Date(days) => f.write_str(crate::spark_fmt::date(*days).as_str()),
             Self::Timestamp(us) => write!(f, "TIMESTAMP_MICROS({us})"),
             Self::TimestampNtz(us) => write!(f, "TIMESTAMP_NTZ_MICROS({us})"),
             Self::YearMonthInterval { months, start, end } => {
@@ -873,32 +941,4 @@ fn day_time_value(micros: u64, start: DayTimeField, end: DayTimeField) -> String
         out.push_str(digits.trim_end_matches('0'));
     }
     out
-}
-
-/// Writes `unscaled * 10^-scale` in plain notation, e.g. `0.06`.
-fn write_decimal(f: &mut Formatter<'_>, unscaled: i128, scale: u8) -> fmt::Result {
-    let digits = unscaled.unsigned_abs().to_string();
-    let scale = usize::from(scale);
-    let sign = if unscaled < 0 { "-" } else { "" };
-    if scale == 0 {
-        return write!(f, "{sign}{digits}");
-    }
-    let padded = format!("{digits:0>width$}", width = scale + 1);
-    let (int, frac) = padded.split_at(padded.len() - scale);
-    write!(f, "{sign}{int}.{frac}")
-}
-
-/// Proleptic Gregorian `(year, month, day)` of a day count since 1970-01-01
-/// (H. Hinnant's `civil_from_days`).
-const fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
-    (y, m, d)
 }

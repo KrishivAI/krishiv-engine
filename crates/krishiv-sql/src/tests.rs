@@ -955,6 +955,226 @@ fn multipart_identifiers_parse_like_spark() {
     assert_eq!(e.error.error_class(), ErrorClass::ParseEmptyStatement);
 }
 
+/// Typed datetime literals lower to an unresolved node (the type keyword
+/// and the raw string), with no time zone involved: the analyzer resolves
+/// them with the session zone.
+#[test]
+fn typed_datetime_literals_lower_unresolved() {
+    use crate::ast::{ExprKind, SetExprKind};
+    use krishiv_plan::SourceId;
+
+    // Each kind keeps its keyword and raw string, with the literal's span,
+    // and lowers without a time zone.
+    for (sql, keyword) in [
+        ("SELECT DATE '2016-03-12'", "DATE"),
+        ("SELECT TIMESTAMP '2024-01-01 10:00:00'", "TIMESTAMP"),
+        (
+            "SELECT TIMESTAMP_NTZ '2024-01-01 10:00:00'",
+            "TIMESTAMP_NTZ",
+        ),
+        (
+            "SELECT TIMESTAMP_LTZ '2024-01-01 10:00:00'",
+            "TIMESTAMP_LTZ",
+        ),
+    ] {
+        let q = crate::parse_query(sql, &ParserOptions::default()).unwrap();
+        let SetExprKind::Select(s) = q.body.kind else {
+            panic!("{sql} is not a select");
+        };
+        let ExprKind::Literal(crate::ast::Literal::Typed { type_name, value }) =
+            s.projection[0].expr.kind.clone()
+        else {
+            panic!("{sql} is not a typed literal");
+        };
+        assert_eq!(type_name.value.to_ascii_uppercase(), keyword, "{sql}");
+        assert!(!value.is_empty(), "{sql}");
+        assert_eq!(s.projection[0].expr.span.range(), 7..sql.len(), "{sql}");
+        // Lowering succeeds with the default options (no zone) and keeps
+        // the raw text: the plan holds a `TypedLiteral`, never micros.
+        let plan = crate::parse_and_lower(sql, &ParserOptions::default(), SourceId(0)).unwrap();
+        let text = plan.root().to_string();
+        assert!(text.contains(&format!("{keyword} '")), "{sql}: {text}");
+    }
+    // The wall-clock text is preserved exactly, including an explicit zone.
+    let q = parser::parse_query_unchecked(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00+05:30'",
+        ParserOptions::default(),
+    )
+    .unwrap();
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!("not a select");
+    };
+    let ExprKind::Literal(crate::ast::Literal::Typed { value, .. }) =
+        s.projection[0].expr.kind.clone()
+    else {
+        panic!("not a typed literal");
+    };
+    assert_eq!(value, "2024-01-01 10:00:00+05:30");
+    let plan = crate::parse_and_lower(
+        "SELECT TIMESTAMP '2024-01-01 10:00:00'",
+        &ParserOptions::default(),
+        SourceId(0),
+    )
+    .unwrap();
+    let text = plan.root().to_string();
+    assert!(text.contains("TIMESTAMP '2024-01-01 10:00:00'"), "{text}");
+    assert!(!text.contains("1704103200000000"), "{text}");
+}
+
+/// `parse_named_expression`: one named expression (`F.expr`,
+/// `selectExpr` once per argument string, `filter`/`where` strings).
+#[test]
+fn expression_strings() {
+    use super::ast::Alias;
+    let d = ParserOptions::default();
+    // One expression with an optional alias keeps its spans.
+    let item = parse_named_expression("a + 1", &d).unwrap();
+    assert_eq!(item.expr.span.text("a + 1"), "a + 1");
+    assert!(item.alias.is_none());
+    assert!(parse_named_expression("count(*) OVER (PARTITION BY a ORDER BY b)", &d).is_ok());
+    assert!(parse_named_expression("*", &d).is_ok());
+    assert!(parse_named_expression("CASE WHEN a THEN 1 ELSE 0 END", &d).is_ok());
+    // Explicit and implicit aliases parse, as in Spark's `parseExpression`.
+    for sql in ["a AS b", "a b", "count(*) AS n", "a > 0 AS c", "v + 1 as w"] {
+        let item = parse_named_expression(sql, &d).unwrap_or_else(|e| panic!("{sql}: {}", e.error));
+        assert!(item.alias.is_some(), "{sql}");
+        if sql == "a b" {
+            let Alias::Name(name) = item.alias.as_ref().unwrap() else {
+                panic!("not a name: {:?}", item.alias);
+            };
+            assert_eq!(name.value, "b");
+        }
+    }
+    assert!(parse_named_expression("t.*", &d).unwrap().alias.is_none());
+    // A statement is no expression.
+    let e = parse_named_expression("SELECT 1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 0..6);
+    // Each argument string is one expression: a comma is trailing input.
+    let e = parse_named_expression("a, b", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(
+        e.error.message_parameters(),
+        [("error", "','".to_owned()), ("hint", String::new())]
+    );
+    assert_eq!(e.span.range(), 1..2);
+    let e = parse_named_expression("a;", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("error", "';'".to_owned()),
+            ("hint", ": extra input ';'".to_owned())
+        ]
+    );
+    assert_eq!(e.span.range(), 1..2);
+    // An unterminated quote with text after it is several tokens to Spark,
+    // so no "extra input" hint (as for statements: `SELECT a 'bc` has none,
+    // `SELECT a '` keeps it for the lone quote).
+    let e = parse_named_expression("a 'bc", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [("error", "'''".to_owned()), ("hint", String::new())]
+    );
+    assert_eq!(e.span.range(), 2..3);
+    let e = parse_named_expression("a '", &d).unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("error", "'''".to_owned()),
+            ("hint", ": extra input '''".to_owned())
+        ]
+    );
+    assert_eq!(e.span.range(), 2..3);
+    // An unfinished expression ends at the end of the input.
+    let e = parse_named_expression("a +", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 3..3);
+    // Empty strings are empty statements.
+    for sql in ["", "  "] {
+        assert_eq!(
+            parse_named_expression(sql, &d)
+                .unwrap_err()
+                .error
+                .error_class(),
+            ErrorClass::ParseEmptyStatement,
+            "{sql:?}"
+        );
+    }
+    // Post-parse checks run on the expression: an empty `IN ()` is an error.
+    let e = parse_named_expression("a IN ()", &d).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE"
+    );
+}
+
+/// Expression strings lower as `SELECT` items do.
+#[test]
+fn expression_strings_lower_like_select_items() {
+    use krishiv_plan::SourceId;
+    let d = ParserOptions::default();
+    let lowered = parse_and_lower_named_expression("a + 1", &d, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Function(call) = &lowered.node else {
+        panic!("not a call: {lowered:?}");
+    };
+    assert_eq!(call.name, "+");
+    assert_eq!(call.args.len(), 2);
+    let lowered = parse_and_lower_named_expression("b AS c", &d, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Alias { name, .. } = &lowered.node else {
+        panic!("not an alias: {lowered:?}");
+    };
+    assert_eq!(name, "c");
+    // Constructs the IR lacks fail while lowering.
+    let e = parse_and_lower_named_expression("a[0]", &d, SourceId(0)).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+/// `lower_expression` lowers one parsed expression as `SELECT` items lower
+/// it, and `lower_select_item` keeps its alias.
+#[test]
+fn lower_expression_and_select_item() {
+    use super::lower::{lower_expression, lower_select_item};
+    use krishiv_plan::SourceId;
+    let d = ParserOptions::default();
+    let item = parse_named_expression("a + 1", &d).unwrap();
+    let lowered = lower_expression(&item.expr, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Function(call) = &lowered.node else {
+        panic!("not a call: {lowered:?}");
+    };
+    assert_eq!(call.name, "+");
+    let item = parse_named_expression("b AS c", &d).unwrap();
+    let lowered = lower_select_item(&item, SourceId(0)).unwrap();
+    let krishiv_plan::ExprNode::Alias { name, .. } = &lowered.node else {
+        panic!("not an alias: {lowered:?}");
+    };
+    assert_eq!(name, "c");
+}
+
+/// Deep expression strings fail with `FAILED_TO_PARSE_TOO_COMPLEX` at the
+/// whole string instead of overflowing the stack. The cap is exact: one
+/// nested level per parenthesis, so `MAX_DEPTH - 1` pairs parse and one
+/// more fails with the full-input span.
+#[test]
+fn expression_depth_is_capped() {
+    let d = ParserOptions::default();
+    let (shallow, deep) = on_small_stack(move || {
+        let shallow = format!(
+            "{}1{}",
+            "(".repeat(MAX_DEPTH - 1),
+            ")".repeat(MAX_DEPTH - 1)
+        );
+        let deep = format!("{}1{}", "(".repeat(MAX_DEPTH), ")".repeat(MAX_DEPTH));
+        (
+            parse_named_expression(&shallow, &d).map(drop),
+            parse_named_expression(&deep, &d),
+        )
+    });
+    assert_eq!(shallow, Ok(()));
+    let e = deep.unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::FailedToParseTooComplex);
+    assert_eq!(e.span.range(), 0..2 * MAX_DEPTH + 1);
+}
+
 /// `SET` statements: every form, with spans and decoded keys/values.
 #[test]
 fn set_statements() {
@@ -1319,10 +1539,10 @@ fn drop_view_statements() {
     assert!(v.if_exists);
     assert_eq!(v.name.value, "my view");
     let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
-    // Only views drop: `DROP TABLE` fails at `TABLE`.
-    let e = fail("DROP TABLE v");
+    // Only views drop here: anything else fails where it stands.
+    let e = fail("DROP VIEWPOINT v");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 5..10);
+    assert_eq!(e.span.range(), 5..14);
     // The name is required.
     let e = fail("DROP VIEW");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
@@ -1330,4 +1550,1087 @@ fn drop_view_statements() {
     let e = fail("DROP VIEW IF EXISTS");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     assert_eq!(e.span.range(), 19..19);
+}
+
+/// `CREATE TABLE` statements: flags, columns and the table clauses.
+#[test]
+fn create_table_statements() {
+    use ast::{DdlName, Statement, TableElement};
+    let d = ParserOptions::default();
+    let create = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateTable(t) => t,
+        other => panic!("{sql} is {other:?}"),
+    };
+    // The minimal form.
+    let t = create("CREATE TABLE t (a INT)");
+    assert!(!t.or_replace && !t.temporary && !t.external && !t.if_not_exists);
+    let DdlName::Parts(name) = &t.name else {
+        panic!("{t:?}");
+    };
+    assert_eq!(
+        name.parts
+            .iter()
+            .map(|p| p.value.as_str())
+            .collect::<Vec<_>>(),
+        ["t"]
+    );
+    assert_eq!(t.elements.len(), 1);
+    let TableElement::Column(c) = &t.elements[0] else {
+        panic!("{:?}", t.elements[0]);
+    };
+    assert!(matches!(&c.name, ast::ColumnName::Ident(id) if id.value == "a"));
+    assert_eq!(c.data_type.to_string(), "int");
+    assert!(!c.not_null && c.default.is_none() && c.generated.is_none());
+    assert_eq!(c.comment, None);
+    assert!(c.constraints.is_empty());
+    assert!(t.using.is_none() && t.as_query.is_none());
+    assert_eq!(
+        t.span.text("CREATE TABLE t (a INT)"),
+        "CREATE TABLE t (a INT)"
+    );
+    // Flags, a qualified name and a trailing `;`.
+    let t = create("CREATE TEMPORARY EXTERNAL TABLE IF NOT EXISTS a.b (c INT);");
+    assert!(!t.or_replace && t.temporary && t.external && t.if_not_exists);
+    let DdlName::Parts(name) = &t.name else {
+        panic!("{t:?}");
+    };
+    assert_eq!(
+        name.parts
+            .iter()
+            .map(|p| p.value.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    // `IF NOT EXISTS` is not an `OR REPLACE` form: the name is `IF`.
+    let t = create("CREATE OR REPLACE TABLE IF (a INT)");
+    let DdlName::Parts(name) = &t.name else {
+        panic!("{t:?}");
+    };
+    assert_eq!(
+        name.parts
+            .iter()
+            .map(|p| p.value.as_str())
+            .collect::<Vec<_>>(),
+        ["IF"]
+    );
+    // Every column option, every clause.
+    let sql = "CREATE TABLE t (a INT NOT NULL DEFAULT 42 COMMENT 'the a' GENERATED ALWAYS AS (a + 1), \
+        b STRING, c STRUCT<x: INT>) USING parquet OPTIONS ('a' 1, password = 'pw') \
+        PARTITIONED BY (c, d, years(ts), e INT NOT NULL COMMENT 'p') CLUSTER BY (a, b) \
+        LOCATION '/tmp/t' COMMENT 'table' DEFAULT COLLATION UTF8_LCASE \
+        TBLPROPERTIES ('k' = 'v', flag) AS SELECT 1";
+    // Spark builds this tree and then rejects a CTAS with a schema.
+    let e = parse_statement(sql, &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0035);
+    let Statement::CreateTable(t) = crate::parser::parse_statement_unchecked(sql, d).unwrap()
+    else {
+        panic!("{sql}");
+    };
+    assert_eq!(t.elements.len(), 3);
+    let TableElement::Column(a) = &t.elements[0] else {
+        panic!("{:?}", t.elements[0]);
+    };
+    assert!(a.not_null);
+    assert_eq!(a.default.as_ref().map(|e| e.span.text(sql)), Some("42"));
+    assert_eq!(a.comment.as_deref(), Some("the a"));
+    assert!(matches!(a.generated, Some(ref g) if matches!(g.kind, ast::GeneratedKind::Expr(_))));
+    assert_eq!(
+        a.span.text(sql),
+        "a INT NOT NULL DEFAULT 42 COMMENT 'the a' GENERATED ALWAYS AS (a + 1)"
+    );
+    let TableElement::Column(c) = &t.elements[2] else {
+        panic!("{:?}", t.elements[2]);
+    };
+    assert_eq!(c.data_type.to_string(), "struct<`x`:int>");
+    assert_eq!(t.using.as_ref().map(|u| u.span.text(sql)), Some("parquet"));
+    assert_eq!(t.options.len(), 2);
+    assert_eq!(
+        t.options[0].value.as_ref().map(|e| e.span.text(sql)),
+        Some("1")
+    );
+    assert_eq!(t.options[1].key.span.text(sql), "password");
+    assert_eq!(t.partitioned_by.len(), 4);
+    assert!(matches!(
+        &t.partitioned_by[2].kind,
+        ast::PartitionFieldKind::Transform(tr)
+            if tr.args.len() == 1
+                && matches!(&tr.name, ast::DdlName::Parts(n) if n.span.text(sql) == "years")
+    ));
+    assert!(matches!(
+        t.partitioned_by[3].kind,
+        ast::PartitionFieldKind::Column(ref col) if col.not_null && col.comment.as_deref() == Some("p")
+    ));
+    assert_eq!(t.cluster_by.len(), 2);
+    assert_eq!(t.location.as_deref(), Some("/tmp/t"));
+    assert_eq!(t.comment.as_deref(), Some("table"));
+    assert_eq!(
+        t.collation.as_ref().map(|c| c.span.text(sql)),
+        Some("UTF8_LCASE")
+    );
+    assert_eq!(t.tblproperties.len(), 2);
+    assert!(t.tblproperties[1].value.is_none());
+    assert!(t.as_query.is_some());
+    assert_eq!(t.span.text(sql), sql);
+    // A CTAS without `AS`, and one without columns.
+    let t = create("CREATE TABLE t USING parquet SELECT a FROM s");
+    assert!(t.as_query.is_some() && t.elements.is_empty());
+    let t = create("CREATE TABLE t AS SELECT 1");
+    assert!(t.as_query.is_some());
+    // A bare `VALUES` is a query too.
+    let t = create("CREATE TABLE t AS VALUES (1), (2)");
+    assert!(t.as_query.is_some());
+    // `parse_query` takes queries only.
+    assert_eq!(
+        err("CREATE TABLE t (a INT)", &d).error.error_class(),
+        ErrorClass::ParseSyntaxError
+    );
+    // Under `EXPLAIN`, a command is the explained statement.
+    let ast::Statement::Explain(e) = parse_statement("EXPLAIN CREATE TABLE t (a INT)", &d).unwrap()
+    else {
+        panic!("not an EXPLAIN")
+    };
+    assert!(matches!(*e.statement, ast::Statement::CreateTable(_)));
+}
+
+/// `CREATE TABLE` bucketing, skew, row formats and file formats.
+#[test]
+fn create_table_storage_clauses() {
+    use ast::{FileFormatKind, RowFormatKind, Statement};
+    let d = ParserOptions::default();
+    let create = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateTable(t) => t,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let t =
+        create("CREATE TABLE t (a INT) CLUSTERED BY (a) SORTED BY (b ASC, c DESC) INTO 2 BUCKETS");
+    let b = t.bucket.as_ref().unwrap();
+    assert_eq!(
+        b.clustered_by
+            .iter()
+            .map(|i| i.value.as_str())
+            .collect::<Vec<_>>(),
+        ["a"]
+    );
+    assert_eq!(b.sorted_by.len(), 2);
+    assert_eq!(b.sorted_by[0].asc, Some(true));
+    assert_eq!(b.sorted_by[1].asc, Some(false));
+    assert_eq!(b.buckets, 2);
+    // `SKEWED BY` parses, and Spark then rejects it in `CREATE TABLE`.
+    let skewed = |sql: &str| {
+        let e = parse_statement(sql, &d).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidStatementOrClause,
+            "{sql}"
+        );
+        assert!(
+            e.error.to_string().contains("CREATE TABLE ... SKEWED BY"),
+            "{sql}: {}",
+            e.error
+        );
+        assert_eq!(e.span.range(), 0..sql.len());
+        match crate::parser::parse_statement_unchecked(sql, d).unwrap() {
+            Statement::CreateTable(t) => t,
+            other => panic!("{sql} is {other:?}"),
+        }
+    };
+    let t = skewed("CREATE TABLE t (a INT) SKEWED BY (a) ON (1, 'x') STORED AS DIRECTORIES");
+    let s = t.skew.as_ref().unwrap();
+    assert!(s.stored_as_directories && s.values.len() == 1 && s.values[0].len() == 2);
+    let t = skewed("CREATE TABLE t (a INT) SKEWED BY (a, b) ON ((1, 2), (3, 4))");
+    let s = t.skew.as_ref().unwrap();
+    assert!(!s.stored_as_directories && s.values.len() == 2);
+    let t = create(
+        "CREATE TABLE t (a INT) ROW FORMAT SERDE 'com.example.SerDe' WITH SERDEPROPERTIES ('k' = 'v')",
+    );
+    let ast::RowFormatKind::Serde(serde) = &t.row_format.as_ref().unwrap().kind else {
+        panic!("{:?}", t.row_format);
+    };
+    assert_eq!(serde.class, "com.example.SerDe");
+    assert_eq!(serde.properties.len(), 1);
+    let sql = "CREATE TABLE t (a INT) ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' ESCAPED BY '\\\\' \
+        COLLECTION ITEMS TERMINATED BY '|' MAP KEYS TERMINATED BY ':' LINES TERMINATED BY '\n' NULL DEFINED AS 'NULL'";
+    let t = create(sql);
+    let RowFormatKind::Delimited(del) = &t.row_format.as_ref().unwrap().kind else {
+        panic!("{:?}", t.row_format);
+    };
+    assert_eq!(del.span.text(sql).lines().count(), 2);
+    let delimited = del.span.text(sql);
+    assert!(delimited.starts_with("DELIMITED"));
+    assert!(delimited.ends_with("'NULL'"));
+    assert_eq!(del.fields_terminated_by.as_deref(), Some(","));
+    assert_eq!(del.escaped_by.as_deref(), Some("\\"));
+    assert_eq!(del.collection_items_terminated_by.as_deref(), Some("|"));
+    assert_eq!(del.map_keys_terminated_by.as_deref(), Some(":"));
+    assert_eq!(del.lines_terminated_by.as_deref(), Some("\n"));
+    assert_eq!(del.null_defined_as.as_deref(), Some("NULL"));
+    let t = create("CREATE TABLE t (a INT) ROW FORMAT DELIMITED");
+    assert!(matches!(
+        t.row_format.as_ref().unwrap().kind,
+        RowFormatKind::Delimited(_)
+    ));
+    let t = create("CREATE TABLE t (a INT) STORED AS parquet");
+    assert!(matches!(
+        t.file_format.as_ref().unwrap().kind,
+        FileFormatKind::StoredAs(_)
+    ));
+    let t = create("CREATE TABLE t (a INT) STORED BY 'com.example.Storage'");
+    let FileFormatKind::StoredBy(h) = &t.file_format.as_ref().unwrap().kind else {
+        panic!("{:?}", t.file_format);
+    };
+    assert_eq!(h, "com.example.Storage");
+}
+
+/// `CREATE TABLE ... LIKE ...`.
+#[test]
+fn create_table_like_statements() {
+    use ast::{DdlName, Statement};
+    let d = ParserOptions::default();
+    let like = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateTableLike(t) => t,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let t = like("CREATE TABLE IF NOT EXISTS a.t LIKE s");
+    assert!(t.if_not_exists);
+    assert!(matches!(t.name, DdlName::Parts(_)));
+    assert!(matches!(t.source, DdlName::Parts(_)));
+    assert!(t.using.is_none() && t.location.is_none() && t.tblproperties.is_empty());
+    let sql = "CREATE TABLE t LIKE s USING parquet ROW FORMAT SERDE 'x' STORED AS parquet \
+        LOCATION '/tmp/t' TBLPROPERTIES ('a' = '1')";
+    let t = like(sql);
+    assert!(t.using.is_some() && t.row_format.is_some() && t.file_format.is_some());
+    assert_eq!(t.location.as_deref(), Some("/tmp/t"));
+    assert_eq!(t.tblproperties.len(), 1);
+    assert_eq!(t.span.text(sql), sql);
+    // `OR REPLACE` takes no `LIKE`: the name is followed by `LIKE`.
+    let e = parse_statement("CREATE OR REPLACE TABLE t LIKE s", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 26..30);
+}
+
+/// `CREATE TABLE` column constraints, identity columns and `IDENTIFIER` names.
+#[test]
+fn create_table_columns_constraints_and_names() {
+    use ast::{ColumnName, ConstraintCharacteristic, DdlName, Statement, TableConstraintKind};
+    let d = ParserOptions::default();
+    let create = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateTable(t) => t,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let t = create(
+        "CREATE TABLE t (a INT PRIMARY KEY, b STRING UNIQUE, c INT REFERENCES r (id), \
+        d INT CHECK (d > 0), CONSTRAINT pk PRIMARY KEY (a, b) ENFORCED, \
+        FOREIGN KEY (c) REFERENCES r, CONSTRAINT u UNIQUE (b) NOT ENFORCED NORELY, \
+        CONSTRAINT ck CHECK (a > 0) RELY, e BIGINT GENERATED ALWAYS AS IDENTITY \
+        (START WITH 10 INCREMENT BY 5), f BIGINT GENERATED BY DEFAULT AS IDENTITY, \
+        g INT GENERATED ALWAYS AS IDENTITY)",
+    );
+    assert_eq!(t.elements.len(), 11);
+    let ast::TableElement::Column(a) = &t.elements[0] else {
+        panic!("{:?}", t.elements[0]);
+    };
+    assert_eq!(a.constraints.len(), 1);
+    assert!(matches!(
+        a.constraints[0].kind,
+        ast::ColumnConstraintKind::PrimaryKey
+    ));
+    let ast::TableElement::Constraint(pk) = &t.elements[4] else {
+        panic!("{:?}", t.elements[4]);
+    };
+    assert_eq!(pk.name.as_ref().map(|n| n.value.as_str()), Some("pk"));
+    assert!(matches!(&pk.kind, TableConstraintKind::PrimaryKey(cols) if cols.len() == 2));
+    assert_eq!(
+        pk.characteristics,
+        [ConstraintCharacteristic::Enforced(true)]
+    );
+    let ast::TableElement::Constraint(u) = &t.elements[6] else {
+        panic!("{:?}", t.elements[6]);
+    };
+    assert_eq!(
+        u.characteristics,
+        [
+            ConstraintCharacteristic::Enforced(false),
+            ConstraintCharacteristic::Rely(false)
+        ]
+    );
+    let ast::TableElement::Column(e) = &t.elements[8] else {
+        panic!("{:?}", t.elements[8]);
+    };
+    let Some(ast::GeneratedColumn {
+        kind: ast::GeneratedKind::Identity(id),
+        ..
+    }) = &e.generated
+    else {
+        panic!("{:?}", e.generated);
+    };
+    assert_eq!(id.how, ast::IdentityHow::Always);
+    assert_eq!((id.start, id.step), (Some(10), Some(5)));
+    // `IDENTIFIER(...)` names: a whole table name, and a column name.
+    let t =
+        create("CREATE TABLE IDENTIFIER('ta' || 'b') (c1 INT, IDENTIFIER('c2') STRING) USING CSV");
+    let DdlName::Dynamic(dyn_name) = &t.name else {
+        panic!("{t:?}");
+    };
+    assert_eq!(
+        dyn_name.span.text(
+            "CREATE TABLE IDENTIFIER('ta' || 'b') (c1 INT, IDENTIFIER('c2') STRING) USING CSV"
+        ),
+        "IDENTIFIER('ta' || 'b')"
+    );
+    let ast::TableElement::Column(c2) = &t.elements[1] else {
+        panic!("{:?}", t.elements[1]);
+    };
+    assert!(matches!(c2.name, ColumnName::Dynamic(_)));
+    // In legacy identifier mode a column `IDENTIFIER(...)` fails at the
+    // `(`, as in Spark, while a table one still parses.
+    let legacy = ParserOptions {
+        legacy_identifier_clause: true,
+        ..d
+    };
+    let e =
+        parse_statement("CREATE TABLE tab(IDENTIFIER('c1') INT) USING CSV", &legacy).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 27..28);
+    let Statement::CreateTable(t) =
+        parse_statement("CREATE TABLE IDENTIFIER('tab')(c1 INT) USING CSV", &legacy).unwrap()
+    else {
+        panic!("legacy table name")
+    };
+    assert!(matches!(t.name, DdlName::Dynamic(_)));
+}
+
+/// `CREATE TABLE` errors: positions and classes.
+#[test]
+fn create_table_errors() {
+    let d = ParserOptions::default();
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    // The name is required.
+    let e = fail("CREATE TABLE");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 12..12);
+    // A column needs a type.
+    let e = fail("CREATE TABLE t (a)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 17..18);
+    // `NOT` needs `NULL`.
+    let e = fail("CREATE TABLE t (a INT NOT)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 25..26);
+    // A `DEFAULT` needs its expression.
+    let e = fail("CREATE TABLE t (a INT DEFAULT)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // `PARTITIONED BY` needs its list.
+    let e = fail("CREATE TABLE t (a INT) PARTITIONED BY");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // `INTO` needs its bucket count.
+    let e = fail("CREATE TABLE t (a INT) CLUSTERED BY (a) INTO BUCKETS");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 45..52);
+    // `TBLPROPERTIES` takes literals only.
+    let e = fail("CREATE TABLE t (a INT) TBLPROPERTIES ('a' = 1L)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 44..46);
+    // A qualified column type is rejected in `PARTITIONED BY`.
+    let e = fail("CREATE TABLE t (a INT) PARTITIONED BY (a INT COLLATE x)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // `LIKE` needs its source.
+    let e = fail("CREATE TABLE t LIKE");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // Anything else fails where it stands.
+    let e = fail("CREATE TABLE");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // An unknown type fails with Spark's class, at the type.
+    let e = fail("create table foo (with baz)");
+    assert_eq!(e.error.error_class(), ErrorClass::UnsupportedDatatype);
+    // `STRING COLLATE` without a name leaves `COLLATE` as extra input.
+    let e = parse_data_type("string collate", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 7..14);
+    // Doubly-quoted names fail without the option, as in Spark.
+    let e = fail("DROP TABLE \"myview\"");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 11..19);
+}
+
+/// `DROP TABLE [IF EXISTS] [PURGE]`.
+#[test]
+fn drop_table_statements() {
+    use ast::{DdlName, Statement};
+    let d = ParserOptions::default();
+    let drop = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::DropTable(t) => t,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let t = drop("DROP TABLE t;");
+    assert!(!t.if_exists && !t.purge);
+    assert_eq!(t.span.text("DROP TABLE t;"), "DROP TABLE t");
+    let t = drop("DROP TABLE IF EXISTS a.b.c PURGE");
+    assert!(t.if_exists && t.purge);
+    let DdlName::Parts(name) = &t.name else {
+        panic!("{t:?}");
+    };
+    assert_eq!(name.parts.len(), 3);
+    let t = drop("DROP TABLE IF EXISTS IDENTIFIER('ta' || 'b')");
+    assert!(matches!(t.name, DdlName::Dynamic(_)));
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    let e = fail("DROP TABLE");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 10..10);
+    let e = fail("DROP TABLE IF EXISTS");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 20..20);
+}
+
+/// `CREATE`/`DROP` `DATABASE`|`SCHEMA`|`NAMESPACE` and `USE`.
+#[test]
+fn namespace_and_use_statements() {
+    use ast::{DdlName, DropBehavior, NamespaceKind, Statement};
+    let d = ParserOptions::default();
+    let create = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateNamespace(n) => n,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let n = create(
+        "CREATE DATABASE IF NOT EXISTS db COMMENT 'c' LOCATION '/tmp/db' \
+        DEFAULT COLLATION UTF8_LCASE WITH DBPROPERTIES ('k' = 'v', flag)",
+    );
+    assert_eq!(n.kind, NamespaceKind::Database);
+    assert!(n.if_not_exists);
+    assert_eq!(n.comment.as_deref(), Some("c"));
+    assert_eq!(n.location.as_deref(), Some("/tmp/db"));
+    assert!(n.collation.is_some());
+    assert_eq!(n.properties.len(), 2);
+    assert!(n.properties[1].value.is_none());
+    let n = create("CREATE SCHEMA s WITH PROPERTIES ('a' = 1)");
+    assert_eq!(n.kind, NamespaceKind::Schema);
+    assert_eq!(n.properties.len(), 1);
+    let n = create("CREATE NAMESPACE n");
+    assert_eq!(n.kind, NamespaceKind::Namespace);
+    let drop = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::DropNamespace(n) => n,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let n = drop("DROP DATABASE IF EXISTS db CASCADE");
+    assert_eq!(n.kind, NamespaceKind::Database);
+    assert!(n.if_exists);
+    assert_eq!(n.behavior, Some(DropBehavior::Cascade));
+    let n = drop("DROP SCHEMA s RESTRICT");
+    assert_eq!(n.behavior, Some(DropBehavior::Restrict));
+    let n = drop("DROP NAMESPACE IDENTIFIER('id' || 'ent')");
+    assert!(matches!(n.name, DdlName::Dynamic(_)));
+    let use_ = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::Use(u) => u,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let u = use_("USE mydb1");
+    assert!(u.kind.is_none());
+    let u = use_("USE SCHEMA IDENTIFIER('id' || 'ent')");
+    assert_eq!(u.kind, Some(NamespaceKind::Schema));
+    assert!(matches!(u.name, DdlName::Dynamic(_)));
+    let u = use_("USE NAMESPACE a.b");
+    assert_eq!(u.kind, Some(NamespaceKind::Namespace));
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    let e = fail("CREATE SCHEMA");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let e = fail("DROP DATABASE db CASCADE RESTRICT");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let e = fail("USE");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 3..3);
+    // Doubly-quoted names fail without the option, as in Spark.
+    let e = fail("USE SCHEMA \"not_exist\"");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 11..22);
+}
+
+/// `COLLATE` in types, and `AS (columns)` aliases without a table name.
+#[test]
+fn collate_types_and_nameless_aliases() {
+    use ast::Statement;
+    let d = ParserOptions::default();
+    // `STRING COLLATE ...`, including in nested types.
+    let t = parse_data_type("STRING COLLATE UTF8_LCASE", &d).unwrap();
+    assert_eq!(t.to_string(), "string collate UTF8_LCASE");
+    assert_eq!(
+        t.to_data_type().unwrap_err().error_class().name(),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    let t = parse_data_type("STRUCT<a: STRING COLLATE x, b: INT>", &d).unwrap();
+    assert_eq!(t.to_string(), "struct<`a`:string collate x,`b`:int>");
+    // `CHAR` and `VARCHAR` take one too, with any quoting of the name.
+    let t = parse_data_type("CHAR(10) COLLATE `a``b`", &d).unwrap();
+    assert_eq!(t.to_string(), "char(10) collate `a``b`");
+    let t = parse_data_type("VARCHAR(10) COLLATE x", &d).unwrap();
+    assert_eq!(t.to_string(), "varchar(10) collate x");
+    // A non-ASCII collation name is no identifier, as in Spark.
+    let e = parse_data_type("STRING COLLATE \u{e9}", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidIdentifier);
+    // `COLLATE` on any other type is a syntax error.
+    let e = parse_data_type("INT COLLATE x", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // A cast to a collated type parses, then fails to lower as
+    // unsupported, as in Spark (which analyzes it).
+    let q = ok("SELECT CAST(a AS STRING COLLATE UTF8_LCASE) FROM t");
+    let e = crate::lower(&q, krishiv_plan::SourceId(0)).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    // `VALUES ... AS (columns)`: a column list without a table name.
+    let q = ok("SELECT * FROM (VALUES (1), (2), (1) AS (my_col)) GROUP BY 1");
+    let ast::SetExprKind::Select(s) = &q.body.kind else {
+        panic!("{q:?}");
+    };
+    let ast::TableFactorKind::Subquery(inner) = &s.from.as_ref().unwrap().relations[0].primary.kind
+    else {
+        panic!("{q:?}");
+    };
+    let ast::SetExprKind::Values(v) = &inner.body.kind else {
+        panic!("{inner:?}");
+    };
+    assert_eq!(v.rows.len(), 3);
+    let alias = v.alias.as_ref().unwrap();
+    assert!(alias.name.is_none());
+    assert_eq!(alias.columns.len(), 1);
+    assert_eq!(
+        alias
+            .span
+            .text("SELECT * FROM (VALUES (1), (2), (1) AS (my_col)) GROUP BY 1"),
+        "AS (my_col)"
+    );
+    // A missing column list is still an error.
+    let e = err("SELECT * FROM (VALUES (1)) AS ()", &d);
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // A nameless alias lowers like an unnamed one, keeping the columns.
+    let q = ok("SELECT * FROM (SELECT 1) AS (a)");
+    let ast::SetExprKind::Select(s) = &q.body.kind else {
+        panic!("{q:?}");
+    };
+    let rel = &s.from.as_ref().unwrap().relations[0];
+    assert!(rel.primary.alias.as_ref().unwrap().name.is_none());
+    crate::lower(&q, krishiv_plan::SourceId(0)).unwrap();
+    let Statement::CreateTable(t) =
+        parse_statement("CREATE TABLE t AS SELECT * FROM (VALUES (1)) AS (c)", &d).unwrap()
+    else {
+        panic!("not a CREATE TABLE")
+    };
+    assert!(t.as_query.is_some());
+}
+
+/// New commands enforce the recursion limit, reported at the whole
+/// statement.
+#[test]
+fn ddl_commands_enforce_the_depth_limit() {
+    use crate::MAX_DEPTH;
+    let d = ParserOptions::default();
+    // A CTAS nested past the limit fails; one level less parses.
+    let deep = |n: usize| {
+        format!(
+            "CREATE TABLE t AS SELECT {}1{}",
+            "(".repeat(n),
+            ")".repeat(n)
+        )
+    };
+    let (mut ok, mut bad) = (0, MAX_DEPTH + 10);
+    while ok + 1 < bad {
+        let mid = (ok + bad) / 2;
+        if parse_statement(&deep(mid), &d).is_ok() {
+            ok = mid;
+        } else {
+            bad = mid;
+        }
+    }
+    assert!(ok > 0);
+    let sql = deep(bad);
+    let e = parse_statement(&sql, &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::FailedToParseTooComplex);
+    assert_eq!(e.span.range(), 0..sql.len());
+    // A deeply nested `DEFAULT` fails the same way.
+    let sql = format!(
+        "CREATE TABLE t (a INT DEFAULT {}1{})",
+        "(".repeat(MAX_DEPTH),
+        ")".repeat(MAX_DEPTH)
+    );
+    let e = parse_statement(&sql, &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::FailedToParseTooComplex);
+    assert_eq!(e.span.range(), 0..sql.len());
+    // So does a deeply nested parenthesized query.
+    let sql = format!(
+        "CREATE TABLE t (SELECT {}1{})",
+        "(".repeat(MAX_DEPTH),
+        ")".repeat(MAX_DEPTH)
+    );
+    let e = parse_statement(&sql, &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::FailedToParseTooComplex);
+    assert_eq!(e.span.range(), 0..sql.len());
+}
+
+/// `CREATE TABLE` errors, continued: every clause's malformed forms fail
+/// where they stand.
+#[test]
+fn create_table_clause_errors() {
+    let d = ParserOptions::default();
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    let syntax = |sql: &str| {
+        let e = fail(sql);
+        assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError, "{sql}");
+        e
+    };
+    // `GENERATED` needs its form.
+    syntax("CREATE TABLE t (a INT GENERATED)");
+    syntax("CREATE TABLE t (a INT GENERATED ALWAYS)");
+    syntax("CREATE TABLE t (a INT GENERATED ALWAYS AS 1)");
+    // A `COMMENT` needs its string.
+    let e = syntax("CREATE TABLE t (a INT COMMENT 1)");
+    assert_eq!(e.span.range(), 30..31);
+    // Constraints need their shape.
+    syntax("CREATE TABLE t (a INT, CONSTRAINT c FOO)");
+    syntax("CREATE TABLE t (a INT, PRIMARY FOO)");
+    // `OPTIONS` needs its value after `=`.
+    syntax("CREATE TABLE t (a INT) OPTIONS (a = )");
+    // `COMMENT`, `LOCATION` and `COLLATION` need their strings.
+    syntax("CREATE TABLE t (a INT) COMMENT 1");
+    syntax("CREATE TABLE t (a INT) DEFAULT COLLATION");
+    // `CLUSTER BY` needs its list.
+    syntax("CREATE TABLE t (a INT) CLUSTER BY a");
+    // `STORED` needs `AS` or `BY`.
+    syntax("CREATE TABLE t (a INT) STORED");
+    // `ROW FORMAT` needs `SERDE` or `DELIMITED`.
+    syntax("CREATE TABLE t (a INT) ROW FORMAT");
+    syntax("CREATE TABLE t (a INT) ROW FORMAT FOO");
+    // `SKEWED ... STORED` needs `AS DIRECTORIES`.
+    syntax("CREATE TABLE t (a INT) SKEWED BY (a) ON (1) STORED");
+    syntax("CREATE TABLE t (a INT) SKEWED BY (a) ON (1) STORED AS");
+    // `AS` needs its query.
+    syntax("CREATE TABLE t (a INT) AS");
+    // An unclosed parenthesized query fails inside it.
+    let e = syntax("CREATE TABLE t (SELECT 1");
+    assert_eq!(e.span.range(), 23..24);
+    // An unclosed `IDENTIFIER(` fails naming the missing `)`.
+    let e = syntax("CREATE TABLE IDENTIFIER('a'");
+    assert_eq!(e.span.range(), 27..27);
+    // Anything else fails where it stands.
+    let e = syntax("CREATE FOO");
+    assert_eq!(e.span.range(), 7..10);
+    let e = syntax("DROP FOO");
+    assert_eq!(e.span.range(), 5..8);
+    // `WITH` needs its properties.
+    syntax("CREATE SCHEMA s WITH");
+    // `USE` needs its name.
+    let e = syntax("USE SCHEMA");
+    assert_eq!(e.span.range(), 10..10);
+}
+
+/// `PARTITIONED BY` field forms.
+#[test]
+fn partition_field_forms() {
+    use ast::{DdlName, PartitionFieldKind, Statement};
+    let d = ParserOptions::default();
+    let fields = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateTable(t) => t.partitioned_by,
+        other => panic!("{sql} is {other:?}"),
+    };
+    // A dotted name is an identity transform.
+    let f = fields("CREATE TABLE t (a INT) PARTITIONED BY (a.b)");
+    assert!(matches!(
+        &f[0].kind,
+        PartitionFieldKind::Transform(tr)
+            if matches!(&tr.name, DdlName::Parts(n) if n.parts.len() == 2) && tr.args.is_empty()
+    ));
+    // A dynamic name without a type is one too.
+    let f = fields("CREATE TABLE t (a INT) PARTITIONED BY (IDENTIFIER('c'))");
+    assert!(matches!(
+        &f[0].kind,
+        PartitionFieldKind::Transform(tr)
+            if matches!(&tr.name, DdlName::Dynamic(_)) && tr.args.is_empty()
+    ));
+    // `NOT NULL` without `NULL`, a `COMMENT` without a string, and a
+    // broken type fail inside the column.
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    let e = fail("CREATE TABLE t (a INT) PARTITIONED BY (a INT NOT)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 48..49);
+    let e = fail("CREATE TABLE t (a INT) PARTITIONED BY (a INT COMMENT 1)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let e = fail("CREATE TABLE t (a INT) PARTITIONED BY (a array<int)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let e = fail("CREATE TABLE t (a INT) PARTITIONED BY (a 1)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 41..42);
+}
+
+/// `TBLPROPERTIES` literal values, `OPTIONS` expressions and storage
+/// defaults.
+#[test]
+fn property_values_and_storage_defaults() {
+    use ast::{RowFormatKind, Statement};
+    let d = ParserOptions::default();
+    let create = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateTable(t) => t,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let t = create("CREATE TABLE t (a INT) TBLPROPERTIES ('a' = TRUE, 'b' = 1.5, 'c' = \"x\")");
+    assert_eq!(t.tblproperties.len(), 3);
+    assert!(t.tblproperties.iter().all(|p| p.value.is_some()));
+    // An `OPTIONS` value without `=` reads as the next expression.
+    let t = create("CREATE TABLE t (a INT) OPTIONS (a b)");
+    assert_eq!(t.options.len(), 1);
+    // `SORTED BY` without a direction, `ROW FORMAT SERDE` without
+    // properties, and an `IDENTITY` without options.
+    let t = create("CREATE TABLE t (a INT) CLUSTERED BY (a) SORTED BY (b) INTO 2 BUCKETS");
+    assert_eq!(t.bucket.as_ref().unwrap().sorted_by[0].asc, None);
+    let t = create("CREATE TABLE t (a INT) ROW FORMAT SERDE 'x'");
+    assert!(matches!(
+        t.row_format.as_ref().unwrap().kind,
+        RowFormatKind::Serde(_)
+    ));
+    // A bucket count that is no integer fails.
+    let e = parse_statement(
+        "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 99999999999999999999999 BUCKETS",
+        &d,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+}
+
+/// A parenthesized query is the CTAS query: no columns, no clauses.
+#[test]
+fn parenthesized_ctas_forms() {
+    use ast::Statement;
+    let d = ParserOptions::default();
+    let t = match parse_statement("CREATE TABLE t (SELECT 1)", &d).unwrap() {
+        Statement::CreateTable(t) => t,
+        other => panic!("{other:?}"),
+    };
+    assert!(t.elements.is_empty() && t.using.is_none());
+    let q = t.as_query.as_ref().unwrap();
+    assert_eq!(q.span.text("CREATE TABLE t (SELECT 1)"), "(SELECT 1)");
+    // Clauses do not follow one: it ends the statement.
+    let e = parse_statement("CREATE TABLE t (SELECT 1) USING parquet", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // `OR REPLACE` with anything but a table fails where it stands.
+    let e = parse_statement("CREATE OR REPLACE VIEW v AS SELECT 1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 18..22);
+    // So does anything else.
+    let e = parse_statement("CREATE TEMPORARY FOO", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 17..20);
+}
+
+/// `NOT NULL` without `NULL` before a `COMMENT`, and identity column
+/// counts that are no integers.
+#[test]
+fn column_option_edge_cases() {
+    let d = ParserOptions::default();
+    let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
+    let e = fail("CREATE TABLE t (a INT NOT COMMENT 'x')");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let e = fail("CREATE TABLE t (a INT GENERATED ALWAYS AS IDENTITY (START WITH x))");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    let e = fail(
+        "CREATE TABLE t (a INT GENERATED ALWAYS AS IDENTITY (START WITH 99999999999999999999999))",
+    );
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // Inline constraint names and references.
+    let t = match parse_statement(
+        "CREATE TABLE t (a INT CONSTRAINT c PRIMARY KEY, b INT REFERENCES r, c INT CONSTRAINT d CHECK (c > 0))",
+        &d,
+    )
+    .unwrap()
+    {
+        ast::Statement::CreateTable(t) => t,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(t.elements.len(), 3);
+    let ast::TableElement::Column(a) = &t.elements[0] else {
+        panic!("{:?}", t.elements[0]);
+    };
+    assert_eq!(a.constraints.len(), 1);
+    assert_eq!(a.constraints[0].name.as_ref().unwrap().value, "c");
+    let e = fail("CREATE TABLE t (a INT PRIMARY FOO)");
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+}
+
+/// `PARTITIONED BY` restores and reports.
+#[test]
+fn partition_field_edge_cases() {
+    use ast::{PartitionFieldKind, Statement};
+    let d = ParserOptions::default();
+    let fields = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::CreateTable(t) => t.partitioned_by,
+        other => panic!("{sql} is {other:?}"),
+    };
+    // A `COLLATE`d string reads as an identity transform, which fails at
+    // the `COLLATE`.
+    let f = fields("CREATE TABLE t (a INT) PARTITIONED BY (a STRING)");
+    assert!(matches!(&f[0].kind, PartitionFieldKind::Column(_)));
+    let e = parse_statement(
+        "CREATE TABLE t (a INT) PARTITIONED BY (a STRING COLLATE x)",
+        &d,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // A broken type rewinds to an identity transform, which fails after
+    // the name.
+    let e = parse_statement("CREATE TABLE t (a INT) PARTITIONED BY (a array<int)", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // A bad name fails as one.
+    let e = parse_statement("CREATE TABLE t (a INT) PARTITIONED BY (a \u{e9})", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidIdentifier);
+    // An unclosed type fails at the end of the input.
+    let e =
+        parse_statement("CREATE TABLE t (x INT) PARTITIONED BY (a decimal(10)", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 52..52);
+    // `NOT NULL` without `NULL` before a `COMMENT` fails at the `COMMENT`.
+    let e = parse_statement(
+        "CREATE TABLE t (a INT) PARTITIONED BY (a INT NOT COMMENT 'x')",
+        &d,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // A table constraint with referenced columns.
+    let t = match parse_statement(
+        "CREATE TABLE t (a INT, b INT, CONSTRAINT fk FOREIGN KEY (a) REFERENCES r (id))",
+        &d,
+    )
+    .unwrap()
+    {
+        Statement::CreateTable(t) => t,
+        other => panic!("{other:?}"),
+    };
+    let ast::TableElement::Constraint(c) = &t.elements[2] else {
+        panic!("{:?}", t.elements[2]);
+    };
+    let ast::TableConstraintKind::ForeignKey(fk) = &c.kind else {
+        panic!("{c:?}");
+    };
+    assert_eq!(fk.ref_columns.len(), 1);
+    assert_eq!(fk.table.parts.len(), 1);
+}
+
+/// The checks Spark's builder makes on a parsed `CREATE TABLE`, with the
+/// error classes and order of Spark 4.2 (each case checked on Spark).
+#[test]
+fn create_table_builder_checks() {
+    use ast::{GeneratedKind, Statement, TableElement};
+    let d = ParserOptions::default();
+    let fail = |sql: &str| {
+        let e = parse_statement(sql, &d).unwrap_err();
+        (e.error.error_class(), e.error.to_string(), e.span.range())
+    };
+    // A clause written twice; the first in Spark's check order wins over
+    // the order in the text.
+    for (clause, text) in [
+        ("TBLPROPERTIES", "TBLPROPERTIES ('a' = 'b')"),
+        ("OPTIONS", "OPTIONS (k 1)"),
+        ("PARTITIONED BY", "PARTITIONED BY (a)"),
+        ("STORED AS/BY", "STORED AS parquet"),
+        ("ROW FORMAT", "ROW FORMAT DELIMITED"),
+        ("COMMENT", "COMMENT 'x'"),
+        ("DEFAULT COLLATION", "DEFAULT COLLATION UTF8_BINARY"),
+        ("CLUSTERED BY", "CLUSTERED BY (a) INTO 2 BUCKETS"),
+        ("CLUSTER BY", "CLUSTER BY (a)"),
+        ("LOCATION", "LOCATION '/a'"),
+    ] {
+        let sql = format!("CREATE TABLE t (a INT) {text} {text}");
+        let (class, message, span) = fail(&sql);
+        assert_eq!(class, ErrorClass::DuplicateClauses, "{sql}");
+        assert!(
+            message.contains(&format!("Found duplicate clauses: {clause}.")),
+            "{sql}: {message}"
+        );
+        assert_eq!(span, 0..sql.len());
+    }
+    let (_, message, _) =
+        fail("CREATE TABLE t (a INT) LOCATION '/a' LOCATION '/b' COMMENT 'x' COMMENT 'y'");
+    assert!(message.contains("clauses: COMMENT."), "{message}");
+    let (_, message, _) = fail(
+        "CREATE TABLE t (a INT) COMMENT 'x' TBLPROPERTIES ('a' = 'b') COMMENT 'y' TBLPROPERTIES ('c' = 'd')",
+    );
+    assert!(message.contains("clauses: TBLPROPERTIES."), "{message}");
+
+    // A column descriptor written twice: the first repeat in the text.
+    for (sql, descriptor) in [
+        ("CREATE TABLE t (a INT COMMENT 'x' COMMENT 'y')", "COMMENT"),
+        ("CREATE TABLE t (a INT NOT NULL NOT NULL)", "NOT NULL"),
+        ("CREATE TABLE t (a INT DEFAULT 1 DEFAULT 2)", "DEFAULT"),
+        (
+            "CREATE TABLE t (a INT DEFAULT 1 COMMENT 'x' COMMENT 'y' DEFAULT 2)",
+            "COMMENT",
+        ),
+        (
+            "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS (1) GENERATED ALWAYS AS IDENTITY)",
+            "GENERATED ALWAYS AS",
+        ),
+        (
+            "CREATE TABLE t (a INT CHECK (a > 0) PRIMARY KEY)",
+            "CONSTRAINT",
+        ),
+        (
+            "CREATE TABLE t (IDENTIFIER('a') INT COMMENT 'x' COMMENT 'y')",
+            "COMMENT",
+        ),
+    ] {
+        let (class, message, span) = fail(sql);
+        assert_eq!(
+            class,
+            ErrorClass::CreateTableColumnDescriptorDuplicate,
+            "{sql}"
+        );
+        assert!(
+            message.contains(&format!("column a specifies descriptor \"{descriptor}\"")),
+            "{sql}: {message}"
+        );
+        assert_eq!(span, 0..sql.len());
+    }
+
+    // Identity options: negative counts parse; a repeated option and a
+    // zero step fail, after the column's descriptors.
+    let sql =
+        "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -1 INCREMENT BY - 2))";
+    let Statement::CreateTable(t) = parse_statement(sql, &d).unwrap() else {
+        panic!("{sql}");
+    };
+    let TableElement::Column(c) = &t.elements[0] else {
+        panic!("{t:?}");
+    };
+    let Some(GeneratedKind::Identity(i)) = c.generated.as_ref().map(|g| &g.kind) else {
+        panic!("{c:?}");
+    };
+    assert_eq!((i.start, i.step), (Some(-1), Some(-2)));
+    for (sql, option) in [
+        (
+            "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 START WITH 2))",
+            "START",
+        ),
+        (
+            "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY \
+             (INCREMENT BY 1 START WITH 1 INCREMENT BY 2 START WITH 3))",
+            "STEP",
+        ),
+    ] {
+        let (class, message, _) = fail(sql);
+        assert_eq!(
+            class,
+            ErrorClass::IdentityColumnsDuplicatedSequenceGeneratorOption,
+            "{sql}"
+        );
+        assert!(
+            message.contains(&format!("generator option: {option}.")),
+            "{sql}: {message}"
+        );
+    }
+    let (class, _, _) =
+        fail("CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 0))");
+    assert_eq!(class, ErrorClass::IdentityColumnsIllegalStep);
+    let (class, _, _) = fail(
+        "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 START WITH 2) \
+         COMMENT 'x' COMMENT 'y')",
+    );
+    assert_eq!(class, ErrorClass::CreateTableColumnDescriptorDuplicate);
+    // A count out of range is a syntax error, as is `10L`.
+    let (class, _, _) = fail(
+        "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -99999999999999999999))",
+    );
+    assert_eq!(class, ErrorClass::ParseSyntaxError);
+
+    // `SKEWED BY` and CTAS restrictions.
+    let (class, message, _) = fail("CREATE TABLE t (a INT) AS SELECT 1");
+    assert_eq!(class, ErrorClass::LegacyErrorTemp0035);
+    assert!(
+        message
+            .contains("Schema may not be specified in a Create Table As Select (CTAS) statement"),
+        "{message}"
+    );
+    let (class, message, _) = fail("CREATE TABLE t PARTITIONED BY (a INT) AS SELECT 1");
+    assert_eq!(class, ErrorClass::LegacyErrorTemp0035);
+    assert!(
+        message.contains(
+            "Partition column types may not be specified in Create Table As Select (CTAS)"
+        ),
+        "{message}"
+    );
+    let (_, message, _) = fail("CREATE TABLE t (a INT) PARTITIONED BY (b INT) AS SELECT 1");
+    assert!(message.contains("Schema may not be specified"), "{message}");
+    assert!(parse_statement("CREATE TABLE t PARTITIONED BY (a) AS SELECT 1 AS a", &d).is_ok());
+
+    // Literals anywhere in the statement get the query checks.
+    let bad = "DATE '2020-13-45'";
+    for sql in [
+        format!("CREATE TABLE t (a DATE DEFAULT {bad})"),
+        format!("CREATE TABLE t (a DATE GENERATED ALWAYS AS ({bad}))"),
+        format!("CREATE TABLE t (a INT CHECK ({bad} IS NULL))"),
+        format!("CREATE TABLE t (a INT, CONSTRAINT c CHECK ({bad} IS NULL))"),
+        format!("CREATE TABLE t (a INT) OPTIONS (k {bad})"),
+        format!("CREATE TABLE t (a INT) PARTITIONED BY (bucket(2, {bad}))"),
+        format!("CREATE TABLE IDENTIFIER({bad} || 'x') (a INT)"),
+        format!("CREATE TABLE t (IDENTIFIER({bad} || 'x') INT)"),
+        format!("CREATE TABLE t (a INT) AS SELECT {bad}"),
+        format!("CREATE TABLE t (a INT DEFAULT {bad}) AS SELECT 1"),
+    ] {
+        assert_eq!(fail(&sql).0, ErrorClass::InvalidTypedLiteral, "{sql}");
+    }
+
+    // The order of the checks.
+    for (sql, class) in [
+        (
+            "CREATE TABLE t (a INT COMMENT 'x' COMMENT 'y') COMMENT 'x' COMMENT 'y'",
+            ErrorClass::CreateTableColumnDescriptorDuplicate,
+        ),
+        (
+            "CREATE TABLE t (a INT) COMMENT 'x' COMMENT 'y' SKEWED BY (a) ON (1)",
+            ErrorClass::DuplicateClauses,
+        ),
+        (
+            "CREATE TABLE t (a INT) COMMENT 'x' COMMENT 'y' AS SELECT 1",
+            ErrorClass::DuplicateClauses,
+        ),
+        (
+            "CREATE TABLE t (a INT) OPTIONS (k DATE '2020-13-45') COMMENT 'x' COMMENT 'y'",
+            ErrorClass::DuplicateClauses,
+        ),
+        (
+            "CREATE TABLE t SKEWED BY (a) ON (1) AS SELECT DATE '2020-13-45'",
+            ErrorClass::InvalidStatementOrClause,
+        ),
+    ] {
+        assert_eq!(fail(sql).0, class, "{sql}");
+    }
+}
+
+/// With `double_quoted_identifiers`, a double-quoted word after a
+/// partition column name reads as its type, as in a column definition.
+#[test]
+fn create_table_double_quoted_partition_type() {
+    let dq = ParserOptions {
+        double_quoted_identifiers: true,
+        ..ParserOptions::default()
+    };
+    let column = parse_statement("CREATE TABLE t (a \"int\")", &dq).unwrap_err();
+    let partition =
+        parse_statement("CREATE TABLE t (a INT) PARTITIONED BY (b \"int\")", &dq).unwrap_err();
+    assert_eq!(column.error.error_class(), ErrorClass::UnsupportedDatatype);
+    assert_eq!(
+        partition.error.error_class(),
+        ErrorClass::UnsupportedDatatype
+    );
+}
+
+/// An error deferred before a speculative parse that then succeeds is
+/// still the one reported.
+#[test]
+fn deferred_error_survives_a_speculative_parse() {
+    let d = ParserOptions::default();
+    for sql in [
+        "SELECT a ! IN (1), CAST(b AS STRING COLLATE c) FROM t",
+        "CREATE TABLE IDENTIFIER(CASE WHEN x ! IN (1) THEN 't' END) (SELECT 1)",
+    ] {
+        let e = parse_statement(sql, &d).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::SyntaxDiscontinuedBangEqualsNot,
+            "{sql}"
+        );
+        let bang = sql.find('!').unwrap();
+        assert_eq!(e.span.range(), bang..bang + 1, "{sql}");
+    }
 }

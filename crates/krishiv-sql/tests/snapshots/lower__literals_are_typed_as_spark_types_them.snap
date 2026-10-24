@@ -5,7 +5,7 @@ expression: "report(&[\"SELECT 2147483647, 2147483648, 9223372036854775808, 1Y, 
 SELECT 2147483647, 2147483648, 9223372036854775808, 1Y, 1S, 1L, -0.050, .5, 5., 1e3, 1.5D, 1.5F, 1.5BD FROM t
   => Project [2147483647, 2147483648L, 9223372036854775808, 1Y, 1S, 1L, -0.050, 0.5, 5, 1000.0D, 1.5D, 1.5F, 1.5] | +- Read t | 
 SELECT X'1F', X'abc', DATE '2020-2-3', DATE '+2020', DATE '2020-02-29T10:00', DATE '-0044-03-15' FROM t
-  => Project [X'1F', X'0ABC', DATE '2020-02-03', DATE '2020-01-01', DATE '2020-02-29', DATE '-0044-03-15'] | +- Read t | 
+  => Project [X'1F', X'0ABC', DATE '2020-2-3', DATE '+2020', DATE '2020-02-29T10:00', DATE '-0044-03-15'] | +- Read t | 
 SELECT 300Y FROM t
   => [INVALID_NUMERIC_LITERAL_RANGE] Numeric literal 300 is outside the valid range for tinyint with minimum value of -128 and maximum value of 127. Please adjust the value accordingly. SQLSTATE: 22003 @ 7..11
 SELECT 40000S FROM t

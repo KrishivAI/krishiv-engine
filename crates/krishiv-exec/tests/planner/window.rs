@@ -45,3 +45,45 @@ fn a_distinct_window_aggregate_is_refused() {
         "{err}"
     );
 }
+
+/// A window over a hash exchange runs over the sort's hash buckets, read by
+/// several drivers: each partition is whole and in order, and `EXPLAIN
+/// ANALYZE` shows the buckets.
+#[test]
+fn a_partitioned_window_reads_the_sort_buckets() {
+    let env = env();
+    let sql = "SELECT b, row_number() OVER (PARTITION BY b % 3 ORDER BY b DESC) AS r FROM t";
+    let plan = env.plan(sql).unwrap();
+    let root = krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+    // Four compute threads, whatever the machine: 16 buckets.
+    let executor = krishiv_exec::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 2,
+    };
+    let (out, query) = super::run_on(&plan, &root, &executor);
+    let mut rows: Vec<String> = Vec::new();
+    for b in &out.unwrap() {
+        for r in 0..b.num_rows() {
+            let cells: Vec<String> = b
+                .columns()
+                .iter()
+                .map(|c| super::cell(c.as_ref(), r))
+                .collect();
+            rows.push(cells.join("|"));
+        }
+    }
+    rows.sort();
+    // b % 3 = 0: 90, 60, 30, 0; 1: 70, 40, 10; 2: 80, 50, 20.
+    let want = [
+        "0|4", "10|3", "20|3", "30|3", "40|2", "50|2", "60|2", "70|1", "80|1", "90|1",
+    ];
+    assert_eq!(rows, want);
+    let metrics = query.metrics();
+    let buckets = metrics
+        .operators
+        .values()
+        .find(|e| e.name == "Sort")
+        .and_then(|e| e.extra("buckets").cloned());
+    assert_eq!(buckets, Some(krishiv_exec::Metric::Max(16)));
+}

@@ -31,7 +31,7 @@ and releasing the stream cancels it.
 `krishiv.sql` mirrors `pyspark.sql` (signatures and import paths); errors are in `krishiv.errors`, shaped like
 `pyspark.errors`. pyarrow is optional: install `krishiv[pyarrow]`; `toArrow`, `collect`, `show` and `toPandas` need it (`count` and
 the PyCapsule interface do not). `toPandas` also needs pandas (`pip install krishiv[pandas]`). SQL expression strings
-(`selectExpr`, `where("...")`, `expr`) are not available yet.
+are supported (`F.expr`, `selectExpr`, `filter`/`where` with a string).
 
 ## Develop
 
@@ -50,6 +50,19 @@ Code quality (ruff lint and format, ty; versions pinned in `uv.lock`):
 cd python
 uv run ruff check && uv run ruff format --check && uv run ty check
 ```
+
+Type stubs (`krishiv/py.typed`, `krishiv/_native.pyi`) ship in the wheel. After
+`maturin develop`, check them with mypy (pinned version via `uvx`):
+
+```sh
+cd python
+uvx mypy@2.4.0 --strict examples/basic.py examples/dataframe_ops.py
+uv pip install "mypy==2.4.0"  # once, for the stubtest below
+python -m mypy.stubtest krishiv._native --concise --ignore-disjoint-bases
+```
+
+The same two checks run as `tests/test_stubs.py` (skipped when mypy is not
+installed); `tests/test_repr.py` covers the notebook rendering.
 
 ## Free-threaded build (cp314t)
 

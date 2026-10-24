@@ -10,10 +10,13 @@
     reason = "test helpers sit outside #[test] fns; the TPC-H runs print their timings"
 )]
 
+mod conditionals;
 mod exchanges;
 mod folding;
+mod group_limit;
 mod hints;
 mod listing;
+mod orientation;
 mod physical;
 mod runtime_filters;
 mod semantics;
@@ -206,6 +209,15 @@ fn run_in(
     plan: &Runnable,
     root: &TreePool,
 ) -> (Result<Vec<RecordBatch>, KrishivError>, Arc<QueryContext>) {
+    run_on(plan, root, &ExecutorConfig::default())
+}
+
+/// [`run_in`] on an executor of `executor`'s threads.
+fn run_on(
+    plan: &Runnable,
+    root: &TreePool,
+    executor: &ExecutorConfig,
+) -> (Result<Vec<RecordBatch>, KrishivError>, Arc<QueryContext>) {
     let agg_row_layout =
         AGG_ROW_LAYOUT.get() || std::env::var("KRISHIV_AGG_ROW_LAYOUT").is_ok_and(|v| v == "1");
     let query = QueryContext::new(
@@ -218,7 +230,7 @@ fn run_in(
         },
         root.child("q", None),
     );
-    let runner = match TokioExecutor::new(&ExecutorConfig::default()) {
+    let runner = match TokioExecutor::new(executor) {
         Ok(executor) => QueryRunner::new(executor),
         Err(e) => return (Err(e), query),
     };
@@ -401,17 +413,16 @@ fn a_self_join_instance_reads_shifted_ids() {
 #[test]
 fn unsupported_and_inconsistent_plans_fail_clearly() {
     let env = env();
-    for sql in [
-        "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a = y.a",
-        "SELECT coalesce(a, 1) FROM t",
-    ] {
-        let e = env.plan(sql).unwrap_err();
-        assert_eq!(
-            e.error_class(),
-            ErrorClass::KrishivUnsupportedFeature,
-            "{sql}: {e}"
-        );
-    }
+    // `FULL OUTER JOIN` planning is still unsupported; `coalesce` (which a
+    // full join's analyzer lowering uses) binds since the conditional
+    // functions do (see `conditionals`).
+    let sql = "SELECT x.a FROM t AS x FULL OUTER JOIN t AS y ON x.a = y.a";
+    let e = env.plan(sql).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{sql}: {e}"
+    );
     // An unresolved plan.
     let unresolved = Plan::try_new(LogicalPlan::table(["t"])).unwrap();
     let e = DefaultPlanner.plan(&unresolved, &env.cx()).unwrap_err();

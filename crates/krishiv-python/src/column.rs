@@ -36,6 +36,13 @@ impl PyColumn {
         Ok(Self::wrap(self.inner.clone().cast(data_type)))
     }
 
+    /// `TRY_CAST(self AS to)`, `to` a Spark type string: invalid input
+    /// becomes `NULL`, even under ANSI.
+    fn try_cast(&self, py: Python<'_>, to: &str) -> PyResult<Self> {
+        let data_type = to.parse::<DataType>().map_err(|e| to_py(py, &e))?;
+        Ok(Self::wrap(self.inner.clone().try_cast(data_type)))
+    }
+
     fn add(&self, other: &Self) -> Self {
         Self::wrap(self.inner.clone() + other.inner.clone())
     }
@@ -198,4 +205,12 @@ pub(crate) fn count_distinct_of(cols: Vec<PyColumn>) -> PyResult<PyColumn> {
     Ok(PyColumn::wrap(count_distinct(
         cols.into_iter().map(|c| c.inner),
     )))
+}
+
+/// Parses `text` as a SQL expression (`F.expr`) with the default parser
+/// options; parse and lowering errors become the engine's exceptions.
+#[pyfunction(name = "expr")]
+pub(crate) fn expression(py: Python<'_>, text: &str) -> PyResult<PyColumn> {
+    let column = krishiv_session::functions::expr(text).map_err(|e| to_py(py, &e))?;
+    Ok(PyColumn::wrap(column))
 }

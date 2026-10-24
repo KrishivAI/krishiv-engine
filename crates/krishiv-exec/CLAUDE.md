@@ -32,13 +32,17 @@ sink (also the runtime filter producer, P2-T163: per-driver partials, published 
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model.
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a
-`Sort` below it; `planner/window.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
+`Sort` below it; `planner/window.rs`; over a hash exchange that sort splits its rows into hash buckets merged and read
+by several drivers, `operators/sort/sort.rs`): `mod.rs` plan types (`WindowPlan`, plan data) + the operator (buffers one
 partition, evaluates complete partitions), `eval.rs` boundaries, ranking functions, frame aggregates (through the
 aggregate `Accumulator`, one row at a time in Spark's order; decimal `sum`/`avg` exact in `i256`, checked when
-evaluated), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
+evaluated), `frames.rs` (ROWS frames with offsets and frames to the partition's end: segment tree, removable
+cumulative, in-order fold for float/ANSI sums), `spill.rs` (buffered rows spill under pressure; after a spill rows wait for the flush phase, which reads
 them back in order; a partition that does not fit is copied to its own file; failed/cancelled steps leave the state
 failed, never a short result), `stream.rs` (a partition evaluated from disk: lead and trailing readers, bounded
-memory), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
+memory), `group_limit.rs` (Spark's `WindowGroupLimit`: the exact limit operator below the window, the `Ranker`
+the sort also uses to prune each sorted batch while that pays; the planner infers it for a filter over the window,
+`planner/window.rs`), `tests.rs` (property test against a naive reference; spilled vs in-memory equality).
 Operators with work after their input (`needs_flush`) get `end_input` + a per-pipeline barrier + `flush`.
 `physical/` (P2-T172) the physical plan as data: `mod.rs` `PhysNode`/`PhysicalPlan`, `data.rs` the sealed
 `PlanData` marker, `instantiate.rs` `WorkerContext` + `instantiate` (the operator graph built from a plan on the

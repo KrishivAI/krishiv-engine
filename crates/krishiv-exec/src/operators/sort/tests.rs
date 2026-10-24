@@ -72,11 +72,11 @@ fn floats_order_as_in_spark() {
         assert_eq!(rows.row(0), rows.row(5));
         assert!(rows.row(0) > rows.row(3));
         assert_eq!(rows.row(1), rows.row(2));
-        let sorted = SortedBatch::new(batch.clone(), &keys).unwrap();
+        let sorted = SortedBatch::new(batch.clone(), &keys, None).unwrap();
         // Ties stay in row order.
         assert_eq!(sorted.order, [4, 6, 1, 2, 3, 0, 5]);
         let desc = KeyEncoder::new(&schema, &[SortKey::desc(column)]).unwrap();
-        let sorted = SortedBatch::new(batch.clone(), &desc).unwrap();
+        let sorted = SortedBatch::new(batch.clone(), &desc, None).unwrap();
         assert_eq!(sorted.order, [0, 5, 3, 1, 2, 6, 4]);
     }
 }
@@ -91,7 +91,10 @@ fn decimals_and_binaries_order_as_in_spark() {
     let batch = Batch::new(RecordBatch::try_from_iter([("d", d), ("b", b)]).unwrap());
     for (column, order) in [(0, [4, 1, 3, 0, 2]), (1, [2, 3, 4, 1, 0])] {
         let keys = KeyEncoder::new(&batch.schema(), &[SortKey::asc(column)]).unwrap();
-        assert_eq!(SortedBatch::new(batch.clone(), &keys).unwrap().order, order);
+        assert_eq!(
+            SortedBatch::new(batch.clone(), &keys, None).unwrap().order,
+            order
+        );
     }
 }
 
@@ -105,7 +108,7 @@ fn the_merge_breaks_ties_by_run_order() {
         batch,
     ]
     .into_iter()
-    .map(|b| Arc::new(SortedBatch::new(b, &keys).unwrap()))
+    .map(|b| Arc::new(SortedBatch::new(b, &keys, None).unwrap()))
     .collect();
     let root = TreePool::new(&MemoryConfig::default());
     let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
@@ -132,7 +135,7 @@ fn a_merged_batch_reads_only_the_batches_it_uses() {
         .map(|(start, w)| {
             let b = batch.slice(start, 3).unwrap();
             let b = Batch::with_weights(b.data().clone(), w).unwrap();
-            Arc::new(SortedBatch::new(b, &keys).unwrap())
+            Arc::new(SortedBatch::new(b, &keys, None).unwrap())
         })
         .collect();
     let root = TreePool::new(&MemoryConfig::default());
@@ -476,4 +479,113 @@ async fn a_late_spill_request_leaves_the_spilled_run_to_the_reader() {
     assert_eq!(root.reserved(), 0);
     drop(manager);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The merge budget covers the merger's per-source `slot`/`stamp` metadata,
+/// not just the run frames and the output batch.
+#[tokio::test(start_paused = true)]
+async fn merge_budget_covers_per_source_metadata() {
+    use super::merge::{SpillRun, metadata_bytes};
+    use super::sort::merge_budget;
+
+    assert_eq!(metadata_bytes(3), 3 * (8 + 4));
+
+    let root = TreePool::new(&MemoryConfig::default());
+    let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target")
+        .join(format!("sort-unit-merge-budget-{}", std::process::id()));
+    let manager = SpillManager::open(&SpillConfig {
+        dir: dir.clone(),
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let k: ArrayRef = Arc::new(Int64Array::from(vec![1, 2, 3]));
+    let batch = Batch::new(RecordBatch::try_new(Arc::clone(&schema), vec![k]).unwrap());
+    let mut runs = Vec::new();
+    for (max_batch_bytes, row_bytes) in [(1000usize, 10usize), (2000, 20), (1500, 15)] {
+        let scratch = handle.reservation().for_spill_scratch();
+        let mut writer = scope.writer(Arc::clone(&schema), scratch).unwrap();
+        writer.write(&batch).unwrap();
+        let file = writer.finish().unwrap();
+        runs.push(SpillRun {
+            file,
+            max_batch_bytes,
+            row_bytes,
+        });
+    }
+    let batch_rows = 100;
+    let (budget, fan_in) = merge_budget(&runs, runs.len(), batch_rows, &handle, false)
+        .await
+        .unwrap();
+    assert_eq!(fan_in, runs.len());
+    let per_run = runs.iter().map(SpillRun::merge_bytes).max().unwrap();
+    let row_bytes = runs.iter().map(|r| r.row_bytes).max().unwrap();
+    let expected = per_run * fan_in + row_bytes * batch_rows + metadata_bytes(fan_in);
+    assert_eq!(budget.size(), expected);
+    drop((budget, runs, handle));
+    assert_eq!(root.reserved(), 0);
+    drop(manager);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bucket_counts_follow_the_drivers() {
+    use super::sort::bucket_bits;
+    assert_eq!(bucket_bits(0), 0);
+    assert_eq!(bucket_bits(1), 0);
+    // At least eight buckets, four per driver, at most 4096.
+    assert_eq!(bucket_bits(2), 3);
+    assert_eq!(bucket_bits(4), 4);
+    assert_eq!(bucket_bits(12), 6);
+    assert_eq!(bucket_bits(5000), 12);
+    assert_eq!(bucket_bits(usize::MAX), 12);
+}
+
+/// A merge of many slices sorts their rows instead of running the loser
+/// tree, in the same stable order (ties by run, then within a run); without
+/// memory for the sort it runs the tree.
+#[test]
+fn a_wide_bucket_merge_sorts_in_the_merge_order() {
+    let (schema, batch) = floats();
+    let keys = KeyEncoder::new(&schema, &[SortKey::asc(0).nulls_first(false)]).unwrap();
+    let n = batch.num_rows();
+    // 100 runs: rotations of the rows, so ties come from many runs.
+    let runs: Vec<_> = (0..100)
+        .map(|i| {
+            let rows: Vec<(usize, usize)> = (0..n).map(|r| (0, (r + i) % n)).collect();
+            let b = interleave_batches(&schema, std::slice::from_ref(&batch), &rows).unwrap();
+            Arc::new(SortedBatch::new(b, &keys, None).unwrap())
+        })
+        .collect();
+    let root = TreePool::new(&MemoryConfig::default());
+    let handle = ConsumerHandle::register(root.child("q", None), "sort", None);
+    let drain = |mut m: Merger| {
+        let mut out = Vec::new();
+        while let Some(b) = m.next(37).unwrap() {
+            out.extend(ids(&b));
+        }
+        out
+    };
+    let tree = Merger::new(
+        Arc::clone(&schema),
+        Arc::clone(&keys),
+        runs.clone(),
+        &[],
+        &handle,
+    );
+    let sorted = Merger::bucket(Arc::clone(&schema), Arc::clone(&keys), &runs, 0, &handle);
+    let want = drain(tree.unwrap());
+    assert_eq!(want.len(), 100 * n);
+    assert_eq!(drain(sorted.unwrap()), want);
+    // A pool too small for the keyed rows: the tree, same order.
+    let tight = TreePool::new(&MemoryConfig {
+        limit: Some(1024),
+        ..MemoryConfig::default()
+    });
+    let small = ConsumerHandle::register(tight.child("q", None), "sort", None);
+    let fallback = Merger::bucket(schema, keys, &runs, 0, &small).unwrap();
+    assert_eq!(drain(fallback), want);
 }

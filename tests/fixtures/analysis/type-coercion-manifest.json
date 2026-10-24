@@ -48,7 +48,7 @@
     {
       "file": "typeCoercion/native/arrayJoin",
       "query": "SELECT array_join(array(timestamp '2016-11-15 20:54:00.000', timestamp '2016-11-12 20:54:00.000'), ', ')",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: TIMESTAMP literals"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function array_join"
     },
     {
       "file": "typeCoercion/native/arrayJoin",
@@ -1044,11 +1044,6 @@
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select trunc(a, 'MM') from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function trunc"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select unhex('-123')",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function unhex"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",

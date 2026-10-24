@@ -18,7 +18,8 @@ use krishiv_exec::physical::{
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
-    FrameBound, FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+    FrameBound, FrameUnits, GroupLimitPlan, RankLike, WindowFrame, WindowFunction,
+    WindowFunctionPlan, WindowPlan,
 };
 use krishiv_exec::{RowStageSettings, SortKey};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -274,6 +275,84 @@ pub(crate) fn window_aggregates() -> WindowPlan {
     }
 }
 
+/// Frames with offsets and to the partition's end.
+pub(crate) fn window_frames() -> WindowPlan {
+    let aggs = aggregate_exprs();
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::Aggregate(aggs[0].clone()),
+                rows(FrameBound::Offset(-2), FrameBound::Offset(3)),
+                "sliding",
+            ),
+            window_function(
+                WindowFunction::Aggregate(aggs[3].clone()),
+                WindowFrame {
+                    units: FrameUnits::Range,
+                    lower: FrameBound::CurrentRow,
+                    upper: FrameBound::UnboundedFollowing,
+                },
+                "rest",
+            ),
+        ],
+    }
+}
+
+/// `lag`/`lead` (with and without a default) and `nth_value`, over their
+/// offset frames.
+pub(crate) fn window_offset_values() -> WindowPlan {
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::Offset {
+                    input: 2,
+                    offset: -1,
+                    default: Some(0),
+                    ignore_nulls: true,
+                    data_type: arrow_schema::DataType::Int64,
+                },
+                rows(FrameBound::Offset(-1), FrameBound::Offset(-1)),
+                "lag",
+            ),
+            window_function(
+                WindowFunction::Offset {
+                    input: 2,
+                    offset: 2,
+                    default: None,
+                    ignore_nulls: false,
+                    data_type: arrow_schema::DataType::Utf8View,
+                },
+                rows(FrameBound::Offset(2), FrameBound::Offset(2)),
+                "lead",
+            ),
+            window_function(
+                WindowFunction::NthValue {
+                    input: 1,
+                    n: 3,
+                    ignore_nulls: true,
+                    data_type: arrow_schema::DataType::Float64,
+                },
+                rows(FrameBound::UnboundedPreceding, FrameBound::Offset(1)),
+                "nth",
+            ),
+        ],
+    }
+}
+
 pub(crate) fn residual() -> Residual {
     Residual {
         layout: vec![AttrId(1), AttrId(2), AttrId(3)],
@@ -304,6 +383,34 @@ fn join(join_type: JoinType) -> HashJoinPlan {
             },
         }],
         distribution: JoinDistribution::Broadcast,
+    }
+}
+
+/// `ROLLUP (a, b)` over a two-column input: the key columns are kept or
+/// nulled and the last column is the grouping id.
+fn expand_rollup() -> PhysNode {
+    let kept = |index, name: &str| ProjectItemPlan::Column {
+        index,
+        name: Some(name.to_owned()),
+    };
+    let nulled = |index, name: &str| ProjectItemPlan::NullOf {
+        index,
+        name: name.to_owned(),
+    };
+    let id = |n: i64| ProjectItemPlan::Expr {
+        name: "grouping_id".to_owned(),
+        expr: lit(Literal::Long(n)),
+    };
+    PhysNode::Expand {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        projections: vec![
+            vec![kept(0, "a"), kept(1, "b"), id(0)],
+            vec![kept(0, "a"), nulled(1, "b"), id(1)],
+            vec![nulled(0, "a"), nulled(1, "b"), id(3)],
+        ],
+        nullable: vec![true, true, false],
+        subqueries: Vec::new(),
     }
 }
 
@@ -383,6 +490,43 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 subqueries: vec![subquery()],
             },
         ),
+        ("expand_rollup", expand_rollup()),
+        (
+            "expand_single",
+            PhysNode::Expand {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                projections: vec![vec![ProjectItemPlan::Column {
+                    index: 0,
+                    name: None,
+                }]],
+                nullable: vec![false],
+                subqueries: Vec::new(),
+            },
+        ),
+        (
+            "expand_subquery",
+            PhysNode::Expand {
+                input: boxed(scan()),
+                layout: vec![AttrId(1), AttrId(2)],
+                projections: vec![
+                    vec![ProjectItemPlan::Expr {
+                        name: "shifted".to_owned(),
+                        expr: call(
+                            Builtin::Add,
+                            vec![col(1, "a", DataType::Integer), lit(Literal::Integer(1))],
+                            DataType::Integer,
+                        ),
+                    }],
+                    vec![ProjectItemPlan::NullOf {
+                        index: 0,
+                        name: "shifted".to_owned(),
+                    }],
+                ],
+                nullable: vec![true],
+                subqueries: vec![subquery()],
+            },
+        ),
         (
             "sort",
             PhysNode::Sort {
@@ -418,6 +562,20 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "window_frames",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_frames(),
+            },
+        ),
+        (
+            "window_offset_values",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_offset_values(),
+            },
+        ),
+        (
             "window_aggregates",
             PhysNode::Window {
                 input: boxed(PhysNode::Sort {
@@ -425,6 +583,24 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     keys: vec![SortKey::asc(0), SortKey::desc(1)],
                 }),
                 window: window_aggregates(),
+            },
+        ),
+        (
+            "window_group_limit",
+            PhysNode::Window {
+                input: boxed(PhysNode::WindowGroupLimit {
+                    input: boxed(PhysNode::Sort {
+                        input: boxed(scan()),
+                        keys: vec![SortKey::asc(0), SortKey::desc(1)],
+                    }),
+                    limit: GroupLimitPlan {
+                        partition_by: vec![0],
+                        order_by: vec![SortKey::desc(1)],
+                        function: RankLike::DenseRank,
+                        limit: 3,
+                    },
+                }),
+                window: window_ranking(),
             },
         ),
         (
@@ -446,6 +622,27 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 residual: None,
                 runtime_filters: Vec::new(),
                 ..join(JoinType::NullAwareAnti)
+            }),
+        ),
+        (
+            "hash_join_right_semi",
+            PhysNode::HashJoin(HashJoinPlan {
+                distribution: JoinDistribution::Partitioned,
+                ..join(JoinType::RightSemi)
+            }),
+        ),
+        (
+            "hash_join_right_anti",
+            PhysNode::HashJoin(HashJoinPlan {
+                distribution: JoinDistribution::Partitioned,
+                ..join(JoinType::RightAnti)
+            }),
+        ),
+        (
+            "hash_join_right_outer",
+            PhysNode::HashJoin(HashJoinPlan {
+                distribution: JoinDistribution::Partitioned,
+                ..join(JoinType::RightOuter)
             }),
         ),
         (

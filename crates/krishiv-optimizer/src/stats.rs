@@ -2,7 +2,8 @@
 //! Table statistics and cardinality estimates.
 //!
 //! Estimates follow the textbook independence assumptions: a predicate's
-//! selectivity is `1 / NDV` for an equality with a literal, the covered
+//! selectivity is `1 / NDV` for an equality with a literal (when the
+//! column's distinct count is known, else [`DEFAULT_SELECTIVITY`]), the covered
 //! fraction of `[min, max]` for a range, `1 / max(NDV)` for an equi-join,
 //! and [`DEFAULT_SELECTIVITY`] when nothing better is known; conjunctions
 //! multiply and disjunctions add. Without statistics a table holds
@@ -77,8 +78,11 @@ pub fn estimated_rows(plan: &Arc<LogicalPlan>, stats: &dyn Statistics) -> f64 {
 /// What is known of one attribute.
 #[derive(Debug, Clone)]
 pub(crate) struct Col {
-    /// Distinct non-null values, at least 1.
+    /// Distinct non-null values, at least 1. Without statistics, every
+    /// value is taken as distinct (`ndv` = rows).
     pub(crate) ndv: f64,
+    /// Whether `ndv` comes from statistics rather than that assumption.
+    pub(crate) ndv_known: bool,
     /// The fraction of rows that are null.
     pub(crate) nulls: f64,
     /// Bounds, as numbers on one scale.
@@ -114,6 +118,7 @@ impl Est {
 fn distinct(rows: f64) -> Col {
     Col {
         ndv: rows.max(1.0),
+        ndv_known: false,
         nulls: 0.0,
         range: None,
     }
@@ -241,6 +246,115 @@ impl<'a> Estimator<'a> {
             // Each distinct row of an `INTERSECT ALL` / `EXCEPT ALL` count:
             // no count is known, the input's rows bound it from below.
             | PlanNode::ReplicateRows { input, .. } => Est::clone(&self.plan(input)),
+            // Every input row once per projection.
+            PlanNode::Expand {
+                input,
+                projections,
+                output,
+            } => {
+                let est = Est::clone(&self.plan(input));
+                let rows = est.rows * to_f64(u64::try_from(projections.len()).unwrap_or(u64::MAX));
+                let rows = rows.max(1.0);
+                if projections.is_empty()
+                    || output.is_empty()
+                    || projections.iter().any(|p| p.len() != output.len())
+                {
+                    return est.with_rows(rows);
+                }
+                let per = est.rows;
+                let mut cols = HashMap::with_capacity(output.len());
+                for (j, out) in output.iter().enumerate() {
+                    let mut null_rows = 0.0;
+                    let mut col_id: Option<AttrId> = None;
+                    let mut mixed = false;
+                    let mut literals: Vec<&Literal> = Vec::new();
+                    let mut other = false;
+                    // Whether every input column's count comes from
+                    // statistics (literals are counted exactly).
+                    let mut known = true;
+                    for proj in projections.iter() {
+                        let s = strip_alias(&proj[j]);
+                        match &s.node {
+                            ExprNode::Literal(Literal::Null(_)) => null_rows += per,
+                            ExprNode::Literal(l) => {
+                                if col_id.is_some() {
+                                    mixed = true;
+                                }
+                                if !literals.contains(&l) {
+                                    literals.push(l);
+                                }
+                            }
+                            ExprNode::Resolved(
+                                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c),
+                            ) => match est.cols.get(&c.id) {
+                                Some(col) => {
+                                    null_rows += col.nulls * per;
+                                    known &= col.ndv_known;
+                                    match col_id {
+                                        None => col_id = Some(c.id),
+                                        Some(id) if id == c.id => {}
+                                        Some(_) => mixed = true,
+                                    }
+                                    if !literals.is_empty() {
+                                        mixed = true;
+                                    }
+                                }
+                                None => other = true,
+                            },
+                            _ => other = true,
+                        }
+                    }
+                    let nulls = (null_rows / rows).clamp(0.0, 1.0);
+                    let distinct_literals = to_f64(u64::try_from(literals.len()).unwrap_or(u64::MAX));
+                    let ndv = if other {
+                        rows
+                    } else if let Some(id) = col_id {
+                        let base = if mixed {
+                            // Different input columns (or columns plus
+                            // literals): at most their sum.
+                            let mut seen = Vec::new();
+                            let mut sum = 0.0;
+                            for proj in projections.iter() {
+                                let s = strip_alias(&proj[j]);
+                                if let ExprNode::Resolved(
+                                    ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c),
+                                ) = &s.node
+                                    && !seen.contains(&c.id)
+                                {
+                                    seen.push(c.id);
+                                    sum += est.cols.get(&c.id).map(|c| c.ndv).unwrap_or(per);
+                                }
+                            }
+                            sum + distinct_literals
+                        } else if literals.is_empty() {
+                            est.cols.get(&id).map(|c| c.ndv).unwrap_or(per)
+                        } else {
+                            est.cols.get(&id).map(|c| c.ndv).unwrap_or(per) + distinct_literals
+                        };
+                        base.clamp(1.0, rows)
+                    } else if literals.is_empty() {
+                        // Every projection is NULL.
+                        1.0
+                    } else {
+                        distinct_literals.clamp(1.0, rows)
+                    };
+                    let range = if !mixed && !other && literals.is_empty() {
+                        col_id.and_then(|id| est.cols.get(&id).and_then(|c| c.range))
+                    } else {
+                        None
+                    };
+                    cols.insert(
+                        out.id,
+                        Col {
+                            ndv: ndv.clamp(1.0, rows),
+                            ndv_known: known && !other,
+                            nulls,
+                            range,
+                        },
+                    );
+                }
+                Est { rows, cols }
+            }
             PlanNode::Union { inputs, .. } => {
                 let rows = inputs.iter().map(|i| self.plan(i).rows).sum();
                 Est::unknown(rows, ids())
@@ -285,6 +399,7 @@ impl<'a> Estimator<'a> {
                 let s = stats.columns.get(&c.name).cloned().unwrap_or_default();
                 let col = Col {
                     ndv: s.distinct.map_or(rows, to_f64).clamp(1.0, rows),
+                    ndv_known: s.distinct.is_some(),
                     nulls: s.nulls.map_or(0.0, |n| (to_f64(n) / rows).min(1.0)),
                     range: s
                         .min
@@ -327,6 +442,10 @@ fn column_ndv(e: &Expr, est: &Est) -> Option<f64> {
     column(e, est).map(|c| c.ndv)
 }
 
+fn is_null_literal(e: &Expr) -> bool {
+    matches!(literal(e), Some(Literal::Null(_)))
+}
+
 fn literal(e: &Expr) -> Option<&Literal> {
     match &e.node {
         ExprNode::Literal(l) => Some(l),
@@ -358,10 +477,27 @@ pub(crate) fn selectivity(pred: &Expr, est: &Est) -> f64 {
             x + y - x * y
         }
         (Some((Builtin::Not, [a], _)), _) => 1.0 - selectivity(a, est),
+        // `c <=> NULL` holds exactly where `c` is NULL, as `c IS NULL`.
+        (Some((Builtin::EqNullSafe, [a, b], _)), _) if is_null_literal(a) || is_null_literal(b) => {
+            let c = if is_null_literal(a) { b } else { a };
+            column(c, est).map_or(DEFAULT_SELECTIVITY, |c| c.nulls)
+        }
         (Some((Builtin::Eq | Builtin::EqNullSafe, [a, b], _)), _) => {
             match (column(a, est), column(b, est)) {
                 (Some(x), Some(y)) => 1.0 / x.ndv.max(y.ndv),
-                (Some(x), None) | (None, Some(x)) => 1.0 / x.ndv,
+                // `col = literal`: one value of the column's. Without a
+                // distinct count, `1 / rows` would claim every value is
+                // unique (one matching row); a low-cardinality column
+                // (`l_returnflag = 'R'`) would then look tiny and be
+                // built.
+                (Some(x), None) | (None, Some(x)) => {
+                    let with_literal = literal(a).is_some() || literal(b).is_some();
+                    if with_literal && !x.ndv_known {
+                        DEFAULT_SELECTIVITY
+                    } else {
+                        1.0 / x.ndv
+                    }
+                }
                 (None, None) => DEFAULT_SELECTIVITY,
             }
         }
@@ -376,8 +512,8 @@ pub(crate) fn selectivity(pred: &Expr, est: &Est) -> f64 {
             }
         }
         (Some((Builtin::In, [v, list @ ..], _)), _) => match column(v, est) {
-            Some(c) => to_f64(u64::try_from(list.len()).unwrap_or(u64::MAX)) / c.ndv,
-            None => DEFAULT_SELECTIVITY,
+            Some(c) if c.ndv_known => to_f64(u64::try_from(list.len()).unwrap_or(u64::MAX)) / c.ndv,
+            _ => DEFAULT_SELECTIVITY,
         },
         (Some((Builtin::IsNull, [a], _)), _) => {
             column(a, est).map_or(DEFAULT_SELECTIVITY, |c| c.nulls)

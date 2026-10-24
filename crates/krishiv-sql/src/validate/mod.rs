@@ -21,6 +21,9 @@
 //! | `NATURAL JOIN LATERAL`, `JOIN LATERAL ... USING` | `INCOMPATIBLE_JOIN_TYPES`, `UNSUPPORTED_FEATURE.LATERAL_JOIN_USING` |
 //! | `VALUES` rows of different widths | `INVALID_INLINE_TABLE.NUM_COLUMNS_MISMATCH` |
 //! | `()` in `ROLLUP` / `CUBE` | `_LEGACY_ERROR_TEMP_0051` |
+//! | a `CREATE TABLE` column descriptor or clause written twice | `CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE`, `DUPLICATE_CLAUSES` |
+//! | a repeated or zero identity option | `IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION`, `IDENTITY_COLUMNS_ILLEGAL_STEP` |
+//! | `SKEWED BY`; a CTAS with a schema or typed partition columns | `INVALID_STATEMENT_OR_CLAUSE`, `_LEGACY_ERROR_TEMP_0035` |
 //!
 //! Not checked here: an inline table whose expressions fail when Spark
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
@@ -33,20 +36,24 @@ mod types;
 use std::collections::HashSet;
 
 use krishiv_common::error::{
-    DuplicatedCteNames, IncompatibleJoinTypes, InvalidInlineTableNumColumnsMismatch,
-    InvalidParameterValueDatetimeUnit, InvalidSqlSyntaxEmptyInPredicate,
-    InvalidSqlSyntaxInvalidWindowReference, InvalidSqlSyntaxRepetitiveWindowDefinition,
-    InvalidSqlSyntaxUnresolvedWindowReference, KrishivError, LegacyErrorTemp0035,
-    LegacyErrorTemp0051, LegacyErrorTemp0064, UnsupportedFeatureLateralJoinUsing,
+    CreateTableColumnDescriptorDuplicate, DuplicateClauses, DuplicatedCteNames,
+    IdentityColumnsDuplicatedSequenceGeneratorOption, IdentityColumnsIllegalStep,
+    IncompatibleJoinTypes, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
+    InvalidSqlSyntaxEmptyInPredicate, InvalidSqlSyntaxInvalidWindowReference,
+    InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxUnresolvedWindowReference,
+    InvalidStatementOrClause, KrishivError, LegacyErrorTemp0035, LegacyErrorTemp0051,
+    LegacyErrorTemp0064, UnsupportedFeatureLateralJoinUsing,
 };
 
 pub(crate) use self::types::data_type;
 use crate::ParserOptions;
 use crate::ast::{
-    Expr, ExprKind, FrameBoundKind, FromClause, Function, GroupBy, GroupItem, GroupItemKind,
-    GroupWith, GroupingSet, Join, JoinConstraint, Literal, NamedWindow, NumKind, Query, Relation,
-    RelationExt, Select, SelectItem, SetExpr, SetExprKind, SortItem, Span, Statement, StructField,
-    TableAlias, TableFactor, TableFactorKind, WindowRef, WindowSpec, With,
+    ColumnConstraintKind, ColumnDef, ColumnName, CreateTable, DdlName, Expr, ExprKind,
+    FrameBoundKind, FromClause, Function, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
+    GroupWith, GroupingSet, Join, JoinConstraint, Literal, NamedWindow, NumKind,
+    PartitionFieldKind, Query, Relation, RelationExt, Select, SelectItem, SetExpr, SetExprKind,
+    SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind, TableElement,
+    TableFactor, TableFactorKind, WindowRef, WindowSpec, With,
 };
 use crate::error::ParseError;
 use crate::lexer::tokenize;
@@ -65,11 +72,20 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
     match s {
         Statement::Query(q) => query(q, sql, opts),
         Statement::Explain(e) => statement(&e.statement, sql, opts),
-        // Assignments and resets carry raw strings, and drops name one
-        // view: nothing Spark's builder checks. A created view's query is
-        // checked as a statement of its own.
-        Statement::Set(_) | Statement::Reset(_) | Statement::DropView(_) => Ok(()),
+        // Assignments and resets carry raw strings; drops, namespaces and
+        // `USE` name one object: nothing Spark's builder checks. A created
+        // view's query, and a CTAS query, are checked as statements of
+        // their own; `TABLE ... LIKE` names two tables.
+        Statement::Set(_)
+        | Statement::Reset(_)
+        | Statement::DropView(_)
+        | Statement::DropTable(_)
+        | Statement::CreateNamespace(_)
+        | Statement::DropNamespace(_)
+        | Statement::Use(_)
+        | Statement::CreateTableLike(_) => Ok(()),
         Statement::CreateView(v) => query(&v.query, sql, opts),
+        Statement::CreateTable(t) => Checker { sql, opts }.create_table(t),
     }
 }
 
@@ -81,6 +97,12 @@ pub(crate) fn query(q: &Query, sql: &str, opts: ParserOptions) -> R {
 /// Checks the column types of a table schema.
 pub(crate) fn columns(columns: &[StructField]) -> R {
     columns.iter().try_for_each(|c| data_type(&c.data_type))
+}
+
+/// Checks one named-expression string (`F.expr`, `selectExpr` once per
+/// argument string, `filter`/`where` strings); `sql` is its text.
+pub(crate) fn expression(e: &Expr, sql: &str, opts: ParserOptions) -> R {
+    Checker { sql, opts }.expr(e)
 }
 
 /// Functions whose first argument is a `datetimeUnit`: a string there is
@@ -101,6 +123,156 @@ struct Checker<'a> {
 }
 
 impl Checker<'_> {
+    /// `CREATE TABLE`, in the order Spark's builder visits it: the name,
+    /// the column definitions and table constraints, the clauses (their
+    /// duplicates first, then `SKEWED BY`, then their contents), the CTAS
+    /// query, and last the CTAS restrictions.
+    fn create_table(&self, t: &CreateTable) -> R {
+        self.ddl_name(&t.name)?;
+        for element in &t.elements {
+            match element {
+                TableElement::Column(c) => self.column_def(c, t.span)?,
+                TableElement::Constraint(c) => {
+                    if let TableConstraintKind::Check(e) = &c.kind {
+                        self.expr(e)?;
+                    }
+                }
+            }
+        }
+        if let Some(clause) = t.duplicate_clause {
+            return Err(at(
+                DuplicateClauses {
+                    clause_name: clause.to_owned(),
+                },
+                t.span,
+            ));
+        }
+        if t.skew.is_some() {
+            return Err(at(
+                InvalidStatementOrClause {
+                    operation: "CREATE TABLE ... SKEWED BY".to_owned(),
+                },
+                t.span,
+            ));
+        }
+        for field in &t.partitioned_by {
+            match &field.kind {
+                PartitionFieldKind::Column(c) => {
+                    self.column_name(&c.name)?;
+                    data_type(&c.data_type)?;
+                }
+                PartitionFieldKind::Transform(f) => {
+                    self.ddl_name(&f.name)?;
+                    f.args.iter().try_for_each(|e| self.expr(e))?;
+                }
+            }
+        }
+        t.options
+            .iter()
+            .chain(&t.tblproperties)
+            .filter_map(|o| o.value.as_ref())
+            .try_for_each(|e| self.expr(e))?;
+        let Some(q) = &t.as_query else {
+            return Ok(());
+        };
+        self.query(q)?;
+        let ctas = |message: &str| {
+            Err(at(
+                LegacyErrorTemp0035 {
+                    message: message.to_owned(),
+                },
+                t.span,
+            ))
+        };
+        if !t.elements.is_empty() {
+            return ctas(
+                "Schema may not be specified in a Create Table As Select (CTAS) statement",
+            );
+        }
+        if t.partitioned_by
+            .iter()
+            .any(|f| matches!(f.kind, PartitionFieldKind::Column(_)))
+        {
+            return ctas(
+                "Partition column types may not be specified in Create Table As Select (CTAS)",
+            );
+        }
+        Ok(())
+    }
+
+    /// One `CREATE TABLE` column (`statement` is the statement's span, where
+    /// Spark reports the errors): its name, its type, a repeated descriptor,
+    /// its default, generation and constraint expressions.
+    fn column_def(&self, c: &ColumnDef, statement: Span) -> R {
+        self.column_name(&c.name)?;
+        data_type(&c.data_type)?;
+        if let Some(option) = c.duplicate_descriptor {
+            return Err(at(
+                CreateTableColumnDescriptorDuplicate {
+                    column_name: self.column_label(&c.name),
+                    option_name: option.to_owned(),
+                },
+                statement,
+            ));
+        }
+        if let Some(e) = &c.default {
+            self.expr(e)?;
+        }
+        match c.generated.as_ref().map(|g| &g.kind) {
+            Some(GeneratedKind::Expr(e)) => self.expr(e)?,
+            Some(GeneratedKind::Identity(i)) => {
+                if let Some(option) = i.duplicate_option {
+                    return Err(at(
+                        IdentityColumnsDuplicatedSequenceGeneratorOption {
+                            sequence_generator_option: option.to_owned(),
+                        },
+                        statement,
+                    ));
+                }
+                if i.step == Some(0) {
+                    return Err(at(IdentityColumnsIllegalStep {}, statement));
+                }
+            }
+            _ => {}
+        }
+        c.constraints.iter().try_for_each(|k| match &k.kind {
+            ColumnConstraintKind::Check(e) => self.expr(e),
+            _ => Ok(()),
+        })
+    }
+
+    /// The expression of an `IDENTIFIER(...)` name.
+    fn ddl_name(&self, name: &DdlName) -> R {
+        match name {
+            DdlName::Dynamic(d) => self.expr(&d.expr),
+            _ => Ok(()),
+        }
+    }
+
+    /// The expression of an `IDENTIFIER(...)` column name.
+    fn column_name(&self, name: &ColumnName) -> R {
+        match name {
+            ColumnName::Dynamic(d) => self.expr(&d.expr),
+            _ => Ok(()),
+        }
+    }
+
+    /// A column's name as Spark's errors show it: the identifier, the
+    /// string of `IDENTIFIER('name')`, or else the expression's text.
+    fn column_label(&self, name: &ColumnName) -> String {
+        match name {
+            ColumnName::Ident(i) => i.value.clone(),
+            ColumnName::Dynamic(d) => match &d.expr.kind {
+                ExprKind::Literal(Literal::String(s)) => s.clone(),
+                _ => self
+                    .sql
+                    .get(d.expr.span.range())
+                    .unwrap_or_default()
+                    .to_owned(),
+            },
+        }
+    }
+
     fn query(&self, q: &Query) -> R {
         self.set_expr(&q.body)?;
         self.sort_items(&q.order_by)?;

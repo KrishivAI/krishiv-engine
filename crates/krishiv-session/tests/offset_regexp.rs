@@ -414,3 +414,58 @@ fn offset_edge_cases_match_spark() {
         assert_eq!(e.error_class(), class, "{tail}: {}", e.message());
     }
 }
+
+/// The `regexp-functions.sql` goldens (Spark 4.2.0) end to end.
+#[test]
+fn regexp_functions_in_sql() {
+    let s = session();
+    let one = |sql: &str| strings(&s, sql).remove(0);
+    // `rlike` is the `RLIKE` operator; `regexp` and `regexp_like` are
+    // registry functions over the same kernel.
+    for f in ["rlike", "regexp", "regexp_like"] {
+        assert_eq!(
+            one(&format!(
+                "SELECT CAST({f}('1a 2b 14m', '\\\\d+b') AS STRING)"
+            ))
+            .as_deref(),
+            Some("true"),
+            "{f}"
+        );
+        assert_eq!(
+            one(&format!(
+                "SELECT CAST({f}('1a 2b 14m', '[a-z]+b') AS STRING)"
+            ))
+            .as_deref(),
+            Some("false"),
+            "{f}"
+        );
+    }
+    assert_eq!(
+        one("SELECT regexp_extract('1a 2b 14m', '(\\\\d+)([a-z]+)', 2)").as_deref(),
+        Some("a")
+    );
+    assert_eq!(
+        one("SELECT CAST(regexp_count('1a 2b 14m', '\\\\d+') AS STRING)").as_deref(),
+        Some("3")
+    );
+    assert_eq!(
+        one("SELECT CAST(regexp_instr('1a 2b 14m', '\\\\d{2}(a|b|m)') AS STRING)").as_deref(),
+        Some("7")
+    );
+    assert_eq!(
+        one("SELECT regexp_substr('1a 2b 14m', '\\\\d+(a|b|m)')").as_deref(),
+        Some("1a")
+    );
+    for (sql, class) in [
+        (
+            "SELECT regexp_extract('1a 2b 14m', '\\\\d+')",
+            "INVALID_PARAMETER_VALUE.REGEX_GROUP_INDEX",
+        ),
+        (
+            "SELECT regexp_instr('abc', ') ?')",
+            "INVALID_PARAMETER_VALUE.PATTERN",
+        ),
+    ] {
+        assert_eq!(fails(&s, sql).error_class().name(), class, "{sql}");
+    }
+}

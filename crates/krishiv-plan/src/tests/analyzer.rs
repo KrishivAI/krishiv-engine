@@ -26,8 +26,8 @@ use crate::analyzer::{
 };
 use crate::walk::{Node, visit_distinct};
 use crate::{
-    ColumnRef, Cte, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan,
-    MAX_DEPTH, Origin, Plan, PlanId, PlanNode, ReadSource, SourceId, SqlArgs, Star, TableVersion,
+    ColumnRef, Cte, Expr, ExprNode, JoinCondition, JoinKind, Literal, LogicalPlan, MAX_DEPTH,
+    Origin, Plan, PlanId, PlanNode, ReadSource, SourceId, SqlArgs, Star, TableVersion,
 };
 
 fn goldens() -> Value {
@@ -306,9 +306,35 @@ fn plan_id_references_resolve_as_spark_connect_does() {
     assert!(raised.contains("AMBIGUOUS_COLUMN_REFERENCE"));
 }
 
+/// `TIMESTAMP` and `TIMESTAMP_NTZ` literals are named as Spark's
+/// `Literal.sql` prints them (`SELECT TIMESTAMP '2024-01-01 00:00:00'` in
+/// Spark 4.2); SQL does not lower timestamp literals yet, so the plan is
+/// built by hand.
+#[test]
+fn timestamp_literals_are_named_as_spark_sql() {
+    let lit = |v: Literal| Expr::from(v);
+    let r = run(
+        LogicalPlan::table(["t"]).project(vec![
+            lit(Literal::Timestamp(1_704_067_200_000_000)),
+            lit(Literal::TimestampNtz(1_704_067_200_123_456)),
+            lit(Literal::Timestamp(-1)),
+        ]),
+        &ctx(),
+    );
+    let names: Vec<String> = r.unwrap().output.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(
+        names,
+        [
+            "TIMESTAMP '2024-01-01 00:00:00'",
+            "TIMESTAMP_NTZ '2024-01-01 00:00:00.123456'",
+            "TIMESTAMP '1969-12-31 23:59:59.999999'",
+        ]
+    );
+}
+
 /// The select list of the generated-names statement of the corpus.
 fn names_query() -> Vec<Expr> {
-    use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Negative, Remainder, Subtract};
+    use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Remainder, Subtract};
     let lit = |v: Literal| Expr::from(v);
     let date = lit(Literal::Date(18263));
     let decimal = lit(Literal::Decimal {
@@ -318,7 +344,9 @@ fn names_query() -> Vec<Expr> {
     let op = |b, args| Expr::builtin(b, args);
     vec![
         add(c("a"), int(1)),
-        op(Negative, vec![c("a")]),
+        // Unary `-` lowers as `"-"` (see `builtin_op`): the function
+        // `negative(x)` is a registry function instead.
+        Expr::function("-", vec![c("a")]),
         eq(c("a"), int(1)),
         op(crate::Builtin::Not, vec![eq(c("a"), int(1))]),
         op(crate::Builtin::Not, vec![eq(c("a"), int(1))]),
@@ -1347,6 +1375,23 @@ fn resolution_reads_only_its_configs() {
         ResolutionConf::from_conf(|_| None),
         ResolutionConf::default()
     );
+    // The timestamp type and session zone flow through `from_conf`: unset
+    // is UTC, fixed offsets resolve, regions and malformed zones are `None`.
+    let ntz =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.timestampType").then_some("TIMESTAMP_NTZ"));
+    assert!(ntz.timestamp_ntz);
+    assert_eq!(ntz.session_zone, Some(0));
+    let plus =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("+05:30"));
+    assert_eq!(plus.session_zone, Some(19_800));
+    assert!(!plus.timestamp_ntz);
+    let region = ResolutionConf::from_conf(|k| {
+        (k == "spark.sql.session.timeZone").then_some("America/Los_Angeles")
+    });
+    assert_eq!(region.session_zone, None);
+    let bad =
+        ResolutionConf::from_conf(|k| (k == "spark.sql.session.timeZone").then_some("Mars/Base"));
+    assert_eq!(bad.session_zone, None);
     // Analysis has no configuration source besides `AnalysisContext::conf`
     // (the type holds none): the same context gives the same result.
     let c = ctx();
@@ -1423,13 +1468,8 @@ fn unsupported_inputs_fail_explicitly() {
         paths: vec![krishiv_common::secret::OptionValue::from_user("path", "/d")],
         options: std::collections::BTreeMap::new(),
     }));
-    let rollup = LogicalPlan::new(PlanNode::Aggregate {
-        input: Arc::new(LogicalPlan::table(["t"])),
-        grouping: Grouping::Rollup(vec![Arc::new(c("a"))]),
-        aggregates: vec![Arc::new(c("a"))],
-    });
     let sha = LogicalPlan::table(["t"]).project(vec![Expr::function("factorial", vec![c("b")])]);
-    for plan in [files, rollup, sha] {
+    for plan in [files, sha] {
         assert_eq!(class(&run(plan, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
     }
     // An untyped NULL is the void type; an interval is not supported yet.
@@ -1909,6 +1949,150 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
     );
     // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
     assert!(try_add.output[0].nullable);
+}
+
+/// Typed datetime literals resolve in the analyzer with the session zone.
+#[test]
+fn typed_literals_resolve_with_the_session_zone() {
+    use crate::{ExprNode, Literal, LogicalPlan, Plan, PlanNode, ResolvedExpr, TypedLiteralKind};
+    let project = |kind: TypedLiteralKind, value: &str, conf: ResolutionConf| {
+        let expr = Expr::new(ExprNode::TypedLiteral {
+            kind,
+            value: value.to_owned(),
+        });
+        let plan = LogicalPlan::new(crate::PlanNode::Project {
+            input: std::sync::Arc::new(LogicalPlan::new(crate::PlanNode::OneRowRelation)),
+            exprs: vec![std::sync::Arc::new(expr)],
+        });
+        let plan = Plan::try_new(plan).unwrap();
+        let ctx = context(MemoryCatalog::new("spark_catalog"), conf);
+        block_on(DefaultAnalyzer.analyze(&plan, &ctx))
+    };
+    // The instant a one-column project holds, unwrapping its alias.
+    let micros_of = |plan: &LogicalPlan| {
+        let PlanNode::Project { exprs, .. } = &plan.node else {
+            panic!("not a project: {plan}");
+        };
+        let inner = match &exprs[0].node {
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+            ExprNode::Literal(_) => &exprs[0],
+            other => panic!("not a literal: {other:?}"),
+        };
+        match &inner.node {
+            ExprNode::Literal(Literal::Timestamp(v)) => *v,
+            other => panic!("not a timestamp: {other:?}"),
+        }
+    };
+    let utc = ResolutionConf {
+        session_zone: Some(0),
+        ..ResolutionConf::default()
+    };
+    let plus = ResolutionConf {
+        session_zone: Some(19_800),
+        ..ResolutionConf::default()
+    };
+    let ntz_conf = ResolutionConf {
+        timestamp_ntz: true,
+        session_zone: Some(0),
+        ..ResolutionConf::default()
+    };
+    let region = ResolutionConf {
+        session_zone: None,
+        ..ResolutionConf::default()
+    };
+    // Plain `TIMESTAMP` is an instant by default, wall-clock under NTZ.
+    let a = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", utc).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 10:00:00'");
+    let a = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", ntz_conf).unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp_ntz");
+    assert_eq!(a.output[0].name, "TIMESTAMP_NTZ '2024-01-01 10:00:00'");
+    // An explicit zone stays an instant under NTZ and ignores the session.
+    let a = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+05:30",
+        ntz_conf,
+    )
+    .unwrap();
+    assert_eq!(a.output[0].data_type.simple_string(), "timestamp");
+    // The session zone moves wall-clock instants (`+05:30` is 04:30 UTC):
+    // Spark 4.2 gives 1_704_103_200_000_000 µs in UTC and
+    // 1_704_083_400_000_000 µs in +05:30.
+    let utc_plan = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", utc).unwrap();
+    let plus_plan = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", plus).unwrap();
+    assert_eq!(micros_of(utc_plan.plan.root()), 1_704_103_200_000_000);
+    assert_eq!(micros_of(plus_plan.plan.root()), 1_704_083_400_000_000);
+    let a = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+00:00",
+        plus,
+    )
+    .unwrap();
+    assert_eq!(a.output[0].name, "TIMESTAMP '2024-01-01 15:30:00'");
+    // `DATE` resolves without a zone.
+    let a = project(TypedLiteralKind::Date, "2016-03-12", utc).unwrap();
+    assert_eq!(a.output[0].name, "DATE '2016-03-12'");
+    assert_eq!(a.output[0].data_type.simple_string(), "date");
+    // Malformed text is `INVALID_TYPED_LITERAL`.
+    for (kind, value) in [
+        (TypedLiteralKind::Timestamp, "2024-13-01 10:00:00"),
+        (TypedLiteralKind::TimestampNtz, "10:00"),
+        (TypedLiteralKind::Date, "2020-02-30"),
+        (TypedLiteralKind::Date, "not-a-date"),
+        (TypedLiteralKind::Date, "10:00"),
+    ] {
+        let e = project(kind, value, utc).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidTypedLiteral,
+            "{value}"
+        );
+    }
+    // Clock-dependent spellings need the query clock.
+    for (kind, value) in [
+        (TypedLiteralKind::Timestamp, "now"),
+        (TypedLiteralKind::TimestampLtz, "10:00"),
+        (TypedLiteralKind::Timestamp, "10:00"),
+    ] {
+        let e = project(kind, value, utc).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{value}"
+        );
+    }
+    // A region session serves explicit zones but not wall-clock time.
+    project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00+05:30",
+        region,
+    )
+    .unwrap();
+    let e = project(TypedLiteralKind::Timestamp, "2024-01-01 10:00:00", region).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // A region id in the value needs the time-zone database.
+    let e = project(
+        TypedLiteralKind::Timestamp,
+        "2024-01-01 10:00:00 America/Los_Angeles",
+        utc,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
+
+/// A conditional with `FILTER` names the filter once: the shown call takes
+/// only the function's own arguments, not the filter child.
+#[test]
+fn conditional_with_filter_names_the_filter_once() {
+    let ctx = ctx();
+    let call = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "nvl".to_owned(),
+        args: vec![Arc::new(c("a")), Arc::new(int(1))],
+        distinct: false,
+        filter: Some(Arc::new(eq(c("b"), s("x")))),
+    }));
+    let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
+    assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");
 }
 
 /// Built-in functions plus `rand`, a nondeterministic `DOUBLE` function as

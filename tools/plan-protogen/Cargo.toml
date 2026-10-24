@@ -13,6 +13,7 @@ publish = false
 
 [dependencies]
 prost-build = "0.14.4"
+prost-types = "0.14.4"
 protox = "0.9"
 
 [workspace]

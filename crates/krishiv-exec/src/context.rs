@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
     Config, EXEC_AGG_ROW_LAYOUT, EXEC_BATCH_SIZE, EXEC_JOIN_RADIX_BITS, EXEC_JOIN_ROW_LAYOUT,
+    EXEC_SORT_HASH_BUCKETS,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{
@@ -42,7 +43,8 @@ pub struct ExecConfig {
     /// batch; provisional 10 ms, recorded with the batch size).
     pub stall_threshold: Duration,
     /// Fail the query with `INTERNAL_ERROR` on a stall instead of only
-    /// counting it (tests and CI).
+    /// counting it (tests and CI). A slice then leaves out the time its
+    /// thread waited on a run queue, so machine load cannot make a stall.
     pub fail_on_stall: bool,
     /// Seeds morsel order (deterministic test mode); `None` claims morsels
     /// in order.
@@ -60,6 +62,9 @@ pub struct ExecConfig {
     /// Level-0 radix bits of a row-layout join build
     /// (`krishiv.exec.join.radixBits`, 3 to 6).
     pub join_radix_bits: u32,
+    /// A sort below a window splits its rows into hash buckets read in
+    /// parallel (`krishiv.exec.sort.hashBuckets`; P2-T055).
+    pub sort_hash_buckets: bool,
 }
 
 impl Default for ExecConfig {
@@ -75,6 +80,7 @@ impl Default for ExecConfig {
             detailed_metrics: false,
             join_row_layout: false,
             join_radix_bits: 3,
+            sort_hash_buckets: true,
         }
     }
 }
@@ -101,8 +107,13 @@ impl ExecConfig {
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .and_then(|n| u32::try_from(n.clamp(3, 6)).ok())
             .unwrap_or(3);
+        let sort_hash_buckets = config
+            .get(&EXEC_SORT_HASH_BUCKETS)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
         Self {
             batch_size,
+            sort_hash_buckets,
             agg_row_layout,
             join_row_layout,
             join_radix_bits,

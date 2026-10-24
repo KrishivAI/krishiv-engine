@@ -156,12 +156,14 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
                 | PlanNode::JoinHint { .. }
+                | PlanNode::Expand { .. }
                 | PlanNode::Window { .. }
                 | PlanNode::ReplicateRows { .. } => true,
             },
             Node::Expr(e) => match &e.node {
                 ExprNode::Column(_)
                 | ExprNode::Star(_)
+                | ExprNode::TypedLiteral { .. }
                 | ExprNode::Function(_)
                 | ExprNode::Alias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
@@ -266,6 +268,12 @@ impl Teardown {
                 self.plans.push(input);
                 self.exprs.push(e);
             }
+            PlanNode::Expand {
+                input, projections, ..
+            } => {
+                self.plans.push(input);
+                self.exprs.extend(projections.into_iter().flatten());
+            }
             PlanNode::Aggregate {
                 input,
                 grouping,
@@ -336,6 +344,7 @@ impl Teardown {
         match node {
             ExprNode::Column(_)
             | ExprNode::Literal(_)
+            | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
             | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })

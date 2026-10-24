@@ -3,13 +3,14 @@
 //! (when the result is deterministic) the same rows as the unoptimised plan
 //! on generated data.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::ErrorClass;
-use krishiv_optimizer::{TopN, optimize};
+use krishiv_optimizer::{ColumnStats, Statistics, TableStats, TopN, optimize, optimize_with};
 use krishiv_plan::{
     Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, LogicalPlan, Plan, PlanNode,
-    ResolvedExpr, ResolvedFunction,
+    ResolvedExpr, ResolvedFunction, Scan,
 };
 use krishiv_types::DataType;
 
@@ -398,6 +399,23 @@ const CASES: &[(&str, &str)] = &[
         "prune_exists",
         "SELECT a FROM t WHERE EXISTS (SELECT * FROM u WHERE u.a = t.a)",
     ),
+    // Grouping sets: the expansion keeps what the aggregate reads.
+    (
+        "expand_rollup",
+        "SELECT a, sum(c) FROM t GROUP BY ROLLUP(a, b)",
+    ),
+    (
+        "expand_cube_pruned",
+        "SELECT count(*) FROM t GROUP BY CUBE(a, b)",
+    ),
+    (
+        "expand_grouping_sets",
+        "SELECT a, grouping(a), grouping_id(a, b), sum(c) FROM t WHERE c > 1 GROUP BY GROUPING SETS ((a), (b), ())",
+    ),
+    (
+        "expand_duplicate_sets",
+        "SELECT a, sum(c) FROM t GROUP BY GROUPING SETS ((a), (a))",
+    ),
 ];
 
 #[test]
@@ -405,13 +423,13 @@ fn rules() {
     let ctx = support::ctx();
     for (name, sql) in CASES {
         let plan = support::resolve(sql, &ctx);
-        let optimized = optimize(&plan).unwrap();
+        let optimized = optimize_with(&plan, &support::AllDistinct).unwrap();
         assert_eq!(
             optimized.root().resolved_output(),
             plan.root().resolved_output(),
             "{name} keeps its output"
         );
-        let again = optimize(&optimized).unwrap();
+        let again = optimize_with(&optimized, &support::AllDistinct).unwrap();
         assert!(
             again.structurally_eq(&optimized),
             "{name} is a fixed point:\n{}",
@@ -441,6 +459,65 @@ fn rules() {
             }
         }
     }
+}
+
+#[test]
+fn an_expansion_has_a_copy_of_its_rows_per_projection() {
+    let ctx = support::ctx();
+    let rows = |sql: &str| {
+        let plan = support::resolve(sql, &ctx);
+        let optimized = optimize(&plan).unwrap();
+        let mut node = Arc::clone(optimized.root());
+        while !matches!(node.node, PlanNode::Expand { .. }) {
+            let mut next = None;
+            node.for_each_child(&mut |c| next = Some(Arc::clone(c)));
+            node = next.expect("an expansion below");
+        }
+        krishiv_optimizer::estimated_rows(&node, &krishiv_optimizer::NoStatistics)
+    };
+    let one_set = rows("SELECT a FROM t GROUP BY GROUPING SETS ((a), (a))");
+    let four_sets = rows("SELECT count(*) FROM t GROUP BY CUBE(a, b)");
+    assert_eq!(one_set, 2_000_000.0, "duplicate sets double the rows");
+    assert_eq!(four_sets, 4_000_000.0, "a 2-cube quadruples the rows");
+}
+
+#[test]
+fn expansion_copies_keep_their_input_ndv() {
+    #[derive(Debug)]
+    struct Stats(HashMap<String, TableStats>);
+    impl Statistics for Stats {
+        fn table(&self, scan: &Scan) -> Option<TableStats> {
+            let name = match &scan.source {
+                krishiv_plan::ReadSource::Table { name, .. } => name.last()?.clone(),
+                _ => return None,
+            };
+            self.0.get(&name).cloned()
+        }
+    }
+    let stats = Stats(HashMap::from([(
+        "t".to_owned(),
+        TableStats {
+            rows: 1_000,
+            columns: HashMap::from([(
+                "a".to_owned(),
+                ColumnStats {
+                    distinct: Some(10),
+                    nulls: Some(0),
+                    min: None,
+                    max: None,
+                },
+            )]),
+        },
+    )]));
+    let ctx = support::ctx();
+    let plan = support::resolve("SELECT a FROM t GROUP BY GROUPING SETS ((a), (a))", &ctx);
+    let optimized = optimize(&plan).unwrap();
+    // Two projections of 1,000 rows; the grouping copy has 10 distinct
+    // values, the id one and the position two: 20 groups, not 2,000 rows.
+    assert_eq!(
+        krishiv_optimizer::estimated_rows(optimized.root(), &stats),
+        20.0
+    );
 }
 
 #[test]

@@ -56,8 +56,8 @@ pub use data::{PlanData, assert_plan_data};
 pub(crate) use instantiate::node_ids;
 pub use instantiate::{SpillScopes, WorkerContext, instantiate};
 pub(crate) use instantiate::{
-    Unbuilt, Values, aggregate_node, aggregate_spec, filter_op, hash_join, nested_loop_join,
-    project_op, replicate_op, scan_filter, sort_op, top_n_op,
+    Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, group_limit_op,
+    hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op, top_n_op,
 };
 
 use crate::aggregate::{AggregateExpr, AggregateOutput};
@@ -65,7 +65,7 @@ use crate::error::Result;
 use crate::join::JoinType;
 use crate::operators::{FileWriteSink, RowStageSettings, SortKey};
 use crate::planner::ExplainNode;
-use crate::window::WindowPlan;
+use crate::window::{GroupLimitPlan, WindowPlan};
 
 /// A scan of a plan, numbered by the planner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -213,6 +213,20 @@ pub enum PhysNode {
         /// The subqueries `count` reads.
         subqueries: Vec<SubqueryPlan>,
     },
+    /// Each row of `input` once per projection (`ROLLUP`, `CUBE`,
+    /// `GROUPING SETS`).
+    Expand {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The attribute of each input column.
+        layout: Vec<AttrId>,
+        /// The projections: the same output columns, each computed one way.
+        projections: Vec<Vec<ProjectItemPlan>>,
+        /// Whether each output column is nullable.
+        nullable: Vec<bool>,
+        /// The subqueries the projections read.
+        subqueries: Vec<SubqueryPlan>,
+    },
     /// `input` sorted by `keys` (columns of `input`).
     Sort {
         /// The input.
@@ -238,6 +252,17 @@ pub enum PhysNode {
         input: Box<PhysNode>,
         /// Partitioning, ordering and functions.
         window: WindowPlan,
+    },
+    /// The rows of each partition of `input` ranked within a limit by a
+    /// rank-like function (Spark's `WindowGroupLimit`), below the window
+    /// whose filter keeps only those: `input` is sorted as the window's is,
+    /// and a sort directly below also drops rows past the limit within
+    /// each of its sorted batches.
+    WindowGroupLimit {
+        /// The sorted input.
+        input: Box<PhysNode>,
+        /// Partitioning, ordering, function and limit.
+        limit: GroupLimitPlan,
     },
     /// A hash aggregate.
     Aggregate {
@@ -332,6 +357,14 @@ pub enum ProjectItemPlan {
         name: String,
         /// The value.
         expr: Arc<Expr>,
+    },
+    /// A column of nulls in the Arrow type of an input column (the cell an
+    /// expansion nulls).
+    NullOf {
+        /// The input column whose type it takes.
+        index: usize,
+        /// The output name.
+        name: String,
     },
 }
 
@@ -444,9 +477,11 @@ plan_data!(enum PhysNode {
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
     ReplicateRows { input, layout, count, subqueries },
+    Expand { input, layout, projections, nullable, subqueries },
     Sort { input, keys },
     TopN { input, keys, limit },
     Window { input, window },
+    WindowGroupLimit { input, limit },
     Aggregate { input, aggregate },
     HashJoin(join),
     NestedLoopJoin(join),
@@ -458,7 +493,7 @@ plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
 plan_data!(struct JoinFilterPlan { id, key, options });
-plan_data!(enum ProjectItemPlan { Column { index, name }, Expr { name, expr } });
+plan_data!(enum ProjectItemPlan { Column { index, name }, Expr { name, expr }, NullOf { index, name } });
 plan_data!(
     enum SubqueryValueKind {
         Scalar,
@@ -487,6 +522,9 @@ impl PhysNode {
             | Self::Project {
                 input, subqueries, ..
             }
+            | Self::Expand {
+                input, subqueries, ..
+            }
             | Self::ReplicateRows {
                 input, subqueries, ..
             } => std::iter::once(input.as_ref())
@@ -496,6 +534,7 @@ impl PhysNode {
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
             | Self::Window { input, .. }
+            | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::WriteFiles { input } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
@@ -515,6 +554,9 @@ impl PhysNode {
             | Self::Project {
                 input, subqueries, ..
             }
+            | Self::Expand {
+                input, subqueries, ..
+            }
             | Self::ReplicateRows {
                 input, subqueries, ..
             } => std::iter::once(input.as_mut())
@@ -524,6 +566,7 @@ impl PhysNode {
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
             | Self::Window { input, .. }
+            | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
             | Self::WriteFiles { input } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
