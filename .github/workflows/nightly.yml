@@ -171,6 +171,7 @@ jobs:
     if: github.repository == 'KrishivAI/krishiv-engine'
     permissions:
       contents: read
+      actions: read
     uses: $/.github/workflows/wheels.yml
 
   loom:

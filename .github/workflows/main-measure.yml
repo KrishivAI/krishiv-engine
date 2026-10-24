@@ -1,0 +1,94 @@
+name: Main measurement
+
+# The baseline for the budget and wheel-size gates of pull requests
+# (pr-policy.yml): on every push to main, measure the budgets (`budgets-main`)
+# and the wheel sizes (`wheel-sizes-main`, from the `sizes` job of wheels.yml)
+# and keep them 90 days. A pull request is compared with the measurement for
+# the main commit it was built on (.github/scripts/main-baseline.sh), so it is
+# gated only on the growth it adds. Each push also reports its drift against
+# the previous main measurement in the job summary (never failing the run), so
+# growth merged under `budget-approved` stays visible.
+#
+# Why a workflow of its own: every main commit must be measured, because a
+# pull request may have been built on any of them, so these runs are keyed by
+# commit and never cancelled. ci.yml cancels superseded runs on a branch and
+# would run its whole test suite for each of them; here only the two
+# measurements run. ci.yml skips its wheel build on main to avoid building the
+# wheels twice. The workflow name in main-baseline.sh (`main-measure.yml`),
+# the artifact names and the job `budgets` are read by pr-policy.yml; keep them
+# in sync.
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: main-measure-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  budgets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
+      # --build-time wipes its own target dir, so it measures a clean build.
+      - run: cargo xtask budgets --build-time --measure-only
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: budgets-main
+          path: target/budgets-current.json
+          retention-days: 90
+          if-no-files-found: error
+      # Report only: the drift against the previous main commit's measurement.
+      - name: Select the previous main measurement
+        id: baseline
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.sha }}
+          ARTIFACT: budgets-main
+          FILE: budgets-current.json
+          OUT_DIR: ${{ runner.temp }}/budgets-main
+          WAIT_SECS: 600
+        run: |
+          TARGET_SHA=$(git rev-parse HEAD^1)
+          export TARGET_SHA
+          source=$(.github/scripts/main-baseline.sh)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+      - name: Report the drift
+        if: steps.baseline.outcome == 'success'
+        env:
+          BASELINE: ${{ runner.temp }}/budgets-main/baseline.json
+        run: cargo xtask budgets --compare target/budgets-current.json --baseline "$BASELINE" || echo "::warning::a budget grew past 5% on main (report only; see the summary)"
+
+  wheels:
+    permissions:
+      contents: read
+      actions: read
+    uses: $/.github/workflows/wheels.yml

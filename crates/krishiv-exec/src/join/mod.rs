@@ -131,6 +131,8 @@ mod nested;
 mod probe;
 mod table;
 
+pub(crate) use grace::{SPILL_SCRATCH, write_sliced};
+
 use std::fmt;
 use std::sync::Arc;
 

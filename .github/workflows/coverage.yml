@@ -15,9 +15,11 @@ name: Coverage
 # the other; that is no weaker than the Rust-only gate it extends.
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
-  group: coverage-${{ github.event.pull_request.number }}
+  group: coverage-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -33,6 +35,9 @@ env:
 
 jobs:
   diff-coverage:
+    # Pull requests only: the diff gate was enforced on the PR; a merge-group
+    # run reports this job as skipped, which satisfies the required check.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     # `id-token: write` lets same-repo PRs upload to Codecov via OIDC (no

@@ -1,0 +1,19 @@
+# Reusable no-op, called from osv-scanner.yml on merge-queue runs so the required
+# check `scan-pr / osv-scan` is reported (the real scan ran on the pull request).
+name: Merge-group no-op
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  osv-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - run: echo "Checked on the pull request; nothing to redo for the merge group."
