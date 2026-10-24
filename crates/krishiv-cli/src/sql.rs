@@ -27,6 +27,30 @@ pub(crate) enum Format {
     Json,
 }
 
+/// Output formats of `--explain-analyze` and `--explain-verbose`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ExplainFormat {
+    /// Plain text (the default).
+    Text,
+    /// The versioned JSON document (experimental: may change before 1.0).
+    Json,
+    /// A Mermaid `flowchart TD` of the plan or profile DAG.
+    Mermaid,
+    /// A Graphviz `digraph` of the plan or profile DAG.
+    Dot,
+}
+
+impl ExplainFormat {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Json => "json",
+            Self::Mermaid => "mermaid",
+            Self::Dot => "dot",
+        }
+    }
+}
+
 /// Arguments of `krishiv sql`.
 #[derive(Args, Debug)]
 #[command(group(clap::ArgGroup::new("explain").args(["explain_analyze", "explain_verbose"])))]
@@ -63,9 +87,13 @@ pub(crate) struct SqlArgs {
     explain_verbose: bool,
     /// With --explain-analyze or --explain-verbose: print the versioned JSON
     /// document (one line per statement) instead of text (experimental: may
-    /// change before 1.0).
+    /// change before 1.0). A synonym for `--explain-format json`.
     #[arg(long, requires = "explain")]
     json: bool,
+    /// With --explain-analyze or --explain-verbose: the output format
+    /// (`text`, `json`, `mermaid` or `dot`).
+    #[arg(long = "explain-format", value_enum, requires = "explain")]
+    explain_format: Option<ExplainFormat>,
 }
 
 fn key_value(s: &str) -> Result<(String, String), String> {
@@ -77,6 +105,17 @@ fn key_value(s: &str) -> Result<(String, String), String> {
 
 /// Runs the command; the process exit code (0 ok, 1 query or I/O error).
 pub(crate) fn run(args: &SqlArgs) -> i32 {
+    if args.json
+        && let Some(format) = args.explain_format
+        && format != ExplainFormat::Json
+    {
+        let _ = writeln!(
+            io::stderr(),
+            "error: the argument '--json' cannot be used with '--explain-format {}'\n\nFor more information, try '--help'.",
+            format.as_str(),
+        );
+        return 2;
+    }
     match run_inner(args) {
         Ok(()) => 0,
         Err(msg) => {
@@ -133,19 +172,63 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
     Ok(())
 }
 
+/// The output format of `--explain-analyze` and `--explain-verbose`:
+/// `--json` is a synonym for `--explain-format json`.
+fn explain_format(args: &SqlArgs) -> ExplainFormat {
+    if args.json {
+        ExplainFormat::Json
+    } else {
+        args.explain_format.unwrap_or(ExplainFormat::Text)
+    }
+}
+
 /// Prints the profile (`--explain-analyze`) or the optimizer's stages
-/// (`--explain-verbose`) of the query `df`, as text or JSON.
+/// (`--explain-verbose`) of the query `df`, in the requested format.
 fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
+    use krishiv::GraphFormat;
+
     let text = if args.explain_analyze {
-        let p = futures::executor::block_on(df.explain_analyze()).map_err(|e| e.to_string())?;
-        if args.json {
-            p.to_json()
-        } else {
-            p.to_text(krishiv::TextOptions::default())
+        match explain_format(args) {
+            ExplainFormat::Text => {
+                let p =
+                    futures::executor::block_on(df.explain_analyze()).map_err(|e| e.to_string())?;
+                p.to_text(krishiv::TextOptions::default())
+            }
+            ExplainFormat::Json => {
+                let p =
+                    futures::executor::block_on(df.explain_analyze()).map_err(|e| e.to_string())?;
+                p.to_json()
+            }
+            ExplainFormat::Mermaid => {
+                futures::executor::block_on(df.explain_analyze_with(GraphFormat::Mermaid))
+                    .map_err(|e| e.to_string())?
+            }
+            ExplainFormat::Dot => {
+                futures::executor::block_on(df.explain_analyze_with(GraphFormat::Dot))
+                    .map_err(|e| e.to_string())?
+            }
         }
     } else {
-        let v = futures::executor::block_on(df.explain_verbose()).map_err(|e| e.to_string())?;
-        if args.json { v.to_json() } else { v.to_text() }
+        match explain_format(args) {
+            ExplainFormat::Text => {
+                let v =
+                    futures::executor::block_on(df.explain_verbose()).map_err(|e| e.to_string())?;
+                v.to_text()
+            }
+            ExplainFormat::Json => {
+                let v =
+                    futures::executor::block_on(df.explain_verbose()).map_err(|e| e.to_string())?;
+                v.to_json()
+            }
+            ExplainFormat::Mermaid => {
+                futures::executor::block_on(df.explain_verbose_with(GraphFormat::Mermaid))
+                    .map_err(|e| e.to_string())?
+            }
+            ExplainFormat::Dot => {
+                futures::executor::block_on(df.explain_verbose_with(GraphFormat::Dot))
+                    .map_err(|e| e.to_string())?
+            }
+        }
     };
     let mut out = io::stdout().lock();
     writeln!(out, "{}", text.trim_end()).map_err(|e| format!("cannot write output: {e}"))
@@ -541,6 +624,14 @@ mod tests {
     use krishiv::arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
+
+    #[test]
+    fn explain_format_names() {
+        assert_eq!(ExplainFormat::Text.as_str(), "text");
+        assert_eq!(ExplainFormat::Json.as_str(), "json");
+        assert_eq!(ExplainFormat::Mermaid.as_str(), "mermaid");
+        assert_eq!(ExplainFormat::Dot.as_str(), "dot");
+    }
 
     #[test]
     fn splits_outside_quotes_and_comments() {

@@ -8,10 +8,14 @@ use std::fmt::Write as _;
 use arrow_array::RecordBatch;
 use futures::StreamExt as _;
 use krishiv_common::error::{KrishivError, KrishivInvalidProfileDocument};
+use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::profile::QueryProfile;
 use serde_json::{Value, json};
 
 use crate::dataframe::DataFrame;
+use crate::explain_graph::{
+    GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
+};
 
 /// The `format` member of an [`ExplainVerbose`] document.
 pub const VERBOSE_FORMAT: &str = "krishiv.explain-verbose";
@@ -232,6 +236,40 @@ impl DataFrame {
             .await
     }
 
+    /// As [`Self::explain_analyze`], returning the profile in `format`:
+    /// [`GraphFormat::Json`] is the versioned JSON document,
+    /// [`GraphFormat::Mermaid`] and [`GraphFormat::Dot`] graph the profile
+    /// DAG (the plan tree with each node's operators and their counters).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # let batch = arrow_array::RecordBatch::try_new(schema.clone(), vec![std::sync::Arc::new(arrow_array::Int32Array::from(vec![3, 1, 2]))]).unwrap();
+    /// # s.register_batches("t", schema, vec![batch])?;
+    /// use krishiv_session::GraphFormat;
+    /// let text = futures::executor::block_on(
+    ///     s.table("t").explain_analyze_with(GraphFormat::Mermaid),
+    /// )?;
+    /// assert!(text.starts_with("flowchart TD\n"));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Analysis, planning and execution errors.
+    pub async fn explain_analyze_with(&self, format: GraphFormat) -> Result<String, KrishivError> {
+        let frame = self.clone();
+        self.session
+            .on_executor(async move {
+                let (_, profile) = frame.profiled(false).await?;
+                Ok(match format {
+                    GraphFormat::Json => profile.to_json(),
+                    GraphFormat::Mermaid => mermaid_of_profile(&profile),
+                    GraphFormat::Dot => dot_of_profile(&profile),
+                })
+            })
+            .await
+    }
+
     /// As [`Self::explain_analyze`], also returning the rows.
     ///
     /// # Errors
@@ -289,7 +327,45 @@ impl DataFrame {
             .await
     }
 
+    /// As [`Self::explain_verbose`], returning the plans in `format`:
+    /// [`GraphFormat::Json`] is the versioned JSON document,
+    /// [`GraphFormat::Mermaid`] and [`GraphFormat::Dot`] graph the physical
+    /// plan (the optimizer's steps are text only).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// use krishiv_session::GraphFormat;
+    /// let df = futures::executor::block_on(s.sql("SELECT a FROM t WHERE a > 1"))?;
+    /// let text = futures::executor::block_on(df.explain_verbose_with(GraphFormat::Dot))?;
+    /// assert!(text.starts_with("digraph {\n"));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// Analysis and planning errors.
+    pub async fn explain_verbose_with(&self, format: GraphFormat) -> Result<String, KrishivError> {
+        let df = self.clone();
+        self.session
+            .on_executor(async move {
+                let (verbose, physical) = df.verbose_full().await?;
+                Ok(match format {
+                    GraphFormat::Json => verbose.to_json(),
+                    GraphFormat::Mermaid => mermaid_of_plan(&physical),
+                    GraphFormat::Dot => dot_of_plan(&physical),
+                })
+            })
+            .await
+    }
+
     pub(crate) async fn verbose(&self) -> Result<ExplainVerbose, KrishivError> {
+        self.verbose_full().await.map(|(verbose, _)| verbose)
+    }
+
+    /// As [`Self::verbose`], also returning the physical plan tree
+    /// ([`GraphFormat::Mermaid`] and [`GraphFormat::Dot`] graph it).
+    pub(crate) async fn verbose_full(&self) -> Result<(ExplainVerbose, ExplainNode), KrishivError> {
         let parsed = self.plan.to_string();
         let a = self.analysis().await?;
         let analyzed = a.analyzed.plan.root().to_string();
@@ -313,13 +389,17 @@ impl DataFrame {
             });
             before = plan;
         }
-        Ok(ExplainVerbose {
-            parsed,
-            analyzed,
-            steps,
-            optimized: optimized.root().to_string(),
-            physical: physical.explain().to_string(),
-        })
+        let node = physical.explain().clone();
+        Ok((
+            ExplainVerbose {
+                parsed,
+                analyzed,
+                steps,
+                optimized: optimized.root().to_string(),
+                physical: node.to_string(),
+            },
+            node,
+        ))
     }
 }
 

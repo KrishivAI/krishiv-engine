@@ -34,6 +34,10 @@ pub fn krishiv_session::functions::lit_null() -> krishiv_session::Column
 pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
+pub fn krishiv_session::dot_of_plan(&krishiv_exec::planner::ExplainNode) -> alloc::string::String
+pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
+pub fn krishiv_session::mermaid_of_plan(&krishiv_exec::planner::ExplainNode) -> alloc::string::String
+pub fn krishiv_session::mermaid_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
 #[non_exhaustive] pub enum krishiv_session::ExplainMode
 pub krishiv_session::ExplainMode::Codegen
 pub krishiv_session::ExplainMode::Cost
@@ -51,6 +55,21 @@ impl core::fmt::Debug for krishiv_session::ExplainMode
 pub fn krishiv_session::ExplainMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for krishiv_session::ExplainMode
 impl core::marker::StructuralPartialEq for krishiv_session::ExplainMode
+pub enum krishiv_session::GraphFormat
+pub krishiv_session::GraphFormat::Dot
+pub krishiv_session::GraphFormat::Json
+pub krishiv_session::GraphFormat::Mermaid
+impl core::clone::Clone for krishiv_session::GraphFormat
+pub fn krishiv_session::GraphFormat::clone(&self) -> krishiv_session::GraphFormat
+impl core::cmp::Eq for krishiv_session::GraphFormat
+impl core::cmp::PartialEq for krishiv_session::GraphFormat
+pub fn krishiv_session::GraphFormat::eq(&self, &krishiv_session::GraphFormat) -> bool
+impl core::fmt::Debug for krishiv_session::GraphFormat
+pub fn krishiv_session::GraphFormat::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::GraphFormat
+pub fn krishiv_session::GraphFormat::as_str(self) -> &'static str
+pub fn krishiv_session::GraphFormat::parse(&str) -> core::result::Result<Self, krishiv_common::error::KrishivError>
+impl core::marker::StructuralPartialEq for krishiv_session::GraphFormat
 #[non_exhaustive] pub enum krishiv_session::JoinType
 pub krishiv_session::JoinType::FullOuter
 pub krishiv_session::JoinType::Inner
@@ -149,6 +168,7 @@ pub fn krishiv_session::DataFrame::distinct(&self) -> Self
 pub fn krishiv_session::DataFrame::except_all(&self, &Self) -> Self
 pub async fn krishiv_session::DataFrame::execute_stream(&self) -> core::result::Result<krishiv_session::RecordBatchStream, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain(&self, krishiv_session::ExplainMode) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::explain_with(&self, krishiv_session::ExplainMode, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::filter(&self, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::group_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
 pub fn krishiv_session::DataFrame::hint(&self, &str, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
@@ -175,7 +195,9 @@ pub fn krishiv_session::DataFrame::write(&self) -> krishiv_session::DataFrameWri
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::collect_with_profile(&self) -> core::result::Result<(alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_exec::profile::QueryProfile), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_analyze(&self) -> core::result::Result<krishiv_exec::profile::QueryProfile, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::explain_analyze_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_verbose(&self) -> core::result::Result<krishiv_session::ExplainVerbose, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::explain_verbose_with(&self, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::clone(&self) -> krishiv_session::DataFrame
 impl core::fmt::Debug for krishiv_session::DataFrame
