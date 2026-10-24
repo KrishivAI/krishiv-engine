@@ -20,13 +20,15 @@ name: Wheels
 # Called by ci.yml for pull requests that touch the Python package, the
 # extension crate or the packaging, and by nightly.yml; runnable by hand.
 # The size of every wheel is measured by the `sizes` job (artifact
-# `wheel-sizes`). On a pull request the label-aware gate `wheel-sizes` in
-# pr-policy.yml compares that measurement with the base branch's budgets.json
-# (`wheel_bytes`), so the `budget-approved` label can approve growth after the
-# run (labels do not re-run CI). Elsewhere (nightly, manual runs) `sizes`
-# gates against this commit's budgets.json itself. The job name `sizes`, the
-# caller's name `wheels-targets` and the artifact name are read by
-# .github/scripts/budgets-measurement.sh; keep them in sync.
+# `wheel-sizes`; from main-measure.yml, on a push to main, `wheel-sizes-main`,
+# kept 90 days). On a pull request the label-aware gate `wheel-sizes` in
+# pr-policy.yml compares that measurement with the one main-measure.yml made
+# on main for the commit it was built on, so the `budget-approved` label can
+# approve growth after the run (labels do not re-run CI). On a push to main
+# `sizes` only reports the drift; nightly and manual runs are gated on main's
+# measurement. The job name `sizes`, the caller's name `wheels-targets` and the
+# artifact name are read by .github/scripts/budgets-measurement.sh; keep them
+# in sync.
 on:
   workflow_call:
   workflow_dispatch:
@@ -258,14 +260,24 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
-  # Every wheel's size, measured (artifact `wheel-sizes`); gated here only
-  # when there is no pull request to carry a label (nightly, manual runs).
+  # Every wheel's size, measured (artifact `wheel-sizes`; from main-measure.yml
+  # `wheel-sizes-main`). On a pull request the measurement also records the main
+  # commit it was made against (`measured-base-sha`). Elsewhere the sizes are
+  # compared with main's measurement for the merge-base with main: a nightly or
+  # manual run is gated on it, a push to main only reports the drift in the job
+  # summary (growth merged under `budget-approved` stays visible). No pull
+  # request carries a label there, so growth is not approvable.
   sizes:
+    # Not on merge-queue runs: the size of a wheel is a property of the pull
+    # request, already measured and gated there (`wheel-sizes` in pr-policy.yml).
+    # A skipped job does not fail the `wheels-targets` caller or `wheels-ok`.
+    if: github.event_name != 'merge_group'
     needs: [linux-x86_64, linux-aarch64, macos-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read
+      actions: read
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -274,6 +286,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # The baseline selection walks main's history; a pull request needs
+          # only the merge commit and its first parent.
+          fetch-depth: ${{ github.event_name == 'pull_request' && 2 || 0 }}
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: wheels-*
@@ -282,11 +297,54 @@ jobs:
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
       - name: Measure the wheels
         run: cargo xtask wheel-sizes dist --measure-only "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json"
+      - name: Record the main commit measured against
+        if: github.event_name == 'pull_request'
+        run: git rev-parse HEAD^1 > "$RUNNER_TEMP/wheel-sizes/measured-base-sha"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: wheel-sizes
-          path: ${{ runner.temp }}/wheel-sizes/wheel-sizes.json
+          name: ${{ github.event_name == 'push' && 'wheel-sizes-main' || 'wheel-sizes' }}
+          path: |
+            ${{ runner.temp }}/wheel-sizes/wheel-sizes.json
+            ${{ runner.temp }}/wheel-sizes/measured-base-sha
+          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
           if-no-files-found: error
-      - name: Wheel sizes (no pull request)
+      # A push compares with its parent commit, anything else with the
+      # merge-base with main.
+      - name: Select the main baseline
+        id: baseline
         if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
-        run: cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json"
+        continue-on-error: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.sha }}
+          ARTIFACT: wheel-sizes-main
+          FILE: wheel-sizes.json
+          WORKFLOW: main-measure.yml
+          OUT_DIR: ${{ runner.temp }}/wheel-sizes-main
+          WAIT_SECS: 600
+        run: |
+          if [ "$EVENT" = push ]; then
+            TARGET_SHA=$(git rev-parse HEAD^1)
+          else
+            TARGET_SHA=$(git merge-base HEAD origin/main)
+          fi
+          export TARGET_SHA
+          source=$(.github/scripts/main-baseline.sh)
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+      - name: Wheel sizes (no pull request)
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group' && steps.baseline.outcome == 'success'
+        env:
+          EVENT: ${{ github.event_name }}
+          SOURCE: ${{ steps.baseline.outputs.source }}
+        run: |
+          if [ "$SOURCE" = main ]; then flag=--baseline; else flag=--budgets; fi
+          rc=0
+          cargo xtask wheel-sizes --compare "$RUNNER_TEMP/wheel-sizes/wheel-sizes.json" \
+            "$flag" "$RUNNER_TEMP/wheel-sizes-main/baseline.json" || rc=$?
+          if [ "$EVENT" = push ] && [ "$rc" -ne 0 ]; then
+            echo "::warning::wheel sizes grew past the budget on main (report only; see the summary)"
+            exit 0
+          fi
+          exit "$rc"
