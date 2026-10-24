@@ -40,6 +40,7 @@
 pub mod csv;
 pub mod data;
 pub mod drive;
+pub mod json;
 pub mod mock;
 pub mod parquet;
 
