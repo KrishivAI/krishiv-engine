@@ -49,6 +49,21 @@ pub(crate) enum Fail {
 }
 
 /// Parse state to rewind to when a speculative parse fails.
+/// The `CREATE TABLE` clauses Spark rejects when written twice, in the
+/// order it checks them (`DUPLICATE_CLAUSES` names the first).
+const CREATE_TABLE_CLAUSES: [&str; 10] = [
+    "TBLPROPERTIES",
+    "OPTIONS",
+    "PARTITIONED BY",
+    "STORED AS/BY",
+    "ROW FORMAT",
+    "COMMENT",
+    "DEFAULT COLLATION",
+    "CLUSTERED BY",
+    "CLUSTER BY",
+    "LOCATION",
+];
+
 struct Checkpoint {
     pos: usize,
     far: usize,
@@ -187,6 +202,32 @@ impl TopRule for StatementRule {
 
     fn validate(out: &Self::Out, src: &str, opts: ParserOptions) -> Result<(), ParseError> {
         validate::statement(out, src, opts)
+    }
+}
+
+/// Parses one statement without the builder's checks, for tests of the
+/// tree of a statement Spark parses and then rejects.
+#[cfg(test)]
+pub(crate) fn parse_statement_unchecked(
+    src: &str,
+    opts: ParserOptions,
+) -> Result<Statement, ParseError> {
+    parse_with::<UncheckedStatementRule>(src, opts)
+}
+
+/// [`Parser::explainable`], without [`validate::statement`].
+#[cfg(test)]
+struct UncheckedStatementRule;
+
+#[cfg(test)]
+impl TopRule for UncheckedStatementRule {
+    type Out = Statement;
+    fn parse(p: &mut Parser<'_>) -> PR<Statement> {
+        p.explainable()
+    }
+
+    fn validate(_: &Self::Out, _: &str, _: ParserOptions) -> Result<(), ParseError> {
+        Ok(())
     }
 }
 
@@ -663,6 +704,14 @@ impl<'s> Parser<'s> {
         self.missing = checkpoint.missing;
         self.matched = checkpoint.matched;
         self.deferred = checkpoint.deferred;
+    }
+
+    /// Keeps the speculative parse begun at `checkpoint`: an error deferred
+    /// before it still wins over one deferred during it.
+    fn commit(&mut self, checkpoint: Checkpoint) {
+        if checkpoint.deferred.is_some() {
+            self.deferred = checkpoint.deferred;
+        }
     }
 
     fn expect_kw(&mut self, kw: &str) -> PR<()> {
@@ -1852,7 +1901,10 @@ impl<'s> Parser<'s> {
             let (elements, paren_query) = if p.sym_at(0, Sym::LParen) && p.query_follows(1) {
                 let save = p.checkpoint();
                 match p.query() {
-                    Ok(query) => (Vec::new(), Some(query)),
+                    Ok(query) => {
+                        p.commit(save);
+                        (Vec::new(), Some(query))
+                    }
                     Err(Fail::Syntax) => {
                         p.restore(save);
                         (p.paren_list(Self::table_element)?, None)
@@ -1880,9 +1932,39 @@ impl<'s> Parser<'s> {
             let mut comment = None;
             let mut collation = None;
             let mut tblproperties = Vec::new();
+            // Occurrences per clause, in Spark's duplicate-check order.
+            let mut seen = [0_usize; CREATE_TABLE_CLAUSES.len()];
             loop {
                 if paren_query.is_some() {
                     break;
+                }
+                let clause = if p.kw_at(0, "TBLPROPERTIES") {
+                    Some("TBLPROPERTIES")
+                } else if p.kw_at(0, "OPTIONS") {
+                    Some("OPTIONS")
+                } else if p.kw_at(0, "PARTITIONED") && p.kw_at(1, "BY") {
+                    Some("PARTITIONED BY")
+                } else if p.kw_at(0, "STORED") {
+                    Some("STORED AS/BY")
+                } else if p.kw_at(0, "ROW") && p.kw_at(1, "FORMAT") {
+                    Some("ROW FORMAT")
+                } else if p.kw_at(0, "COMMENT") {
+                    Some("COMMENT")
+                } else if p.kw_at(0, "DEFAULT") && p.kw_at(1, "COLLATION") {
+                    Some("DEFAULT COLLATION")
+                } else if p.kw_at(0, "CLUSTERED") {
+                    Some("CLUSTERED BY")
+                } else if p.kw_at(0, "CLUSTER") && p.kw_at(1, "BY") {
+                    Some("CLUSTER BY")
+                } else if p.kw_at(0, "LOCATION") {
+                    Some("LOCATION")
+                } else {
+                    None
+                };
+                if let Some(i) =
+                    clause.and_then(|c| CREATE_TABLE_CLAUSES.iter().position(|k| *k == c))
+                {
+                    seen[i] += 1;
                 }
                 if p.eat_kw("OPTIONS") {
                     options.extend(p.property_list(true)?);
@@ -1929,6 +2011,11 @@ impl<'s> Parser<'s> {
                 None
             })
             .map(Box::new);
+            let duplicate_clause = CREATE_TABLE_CLAUSES
+                .iter()
+                .zip(seen)
+                .find(|(_, n)| *n > 1)
+                .map(|(c, _)| *c);
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::CreateTable(Box::new(CreateTable {
@@ -1951,6 +2038,7 @@ impl<'s> Parser<'s> {
                 collation,
                 tblproperties,
                 as_query,
+                duplicate_clause,
                 span,
             })))
         })
@@ -1980,7 +2068,32 @@ impl<'s> Parser<'s> {
         let mut generated = None;
         let mut comment = None;
         let mut constraints = Vec::new();
+        // Descriptors seen so far, and the first one written twice.
+        let mut seen: Vec<&'static str> = Vec::new();
+        let mut duplicate_descriptor = None;
         loop {
+            let descriptor = if self.kw_at(0, "NOT") {
+                Some("NOT NULL")
+            } else if self.kw_at(0, "DEFAULT") {
+                Some("DEFAULT")
+            } else if self.kw_at(0, "GENERATED") {
+                Some("GENERATED ALWAYS AS")
+            } else if self.kw_at(0, "COMMENT") {
+                Some("COMMENT")
+            } else if self.kw_at(0, "CONSTRAINT")
+                || self.any_kw_at(0, &["PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "REFERENCES"])
+            {
+                Some("CONSTRAINT")
+            } else {
+                None
+            };
+            if let Some(d) = descriptor {
+                if seen.contains(&d) {
+                    duplicate_descriptor = duplicate_descriptor.or(Some(d));
+                } else {
+                    seen.push(d);
+                }
+            }
             if self.eat_kw("NOT") {
                 not_null = true;
                 if !self.eat_kw("NULL") {
@@ -2020,6 +2133,7 @@ impl<'s> Parser<'s> {
             generated,
             comment,
             constraints,
+            duplicate_descriptor,
             span: self.span_from(start),
         })
     }
@@ -2060,15 +2174,22 @@ impl<'s> Parser<'s> {
     /// `[(START WITH n INCREMENT BY m)]` after `IDENTITY` at `ident`.
     fn identity_options(&mut self, how: IdentityHow, ident: usize) -> PR<IdentityColumn> {
         let (mut start, mut step) = (None, None);
+        let mut duplicate_option = None;
         let mut count = 0;
         if self.eat_sym(Sym::LParen) {
             loop {
                 if self.kw_at(0, "START") && self.kw_at(1, "WITH") {
                     self.pos += 2;
+                    if start.is_some() {
+                        duplicate_option = duplicate_option.or(Some("START"));
+                    }
                     start = Some(self.identity_count()?);
                     count += 1;
                 } else if self.kw_at(0, "INCREMENT") && self.kw_at(1, "BY") {
                     self.pos += 2;
+                    if step.is_some() {
+                        duplicate_option = duplicate_option.or(Some("STEP"));
+                    }
                     step = Some(self.identity_count()?);
                     count += 1;
                 } else {
@@ -2081,24 +2202,30 @@ impl<'s> Parser<'s> {
             how,
             start,
             step,
+            duplicate_option,
             span: self.span_from(ident),
         })
     }
 
-    /// A `START WITH` / `INCREMENT BY` count.
+    /// A `START WITH` / `INCREMENT BY` count: an integer, optionally
+    /// negative.
     fn identity_count(&mut self) -> PR<i64> {
-        match self.kind(0) {
-            Some(TokenKind::Number(NumKind::Int)) => {
-                let text = self.text(0).to_owned();
-                match text.parse() {
-                    Ok(n) => {
-                        self.bump();
-                        Ok(n)
-                    }
-                    Err(_) => self.fail(),
-                }
+        let negative = self.sym_at(0, Sym::Minus);
+        let at = usize::from(negative);
+        if self.kind(at) != Some(TokenKind::Number(NumKind::Int)) {
+            return self.fail();
+        }
+        let text = if negative {
+            format!("-{}", self.text(at))
+        } else {
+            self.text(at).to_owned()
+        };
+        match text.parse() {
+            Ok(n) => {
+                self.pos += at + 1;
+                Ok(n)
             }
-            _ => self.fail(),
+            Err(_) => self.fail(),
         }
     }
 
@@ -2302,7 +2429,7 @@ impl<'s> Parser<'s> {
                 self.kind(0),
                 Some(TokenKind::Word | TokenKind::QuotedIdent | TokenKind::DoubleQuoted)
                 if self.kind(0) != Some(TokenKind::DoubleQuoted)
-                    || !self.opts.double_quoted_identifiers
+                    || self.opts.double_quoted_identifiers
             )
         {
             let save = self.pos;

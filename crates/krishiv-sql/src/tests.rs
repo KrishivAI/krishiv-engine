@@ -1619,7 +1619,13 @@ fn create_table_statements() {
         PARTITIONED BY (c, d, years(ts), e INT NOT NULL COMMENT 'p') CLUSTER BY (a, b) \
         LOCATION '/tmp/t' COMMENT 'table' DEFAULT COLLATION UTF8_LCASE \
         TBLPROPERTIES ('k' = 'v', flag) AS SELECT 1";
-    let t = create(sql);
+    // Spark builds this tree and then rejects a CTAS with a schema.
+    let e = parse_statement(sql, &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0035);
+    let Statement::CreateTable(t) = crate::parser::parse_statement_unchecked(sql, d).unwrap()
+    else {
+        panic!("{sql}");
+    };
     assert_eq!(t.elements.len(), 3);
     let TableElement::Column(a) = &t.elements[0] else {
         panic!("{:?}", t.elements[0]);
@@ -1709,10 +1715,29 @@ fn create_table_storage_clauses() {
     assert_eq!(b.sorted_by[0].asc, Some(true));
     assert_eq!(b.sorted_by[1].asc, Some(false));
     assert_eq!(b.buckets, 2);
-    let t = create("CREATE TABLE t (a INT) SKEWED BY (a) ON (1, 'x') STORED AS DIRECTORIES");
+    // `SKEWED BY` parses, and Spark then rejects it in `CREATE TABLE`.
+    let skewed = |sql: &str| {
+        let e = parse_statement(sql, &d).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidStatementOrClause,
+            "{sql}"
+        );
+        assert!(
+            e.error.to_string().contains("CREATE TABLE ... SKEWED BY"),
+            "{sql}: {}",
+            e.error
+        );
+        assert_eq!(e.span.range(), 0..sql.len());
+        match crate::parser::parse_statement_unchecked(sql, d).unwrap() {
+            Statement::CreateTable(t) => t,
+            other => panic!("{sql} is {other:?}"),
+        }
+    };
+    let t = skewed("CREATE TABLE t (a INT) SKEWED BY (a) ON (1, 'x') STORED AS DIRECTORIES");
     let s = t.skew.as_ref().unwrap();
     assert!(s.stored_as_directories && s.values.len() == 1 && s.values[0].len() == 2);
-    let t = create("CREATE TABLE t (a INT) SKEWED BY (a, b) ON ((1, 2), (3, 4))");
+    let t = skewed("CREATE TABLE t (a INT) SKEWED BY (a, b) ON ((1, 2), (3, 4))");
     let s = t.skew.as_ref().unwrap();
     assert!(!s.stored_as_directories && s.values.len() == 2);
     let t = create(
@@ -2380,4 +2405,232 @@ fn partition_field_edge_cases() {
     };
     assert_eq!(fk.ref_columns.len(), 1);
     assert_eq!(fk.table.parts.len(), 1);
+}
+
+/// The checks Spark's builder makes on a parsed `CREATE TABLE`, with the
+/// error classes and order of Spark 4.2 (each case checked on Spark).
+#[test]
+fn create_table_builder_checks() {
+    use ast::{GeneratedKind, Statement, TableElement};
+    let d = ParserOptions::default();
+    let fail = |sql: &str| {
+        let e = parse_statement(sql, &d).unwrap_err();
+        (e.error.error_class(), e.error.to_string(), e.span.range())
+    };
+    // A clause written twice; the first in Spark's check order wins over
+    // the order in the text.
+    for (clause, text) in [
+        ("TBLPROPERTIES", "TBLPROPERTIES ('a' = 'b')"),
+        ("OPTIONS", "OPTIONS (k 1)"),
+        ("PARTITIONED BY", "PARTITIONED BY (a)"),
+        ("STORED AS/BY", "STORED AS parquet"),
+        ("ROW FORMAT", "ROW FORMAT DELIMITED"),
+        ("COMMENT", "COMMENT 'x'"),
+        ("DEFAULT COLLATION", "DEFAULT COLLATION UTF8_BINARY"),
+        ("CLUSTERED BY", "CLUSTERED BY (a) INTO 2 BUCKETS"),
+        ("CLUSTER BY", "CLUSTER BY (a)"),
+        ("LOCATION", "LOCATION '/a'"),
+    ] {
+        let sql = format!("CREATE TABLE t (a INT) {text} {text}");
+        let (class, message, span) = fail(&sql);
+        assert_eq!(class, ErrorClass::DuplicateClauses, "{sql}");
+        assert!(
+            message.contains(&format!("Found duplicate clauses: {clause}.")),
+            "{sql}: {message}"
+        );
+        assert_eq!(span, 0..sql.len());
+    }
+    let (_, message, _) =
+        fail("CREATE TABLE t (a INT) LOCATION '/a' LOCATION '/b' COMMENT 'x' COMMENT 'y'");
+    assert!(message.contains("clauses: COMMENT."), "{message}");
+    let (_, message, _) = fail(
+        "CREATE TABLE t (a INT) COMMENT 'x' TBLPROPERTIES ('a' = 'b') COMMENT 'y' TBLPROPERTIES ('c' = 'd')",
+    );
+    assert!(message.contains("clauses: TBLPROPERTIES."), "{message}");
+
+    // A column descriptor written twice: the first repeat in the text.
+    for (sql, descriptor) in [
+        ("CREATE TABLE t (a INT COMMENT 'x' COMMENT 'y')", "COMMENT"),
+        ("CREATE TABLE t (a INT NOT NULL NOT NULL)", "NOT NULL"),
+        ("CREATE TABLE t (a INT DEFAULT 1 DEFAULT 2)", "DEFAULT"),
+        (
+            "CREATE TABLE t (a INT DEFAULT 1 COMMENT 'x' COMMENT 'y' DEFAULT 2)",
+            "COMMENT",
+        ),
+        (
+            "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS (1) GENERATED ALWAYS AS IDENTITY)",
+            "GENERATED ALWAYS AS",
+        ),
+        (
+            "CREATE TABLE t (a INT CHECK (a > 0) PRIMARY KEY)",
+            "CONSTRAINT",
+        ),
+        (
+            "CREATE TABLE t (IDENTIFIER('a') INT COMMENT 'x' COMMENT 'y')",
+            "COMMENT",
+        ),
+    ] {
+        let (class, message, span) = fail(sql);
+        assert_eq!(
+            class,
+            ErrorClass::CreateTableColumnDescriptorDuplicate,
+            "{sql}"
+        );
+        assert!(
+            message.contains(&format!("column a specifies descriptor \"{descriptor}\"")),
+            "{sql}: {message}"
+        );
+        assert_eq!(span, 0..sql.len());
+    }
+
+    // Identity options: negative counts parse; a repeated option and a
+    // zero step fail, after the column's descriptors.
+    let sql =
+        "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -1 INCREMENT BY - 2))";
+    let Statement::CreateTable(t) = parse_statement(sql, &d).unwrap() else {
+        panic!("{sql}");
+    };
+    let TableElement::Column(c) = &t.elements[0] else {
+        panic!("{t:?}");
+    };
+    let Some(GeneratedKind::Identity(i)) = c.generated.as_ref().map(|g| &g.kind) else {
+        panic!("{c:?}");
+    };
+    assert_eq!((i.start, i.step), (Some(-1), Some(-2)));
+    for (sql, option) in [
+        (
+            "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 START WITH 2))",
+            "START",
+        ),
+        (
+            "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY \
+             (INCREMENT BY 1 START WITH 1 INCREMENT BY 2 START WITH 3))",
+            "STEP",
+        ),
+    ] {
+        let (class, message, _) = fail(sql);
+        assert_eq!(
+            class,
+            ErrorClass::IdentityColumnsDuplicatedSequenceGeneratorOption,
+            "{sql}"
+        );
+        assert!(
+            message.contains(&format!("generator option: {option}.")),
+            "{sql}: {message}"
+        );
+    }
+    let (class, _, _) =
+        fail("CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 0))");
+    assert_eq!(class, ErrorClass::IdentityColumnsIllegalStep);
+    let (class, _, _) = fail(
+        "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 1 START WITH 2) \
+         COMMENT 'x' COMMENT 'y')",
+    );
+    assert_eq!(class, ErrorClass::CreateTableColumnDescriptorDuplicate);
+    // A count out of range is a syntax error, as is `10L`.
+    let (class, _, _) = fail(
+        "CREATE TABLE t (a BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -99999999999999999999))",
+    );
+    assert_eq!(class, ErrorClass::ParseSyntaxError);
+
+    // `SKEWED BY` and CTAS restrictions.
+    let (class, message, _) = fail("CREATE TABLE t (a INT) AS SELECT 1");
+    assert_eq!(class, ErrorClass::LegacyErrorTemp0035);
+    assert!(
+        message
+            .contains("Schema may not be specified in a Create Table As Select (CTAS) statement"),
+        "{message}"
+    );
+    let (class, message, _) = fail("CREATE TABLE t PARTITIONED BY (a INT) AS SELECT 1");
+    assert_eq!(class, ErrorClass::LegacyErrorTemp0035);
+    assert!(
+        message.contains(
+            "Partition column types may not be specified in Create Table As Select (CTAS)"
+        ),
+        "{message}"
+    );
+    let (_, message, _) = fail("CREATE TABLE t (a INT) PARTITIONED BY (b INT) AS SELECT 1");
+    assert!(message.contains("Schema may not be specified"), "{message}");
+    assert!(parse_statement("CREATE TABLE t PARTITIONED BY (a) AS SELECT 1 AS a", &d).is_ok());
+
+    // Literals anywhere in the statement get the query checks.
+    let bad = "DATE '2020-13-45'";
+    for sql in [
+        format!("CREATE TABLE t (a DATE DEFAULT {bad})"),
+        format!("CREATE TABLE t (a DATE GENERATED ALWAYS AS ({bad}))"),
+        format!("CREATE TABLE t (a INT CHECK ({bad} IS NULL))"),
+        format!("CREATE TABLE t (a INT, CONSTRAINT c CHECK ({bad} IS NULL))"),
+        format!("CREATE TABLE t (a INT) OPTIONS (k {bad})"),
+        format!("CREATE TABLE t (a INT) PARTITIONED BY (bucket(2, {bad}))"),
+        format!("CREATE TABLE IDENTIFIER({bad} || 'x') (a INT)"),
+        format!("CREATE TABLE t (IDENTIFIER({bad} || 'x') INT)"),
+        format!("CREATE TABLE t (a INT) AS SELECT {bad}"),
+        format!("CREATE TABLE t (a INT DEFAULT {bad}) AS SELECT 1"),
+    ] {
+        assert_eq!(fail(&sql).0, ErrorClass::InvalidTypedLiteral, "{sql}");
+    }
+
+    // The order of the checks.
+    for (sql, class) in [
+        (
+            "CREATE TABLE t (a INT COMMENT 'x' COMMENT 'y') COMMENT 'x' COMMENT 'y'",
+            ErrorClass::CreateTableColumnDescriptorDuplicate,
+        ),
+        (
+            "CREATE TABLE t (a INT) COMMENT 'x' COMMENT 'y' SKEWED BY (a) ON (1)",
+            ErrorClass::DuplicateClauses,
+        ),
+        (
+            "CREATE TABLE t (a INT) COMMENT 'x' COMMENT 'y' AS SELECT 1",
+            ErrorClass::DuplicateClauses,
+        ),
+        (
+            "CREATE TABLE t (a INT) OPTIONS (k DATE '2020-13-45') COMMENT 'x' COMMENT 'y'",
+            ErrorClass::DuplicateClauses,
+        ),
+        (
+            "CREATE TABLE t SKEWED BY (a) ON (1) AS SELECT DATE '2020-13-45'",
+            ErrorClass::InvalidStatementOrClause,
+        ),
+    ] {
+        assert_eq!(fail(sql).0, class, "{sql}");
+    }
+}
+
+/// With `double_quoted_identifiers`, a double-quoted word after a
+/// partition column name reads as its type, as in a column definition.
+#[test]
+fn create_table_double_quoted_partition_type() {
+    let dq = ParserOptions {
+        double_quoted_identifiers: true,
+        ..ParserOptions::default()
+    };
+    let column = parse_statement("CREATE TABLE t (a \"int\")", &dq).unwrap_err();
+    let partition =
+        parse_statement("CREATE TABLE t (a INT) PARTITIONED BY (b \"int\")", &dq).unwrap_err();
+    assert_eq!(column.error.error_class(), ErrorClass::UnsupportedDatatype);
+    assert_eq!(
+        partition.error.error_class(),
+        ErrorClass::UnsupportedDatatype
+    );
+}
+
+/// An error deferred before a speculative parse that then succeeds is
+/// still the one reported.
+#[test]
+fn deferred_error_survives_a_speculative_parse() {
+    let d = ParserOptions::default();
+    for sql in [
+        "SELECT a ! IN (1), CAST(b AS STRING COLLATE c) FROM t",
+        "CREATE TABLE IDENTIFIER(CASE WHEN x ! IN (1) THEN 't' END) (SELECT 1)",
+    ] {
+        let e = parse_statement(sql, &d).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::SyntaxDiscontinuedBangEqualsNot,
+            "{sql}"
+        );
+        let bang = sql.find('!').unwrap();
+        assert_eq!(e.span.range(), bang..bang + 1, "{sql}");
+    }
 }

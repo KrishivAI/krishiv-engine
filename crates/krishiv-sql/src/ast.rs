@@ -359,6 +359,13 @@ pub struct CreateTable {
     pub tblproperties: Vec<TableOption>,
     /// The `AS query` (or bare query) of a CTAS.
     pub as_query: Option<Box<Query>>,
+    /// The first clause written more than once, in the order Spark checks
+    /// them (`TBLPROPERTIES`, `OPTIONS`, `PARTITIONED BY`, `STORED AS/BY`,
+    /// `ROW FORMAT`, `COMMENT`, `DEFAULT COLLATION`, `CLUSTERED BY`,
+    /// `CLUSTER BY`, `LOCATION`): the statement then fails with
+    /// `DUPLICATE_CLAUSES`. Repeated clauses are merged above (lists
+    /// appended, the later single value kept).
+    pub duplicate_clause: Option<&'static str>,
     /// Source text, from `CREATE` to the end of the statement.
     pub span: Span,
 }
@@ -391,6 +398,12 @@ pub struct ColumnDef {
     pub comment: Option<String>,
     /// Inline constraints.
     pub constraints: Vec<ColumnConstraint>,
+    /// The first descriptor written twice, in source order (`NOT NULL`,
+    /// `DEFAULT`, `GENERATED ALWAYS AS`, `COMMENT` or `CONSTRAINT`, as
+    /// Spark names them): the statement then fails with
+    /// `CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE`. The later occurrence's
+    /// value is the one kept above.
+    pub duplicate_descriptor: Option<&'static str>,
     /// Source text.
     pub span: Span,
 }
@@ -424,6 +437,10 @@ pub struct IdentityColumn {
     pub start: Option<i64>,
     /// `INCREMENT BY n`.
     pub step: Option<i64>,
+    /// The first option written twice, in source order (`START` or
+    /// `STEP`, as Spark names them): the statement then fails with
+    /// `IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION`.
+    pub duplicate_option: Option<&'static str>,
     /// Source text.
     pub span: Span,
 }

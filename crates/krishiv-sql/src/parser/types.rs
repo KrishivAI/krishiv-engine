@@ -295,7 +295,10 @@ impl Parser<'_> {
                 let save = p.checkpoint();
                 p.bump();
                 match p.table_name() {
-                    Ok(name) => Some(name),
+                    Ok(name) => {
+                        p.commit(save);
+                        Some(name)
+                    }
                     Err(Fail::Syntax) => {
                         p.restore(save);
                         None

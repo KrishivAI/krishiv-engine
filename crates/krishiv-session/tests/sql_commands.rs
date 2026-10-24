@@ -759,7 +759,8 @@ fn unexecuted_commands_parse_and_report_unsupported() {
     let s = session();
     for sql in [
         "CREATE TABLE t (a INT NOT NULL DEFAULT 1, b STRING COMMENT 'x') USING parquet \
-         PARTITIONED BY (a) TBLPROPERTIES ('k' = 'v') AS SELECT id FROM people",
+         PARTITIONED BY (a) TBLPROPERTIES ('k' = 'v')",
+        "CREATE TABLE t USING parquet PARTITIONED BY (a) AS SELECT id AS a FROM people",
         "CREATE TABLE t LIKE people",
         "DROP TABLE IF EXISTS t PURGE",
         "CREATE DATABASE IF NOT EXISTS db COMMENT 'c'",
