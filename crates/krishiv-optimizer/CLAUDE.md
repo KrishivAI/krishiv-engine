@@ -11,7 +11,8 @@ Paths are relative to this crate.
 - `src/lib.rs` rule batches and the `optimize` entry point
 - `src/dag.rs` `dag::Rewriter`, the rewrite-once rule for shared subtrees
 - `src/fold.rs` constant folding; `src/pushdown.rs` predicate pushdown (below a window only on partition keys); `src/prune.rs` column pruning (removes unused window columns)
-- `src/project.rs` projection rules; `src/limit.rs` limit rules
+- `src/project.rs` projection rules; `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
+  `InferWindowGroupLimit` decision (applied by the physical planner)
 - `src/restrict.rs` subquery restriction rules
 - `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads
 - `tests/it/rules.rs` per-rule snapshots; `tests/it/join_order.rs` ordering snapshots; `tests/it/support/eval.rs` reference interpreter
