@@ -12,11 +12,13 @@
 
 mod conditionals;
 mod exchanges;
+mod folding;
 mod hints;
 mod listing;
 mod physical;
 mod runtime_filters;
 mod semantics;
+mod sum_rewrite;
 mod tpch;
 mod window;
 mod write;

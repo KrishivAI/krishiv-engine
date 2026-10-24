@@ -52,6 +52,7 @@ TABLES = {
     "u": "a INT, d STRING",
     "wide": "col1 INT, col2 INT, col3 INT, col4 INT, col5 INT, col6 INT, col7 INT, colx INT",
     "MixedCase": "Id INT, Name STRING",
+    "g": "x INT, l BIGINT",
     "n": "ti TINYINT, si SMALLINT, i INT, l BIGINT, f FLOAT, d DOUBLE, dc DECIMAL(10,2), dw DECIMAL(38,10), "
     "s STRING, bo BOOLEAN, dt DATE, ts TIMESTAMP, tn TIMESTAMP_NTZ, bi BINARY",
 }
@@ -519,6 +520,173 @@ ANALYZER_FIXES = [
     ]
 ]
 
+# Constant folding of arguments that need a constant, and ORDER BY / HAVING over a grouping expression
+# (`--section folding`, written to its own fixture). Spark folds any foldable expression for these
+# arguments (`round`'s scale, `ceil`/`floor`'s scale, `date_part`'s field, `LIMIT`) and raises what
+# folding raises; `first`/`last` match a boolean `Literal` and fold nothing.
+FOLD_SCALES = [
+    "1+1",
+    "i",
+    "1+i",
+    "2147483647+1",
+    "CAST(1 AS BIGINT)+1",
+    "-(-2)",
+    "5/2",
+    "5 div 2",
+    "5 % 3",
+    "1/0",
+    "if(true,1,2)",
+    "CASE WHEN 1=1 THEN 3 ELSE 2 END",
+    "coalesce(NULL,2)",
+    "abs(-2)",
+    "length('abc')",
+    "1.5+1.5",
+    "1.5D+1",
+    "NULL+1",
+    "3+5L",
+    "2L",
+    "CAST(2 AS INT)",
+    "1=1",
+    "'1'||'1'",
+    "upper('2')",
+    "(1+1) * (2-1)",
+    "1 < 2",
+    "NOT TRUE",
+    "CASE WHEN 1=2 THEN 1/0 ELSE 2 END",
+    "if(1=1, 2, 1/0)",
+]
+FOLDING = (
+    [
+        (f"SELECT {fn}(dc, {x}) FROM n", conf)
+        for fn in ["round", "bround", "ceil", "floor"]
+        for x in FOLD_SCALES
+        for conf in [{}, NO_ANSI]
+    ]
+    + [
+        (f"SELECT date_part({x}, dt) FROM n", conf)
+        for x in ["'y'||'ear'", "s", "CAST(NULL AS STRING)", "upper('year')", "1+1"]
+        for conf in [{}, NO_ANSI]
+    ]
+    + [
+        (f"SELECT {fn}(i, {x}) FROM n", {})
+        for fn in ["first", "last"]
+        for x in ["true", "false", "1=1", "true AND true", "i > 1", "NOT FALSE", "NULL", "CAST(true AS BOOLEAN)"]
+    ]
+    + [
+        (f"SELECT {fn}(dt, {x}) FROM n", conf)
+        for fn in ["date_add", "date_sub"]
+        for x in ["'1'||'2'", "'1'||'.5'", "upper('1')", "1+1", "'a'", "s", "1.5"]
+        for conf in [{}, NO_ANSI]
+    ]
+    + [
+        (f"SELECT date_add(dt, {x}) FROM n", NO_ANSI)
+        for x in [
+            "'1'",
+            "'1.5'",
+            "' 12 '",
+            "'+3'",
+            "'1.'",
+            "'.5'",
+            "'1e2'",
+            "'0x1'",
+            "'2147483648'",
+            "'-0'",
+            "'1.0'",
+            "'abc'",
+            "''",
+            "' '",
+            "'1 2'",
+        ]
+    ]
+    + [
+        (f"SELECT * FROM n LIMIT {x}", conf)
+        for x in [
+            "1+1",
+            "i",
+            "2147483647+1",
+            "length('ab')",
+            "CAST(NULL AS INT)",
+            "-1",
+            "1+(-2)",
+            "1L",
+            "'1'",
+            "1.5",
+            "CASE WHEN 1=1 THEN 5 ELSE 6 END",
+            "(SELECT 1)",
+        ]
+        for conf in [{}, NO_ANSI]
+    ]
+)
+ORDER_BY_GROUPED = [
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 2",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY 1 + x",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY m + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x",
+    "SELECT x m, count(*) c FROM g GROUP BY x ORDER BY x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY abs(x + 1)",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY (x + 1) * count(*)",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY sum(x)",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY sum(x + 1)",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3 ORDER BY x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING x + 2 > 3",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3",
+    "SELECT count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1",
+    "SELECT count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3",
+    "SELECT count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3 ORDER BY x + 1",
+    "SELECT sum(l) FROM g GROUP BY x + 1 HAVING x + 1 > 3 ORDER BY x + 1 DESC",
+    "SELECT count(*) c FROM g GROUP BY x + 1 HAVING x + 1 > 3 ORDER BY x + 2",
+    # A HAVING that grows the aggregate leaves a projection over it: a sort cannot grow it again
+    "SELECT count(*) c FROM g GROUP BY x HAVING sum(l) > 1 ORDER BY sum(l)",
+    "SELECT count(*) c FROM g GROUP BY x HAVING sum(l) > 1 ORDER BY c",
+    "SELECT count(*) c FROM g GROUP BY x + 1 HAVING sum(l) > 1 ORDER BY x + 1",
+    "SELECT count(*) c FROM g GROUP BY x HAVING x > 1 ORDER BY sum(l)",
+    "SELECT count(*) c FROM g GROUP BY x HAVING count(*) > 0 ORDER BY sum(l)",
+    "SELECT count(*) c FROM g GROUP BY x + 1 HAVING count(*) > 0 ORDER BY x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY m ORDER BY x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY 1 ORDER BY x + 1",
+    "SELECT DISTINCT x + 1 FROM g ORDER BY x + 1",
+    "SELECT DISTINCT x + 1 m FROM g ORDER BY x + 2",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1 DESC, c",
+    "SELECT abs(x) m FROM g GROUP BY abs(x) ORDER BY abs(x)",
+    "SELECT X + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY X + 1",
+    "SELECT g.x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY g.x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY g.x + 1 ORDER BY x + 1",
+    "SELECT sum(x) + 1 m FROM g GROUP BY x + 1 ORDER BY x + 1",
+    "SELECT sum(x) s FROM g GROUP BY x + 1 ORDER BY x + 1, s",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY x + 1 + 1",
+    "SELECT cast(x as string) m, count(*) c FROM g GROUP BY cast(x as string) ORDER BY cast(x as string)",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY (SELECT 1) + x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 ORDER BY CASE WHEN x + 1 > 1 THEN 1 ELSE 2 END",
+    "SELECT (x + 1) * 2 m FROM g GROUP BY x + 1 ORDER BY x + 1",
+    "SELECT (x + 1) * 2 m FROM g GROUP BY x + 1 ORDER BY (x + 1) * 2",
+    "SELECT x + l m, count(*) c FROM g GROUP BY x + l ORDER BY l + x",
+    "SELECT x * l m, count(*) c FROM g GROUP BY x * l ORDER BY l * x",
+    "SELECT (x = 1 AND l = 2) m, count(*) c FROM g GROUP BY (x = 1 AND l = 2) ORDER BY (l = 2 AND x = 1)",
+    "SELECT (x = 1 OR l = 2) m, count(*) c FROM g GROUP BY (x = 1 OR l = 2) ORDER BY (l = 2 OR x = 1)",
+    "SELECT (x = l) m, count(*) c FROM g GROUP BY (x = l) ORDER BY (l = x)",
+    "SELECT (x <=> l) m, count(*) c FROM g GROUP BY (x <=> l) ORDER BY (l <=> x)",
+    "SELECT (x < l) m, count(*) c FROM g GROUP BY (x < l) ORDER BY (l > x)",
+    "SELECT (x <= l) m, count(*) c FROM g GROUP BY (x <= l) ORDER BY (l >= x)",
+    "SELECT greatest(x, l) m, count(*) c FROM g GROUP BY greatest(x, l) ORDER BY greatest(l, x)",
+    "SELECT least(x, l) m, count(*) c FROM g GROUP BY least(x, l) ORDER BY least(l, x)",
+    "SELECT x - l m, count(*) c FROM g GROUP BY x - l ORDER BY l - x",
+    "SELECT concat(cast(x as string), cast(l as string)) m, count(*) c FROM g GROUP BY concat(cast(x as string), "
+    "cast(l as string)) ORDER BY concat(cast(l as string), cast(x as string))",
+    "SELECT coalesce(x, l) m, count(*) c FROM g GROUP BY coalesce(x, l) ORDER BY coalesce(l, x)",
+    "SELECT (x + 1) + 2 m, count(*) c FROM g GROUP BY (x + 1) + 2 ORDER BY x + (1 + 2)",
+    "SELECT x + 1 + l m, count(*) c FROM g GROUP BY x + 1 + l ORDER BY l + 1 + x",
+    "SELECT x + l m, count(*) c FROM g GROUP BY l + x ORDER BY x + l",
+    "SELECT l - l % 60 m, count(*) c FROM g WHERE x = 62 GROUP BY l - l % 60 ORDER BY l - l % 60 LIMIT 10",
+    "SELECT x m, count(*) c FROM g GROUP BY x HAVING x > 3 ORDER BY x",
+    "SELECT x m, count(*) c FROM g GROUP BY x HAVING x > 3 ORDER BY sum(l)",
+    "SELECT x m, count(*) c FROM g GROUP BY x HAVING count(*) > 3 ORDER BY sum(l)",
+    "SELECT x m FROM g GROUP BY x HAVING count(*) > 3 ORDER BY x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING count(*) > 3 ORDER BY x + 1",
+    "SELECT x + 1 m, count(*) c FROM g GROUP BY x + 1 HAVING count(*) > 3 ORDER BY m",
+]
+FOLDING += [(sql, conf) for sql in ORDER_BY_GROUPED for conf in [{}]]
+
 TPCH_DIR = Path(__file__).resolve().parents[2] / "bench" / "queries" / "tpch"
 
 
@@ -620,21 +788,55 @@ def analyze(thunk) -> dict:
     }
 
 
+def view_query(cols: str) -> str:
+    """`SELECT CAST(NULL AS <type>) AS <name>, ... WHERE false` for a DDL column list."""
+    parts, depth, cur = [], 0, ""
+    for ch in cols:
+        depth += (ch == "(") - (ch == ")")
+        if ch == "," and depth == 0:
+            parts.append(cur.strip())
+            cur = ""
+        else:
+            cur += ch
+    parts.append(cur.strip())
+    items = []
+    for part in parts:
+        name, type_ = part.split(" ", 1)
+        items.append(f"CAST(NULL AS {type_}) AS {name}")
+    return f"SELECT {', '.join(items)} WHERE false"
+
+
 def main() -> None:
     from pyspark.sql import SparkSession
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--remote", default="sc://localhost:15002")
     ap.add_argument("--out", default="tests/fixtures/spark-4.2.0/analyzer-goldens.json")
+    ap.add_argument(
+        "--section",
+        choices=["all", "folding"],
+        default="all",
+        help="`folding` writes only the constant-folding and ORDER BY-over-aggregate cases "
+        "(tests/fixtures/spark-4.2.0/analyzer-folding-goldens.json)",
+    )
+    ap.add_argument(
+        "--views",
+        action="store_true",
+        help="create the tables as temporary views over empty relations (no catalog writes: for a shared server)",
+    )
     args = ap.parse_args()
 
     spark = SparkSession.builder.remote(args.remote).getOrCreate()
     if spark.version != "4.2.0":
         raise SystemExit(f"expected Spark 4.2.0, found {spark.version}")
-    spark.sql("CREATE DATABASE IF NOT EXISTS default")
-    for name, cols in TABLES.items():
-        spark.sql(f"DROP TABLE IF EXISTS {name}")
-        spark.sql(f"CREATE TABLE {name} ({cols}) USING parquet")
+    if args.views:
+        for name, cols in TABLES.items():
+            spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW {name} AS {view_query(cols)}")
+    else:
+        spark.sql("CREATE DATABASE IF NOT EXISTS default")
+        for name, cols in TABLES.items():
+            spark.sql(f"DROP TABLE IF EXISTS {name}")
+            spark.sql(f"CREATE TABLE {name} ({cols}) USING parquet")
     tables = {
         name: [
             {"name": f.name, "type": f.dataType.simpleString(), "nullable": f.nullable}
@@ -653,15 +855,19 @@ def main() -> None:
                 spark.conf.unset(k)
 
     tpch = []
-    for path in sorted(TPCH_DIR.glob("q*.sql")):
-        sql = path.read_text(encoding="utf-8").strip().rstrip(";")
-        tpch.append({"id": path.stem, **run_sql(sql, {})})
-    corpus = [
-        {"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in CORPUS + MATRIX + CASTS + ANALYZER_FIXES
-    ]
-    plan_ids = [{"id": i, "dataframe": d, **analyze(f)} for i, d, f in plan_id_cases(spark)]
+    plan_ids = []
+    if args.section == "folding":
+        corpus = [{"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in FOLDING]
+    else:
+        for path in sorted(TPCH_DIR.glob("q*.sql")):
+            sql = path.read_text(encoding="utf-8").strip().rstrip(";")
+            tpch.append({"id": path.stem, **run_sql(sql, {})})
+        corpus = [
+            {"sql": sql, "conf": conf, **run_sql(sql, conf)} for sql, conf in CORPUS + MATRIX + CASTS + ANALYZER_FIXES
+        ]
+        plan_ids = [{"id": i, "dataframe": d, **analyze(f)} for i, d, f in plan_id_cases(spark)]
     for name in TABLES:
-        spark.sql(f"DROP TABLE IF EXISTS {name}")
+        spark.sql(f"DROP VIEW IF EXISTS {name}" if args.views else f"DROP TABLE IF EXISTS {name}")
 
     doc = {
         "format_version": FORMAT_VERSION,

@@ -12,7 +12,7 @@ use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::planner::{ExplainNode, ProviderStatistics, TableProviderResolver};
 use krishiv_optimizer::estimated_rows;
 use krishiv_plan::Plan;
-use krishiv_sql::ast::{Explain, Statement};
+use krishiv_sql::ast::{Explain, SetKind, Statement, TimeZone};
 
 use crate::dataframe::{Analysis, DataFrame, ExplainMode};
 use crate::functions::lit;
@@ -44,14 +44,17 @@ struct Planned {
 
 impl Session {
     /// Answers `EXPLAIN` as `spark.sql` does: eagerly, as a one-row
-    /// `plan STRING` frame. A query that fails to analyze or plan is part
-    /// of the text, not an error; a syntax error is an error.
+    /// `plan STRING` frame. A command (`SET`, `RESET`, `CREATE TEMPORARY
+    /// VIEW`, `DROP VIEW`) explains as its own plan text. A query that
+    /// fails to analyze or plan is part of the text, not an error; a
+    /// syntax error is an error.
     pub(crate) async fn explain_statement(&self, e: &Explain) -> Result<DataFrame, KrishivError> {
+        if !matches!(&*e.statement, Statement::Query(_)) {
+            let text = command_plan(&e.statement)?;
+            return self.one_row(&text).await;
+        }
         let Statement::Query(q) = &*e.statement else {
-            return Err(KrishivUnsupportedFeature {
-                feature: "EXPLAIN of an EXPLAIN in sessions".to_owned(),
-            }
-            .into());
+            unreachable!("an explained query");
         };
         let plan = krishiv_sql::lower(q, krishiv_plan::SourceId(0)).map_err(|e| e.error)?;
         let explained = DataFrame::new(self.clone(), Arc::clone(plan.root()));
@@ -68,8 +71,84 @@ impl Session {
         };
         self.one_row(&text).await
     }
+}
 
-    /// A frame of one row, the string column `plan`.
+/// The plan text of an explained command: the command itself, under the
+/// physical-plan header Spark prints.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for an `EXPLAIN` of an `EXPLAIN`.
+fn command_plan(statement: &Statement) -> Result<String, KrishivError> {
+    let command = match statement {
+        Statement::Set(s) => match &s.kind {
+            SetKind::All => "SET".to_owned(),
+            SetKind::Verbose => "SET -v".to_owned(),
+            SetKind::Show { key, .. } => format!("SET {key}"),
+            SetKind::Assign { key, value, .. } => format!("SET {key}={value}"),
+            SetKind::TimeZone { zone, .. } => match zone {
+                TimeZone::Local => "SET TIME ZONE LOCAL".to_owned(),
+                TimeZone::Named(zone) => format!("SET TIME ZONE '{zone}'"),
+                _ => {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: "EXPLAIN of this SET form in sessions".to_owned(),
+                    }
+                    .into());
+                }
+            },
+            _ => {
+                return Err(KrishivUnsupportedFeature {
+                    feature: "EXPLAIN of this SET form in sessions".to_owned(),
+                }
+                .into());
+            }
+        },
+        Statement::Reset(r) => match &r.key {
+            None => "RESET".to_owned(),
+            Some(key) => format!("RESET {key}"),
+        },
+        Statement::CreateView(v) => {
+            let mut text = if v.or_replace {
+                "CREATE OR REPLACE TEMPORARY VIEW ".to_owned()
+            } else {
+                "CREATE TEMPORARY VIEW ".to_owned()
+            };
+            text.push_str(&format!("`{}`", v.name.value.replace('`', "``")));
+            if !v.columns.is_empty() {
+                let columns: Vec<String> = v
+                    .columns
+                    .iter()
+                    .map(|c| format!("`{}`", c.name.value.replace('`', "``")))
+                    .collect();
+                text.push_str(&format!(" ({})", columns.join(", ")));
+            }
+            text.push_str(" AS ...");
+            text
+        }
+        Statement::DropView(v) => {
+            if v.if_exists {
+                format!("DROP VIEW IF EXISTS `{}`", v.name.value.replace('`', "``"))
+            } else {
+                format!("DROP VIEW `{}`", v.name.value.replace('`', "``"))
+            }
+        }
+        Statement::Explain(_) => {
+            return Err(KrishivUnsupportedFeature {
+                feature: "EXPLAIN of an EXPLAIN in sessions".to_owned(),
+            }
+            .into());
+        }
+        _ => {
+            return Err(KrishivUnsupportedFeature {
+                feature: "EXPLAIN of this statement in sessions".to_owned(),
+            }
+            .into());
+        }
+    };
+    Ok(format!("== Physical Plan ==\n{command}\n"))
+}
+
+/// A frame of one row, the string column `plan`.
+impl Session {
     async fn one_row(&self, text: &str) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
         let Statement::Query(q) =

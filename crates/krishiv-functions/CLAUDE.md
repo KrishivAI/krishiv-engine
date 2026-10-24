@@ -27,6 +27,21 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
   version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`) and `decimalOperations.allowPrecisionLoss`. `round`/`ceil`/`floor` bind
   their scale from a `BindArg::Literal`. Operators, `CAST` and aggregates are not bound here.
 
+## Key files
+Paths are relative to this crate.
+- `src/signature.rs` call-site types the analyzer uses (`FunctionKind`, `ArgType`, `InputType`, `ResultType`, `Arity`)
+- `src/registry/mod.rs` `builtins()` and `Registry::lookup`; its `Execution` includes `Window` (run by the window operator, never called without `OVER`)
+- `src/registry/defs.rs` string, datetime and aggregate signatures; `src/registry/math.rs` math and `try_*` signatures
+- `src/registry/conditional.rs` conditional evaluators; `src/registry/hashing.rs` hash signatures
+- `src/registry/catalog.rs` catalog rows loaded from `vendored/spark-functions.tsv`
+- `src/scalar/mod.rs` `bind_scalar`; `src/scalar/args.rs` argument handling shared by bindings
+- `src/scalar/{string,datetime,math,arith,hash,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
+- `vendored/spark-functions.tsv` generated from Spark runs; never edit by hand
+
+## Extension points
+- New scalar function: a signature in `src/registry/`, a catalog row (regenerate with `tests/scripts/gen_function_registry.py`), a binding in its family module under `src/scalar/`, tests in `src/scalar/tests/`.
+- New function family: a `src/scalar/<family>.rs` with `NAMES` and `bind`, wired into `bind_scalar` in `src/scalar/mod.rs`.
+
 - `scalar/regex` (`regexp_replace`): Java patterns are translated to `fancy_regex` by `regex/java.rs` (ASCII `\d\w\s`,
   Java's `.`/`$`/`^` and line terminators, `\Q..\E`, POSIX `\p{..}`); the replacement is read as `Matcher.appendReplacement`
   does (errors are `INVALID_REGEXP_REPLACE`). Unsupported Java constructs are `INVALID_PARAMETER_VALUE.PATTERN`.
@@ -45,5 +60,5 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
 ## ADRs (in `../krishiv-internal/adr/`)
 0008, 0009, 0010
 
-## Test
+## Tests
 `cargo nextest run -p krishiv-functions --no-tests=pass` · `cargo clippy -p krishiv-functions --all-targets -- -D warnings`

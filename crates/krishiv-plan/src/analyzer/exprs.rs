@@ -641,13 +641,14 @@ impl Resolver<'_> {
                     deterministic: entry.deterministic,
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
+                let shown = self.call_shown(&f.name, &expr, kids, &call_kids);
                 Bound {
                     agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
                     } else {
                         agg
                     },
-                    shown: shown_call(&expr, kids, &call_kids),
+                    shown,
                     expr,
                     ..keep(ty)
                 }
@@ -775,14 +776,16 @@ impl Resolver<'_> {
         }
         let constants: Vec<Option<Constant>> = kids
             .iter()
-            .map(|k| fold::constant(&k.expr, self.ctx.conf.ansi))
+            .map(|k| self.fold(&k.expr, self.ctx.conf.ansi))
             .collect();
+        let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
         // Rendered only if a rule's error quotes an argument.
         let sql = |i: usize| kids.get(i).map(|k| pretty(&k.shown()));
         let given: Vec<ArgType> = kids.iter().map(|k| k.ty.clone()).collect();
         let ansi = self.ctx.conf.ansi;
         let loss = self.ctx.conf.decimal_precision_loss;
         let call = CallTypes::new(&given, &constants)
+            .with_literals(&literals)
             .with_sql(&sql)
             .with_ansi(ansi)
             .with_decimal_loss(loss);
@@ -798,11 +801,91 @@ impl Resolver<'_> {
             .collect();
         let types: Vec<ArgType> = call_kids.iter().map(|k| k.ty.clone()).collect();
         let call = CallTypes::new(&types, &constants)
+            .with_literals(&literals)
             .with_sql(&sql)
             .with_ansi(ansi)
             .with_decimal_loss(loss);
-        let ty = (entry.result)(&call).map_err(|err| AnalysisError::new(err, e.origin))?;
-        Ok((call_kids, ty))
+        let ty = (entry.result)(&call).map_err(|err| {
+            // An error folding an argument is Spark's, cited at the argument.
+            let origin = constants
+                .iter()
+                .zip(kids)
+                .find_map(|(c, k)| match c {
+                    Some(Constant::Error(folded)) if *folded == err => Some(k.expr.origin),
+                    _ => None,
+                })
+                .unwrap_or(e.origin);
+            AnalysisError::new(err, origin)
+        })?;
+        Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// `ntile`'s bucket count as the literal it folds to (`ntile(1 + 1)`):
+    /// the window operator reads a literal. The rule above checked it is an
+    /// `int` constant.
+    #[inline(never)]
+    fn folded_ntile(
+        entry: &FunctionEntry,
+        constants: &[Option<Constant>],
+        mut kids: Vec<Bound>,
+    ) -> Vec<Bound> {
+        if entry.id.name() == "ntile"
+            && let (Some(Some(Constant::Integral(n))), Some(k)) =
+                (constants.first(), kids.first_mut())
+            && let Ok(n) = i32::try_from(*n)
+        {
+            k.expr = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::Integer(n))).with_origin(k.expr.origin),
+            );
+        }
+        kids
+    }
+
+    /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,
+    /// ' 12 ')` and `date_add(d, '1' || '2')` without ANSI show the day count
+    /// as an integer (`date_add(d, 12)`): Spark folds the string it casts to
+    /// `INT`. Out of line: it is on the path of every call.
+    #[inline(never)]
+    fn call_shown(
+        &self,
+        name: &str,
+        expr: &Expr,
+        kids: &[Bound],
+        cast: &[Bound],
+    ) -> Option<Arc<Expr>> {
+        let days = self.legacy_day_count(name, kids);
+        shown_call(expr, days.as_deref().unwrap_or(kids), cast)
+    }
+
+    /// The value of `e` as a constant (`fold::constant`) under this
+    /// session's settings, with `ansi` for the arithmetic: shared with
+    /// every other fold of the pass.
+    pub(super) fn fold(&self, e: &Arc<Expr>, ansi: bool) -> Option<Constant> {
+        let conf = fold::Conf::new(ansi, self.ctx.conf.decimal_precision_loss, self.ctx.profile);
+        fold::constant(e, conf, &mut self.folds.borrow_mut())
+    }
+
+    fn legacy_day_count(&self, name: &str, kids: &[Bound]) -> Option<Vec<Bound>> {
+        if self.ctx.conf.ansi
+            || !["date_add", "dateadd", "date_sub"]
+                .iter()
+                .any(|n| name.eq_ignore_ascii_case(n))
+        {
+            return None;
+        }
+        let kid = kids.get(1)?;
+        if kid.ty.data_type != Some(DataType::String) {
+            return None;
+        }
+        let Some(Constant::String(text)) = self.fold(&kid.expr, false) else {
+            return None;
+        };
+        let days = krishiv_functions::registry::legacy_day_count(&text)?;
+        let mut shown = kids.to_vec();
+        shown[1].shown = Some(Arc::new(Expr::new(ExprNode::Literal(Literal::String(
+            days.to_string(),
+        )))));
+        Some(shown)
     }
 
     pub(super) fn implicit_cast(&self, b: &Bound, to: Option<DataType>) -> Bound {
@@ -1851,7 +1934,9 @@ fn pretty_node(x: &Expr, k: &[&str]) -> String {
         }
         ExprNode::Star(_) => "*".to_owned(),
         ExprNode::Window(w) => pretty_window(w, k),
-        ExprNode::Function(FunctionCall { name, distinct, .. }) => call(name, None, *distinct, k),
+        ExprNode::Function(FunctionCall { name, distinct, .. }) => {
+            call(name, Builtin::from_name(name), *distinct, k)
+        }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),
@@ -2022,8 +2107,42 @@ fn pretty_literal(v: &Literal) -> String {
     }
 }
 
+/// How Spark's canonicalisation (`Expression.canonicalized`) orders a call's
+/// operands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Canon {
+    /// Operands in order.
+    Ordered,
+    /// `+ * AND OR`: nested calls of the same operator are flattened and
+    /// the operands sorted (`greatest`/`least` and `= <=>` sort too, with
+    /// nothing to flatten for the latter).
+    Commutative { flatten: bool },
+    /// `a > b` is `b < a`, `a >= b` is `b <= a`: the call is renamed and
+    /// its operands swapped.
+    Flipped(Builtin),
+}
+
+fn canon(f: &ResolvedFunction) -> Canon {
+    match &f.id {
+        FunctionId::Builtin(Builtin::Add | Builtin::Multiply | Builtin::And | Builtin::Or) => {
+            Canon::Commutative { flatten: true }
+        }
+        FunctionId::Builtin(Builtin::Eq | Builtin::EqNullSafe) => {
+            Canon::Commutative { flatten: false }
+        }
+        FunctionId::Builtin(Builtin::Gt) => Canon::Flipped(Builtin::Lt),
+        FunctionId::Builtin(Builtin::GtEq) => Canon::Flipped(Builtin::LtEq),
+        FunctionId::Registry { name, .. } if matches!(name.as_str(), "greatest" | "least") => {
+            Canon::Commutative { flatten: false }
+        }
+        _ => Canon::Ordered,
+    }
+}
+
 /// A semantic key: equal for expressions that compute the same value,
-/// whatever their origins, column spellings or (top-level) alias.
+/// whatever their origins, column spellings or (top-level) alias, and
+/// canonicalised as Spark's `semanticEquals` is (commutative operands
+/// sorted, `a > b` as `b < a`).
 pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
     let e = match &e.node {
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => &**expr,
@@ -2041,11 +2160,19 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
             stack.extend(kids.into_iter().map(|c| (c, false)));
             continue;
         }
+        let mut name = None;
+        let mut order = Canon::Ordered;
         let mut b = match &x.node {
             ExprNode::Resolved(ResolvedExpr::Column(c)) => format!("c{}", c.id.0),
             ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => format!("o{}", c.id.0),
             ExprNode::Resolved(ResolvedExpr::Function(f)) => {
-                format!("f{}:{:?}:{}", f.id.name(), f.kind, f.distinct)
+                order = canon(f);
+                let id = match order {
+                    Canon::Flipped(to) => to.name(),
+                    _ => f.id.name(),
+                };
+                name = Some(f);
+                format!("f{id}:{:?}:{}", f.kind, f.distinct)
             }
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => format!("a{}", output.id.0),
             ExprNode::Literal(v) => format!("l{v:?}"),
@@ -2072,12 +2199,78 @@ pub(super) fn semantic_key(e: &Expr, memo: &mut HashMap<usize, u128>) -> u128 {
             other => format!("u{other:?}"),
         }
         .into_bytes();
-        for c in kids {
-            b.extend_from_slice(&memo.get(&addr(c)).copied().unwrap_or(0).to_le_bytes());
+        let mut hashes: Vec<u128> = Vec::new();
+        match (order, name) {
+            (Canon::Commutative { flatten }, Some(f)) => {
+                // Flattening reads a nested operator's operands again for each
+                // way it is shared, so it stops at a bound; past it the
+                // operands are the call's own (equal expressions written the
+                // same way still match).
+                let mut budget = FLATTEN_BUDGET;
+                if !(flatten && collect_operands(x, f, memo, &mut hashes, &mut budget)) {
+                    hashes.clear();
+                    hashes.extend(
+                        kids.iter()
+                            .map(|c| memo.get(&addr(*c)).copied().unwrap_or(0)),
+                    );
+                }
+                hashes.sort_unstable();
+            }
+            (Canon::Flipped(_), _) => {
+                hashes.extend(
+                    kids.iter()
+                        .rev()
+                        .map(|c| memo.get(&addr(*c)).copied().unwrap_or(0)),
+                );
+            }
+            _ => hashes.extend(
+                kids.iter()
+                    .map(|c| memo.get(&addr(*c)).copied().unwrap_or(0)),
+            ),
+        }
+        for h in hashes {
+            b.extend_from_slice(&h.to_le_bytes());
         }
         memo.insert(addr(x), XxHash3_128::oneshot(&b));
     }
     memo.get(&addr(e)).copied().unwrap_or(0)
+}
+
+/// The most nodes [`collect_operands`] reads for one call.
+const FLATTEN_BUDGET: usize = 64;
+
+/// Adds the operand hashes of `x`, a call of `f`, to `out`: those of nested
+/// calls of the same operator and result type are gathered too (Spark's
+/// `gatherCommutative`). `false` when `budget` nodes were not enough, which
+/// keeps a shared operand (a DAG that is exponentially large as a tree) from
+/// being read once per path.
+fn collect_operands(
+    x: &Expr,
+    f: &ResolvedFunction,
+    memo: &HashMap<usize, u128>,
+    out: &mut Vec<u128>,
+    budget: &mut usize,
+) -> bool {
+    let mut done = true;
+    x.for_each_child(&mut |c| {
+        if !done {
+            return;
+        }
+        let Some(left) = budget.checked_sub(1) else {
+            done = false;
+            return;
+        };
+        *budget = left;
+        if let ExprNode::Resolved(ResolvedExpr::Function(g)) = &c.node
+            && g.id == f.id
+            && g.data_type == f.data_type
+        {
+            done = collect_operands(c, g, memo, out, budget);
+        } else {
+            out.push(memo.get(&addr(&**c)).copied().unwrap_or(0));
+        }
+    });
+    done
 }
 
 /// A frame bound's kind, for [`semantic_key`] (an offset's value is a

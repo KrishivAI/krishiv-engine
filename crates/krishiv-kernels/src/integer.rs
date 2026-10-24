@@ -22,7 +22,7 @@ use arrow_array::{Array, ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{NullBuffer, ScalarBuffer};
 
 use crate::chunk::{self, LaneOp, Resolved, Side};
-use crate::dispatch::KernelCtx;
+use crate::dispatch::Dispatch;
 use crate::error::KernelError;
 use crate::ops::{ArithOp, BinaryOp, IntNative, Operand};
 use crate::policy::{Fault, Overflow};
@@ -67,7 +67,7 @@ spark_integral!(
 
 /// The overflow error of `l op r` at `row`.
 pub(crate) fn overflow_error<T: SparkIntegral>(
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
     row: usize,
     op: ArithOp,
     l: T::Native,
@@ -140,7 +140,7 @@ impl<T: IntNative, Op: BinaryOp> LaneOp<T> for IntLane<Op> {
 pub fn binary<T, Op, O>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<PrimitiveArray<T>, KernelError>
 where
     T: SparkIntegral,
@@ -158,7 +158,7 @@ where
 pub fn binary_nulls_path<T, Op, O>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<PrimitiveArray<T>, KernelError>
 where
     T: SparkIntegral,
@@ -171,7 +171,7 @@ where
 fn binary_impl<T, Op, O>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
     force_nulls: bool,
 ) -> Result<PrimitiveArray<T>, KernelError>
 where
@@ -232,7 +232,7 @@ impl<T: IntNative> LaneOp<T> for RemLane {
 pub fn remainder<T, O>(
     l: Operand<'_, T>,
     r: Operand<'_, T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<PrimitiveArray<T>, KernelError>
 where
     T: SparkIntegral,
@@ -286,7 +286,7 @@ impl LaneOp<i64> for DivLane {
 pub fn integral_divide<O: Overflow>(
     l: Operand<'_, Int64Type>,
     r: Operand<'_, Int64Type>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<PrimitiveArray<Int64Type>, KernelError> {
     let (l, r, nulls, len) = match chunk::resolve(l, r)? {
         Resolved::AllNull(len) => return Ok(PrimitiveArray::new_null(len)),
@@ -340,7 +340,7 @@ impl<T: IntNative> LaneOp<T> for UnaryLane {
 pub fn unary<T, O>(
     op: UnaryOp,
     a: &PrimitiveArray<T>,
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
 ) -> Result<PrimitiveArray<T>, KernelError>
 where
     T: SparkIntegral,

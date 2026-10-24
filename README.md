@@ -23,7 +23,7 @@
 
 <h3 align="center">Your Spark code. No JVM. One engine for batch, streaming and always-fresh views.</h3>
 
-**Krishiv** is a Rust-native, Spark-compatible compute engine we are building for the agentic era. Keep the PySpark
+**Krishiv** is a Rust-native, Apache Spark™-compatible compute engine we are building for the agentic era. Keep the PySpark
 and Spark SQL you already write, and run it on a vectorized, Arrow-native engine that handles **batch SQL**,
 **streaming** and **incrementally maintained materialized views** with the same semantics. Start in-process on a
 laptop, and take the same code to a single server or a cluster.
@@ -251,5 +251,7 @@ require a DCO sign-off (`git commit -s`).
 
 ## Trademarks
 
-Apache Spark, Apache Arrow and Apache Iceberg are trademarks of the Apache Software Foundation. Krishiv is an
-independent project and is not affiliated with or endorsed by the Apache Software Foundation.
+Apache Spark, Apache Arrow and Apache Iceberg are trademarks of the Apache Software Foundation. Delta Lake is a
+trademark of LF Projects, LLC. Krishiv is an independent project and is not affiliated with or endorsed by the Apache
+Software Foundation or LF Projects. "Spark-compatible" describes API compatibility with Apache Spark; Krishiv is not
+Apache Spark.

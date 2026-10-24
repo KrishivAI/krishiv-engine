@@ -116,19 +116,17 @@ fn date(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Date, c)
 }
 
-/// Whether Spark's legacy string-to-`int` cast reads `s` (surrounding
-/// whitespace, a sign, digits and a fraction it truncates).
-fn legacy_int(s: &str) -> bool {
-    let t = s.trim();
-    let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
-    let (whole, fraction) = digits.split_once('.').unwrap_or((digits, ""));
-    !whole.is_empty()
-        && whole.bytes().all(|b| b.is_ascii_digit())
-        && fraction.bytes().all(|b| b.is_ascii_digit())
-        && t.split('.')
-            .next()
-            .and_then(|w| w.parse::<i32>().ok())
-            .is_some()
+/// The day count `date_add`/`date_sub` without ANSI read `s` as: an `int`
+/// with an optional sign, surrounded by whitespace or control characters
+/// (`UTF8String.toIntExact`). A fraction is not read (`'1.5'`, `'1.'`),
+/// nor an exponent, a hex number or one past `int` (checked against a
+/// Spark 4.2 run of each). The typing rule here and the analyzer's shown
+/// form of the call both read the day count through this.
+#[must_use]
+pub fn legacy_day_count(s: &str) -> Option<i32> {
+    s.trim_matches(|c: char| c.is_whitespace() || c.is_control())
+        .parse::<i32>()
+        .ok()
 }
 
 /// `date_add`/`date_sub` with ANSI off: a string literal day count that is
@@ -136,7 +134,7 @@ fn legacy_int(s: &str) -> bool {
 fn day_arith(function: &str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if !c.ansi()
         && let Some(Constant::String(s)) = c.constant(1)
-        && !legacy_int(s)
+        && legacy_day_count(s).is_none()
     {
         return Err(SecondFunctionArgumentNotInteger {
             function_name: function.to_owned(),
@@ -396,9 +394,11 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// `first(x [, ignoreNulls])`: the type of `x`; the flag must be a boolean
-/// literal.
+/// literal (Spark matches `Literal(b, BooleanType)`, so `1 = 1` is rejected).
 fn pick(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
-    if c.args().len() > 1 && !matches!(c.constant(1), Some(Constant::Boolean(_))) {
+    if c.args().len() > 1
+        && !(c.is_literal(1) && matches!(c.constant(1), Some(Constant::Boolean(_))))
+    {
         return Err(LegacyErrorTemp1210 {
             func_name: function.to_owned(),
         }

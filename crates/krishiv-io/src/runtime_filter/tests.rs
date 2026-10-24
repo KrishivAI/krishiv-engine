@@ -648,7 +648,7 @@ mod unit {
 /// The publication protocol under loom: a reader that sees a generation
 /// finds that generation's snapshot (never an older one), and a consumer's
 /// cache never pairs a generation with another snapshot.
-/// `RUSTFLAGS="--cfg loom" cargo test -p krishiv-io --lib --release runtime_filter`.
+/// `RUSTFLAGS="--cfg loom" cargo test -p krishiv-io --lib --release loom_model::`.
 #[cfg(loom)]
 mod loom_model {
     use std::sync::Arc;
