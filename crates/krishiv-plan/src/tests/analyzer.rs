@@ -2057,6 +2057,21 @@ fn typed_literals_resolve_with_the_session_zone() {
     assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 
+/// A conditional with `FILTER` names the filter once: the shown call takes
+/// only the function's own arguments, not the filter child.
+#[test]
+fn conditional_with_filter_names_the_filter_once() {
+    let ctx = ctx();
+    let call = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "nvl".to_owned(),
+        args: vec![Arc::new(c("a")), Arc::new(int(1))],
+        distinct: false,
+        filter: Some(Arc::new(eq(c("b"), s("x")))),
+    }));
+    let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
+    assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");
+}
+
 /// Built-in functions plus `rand`, a nondeterministic `DOUBLE` function as
 /// in Spark (the engine does not implement it yet; `sqrt`'s signature
 /// stands in for its typing).

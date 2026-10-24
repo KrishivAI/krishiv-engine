@@ -256,7 +256,17 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 .collect::<Result<Vec<_>>>()?;
             match &f.id {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
-                FunctionId::Registry { name, .. } => func::compile(name, f, args, input, e),
+                FunctionId::Registry { name, .. } => {
+                    if name == "coalesce" {
+                        cond::coalesce(f, args)
+                    } else if name == "nullif" || name == "nullifzero" {
+                        cond::null_if(f, args, input)
+                    } else if name == "nanvl" {
+                        cond::nan_vl(f, args, input)
+                    } else {
+                        func::compile(name, f, args, input, e)
+                    }
+                }
                 _ => Err(unsupported_expr(e)),
             }
         }
