@@ -56,3 +56,41 @@ fn unknown_engine_is_a_usage_error() -> R {
     assert!(stderr.contains("--engine reject-all|sql-parse"), "{stderr}");
     Ok(())
 }
+
+#[test]
+fn ratchet_flags_are_checked() -> R {
+    let (ok, _, stderr) = report(&["--ratchet", "check"])?;
+    assert!(!ok);
+    assert!(
+        stderr.contains("--ratchet needs --engine session"),
+        "{stderr}"
+    );
+    let (ok, _, stderr) = report(&["--engine", "session", "--ratchet", "maybe"])?;
+    assert!(!ok);
+    assert!(stderr.contains("[--ratchet check|update]"), "{stderr}");
+    Ok(())
+}
+
+#[test]
+fn reject_all_writes_every_failing_case() -> R {
+    let cases = Path::new(env!("CARGO_TARGET_TMPDIR")).join("golden-reject-all-cases.json");
+    let (ok, _, stderr) = report(&[
+        "--engine",
+        "reject-all",
+        "--cases",
+        &cases.to_string_lossy(),
+        "--known-failures",
+        "unused.json",
+    ])?;
+    assert!(ok, "{stderr}");
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&cases)?)?;
+    let first = &json["array"][0];
+    assert_eq!(first["index"], 0);
+    assert!(
+        first["detail"]
+            .as_str()
+            .is_some_and(|d| d.contains("RejectAllEngine")),
+        "{first}"
+    );
+    Ok(())
+}
