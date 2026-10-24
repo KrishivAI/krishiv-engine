@@ -936,36 +936,6 @@
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
     },
     {
-      "file": "typeCoercion/native/promoteStrings",
-      "query": "SELECT kurtosis('1') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function kurtosis"
-    },
-    {
-      "file": "typeCoercion/native/promoteStrings",
-      "query": "SELECT skewness('1') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function skewness"
-    },
-    {
-      "file": "typeCoercion/native/promoteStrings",
-      "query": "SELECT stddev_pop('1') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function stddev_pop"
-    },
-    {
-      "file": "typeCoercion/native/promoteStrings",
-      "query": "SELECT stddev_samp('1') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function stddev_samp"
-    },
-    {
-      "file": "typeCoercion/native/promoteStrings",
-      "query": "SELECT var_pop('1') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function var_pop"
-    },
-    {
-      "file": "typeCoercion/native/promoteStrings",
-      "query": "SELECT var_samp('1') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function var_samp"
-    },
-    {
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select cast(a as array<string>) from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"

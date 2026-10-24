@@ -17,7 +17,7 @@ use krishiv_plan::{
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
 use super::properties::Distribution;
-use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
+use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, arity};
 use crate::error::Result;
 use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
 
@@ -73,6 +73,15 @@ impl Planner<'_> {
                 "avg" => AggregateFunction::Avg,
                 "min" => AggregateFunction::Min,
                 "max" => AggregateFunction::Max,
+                "stddev" | "std" | "stddev_samp" => AggregateFunction::StddevSamp,
+                "stddev_pop" => AggregateFunction::StddevPop,
+                "variance" | "var_samp" => AggregateFunction::VarSamp,
+                "var_pop" => AggregateFunction::VarPop,
+                "skewness" => AggregateFunction::Skewness,
+                "kurtosis" => AggregateFunction::Kurtosis,
+                "corr" => AggregateFunction::Corr,
+                "covar_samp" => AggregateFunction::CovarSamp,
+                "covar_pop" => AggregateFunction::CovarPop,
                 // `first(x, ignoreNulls)`: the analyzer checked the flag is a
                 // boolean literal.
                 name if picks(name).is_some() => {
@@ -94,8 +103,8 @@ impl Planner<'_> {
                 return Err(unsupported("aggregate FILTER (WHERE ...) clauses"));
             }
             let args: Vec<usize> = columns[at.clone()].to_vec();
-            if function != AggregateFunction::Count && args.len() != 1 {
-                return Err(internal("an aggregate of several arguments"));
+            if function != AggregateFunction::Count && args.len() != arity(function) {
+                return Err(internal("an aggregate with the wrong number of arguments"));
             }
             // Spark's STRING and BINARY are views here whatever carrier a
             // registered table uses; the accumulators read any carrier.
@@ -146,7 +155,7 @@ impl Planner<'_> {
         };
         // Validates the aggregate (over an input that is never run) and
         // gives its schema.
-        let spec = aggregate_spec(&input.schema, &plan, self.env.ansi, None);
+        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
         let schema = spec.output_schema()?;
         aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
         let mut layout: Vec<AttrId> = columns[..k].iter().map(|c| input.layout[*c]).collect();

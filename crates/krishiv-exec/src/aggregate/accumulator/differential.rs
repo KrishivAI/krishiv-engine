@@ -330,3 +330,125 @@ fn min_max_on_decimal64() {
         assert_eq!(v.as_primitive::<Decimal64Type>().value(0), want);
     }
 }
+
+/// The moment aggregates: `(group, x, y, x is valid, y is valid)`.
+type MomentRow = (u32, f64, f64, bool, bool);
+
+fn moment_acc(f: AggregateFunction, groups: u32) -> Accumulator {
+    let args = if crate::aggregate::arity(f) == 2 {
+        vec![0, 1]
+    } else {
+        vec![0]
+    };
+    let e = AggregateExpr {
+        function: f,
+        args,
+        input: AggInput::Raw,
+        arg_type: DataType::Float64,
+        name: "m".to_owned(),
+    };
+    // Without ANSI: `corr` of a constant column is NULL, not an error.
+    let mut a = Accumulator::new(&e, false).unwrap();
+    a.resize(groups as usize);
+    a
+}
+
+/// The columns of `rows` as the arguments of a moment aggregate (garbage
+/// under the NULL slots).
+fn moment_columns(rows: &[MomentRow]) -> Vec<ArrayRef> {
+    let col = |value: fn(&MomentRow) -> f64, valid: fn(&MomentRow) -> bool| -> ArrayRef {
+        let nulls = NullBuffer::from(rows.iter().map(valid).collect::<Vec<_>>());
+        let v: Vec<f64> = rows
+            .iter()
+            .map(|r| if valid(r) { value(r) } else { f64::NAN })
+            .collect();
+        Arc::new(Float64Array::new(v.into(), Some(nulls)))
+    };
+    vec![col(|r| r.1, |r| r.3), col(|r| r.2, |r| r.4)]
+}
+
+fn moment_values(a: &Accumulator, groups: u32) -> Vec<Option<f64>> {
+    let ids: Vec<u32> = (0..groups).collect();
+    let out = a.evaluate(&ids).unwrap();
+    out.as_primitive::<Float64Type>().iter().collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 96,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    /// Partial states of any split of the input merge, in any order and
+    /// through a second level, to the single pass's answer (up to the
+    /// reassociation of the floating-point operations).
+    #[test]
+    fn moments_merge_differential(
+        groups in 1..6_u32,
+        rows in proptest::collection::vec(
+            (0..6_u32, -1000.0..1000.0_f64, -1000.0..1000.0_f64,
+             proptest::bool::weighted(0.85), proptest::bool::weighted(0.85)),
+            0..160,
+        ),
+        parts in 1..7_usize,
+        rotate in 0..7_usize,
+        reverse in proptest::bool::ANY,
+    ) {
+        let rows: Vec<MomentRow> = rows.into_iter().map(|r| (r.0 % groups, r.1, r.2, r.3, r.4)).collect();
+        let ids: Vec<u32> = (0..groups).collect();
+        for f in MOMENT_FUNCTIONS {
+            let mut once = moment_acc(f, groups);
+            let g: Vec<u32> = rows.iter().map(|r| r.0).collect();
+            once.update(&g, &moment_columns(&rows), &Weights::Const(1)).unwrap();
+            let mut states: Vec<Vec<ArrayRef>> = rows
+                .chunks(rows.len().div_ceil(parts).max(1))
+                .map(|chunk| {
+                    let mut a = moment_acc(f, groups);
+                    let g: Vec<u32> = chunk.iter().map(|r| r.0).collect();
+                    a.update(&g, &moment_columns(chunk), &Weights::Const(1)).unwrap();
+                    a.state(&ids).unwrap()
+                })
+                .collect();
+            let len = states.len().max(1);
+            states.rotate_left(rotate % len);
+            if reverse {
+                states.reverse();
+            }
+            // Two levels: halves merged apart, then together.
+            let (lo, hi) = states.split_at(states.len() / 2);
+            let mut top = moment_acc(f, groups);
+            for half in [lo, hi] {
+                let mut mid = moment_acc(f, groups);
+                for st in half {
+                    mid.merge(&ids, st).unwrap();
+                }
+                top.merge(&ids, &mid.state(&ids).unwrap()).unwrap();
+            }
+            for (got, want) in moment_values(&top, groups).iter().zip(moment_values(&once, groups)) {
+                match (got, want) {
+                    (None, None) => {}
+                    (Some(g), Some(w)) if g.is_nan() || w.is_nan() => {
+                        prop_assert!(g.is_nan() && w.is_nan(), "{:?}: {} vs {}", f, g, w);
+                    }
+                    (Some(g), Some(w)) => {
+                        prop_assert!((g - w).abs() <= 1e-8 * g.abs().max(w.abs()).max(1.0), "{:?}: {} vs {}", f, g, w);
+                    }
+                    (g, w) => prop_assert!(false, "{:?}: {:?} vs {:?}", f, g, w),
+                }
+            }
+        }
+    }
+}
+
+const MOMENT_FUNCTIONS: [AggregateFunction; 9] = [
+    AggregateFunction::StddevSamp,
+    AggregateFunction::StddevPop,
+    AggregateFunction::VarSamp,
+    AggregateFunction::VarPop,
+    AggregateFunction::Skewness,
+    AggregateFunction::Kurtosis,
+    AggregateFunction::Corr,
+    AggregateFunction::CovarSamp,
+    AggregateFunction::CovarPop,
+];

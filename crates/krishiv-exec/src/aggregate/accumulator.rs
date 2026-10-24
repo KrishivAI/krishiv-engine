@@ -37,6 +37,7 @@ use arrow_schema::{DataType, TimeUnit};
 use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
+use super::moments::Moments;
 use super::{
     AggInput, AggregateExpr, AggregateFunction, decimal_sum_overflow, long_overflow, out_of_range,
     unsupported,
@@ -155,6 +156,8 @@ enum Kind {
         null: Vec<bool>,
         heap: usize,
     },
+    /// The moment aggregates: Spark's buffers of doubles (see `moments`).
+    Moments(Moments),
 }
 
 /// One aggregate's state for every group of a table.
@@ -448,6 +451,18 @@ fn counts_of(a: &ArrayRef) -> Result<&[i64]> {
     a.as_primitive_opt::<Int64Type>()
         .map(|c| c.values().as_ref())
         .ok_or_else(|| internal(format!("count state of type {}", a.data_type())))
+}
+
+/// A moment aggregate's state column: `double`s, none NULL (a buffer is
+/// never NULL; a NULL would silently skip a partial's rows).
+fn state_doubles(a: &ArrayRef) -> Result<&[f64]> {
+    match a.as_primitive_opt::<Float64Type>() {
+        Some(c) if c.null_count() == 0 => Ok(c.values().as_ref()),
+        _ => Err(internal(format!(
+            "moment state of type {} with NULLs or not double",
+            a.data_type()
+        ))),
+    }
 }
 
 /// A `boolean` state column.
@@ -802,6 +817,18 @@ impl Accumulator {
                 null: Vec::new(),
                 heap: 0,
             },
+            (
+                f @ (F::StddevSamp
+                | F::StddevPop
+                | F::VarSamp
+                | F::VarPop
+                | F::Skewness
+                | F::Kurtosis
+                | F::Corr
+                | F::CovarSamp
+                | F::CovarPop),
+                _,
+            ) => Kind::Moments(Moments::new(f, ansi)?),
         };
         let sum_bound = match (expr.function, expr.avg_sum_type()) {
             (F::Sum | F::Avg, DataType::Decimal64(p, _) | DataType::Decimal128(p, _)) => {
@@ -818,6 +845,17 @@ impl Accumulator {
             max_sum: 0,
             proofs: true,
         })
+    }
+
+    /// Whether the sample moment aggregates give NaN instead of NULL where
+    /// Spark divides by zero (`spark.sql.legacy.statisticalAggregate`); the
+    /// other aggregates ignore it.
+    #[must_use]
+    pub(crate) fn legacy_statistical(mut self, on: bool) -> Self {
+        if let Kind::Moments(m) = &mut self.kind {
+            m.legacy(on);
+        }
+        self
     }
 
     /// Bytes one group's state takes (heap bytes of string values aside).
@@ -845,6 +883,7 @@ impl Accumulator {
             Kind::Pick {
                 values, set, null, ..
             } => vec![values.vec(), v(set), v(null)],
+            Kind::Moments(m) => m.vecs(),
         }
     }
 
@@ -931,6 +970,7 @@ impl Accumulator {
                 null.resize(n, false);
                 values.resize(n);
             }
+            Kind::Moments(m) => m.resize(n),
         }
     }
 
@@ -974,6 +1014,7 @@ impl Accumulator {
                 null.reserve(new);
                 values.reserve(new);
             }
+            Kind::Moments(m) => m.reserve(new),
         }
     }
 
@@ -1051,7 +1092,13 @@ impl Accumulator {
                 args.len()
             )));
         }
-        if (state || matches!(self.kind, Kind::MinMax { .. } | Kind::Pick { .. })) && !is_unit(w) {
+        if (state
+            || matches!(
+                self.kind,
+                Kind::MinMax { .. } | Kind::Pick { .. } | Kind::Moments(_)
+            ))
+            && !is_unit(w)
+        {
             return Err(unsupported(format!(
                 "{:?} over rows with weights other than 1 (needs incremental view maintenance)",
                 self.expr.function
@@ -1084,6 +1131,7 @@ impl Accumulator {
                 self.kind,
                 Kind::SumDec { .. }
                     | Kind::AvgDec { .. }
+                    | Kind::Moments(_)
                     | Kind::MinMax {
                         values: Values::Bytes(_),
                         ..
@@ -1340,6 +1388,23 @@ impl Accumulator {
                     }
                 }
             }
+            (Kind::Moments(m), false) => {
+                let cols = args.iter().map(|a| floats(a)).collect::<Result<Vec<_>>>()?;
+                let cols: Vec<&[f64]> = cols.iter().map(AsRef::as_ref).collect();
+                let all_valid = |i: usize| {
+                    nulls
+                        .iter()
+                        .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
+                };
+                m.update(groups, &cols, all_valid)?;
+            }
+            (Kind::Moments(m), true) => {
+                let cols = args
+                    .iter()
+                    .map(|a| state_doubles(a))
+                    .collect::<Result<Vec<_>>>()?;
+                m.merge(groups, &cols)?;
+            }
         }
         if let Kind::SumDec { sum, .. } | Kind::AvgDec { sum, .. } = &self.kind {
             self.max_sum = refresh_max(self.max_sum, sum, groups);
@@ -1360,6 +1425,7 @@ impl Accumulator {
             | Kind::AvgFloat { .. }
             | Kind::AvgDec { .. }
             | Kind::Pick { .. } => 2,
+            Kind::Moments(ref m) => m.width(),
         }
     }
 
@@ -1419,6 +1485,7 @@ impl Accumulator {
                     ids.iter().map(|i| Some(set[pick(i)])),
                 )),
             ],
+            Kind::Moments(m) => m.state(ids)?,
         })
     }
 
@@ -1548,6 +1615,7 @@ impl Accumulator {
                 }
                 self.decimal(out.into_iter(), &self.result)?
             }
+            Kind::Moments(m) => m.evaluate(ids)?,
             Kind::Count(_)
             | Kind::SumInt { .. }
             | Kind::SumFloat { .. }

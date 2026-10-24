@@ -1203,3 +1203,66 @@ fn regex_signatures() {
     let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
     assert_eq!(r, ArgType::new(DataType::Integer, true));
 }
+
+#[test]
+fn moment_aggregates_are_registered_as_doubles() {
+    let r = builtins();
+    for (name, agg, arguments) in [
+        ("stddev", Aggregate::StddevSamp, 1),
+        ("std", Aggregate::StddevSamp, 1),
+        ("stddev_samp", Aggregate::StddevSamp, 1),
+        ("stddev_pop", Aggregate::StddevPop, 1),
+        ("variance", Aggregate::VarSamp, 1),
+        ("var_samp", Aggregate::VarSamp, 1),
+        ("var_pop", Aggregate::VarPop, 1),
+        ("skewness", Aggregate::Skewness, 1),
+        ("kurtosis", Aggregate::Kurtosis, 1),
+        ("corr", Aggregate::Corr, 2),
+        ("covar_samp", Aggregate::CovarSamp, 2),
+        ("covar_pop", Aggregate::CovarPop, 2),
+    ] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
+        assert!(d.deterministic, "{name}");
+        assert!(
+            d.arity.accepts(arguments) && !d.arity.accepts(3 - arguments),
+            "{name}"
+        );
+        // Found in every profile that has the name, and only there.
+        let since = r.spark_function(name).unwrap().since;
+        for p in SparkProfile::ALL {
+            assert_eq!(
+                matches!(r.lookup(name, p), Lookup::Found(_)),
+                p >= since,
+                "{name} {p:?}"
+            );
+        }
+        // Every argument is cast to DOUBLE: an integer, a decimal and a
+        // string become one; the result is a nullable DOUBLE whatever the
+        // arguments (no rows, one row).
+        let args: Vec<ArgType> = (0..arguments).map(|_| ty(DataType::Integer)).collect();
+        assert_eq!(
+            d.inputs.expected(&CallTypes::new(&args, &[])),
+            Some(vec![InputType::Exact(DataType::Double)]),
+            "{name}"
+        );
+        assert_eq!(
+            result(name, &args, &[]).unwrap(),
+            ArgType::new(DataType::Double, true),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn moment_aggregates_reject_the_wrong_number_of_arguments() {
+    for (name, wrong) in [
+        ("stddev", 2),
+        ("corr", 1),
+        ("covar_pop", 3),
+        ("kurtosis", 0),
+    ] {
+        assert!(!def(name).arity.accepts(wrong), "{name}({wrong})");
+    }
+}

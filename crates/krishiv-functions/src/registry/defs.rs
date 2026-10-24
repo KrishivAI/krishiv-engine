@@ -457,8 +457,15 @@ fn last(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     pick(c, "last")
 }
 
+/// The moment aggregates (`CentralMomentAgg`, `Covariance`, `Corr`): every
+/// argument is cast to `DOUBLE`; the result is a nullable `DOUBLE`.
+fn moment(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Double, true))
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
+    let doubles = || Inputs::Expects(vec![exact(DataType::Double)]);
     vec![
         aggregate("count", Inputs::Any, count, Aggregate::Count),
         aggregate("sum", numeric(), sum, Aggregate::Sum),
@@ -470,6 +477,18 @@ fn aggregates() -> Vec<Spec> {
         aggregate("first_value", Inputs::Any, first, Aggregate::First),
         aggregate("last", Inputs::Any, last, Aggregate::Last),
         aggregate("last_value", Inputs::Any, last, Aggregate::Last),
+        aggregate("stddev", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("std", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("stddev_samp", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("stddev_pop", doubles(), moment, Aggregate::StddevPop),
+        aggregate("variance", doubles(), moment, Aggregate::VarSamp),
+        aggregate("var_samp", doubles(), moment, Aggregate::VarSamp),
+        aggregate("var_pop", doubles(), moment, Aggregate::VarPop),
+        aggregate("skewness", doubles(), moment, Aggregate::Skewness),
+        aggregate("kurtosis", doubles(), moment, Aggregate::Kurtosis),
+        aggregate("corr", doubles(), moment, Aggregate::Corr),
+        aggregate("covar_samp", doubles(), moment, Aggregate::CovarSamp),
+        aggregate("covar_pop", doubles(), moment, Aggregate::CovarPop),
     ]
 }
 

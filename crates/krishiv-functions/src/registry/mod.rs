@@ -66,6 +66,24 @@ pub enum Aggregate {
     First,
     /// `last` / `last_value`; `ignoreNulls` is the second argument.
     Last,
+    /// `stddev` / `std` / `stddev_samp`.
+    StddevSamp,
+    /// `stddev_pop`.
+    StddevPop,
+    /// `variance` / `var_samp`.
+    VarSamp,
+    /// `var_pop`.
+    VarPop,
+    /// `skewness`.
+    Skewness,
+    /// `kurtosis`.
+    Kurtosis,
+    /// `corr`.
+    Corr,
+    /// `covar_samp`.
+    CovarSamp,
+    /// `covar_pop`.
+    CovarPop,
 }
 
 /// A built-in function.

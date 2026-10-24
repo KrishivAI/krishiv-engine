@@ -217,7 +217,18 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::Min
             | AggregateFunction::Max
             | AggregateFunction::First { .. }
-            | AggregateFunction::Last { .. } => None,
+            | AggregateFunction::Last { .. }
+            // The moment aggregates are not encodable yet: the encoder
+            // refuses them, so none reaches a worker.
+            | AggregateFunction::StddevSamp
+            | AggregateFunction::StddevPop
+            | AggregateFunction::VarSamp
+            | AggregateFunction::VarPop
+            | AggregateFunction::Skewness
+            | AggregateFunction::Kurtosis
+            | AggregateFunction::Corr
+            | AggregateFunction::CovarSamp
+            | AggregateFunction::CovarPop => None,
         },
     }
 }

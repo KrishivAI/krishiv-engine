@@ -1359,6 +1359,7 @@ fn run_op(x: &Ctx<'_>) -> Timing {
         ansi: false,
         spill: None,
         require_unit_weights: false,
+        legacy_statistical: false,
     };
     let batches: Vec<Batch> = x.data.batches.iter().cloned().map(Batch::new).collect();
     let scan = Arc::new(Scan(Batches::new(s, batches)));

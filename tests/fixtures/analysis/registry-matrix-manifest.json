@@ -1,5 +1,5 @@
 {
-  "cases": 12512,
+  "cases": 12594,
   "entries": [
     {
       "id": "&#3c1a16bec609/ansi_off",
@@ -1930,6 +1930,14 @@
       "reason": "SELECT conv('100', 2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "corr#d345280d5c4a/ansi_off",
+      "reason": "SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "corr#d345280d5c4a/ansi_on",
+      "reason": "SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
       "id": "cos#0aa1d83e940a/ansi_off",
       "reason": "SELECT cos(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -2096,6 +2104,22 @@
     {
       "id": "count#f7eefd2913d9/ansi_on",
       "reason": "SELECT count(*) FROM VALUES (NULL), (5), (5), (20) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "covar_pop#7ce2b5725450/ansi_off",
+      "reason": "SELECT covar_pop(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "covar_pop#7ce2b5725450/ansi_on",
+      "reason": "SELECT covar_pop(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "covar_samp#0d8013c6ae21/ansi_off",
+      "reason": "SELECT covar_samp(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "covar_samp#0d8013c6ae21/ansi_on",
+      "reason": "SELECT covar_samp(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
     },
     {
       "id": "crc32#2651371c29d2/ansi_off",
@@ -5184,6 +5208,46 @@
     {
       "id": "isnull#ca1c1fc4fce7/ansi_on",
       "reason": "SELECT isnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+    },
+    {
+      "id": "kurtosis#302fdce6faba/ansi_off",
+      "reason": "SELECT kurtosis(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#302fdce6faba/ansi_on",
+      "reason": "SELECT kurtosis(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#45aed161bbcd/ansi_off",
+      "reason": "SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#45aed161bbcd/ansi_on",
+      "reason": "SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#5142258ab80d/ansi_off",
+      "reason": "SELECT kurtosis(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#5142258ab80d/ansi_on",
+      "reason": "SELECT kurtosis(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#8d3a95e5b5b6/ansi_off",
+      "reason": "SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#8d3a95e5b5b6/ansi_on",
+      "reason": "SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#db80cb99845a/ansi_off",
+      "reason": "SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "kurtosis#db80cb99845a/ansi_on",
+      "reason": "SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
     },
     {
       "id": "last#03f68fa9443d/ansi_off",
@@ -9642,6 +9706,46 @@
       "reason": "SELECT sinh(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "skewness#3703f2caff00/ansi_off",
+      "reason": "SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#3703f2caff00/ansi_on",
+      "reason": "SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#66c085d23cc2/ansi_off",
+      "reason": "SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#66c085d23cc2/ansi_on",
+      "reason": "SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#68781d23ea57/ansi_off",
+      "reason": "SELECT skewness(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#68781d23ea57/ansi_on",
+      "reason": "SELECT skewness(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#9984fabe879b/ansi_off",
+      "reason": "SELECT skewness(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#9984fabe879b/ansi_on",
+      "reason": "SELECT skewness(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#c6c2c9d249b1/ansi_off",
+      "reason": "SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "skewness#c6c2c9d249b1/ansi_on",
+      "reason": "SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
       "id": "sqrt#16036e88e7c1/ansi_off",
       "reason": "SELECT sqrt(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -9760,6 +9864,134 @@
     {
       "id": "startswith#bf1ab845092b/ansi_on",
       "reason": "SELECT startswith('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "std#4432de39277c/ansi_off",
+      "reason": "SELECT std(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "std#4432de39277c/ansi_on",
+      "reason": "SELECT std(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "std#61ca896dc0f6/ansi_off",
+      "reason": "SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "std#61ca896dc0f6/ansi_on",
+      "reason": "SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "std#6b002a4cb79e/ansi_off",
+      "reason": "SELECT std(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "std#6b002a4cb79e/ansi_on",
+      "reason": "SELECT std(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "std#bc26cc485619/ansi_off",
+      "reason": "SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "std#bc26cc485619/ansi_on",
+      "reason": "SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev#31f480f9a15c/ansi_off",
+      "reason": "SELECT stddev(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev#31f480f9a15c/ansi_on",
+      "reason": "SELECT stddev(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev#3e5793561511/ansi_off",
+      "reason": "SELECT stddev(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev#3e5793561511/ansi_on",
+      "reason": "SELECT stddev(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev#4ec3f9fff7c6/ansi_off",
+      "reason": "SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev#4ec3f9fff7c6/ansi_on",
+      "reason": "SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev#e98195c18179/ansi_off",
+      "reason": "SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev#e98195c18179/ansi_on",
+      "reason": "SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_pop#53ab5668ef2d/ansi_off",
+      "reason": "SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_pop#53ab5668ef2d/ansi_on",
+      "reason": "SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_pop#877e1511c802/ansi_off",
+      "reason": "SELECT stddev_pop(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_pop#877e1511c802/ansi_on",
+      "reason": "SELECT stddev_pop(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_pop#f14e79c2136c/ansi_off",
+      "reason": "SELECT stddev_pop(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_pop#f14e79c2136c/ansi_on",
+      "reason": "SELECT stddev_pop(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_pop#fa5d44f3124b/ansi_off",
+      "reason": "SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_pop#fa5d44f3124b/ansi_on",
+      "reason": "SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_samp#0fe5c33e1041/ansi_off",
+      "reason": "SELECT stddev_samp(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_samp#0fe5c33e1041/ansi_on",
+      "reason": "SELECT stddev_samp(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_samp#2f720e7da5ac/ansi_off",
+      "reason": "SELECT stddev_samp(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_samp#2f720e7da5ac/ansi_on",
+      "reason": "SELECT stddev_samp(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_samp#5561eced0f8f/ansi_off",
+      "reason": "SELECT stddev_samp(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_samp#5561eced0f8f/ansi_on",
+      "reason": "SELECT stddev_samp(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_samp#bcc33eac2f58/ansi_off",
+      "reason": "SELECT stddev_samp(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "stddev_samp#bcc33eac2f58/ansi_on",
+      "reason": "SELECT stddev_samp(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
     },
     {
       "id": "substr#0423abe35937/ansi_off",
@@ -11898,6 +12130,102 @@
       "reason": "SELECT upper(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "var_pop#0004df2b0e9c/ansi_off",
+      "reason": "SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_pop#0004df2b0e9c/ansi_on",
+      "reason": "SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_pop#38811a56a315/ansi_off",
+      "reason": "SELECT var_pop(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_pop#38811a56a315/ansi_on",
+      "reason": "SELECT var_pop(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_pop#d570e747d528/ansi_off",
+      "reason": "SELECT var_pop(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_pop#d570e747d528/ansi_on",
+      "reason": "SELECT var_pop(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_pop#e1825a716015/ansi_off",
+      "reason": "SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_pop#e1825a716015/ansi_on",
+      "reason": "SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_samp#2bce1ead63a4/ansi_off",
+      "reason": "SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_samp#2bce1ead63a4/ansi_on",
+      "reason": "SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_samp#57d96c2d29ae/ansi_off",
+      "reason": "SELECT var_samp(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_samp#57d96c2d29ae/ansi_on",
+      "reason": "SELECT var_samp(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_samp#de022352efb6/ansi_off",
+      "reason": "SELECT var_samp(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_samp#de022352efb6/ansi_on",
+      "reason": "SELECT var_samp(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_samp#f7e8c8549809/ansi_off",
+      "reason": "SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "var_samp#f7e8c8549809/ansi_on",
+      "reason": "SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "variance#0058ce8b433d/ansi_off",
+      "reason": "SELECT variance(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "variance#0058ce8b433d/ansi_on",
+      "reason": "SELECT variance(col) FROM VALUES (1), (2), (3) AS tab(col) WHERE false | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "variance#03e02e1a0f84/ansi_off",
+      "reason": "SELECT variance(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "variance#03e02e1a0f84/ansi_on",
+      "reason": "SELECT variance(col) FROM VALUES (1), (2), (3) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "variance#39a600813155/ansi_off",
+      "reason": "SELECT variance(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "variance#39a600813155/ansi_on",
+      "reason": "SELECT variance(col) FROM VALUES (CAST(2147483647 AS INT)), (CAST(2147483647 AS INT)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "variance#e6cdd43a60e6/ansi_off",
+      "reason": "SELECT variance(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
+      "id": "variance#e6cdd43a60e6/ansi_on",
+      "reason": "SELECT variance(col) FROM VALUES (CAST(NULL AS int)), (CAST(NULL AS int)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: VALUES"
+    },
+    {
       "id": "xxhash64#04d801e25e35/ansi_off",
       "reason": "SELECT xxhash64(CAST(NULL AS string), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
@@ -12713,6 +13041,11 @@
       "pass": 128
     },
     {
+      "cases": 2,
+      "function": "corr",
+      "pass": 0
+    },
+    {
       "cases": 50,
       "function": "cos",
       "pass": 40
@@ -12730,6 +13063,16 @@
     {
       "cases": 12,
       "function": "count",
+      "pass": 0
+    },
+    {
+      "cases": 2,
+      "function": "covar_pop",
+      "pass": 0
+    },
+    {
+      "cases": 2,
+      "function": "covar_samp",
       "pass": 0
     },
     {
@@ -12916,6 +13259,11 @@
       "cases": 48,
       "function": "isnull",
       "pass": 38
+    },
+    {
+      "cases": 10,
+      "function": "kurtosis",
+      "pass": 0
     },
     {
       "cases": 54,
@@ -13228,6 +13576,11 @@
       "pass": 40
     },
     {
+      "cases": 10,
+      "function": "skewness",
+      "pass": 0
+    },
+    {
       "cases": 50,
       "function": "sqrt",
       "pass": 40
@@ -13236,6 +13589,26 @@
       "cases": 126,
       "function": "startswith",
       "pass": 106
+    },
+    {
+      "cases": 8,
+      "function": "std",
+      "pass": 0
+    },
+    {
+      "cases": 8,
+      "function": "stddev",
+      "pass": 0
+    },
+    {
+      "cases": 8,
+      "function": "stddev_pop",
+      "pass": 0
+    },
+    {
+      "cases": 8,
+      "function": "stddev_samp",
+      "pass": 0
     },
     {
       "cases": 266,
@@ -13331,6 +13704,21 @@
       "cases": 2,
       "function": "user",
       "pass": 2
+    },
+    {
+      "cases": 8,
+      "function": "var_pop",
+      "pass": 0
+    },
+    {
+      "cases": 8,
+      "function": "var_samp",
+      "pass": 0
+    },
+    {
+      "cases": 8,
+      "function": "variance",
+      "pass": 0
     },
     {
       "cases": 150,

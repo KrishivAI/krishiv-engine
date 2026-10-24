@@ -288,6 +288,9 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         .ok_or_else(|| corrupt("no expression environment"))?;
     let env = ExprEnv {
         ansi: env.ansi,
+        // Not in the format: only the moment aggregates read it, and the
+        // encoder refuses those.
+        legacy_statistical_aggregate: false,
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),

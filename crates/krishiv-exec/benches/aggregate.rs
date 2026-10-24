@@ -94,6 +94,7 @@ fn decimal_plan(batches: &[Batch], f: AggregateFunction) -> Arc<dyn ExecNode> {
         ansi: true,
         spill: None,
         require_unit_weights: false,
+        legacy_statistical: false,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
     AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
@@ -132,6 +133,7 @@ fn plan(batches: &[Batch], spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
         ansi: true,
         spill,
         require_unit_weights: false,
+        legacy_statistical: false,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
     AggregateNode::new(scan, HashAggregate::new(spec).expect("spec"))
