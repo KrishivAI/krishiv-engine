@@ -499,11 +499,23 @@ impl RowTable {
         Ok(())
     }
 
-    /// Bytes [`widen`](Self::widen) needs beyond the table's: the copy of
-    /// its rows and states it holds while it runs (at most the table's
-    /// bytes), and the sketches it starts.
+    /// Bytes [`widen`](Self::widen) needs beyond the table's while it
+    /// runs: the copy of its rows and states (at most the table's bytes),
+    /// the state arrays of one new partition at a time (at most the
+    /// states' bytes, twice for validity and offsets), the row lists and
+    /// references (two `u32` per group, plus per-partition list headers),
+    /// and the sketches it starts.
     pub(crate) fn widen_bytes(&self) -> usize {
-        self.memory_size() + (1usize << self.widen_to) * Hll::new(PART_HLL_BITS).bytes()
+        let nparts = 1usize << self.widen_to;
+        let accs: usize = self
+            .parts
+            .iter()
+            .flat_map(|p| &p.accs)
+            .map(Accumulator::size)
+            .sum();
+        let lists = 2 * self.groups * size_of::<u32>()
+            + nparts * (2 * size_of::<Vec<u32>>() + size_of::<usize>());
+        self.memory_size() + 2 * accs + lists + nparts * Hll::new(PART_HLL_BITS).bytes()
     }
 
     /// Buckets of the index (its capacity).
@@ -2058,6 +2070,16 @@ mod tests {
             let all = |t: &RowTable| sorted(&t.output_batch(&t.ids(0..t.len())).unwrap());
             let want = all(&t);
             let bytes = t.memory_size();
+            // The reservation covers the copy, the state arrays and the
+            // row lists the widening holds while it runs.
+            let accs: usize = t
+                .parts
+                .iter()
+                .flat_map(|p| &p.accs)
+                .map(Accumulator::size)
+                .sum();
+            let lists = 2 * t.len() * size_of::<u32>();
+            assert!(t.widen_bytes() >= bytes + 2 * accs + lists);
             t.widen().unwrap();
             assert_eq!((t.part_count(), t.wants_widen()), (PARTS, false));
             assert_eq!(all(&t), want, "{mode:?}");
