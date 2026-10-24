@@ -456,6 +456,23 @@ fn regexp_functions_in_sql() {
         one("SELECT regexp_substr('1a 2b 14m', '\\\\d+(a|b|m)')").as_deref(),
         Some("1a")
     );
+    // The `RLIKE` operator runs the same Java translation as `regexp_like`:
+    // `\Q..\E` is meaningless to the engine directly, `(?i)` folds ASCII
+    // only (the Kelvin sign is no `k`), and a possessive quantifier never
+    // gives its repetitions back.
+    for (input, re, want) in [
+        ("a.b", "\\\\Q.\\\\E", "true"),
+        ("aaa", "a*+a", "false"),
+        ("aaa", "a*a", "true"),
+        ("K", "(?i)k", "false"),
+        ("K", "(?i)k", "true"),
+    ] {
+        assert_eq!(
+            one(&format!("SELECT CAST('{input}' RLIKE '{re}' AS STRING)")).as_deref(),
+            Some(want),
+            "{input:?} RLIKE {re:?}"
+        );
+    }
     for (sql, class) in [
         (
             "SELECT regexp_extract('1a 2b 14m', '\\\\d+')",
