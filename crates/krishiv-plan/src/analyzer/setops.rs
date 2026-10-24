@@ -21,10 +21,13 @@
 //! - A hint passes rows through; [`super::hints`] resolves it once the
 //!   whole plan is resolved (a hint names relations of its subtree).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    ColumnAlreadyExists, IncompatibleColumnType, KrishivInvalidPartitionNumber,
+    ColumnAlreadyExists, ErrorClass, IncompatibleColumnType,
+    InvalidInlineTableCannotEvaluateExpressionInInlineTable,
+    InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
 };
 use krishiv_types::DataType;
@@ -32,13 +35,13 @@ use krishiv_types::DataType;
 use super::bind::{same, unsupported};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, ordinal, quoted_type};
-use super::exprs::Bound;
-use super::ops::{col_expr, column_bound};
+use super::exprs::{Bound, WindowUse, pretty};
+use super::ops::{col_expr, column_bound, no_qual};
 use super::resolve::{Attr, Env, Rel, Resolver, Widen};
-use super::{AnalysisError, ArgType};
+use super::{AnalysisError, ArgType, FunctionLookup};
 use crate::{
-    ColumnRef, Expr, ExprNode, FunctionCall, Grouping, JoinCondition, JoinKind, Literal,
-    LogicalPlan, Origin, PlanNode, ResolvedExpr, SetOperation,
+    Builtin, ColumnRef, Expr, ExprNode, FunctionCall, FunctionKind, Grouping, JoinCondition,
+    JoinKind, Literal, LogicalPlan, Origin, PlanNode, ResolvedExpr, SetOperation,
 };
 
 /// Spark's partitioning hints: checked, then no-ops on one node.
@@ -92,6 +95,212 @@ impl Resolver<'_> {
         };
         let refs: Vec<&Rel> = kids.iter().collect();
         Ok(self.make(o, node, out, &refs))
+    }
+
+    /// An inline table (`VALUES ...`, Spark's `ResolveInlineTables`):
+    /// resolves every row's expressions with no input columns, then rewrites
+    /// the node into one [`PlanNode::Project`] over
+    /// [`PlanNode::OneRowRelation`] per row (each value cast to its column's
+    /// type, aliased to the column's name), joined by an n-ary
+    /// [`PlanNode::Union`] (a single row is just the `Project`).
+    ///
+    /// Each column's type is the wider type of its values: the wider type
+    /// set operations use with ANSI on, without string promotion with ANSI
+    /// off (as Spark's `ResolveInlineTables`); a column whose values share
+    /// no type is `INVALID_INLINE_TABLE.INCOMPATIBLE_TYPES_IN_INLINE_TABLE`.
+    /// A column is nullable where any row's value is. Row order is the
+    /// union's, as Spark leaves it.
+    pub(super) fn inline_table(
+        &mut self,
+        p: &LogicalPlan,
+        rows: &[Vec<Arc<Expr>>],
+        columns: &[String],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let o = p.origin;
+        if rows.is_empty() {
+            return Err(unsupported("an inline table without rows", o));
+        }
+        let mut bound: Vec<Vec<Bound>> = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut cells = Vec::with_capacity(row.len());
+            for cell in row {
+                self.check_inline_cell(cell)?;
+                let scope: &[Attr] = &[];
+                let rels: &[&Rel] = &[];
+                let mut cx = Self::cx(scope, rels, env, "Project");
+                // A select list's expressions: windows bind, so the check
+                // below rejects them as Spark does.
+                cx.windows = WindowUse::Allowed;
+                // No enclosing query is visible: a column reference is not
+                // resolvable here.
+                cx.outer = false;
+                let b = match self.bind(cell, &cx) {
+                    Ok(b) => b,
+                    Err(e) if is_missing_column(&e) => {
+                        return Err(cannot_evaluate(cell, self.ctx.conf.session_zone));
+                    }
+                    Err(e) => return Err(e),
+                };
+                self.check_inline_bound(&b)?;
+                cells.push(b);
+            }
+            bound.push(cells);
+        }
+        let width = columns.len();
+        let mut types = Vec::with_capacity(width);
+        for (c, name) in columns.iter().enumerate() {
+            let mut acc: Option<DataType> = None;
+            for row in &bound {
+                let here = row.get(c).and_then(|b| b.ty.data_type.clone());
+                let (x, y) = (arg(acc.as_ref()), arg(here.as_ref()));
+                let wider = if self.ctx.conf.ansi {
+                    coerce::wider_type(&x, &y, true)
+                } else {
+                    coerce::wider_type_without_string_promotion(&x, &y)
+                };
+                match wider {
+                    Some(t) => acc = t,
+                    None => {
+                        return Err(AnalysisError::new(
+                            InvalidInlineTableIncompatibleTypesInInlineTable {
+                                col_name: quoted(std::slice::from_ref(name)),
+                            },
+                            o,
+                        ));
+                    }
+                }
+            }
+            types.push(acc.unwrap_or(DataType::Null));
+        }
+        let mut kids = Vec::with_capacity(rows.len());
+        for row in &bound {
+            let mut exprs = Vec::with_capacity(width);
+            let mut out = Vec::with_capacity(width);
+            for (c, name) in columns.iter().enumerate() {
+                // A hand-built plan may hold a short row (the parser
+                // rejects those): a missing value reads NULL.
+                let missing;
+                let b = match row.get(c) {
+                    Some(b) => b,
+                    None => {
+                        missing = inline_null();
+                        &missing
+                    }
+                };
+                let ty = &types[c];
+                let cast =
+                    self.implicit_cast(b, coerce::cast_to(b.ty.data_type.as_ref(), Some(ty)));
+                let output = self.attr(name, &cast.ty);
+                let expr = Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                        expr: cast.expr,
+                        output: output.clone(),
+                    }))
+                    .with_origin(b.expr.origin),
+                );
+                exprs.push(expr);
+                out.push(Attr {
+                    col: output,
+                    qual: no_qual(),
+                    source: None,
+                });
+            }
+            let one = Arc::new(LogicalPlan::new(PlanNode::OneRowRelation).with_origin(o));
+            let base = self.wrap(Arc::clone(&one), o.plan_id, Vec::new(), &[]);
+            let node = PlanNode::Project { input: one, exprs };
+            kids.push(self.make(o, node, out, &[&base]));
+        }
+        if kids.len() == 1 {
+            let [only] = kids
+                .try_into()
+                .map_err(|_| unsupported("an inline table", o))?;
+            return Ok(only);
+        }
+        // The first row's attributes, nullable where any row's column is
+        // (as a set operation's output is).
+        let mut out = kids[0].out.to_vec();
+        for k in &kids[1..] {
+            for (a, b) in out.iter_mut().zip(k.out.iter()) {
+                a.col.nullable |= b.col.nullable;
+            }
+        }
+        let node = PlanNode::Union {
+            inputs: kids.iter().map(|k| Arc::clone(&k.plan)).collect(),
+            by_name: false,
+            allow_missing_columns: false,
+        };
+        let refs: Vec<&Rel> = kids.iter().collect();
+        Ok(self.make(o, node, out, &refs))
+    }
+
+    /// Whether a row expression of an inline table may stay: it holds no
+    /// aggregate, window or generator call, no subquery and no call Spark
+    /// analyzes as nondeterministic. Binding would reject some of those
+    /// before this rule sees them (or accept the clock functions Spark
+    /// evaluates once per query); unknown routines pass, and binding
+    /// reports them as `UNRESOLVED_ROUTINE`.
+    fn check_inline_cell(&self, cell: &Arc<Expr>) -> Result<(), AnalysisError> {
+        let zone = self.ctx.conf.session_zone;
+        // Expressions are DAGs, so a shared subexpression is visited once.
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(cell)];
+        while let Some(e) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&e) as usize) {
+                continue;
+            }
+            let reject = match &e.node {
+                ExprNode::Subquery { .. } | ExprNode::Window(_) => true,
+                ExprNode::Function(f) if Builtin::from_name(&f.name).is_none() => {
+                    match self
+                        .ctx
+                        .functions
+                        .lookup(std::slice::from_ref(&f.name), self.ctx.profile)
+                    {
+                        FunctionLookup::Found(entry) => {
+                            !entry.deterministic || !matches!(entry.kind, FunctionKind::Scalar)
+                        }
+                        // A function the engine lacks but Spark analyzes as
+                        // nondeterministic (like `rand`) cannot be
+                        // evaluated here either.
+                        FunctionLookup::KnownUnsupported => {
+                            self.ctx.functions.spark_deterministic(&f.name) == Some(false)
+                        }
+                        FunctionLookup::NotFound => false,
+                    }
+                }
+                _ => false,
+            };
+            if reject {
+                return Err(cannot_evaluate(&e, zone));
+            }
+            e.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+        Ok(())
+    }
+
+    /// Whether a bound row expression may stay in an inline table: no
+    /// aggregate, no window and no nondeterministic call (clock functions
+    /// read the query clock, so every row evaluates them alike).
+    fn check_inline_bound(&self, b: &Bound) -> Result<(), AnalysisError> {
+        let zone = self.ctx.conf.session_zone;
+        if b.agg.is_some() || b.win.is_some() {
+            return Err(cannot_evaluate(&b.shown(), zone));
+        }
+        let mut seen = HashSet::new();
+        let mut stack = vec![Arc::clone(&b.expr)];
+        while let Some(e) = stack.pop() {
+            if !seen.insert(Arc::as_ptr(&e) as usize) {
+                continue;
+            }
+            if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+                && (!f.deterministic || !matches!(f.kind, FunctionKind::Scalar))
+            {
+                return Err(cannot_evaluate(&e, zone));
+            }
+            e.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+        }
+        Ok(())
     }
 
     /// The inputs of a union, cast to the wider type of each column.
@@ -619,6 +828,46 @@ fn arg(t: Option<&DataType>) -> Arg<'_> {
         ty: t.filter(|t| **t != DataType::Null),
         nullable: false,
         literal: None,
+    }
+}
+
+/// Whether binding failed only because the expression names a column:
+/// with no input in scope, that is not an unresolvable reference but an
+/// expression an inline table cannot evaluate.
+fn is_missing_column(e: &AnalysisError) -> bool {
+    matches!(
+        e.error.error_class(),
+        ErrorClass::UnresolvedColumnWithSuggestion
+            | ErrorClass::UnresolvedColumnWithoutSuggestion
+            | ErrorClass::CannotResolveDataframeColumn
+    )
+}
+
+/// `INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE` for
+/// `e`, shown as Spark shows it, at its origin.
+fn cannot_evaluate(e: &Expr, zone: Option<i32>) -> AnalysisError {
+    AnalysisError::new(
+        InvalidInlineTableCannotEvaluateExpressionInInlineTable {
+            expr: format!("\"{}\"", pretty(e, zone)),
+        },
+        e.origin,
+    )
+}
+
+/// An untyped NULL, for a hand-built row shorter than its columns (the
+/// parser rejects those).
+fn inline_null() -> Bound {
+    Bound {
+        expr: Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None)))),
+        ty: ArgType {
+            data_type: None,
+            nullable: true,
+        },
+        agg: None,
+        win: None,
+        outer: None,
+        lateral: Vec::new(),
+        shown: None,
     }
 }
 

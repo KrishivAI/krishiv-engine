@@ -378,9 +378,11 @@ fn create_view_options_replace_errors_and_arity() {
     let e = block_on(s.sql("CREATE TEMP VIEW missing AS SELECT * FROM nosuch")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
     assert!(!s.temp_table_names().contains(&"broken".to_owned()));
-    // So are lowering errors: the IR has no `VALUES` yet.
-    let e = block_on(s.sql("CREATE TEMP VIEW vals AS VALUES (1, 2)")).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // So is an inline table: it analyzes, then reads back.
+    block_on(s.sql("CREATE TEMP VIEW vals AS VALUES (1, 2)")).unwrap();
+    let (names, found) = rows(&s, "SELECT * FROM vals");
+    assert_eq!(names, ["col1", "col2"]);
+    assert_eq!(found, [vec!["1", "2"]]);
 }
 
 #[test]

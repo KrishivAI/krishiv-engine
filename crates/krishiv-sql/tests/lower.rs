@@ -8,8 +8,9 @@
 
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::Arc;
 
-use krishiv_plan::{Plan, SourceId};
+use krishiv_plan::{Plan, PlanNode, SourceId};
 use krishiv_sql::{ParserOptions, parse_and_lower};
 
 fn lower(sql: &str) -> Result<Plan, krishiv_sql::ParseError> {
@@ -246,5 +247,110 @@ fn nested_grouping_sets_cap_counts_inside_the_loop() {
         e.span.start,
         sql.find("GROUPING SETS").expect("the item"),
         "the cap cites the GROUPING SETS item, not GROUP BY"
+    );
+}
+
+/// The inline table of `sql`: the first `PlanNode::InlineTable` under its
+/// root, with the alias above it unwrapped.
+fn inline_table(sql: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    let plan = lower(sql).unwrap();
+    let mut stack = vec![Arc::clone(plan.root())];
+    while let Some(p) = stack.pop() {
+        if let PlanNode::InlineTable { rows, columns } = &p.node {
+            let rows = rows
+                .iter()
+                .map(|r| r.iter().map(ToString::to_string).collect())
+                .collect();
+            return Some((columns.clone(), rows));
+        }
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    None
+}
+
+#[test]
+fn values_lower_to_inline_tables() {
+    // A query body without an alias: columns are `col1`, ....
+    assert_eq!(
+        inline_table("VALUES (1, 'a'), (2, 'b')").expect("an inline table"),
+        (
+            vec!["col1".to_owned(), "col2".to_owned()],
+            vec![
+                vec!["1".to_owned(), "'a'".to_owned()],
+                vec!["2".to_owned(), "'b'".to_owned()],
+            ]
+        )
+    );
+    // A query body with an alias: the alias column list renames them, and
+    // the alias itself stays a `SubqueryAlias` above.
+    let plan = lower("VALUES (1, 'a'), (2, 'b') AS t(x, y)").unwrap();
+    let PlanNode::SubqueryAlias {
+        input,
+        alias,
+        columns,
+    } = &plan.root().node
+    else {
+        panic!("alias above:\n{}", plan.root());
+    };
+    assert_eq!(alias, "t");
+    assert_eq!(columns, &["x", "y"]);
+    assert!(
+        matches!(&input.node, PlanNode::InlineTable { .. }),
+        "inline table below:\n{}",
+        plan.root()
+    );
+    assert_eq!(
+        inline_table("VALUES (1, 'a'), (2, 'b') AS t(x, y)")
+            .expect("an inline table")
+            .0,
+        ["x", "y"]
+    );
+    // A table factor with an alias column list.
+    assert_eq!(
+        inline_table("SELECT * FROM VALUES ('one', 1) AS data(a, b)")
+            .expect("an inline table")
+            .0,
+        ["a", "b"]
+    );
+    // A table factor without an alias keeps `col1`, ....
+    assert_eq!(
+        inline_table("SELECT * FROM VALUES ('one', 1)")
+            .expect("an inline table")
+            .0,
+        ["col1", "col2"]
+    );
+    // A single-column row written without parentheses is one column, and
+    // one row per expression.
+    assert_eq!(
+        inline_table("SELECT * FROM VALUES 1, 2, 3 AS data(a)").expect("an inline table"),
+        (
+            vec!["a".to_owned()],
+            vec![
+                vec!["1".to_owned()],
+                vec!["2".to_owned()],
+                vec!["3".to_owned()],
+            ]
+        )
+    );
+    // Row aliases are stripped: the schema never comes from them (the
+    // outer alias renames `col1`, ... here).
+    assert_eq!(
+        inline_table(
+            "SELECT * FROM (VALUES (1 AS id, 'a' AS name), (2 AS id, 'b' AS name)) AS t(a, b)"
+        )
+        .expect("an inline table"),
+        (
+            vec!["col1".to_owned(), "col2".to_owned()],
+            vec![
+                vec!["1".to_owned(), "'a'".to_owned()],
+                vec!["2".to_owned(), "'b'".to_owned()],
+            ]
+        )
+    );
+    assert_eq!(
+        inline_table("SELECT * FROM VALUES (1 AS a, 2 AS b)")
+            .expect("an inline table")
+            .0,
+        ["col1", "col2"]
     );
 }

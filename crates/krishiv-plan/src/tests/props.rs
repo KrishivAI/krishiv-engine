@@ -334,7 +334,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 24 };
+        let kinds = if depth == 0 { 4 } else { 25 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -472,6 +472,10 @@ impl Gen<'_> {
                 input: self.input(d),
                 projections: self.many(1, 2, Gen::exprs),
                 output: self.many(0, 2, Gen::bound),
+            },
+            24 => PlanNode::InlineTable {
+                rows: self.many(1, 2, |g| g.many(1, 2, |h| Arc::new(h.expr(2)))),
+                columns: self.many(0, 2, Gen::name),
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -937,6 +941,11 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             projections.iter_mut().any(|p| m_exprs(p, w))
                 || output.iter_mut().any(|c| m_bound(c, w))
                 || m_plan(input, w)
+        }
+        PlanNode::InlineTable { rows, columns } => {
+            site!(w, rows.push(Vec::new()));
+            site!(w, columns.push("x".to_owned()));
+            rows.iter_mut().any(|r| m_exprs(r, w)) || m_strings(columns, w)
         }
         PlanNode::SetOp {
             left,

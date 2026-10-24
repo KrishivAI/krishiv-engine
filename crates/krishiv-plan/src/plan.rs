@@ -280,6 +280,20 @@ pub enum PlanNode {
         /// The output attributes, aligned with each projection.
         output: Vec<BoundColumn>,
     },
+    /// An unresolved inline table (`VALUES ...`, Spark's
+    /// `UnresolvedInlineTable`): each row's expressions over no input.
+    /// Unresolved plans only: the analyzer resolves the expressions and
+    /// rewrites the node into [`PlanNode::Project`]s over
+    /// [`PlanNode::OneRowRelation`] joined by a [`PlanNode::Union`]
+    /// (Spark's `ResolveInlineTables`).
+    InlineTable {
+        /// One expression per column per row; row aliases (`VALUES (1 AS
+        /// a)`) are stripped at lowering, the schema comes from `columns`.
+        rows: Vec<Vec<Arc<Expr>>>,
+        /// Output column names (`col1`, ... unless the table alias renames
+        /// them).
+        columns: Vec<String>,
+    },
 }
 
 /// The operation of a [`PlanNode::SetOp`].
@@ -588,6 +602,7 @@ impl LogicalPlan {
             | PlanNode::Sql { .. }
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
+            | PlanNode::InlineTable { .. }
             | PlanNode::OneRowRelation => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
@@ -622,6 +637,7 @@ impl LogicalPlan {
             | PlanNode::Sql { .. }
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
+            | PlanNode::InlineTable { .. }
             | PlanNode::OneRowRelation => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
@@ -698,6 +714,7 @@ impl LogicalPlan {
             },
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
             PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
+            PlanNode::InlineTable { rows, .. } => rows.iter().flatten().for_each(f),
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -760,6 +777,9 @@ impl LogicalPlan {
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
             PlanNode::Expand { projections, .. } => {
                 projections.iter_mut().flatten().for_each(f);
+            }
+            PlanNode::InlineTable { rows, .. } => {
+                rows.iter_mut().flatten().for_each(f);
             }
             PlanNode::Window {
                 exprs,
@@ -896,6 +916,7 @@ impl LogicalPlan {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::InlineTable { .. }
                 | PlanNode::Distinct { .. } => {
                     return None;
                 }
