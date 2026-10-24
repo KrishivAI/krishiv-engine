@@ -13,6 +13,7 @@
 //! row's content, so these kernels have no has-nulls axis (they skip NULL
 //! rows) and ASCII rows take byte-wise fast paths.
 
+mod case_table;
 mod like;
 mod split;
 
@@ -222,26 +223,80 @@ fn is_cased_in_unicode_17(c: char) -> bool {
         .any(|(from, to)| (*from..=*to).contains(&c))
 }
 
+/// Whether Spark `version` changes `c` under `case`: the generated table of
+/// what Spark 4.2 maps ([`case_table`]), less the Unicode 17 additions
+/// before 4.2. It does not depend on the toolchain's Unicode version.
+fn spark_maps(c: char, case: Case, version: SparkVersion) -> bool {
+    let runs = match case {
+        Case::Upper => case_table::UPPER,
+        Case::Lower => case_table::LOWER,
+    };
+    let cp = u32::from(c);
+    let at = runs.partition_point(|(first, _, _)| *first <= cp);
+    let listed = at
+        .checked_sub(1)
+        .and_then(|i| runs.get(i))
+        .is_some_and(|(first, last, step)| {
+            cp <= *last && cp.wrapping_sub(*first).checked_rem(*step) == Some(0)
+        });
+    listed && (version >= SparkVersion::V4_2 || !is_cased_in_unicode_17(c))
+}
+
+/// A Unicode case mapping: std's (the toolchain's Unicode data), or in
+/// tests a stand-in for a toolchain with newer data.
+trait CaseMapping {
+    /// The full mapping of `s` (context rules included).
+    fn string(&self, s: &str, case: Case) -> String;
+    /// Whether the mapping changes the single character `c`.
+    fn changes(&self, c: char, case: Case) -> bool;
+}
+
+/// `str::to_*case` / `char::to_*case`.
+struct StdMapping;
+
+impl CaseMapping for StdMapping {
+    fn string(&self, s: &str, case: Case) -> String {
+        match case {
+            Case::Upper => s.to_uppercase(),
+            Case::Lower => s.to_lowercase(),
+        }
+    }
+
+    fn changes(&self, c: char, case: Case) -> bool {
+        let unchanged =
+            |m: &mut dyn Iterator<Item = char>| m.next() == Some(c) && m.next().is_none();
+        match case {
+            Case::Upper => !unchanged(&mut c.to_uppercase()),
+            Case::Lower => !unchanged(&mut c.to_lowercase()),
+        }
+    }
+}
+
 /// The full Unicode mapping of a non-ASCII `s` (`str::to_*case` carries the
 /// context rules, final sigma), as Spark `version` maps it.
 fn map_case(s: &str, case: Case, version: SparkVersion) -> String {
-    let whole = |s: &str| match case {
-        Case::Upper => s.to_uppercase(),
-        Case::Lower => s.to_lowercase(),
-    };
-    if version >= SparkVersion::V4_2 || !s.chars().any(is_cased_in_unicode_17) {
-        return whole(s);
+    map_case_with(&StdMapping, s, case, version)
+}
+
+/// [`map_case`] over `mapping`. A character the mapping would change but
+/// Spark `version` does not (a later Unicode version than Spark's JVM, or a
+/// Unicode 17 letter before Spark 4.2) is left unchanged, so the result does
+/// not move when the toolchain's Unicode data does.
+fn map_case_with(mapping: &impl CaseMapping, s: &str, case: Case, version: SparkVersion) -> String {
+    let held = |c: char| !spark_maps(c, case, version) && mapping.changes(c, case);
+    if !s.chars().any(held) {
+        return mapping.string(s, case);
     }
-    // Older Spark does not know the Unicode 17 letters: they stay as they
-    // are, and (being uncased there) they end the context of their
+    // A held character stays as it is and (uncased for Spark's JVM, as an
+    // unassigned or newly cased letter is) ends the context of its
     // neighbours like any other uncased character.
     let (mut out, mut start) = (String::new(), 0);
-    for (at, c) in s.char_indices().filter(|(_, c)| is_cased_in_unicode_17(*c)) {
-        out.push_str(&whole(s.get(start..at).unwrap_or_default()));
+    for (at, c) in s.char_indices().filter(|(_, c)| held(*c)) {
+        out.push_str(&mapping.string(s.get(start..at).unwrap_or_default(), case));
         out.push(c);
         start = at.saturating_add(c.len_utf8());
     }
-    out.push_str(&whole(s.get(start..).unwrap_or_default()));
+    out.push_str(&mapping.string(s.get(start..).unwrap_or_default(), case));
     out
 }
 
@@ -798,6 +853,60 @@ mod tests {
         let mut sink = BinSink::<i32>::new(1, 0);
         sink.bytes = usize::try_from(i32::MAX).unwrap();
         assert!(sink.push(b"x").is_err());
+    }
+
+    /// std's mapping plus what a later Unicode version might add: `ɷ`
+    /// gains an uppercase (U+A7DD, as in Unicode 18) and U+A7DD a lowercase.
+    struct NewerUnicode;
+
+    impl CaseMapping for NewerUnicode {
+        fn string(&self, s: &str, case: Case) -> String {
+            s.chars()
+                .map(|c| match (case, c) {
+                    (Case::Upper, '\u{0277}') => '\u{A7DD}'.to_string(),
+                    (Case::Lower, '\u{A7DD}') => '\u{0277}'.to_string(),
+                    _ => StdMapping.string(&c.to_string(), case),
+                })
+                .collect()
+        }
+
+        fn changes(&self, c: char, case: Case) -> bool {
+            matches!(
+                (case, c),
+                (Case::Upper, '\u{0277}') | (Case::Lower, '\u{A7DD}')
+            ) || StdMapping.changes(c, case)
+        }
+    }
+
+    /// The kernel's output does not follow the toolchain's Unicode data: a
+    /// mapping no Spark version has stays unapplied on every version, and the
+    /// rest of the string still maps.
+    #[test]
+    fn a_newer_toolchain_unicode_does_not_change_the_result() {
+        for v in [SparkVersion::V4_0, SparkVersion::V4_1, SparkVersion::V4_2] {
+            let up = |s| map_case_with(&NewerUnicode, s, Case::Upper, v);
+            let low = |s| map_case_with(&NewerUnicode, s, Case::Lower, v);
+            assert_eq!(up("\u{0277}é"), "\u{0277}É");
+            assert_eq!(low("\u{A7DD}É"), "\u{A7DD}é");
+            assert_eq!(up("straße"), "STRASSE");
+        }
+    }
+
+    /// The table gate itself: what Spark maps, by direction and version.
+    #[test]
+    fn spark_maps_follows_the_generated_table() {
+        let v42 = SparkVersion::V4_2;
+        assert!(spark_maps('a', Case::Upper, v42) && !spark_maps('a', Case::Lower, v42));
+        assert!(spark_maps('A', Case::Lower, v42) && !spark_maps('A', Case::Upper, v42));
+        // A step-2 run (Latin Extended-A) and its gaps.
+        assert!(spark_maps('\u{0101}', Case::Upper, v42));
+        assert!(!spark_maps('\u{0102}', Case::Upper, v42));
+        assert!(!spark_maps('\u{0277}', Case::Upper, v42));
+        assert!(!spark_maps('\u{A7DD}', Case::Lower, v42));
+        assert!(!spark_maps('日', Case::Upper, v42));
+        // Unicode 17 additions: 4.2 maps them, 4.1 does not.
+        assert!(spark_maps('\u{A7CE}', Case::Lower, v42));
+        assert!(!spark_maps('\u{A7CE}', Case::Lower, SparkVersion::V4_1));
     }
 
     #[test]
