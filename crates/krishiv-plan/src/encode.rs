@@ -70,7 +70,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 3;
+pub const ENCODING_VERSION: u16 = 4;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -711,6 +711,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                         self.u8(2);
                         self.strs(cols);
                     }
+                    JoinCondition::Natural => self.u8(3),
                 }
             }
             PlanNode::Sort { order, global, .. } => {
@@ -919,9 +920,15 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(2);
                 self.literal(v);
             }
-            ExprNode::Star(Star { qualifier, plan_id }) => {
+            ExprNode::Star(Star {
+                qualifier,
+                except,
+                plan_id,
+            }) => {
                 self.u8(3);
                 self.strs(qualifier);
+                self.len(except.len());
+                except.iter().for_each(|path| self.strs(path));
                 self.plan_ref(*plan_id);
             }
             ExprNode::Function(FunctionCall {

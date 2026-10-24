@@ -140,7 +140,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Distinct { .. } => false,
                 PlanNode::Union { by_name, .. } => !by_name,
                 PlanNode::Join { condition, .. } => match condition {
-                    JoinCondition::Using(_) => false,
+                    JoinCondition::Natural | JoinCondition::Using(_) => false,
                     JoinCondition::None | JoinCondition::On(_) => true,
                 },
                 PlanNode::Scan(_)
@@ -300,7 +300,7 @@ impl Teardown {
                 self.plans.extend([left, right]);
                 match condition {
                     JoinCondition::On(e) => self.exprs.push(e),
-                    JoinCondition::None | JoinCondition::Using(_) => {}
+                    JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
                 }
             }
             PlanNode::Sort { input, order, .. } => {

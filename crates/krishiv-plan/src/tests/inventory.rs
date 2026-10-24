@@ -136,6 +136,7 @@ fn df(id: i64) -> LogicalPlan {
 fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     let star = Expr::new(ExprNode::Star(Star {
         qualifier: Vec::new(),
+        except: Vec::new(),
         plan_id: None,
     }));
     let df_col = Expr::new(ExprNode::Column(ColumnRef {

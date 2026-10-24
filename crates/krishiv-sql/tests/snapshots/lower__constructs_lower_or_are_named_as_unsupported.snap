@@ -25,7 +25,7 @@ SELECT a FROM t GROUP BY ROLLUP (a)
 SELECT a FROM t GROUP BY a WITH CUBE
   => Aggregate CUBE [a], [a] | +- Read t | 
 SELECT * FROM t NATURAL JOIN u
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature NATURAL JOIN is not supported by Krishiv yet. SQLSTATE: 0A000 @ 16..30
+  => Project [*] | +- Join Inner, NATURAL |    :- Read t |    +- Read u | 
 SELECT * FROM t, LATERAL (SELECT a)
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL subqueries is not supported by Krishiv yet. SQLSTATE: 0A000 @ 17..35
 SELECT * FROM t VERSION AS OF 1
@@ -47,11 +47,11 @@ FROM t SELECT a WINDOW w AS (ORDER BY a)
 SELECT a FROM t WINDOW w AS (ORDER BY a)
   => Project [a] | +- Read t | 
 SELECT a FROM t QUALIFY a > 1
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature QUALIFY is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..29
+  => Filter qualify((a > 1)) | +- Project [a] |    +- Read t | 
 WITH RECURSIVE r AS (SELECT a FROM t) SELECT * FROM r
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature recursive CTEs is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..37
 SELECT * EXCEPT (a) FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature SELECT * EXCEPT is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..19
+  => Project [* EXCEPT (a)] | +- Read t | 
 SELECT a FROM t INTERSECT SELECT a FROM u
   => Intersect false | :- Project [a] | :  +- Read t | +- Project [a] |    +- Read u | 
 SELECT a FROM t EXCEPT ALL SELECT a FROM u

@@ -466,6 +466,10 @@ pub enum JoinCondition {
     On(Arc<Expr>),
     /// `USING (columns)`.
     Using(Vec<String>),
+    /// `NATURAL [INNER|LEFT|RIGHT|FULL] JOIN`: the analyzer replaces it by
+    /// the `USING` join over the common column names (a cross join when
+    /// there are none), so resolved plans never hold it.
+    Natural,
 }
 
 /// One `WITH` definition.
@@ -694,7 +698,7 @@ impl LogicalPlan {
             }
             PlanNode::Join { condition, .. } => match condition {
                 JoinCondition::On(e) => f(e),
-                JoinCondition::None | JoinCondition::Using(_) => {}
+                JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
             PlanNode::Sort { order, .. } => order.iter().for_each(|o| f(&o.expr)),
             PlanNode::Expand { projections, .. } => projections.iter().flatten().for_each(f),
@@ -755,7 +759,7 @@ impl LogicalPlan {
             }
             PlanNode::Join { condition, .. } => match condition {
                 JoinCondition::On(e) => f(e),
-                JoinCondition::None | JoinCondition::Using(_) => {}
+                JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
             },
             PlanNode::Sort { order, .. } => order.iter_mut().for_each(|o| f(&mut o.expr)),
             PlanNode::Expand { projections, .. } => {

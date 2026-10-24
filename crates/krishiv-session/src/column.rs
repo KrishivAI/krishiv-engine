@@ -41,6 +41,7 @@ impl Column {
             parts.pop();
             ExprNode::Star(Star {
                 qualifier: parts,
+                except: Vec::new(),
                 plan_id,
             })
         } else {

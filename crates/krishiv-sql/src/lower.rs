@@ -557,13 +557,8 @@ impl Lowerer {
     }
 
     fn select_list(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
-        for (present, what) in [
-            (!s.lateral_views.is_empty(), "LATERAL VIEW"),
-            (s.qualify.is_some(), "QUALIFY"),
-        ] {
-            if present {
-                return Err(unsupported(what, s.span));
-            }
+        if !s.lateral_views.is_empty() {
+            return Err(unsupported("LATERAL VIEW", s.span));
         }
         let mut plan = match from {
             Some(from) => self.from(from)?,
@@ -584,43 +579,70 @@ impl Lowerer {
             items.push(self.select_item(item)?);
         }
         if s.group_by.is_none() && s.having.is_none() {
-            return Ok(self.node(
+            plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),
                     exprs: items,
                 },
                 s.span,
-            ));
-        }
-        let grouping = match &s.group_by {
-            Some(g) => self.grouping(g)?,
-            None => Grouping::GroupBy(Vec::new()),
-        };
-        plan = self.node(
-            PlanNode::Aggregate {
-                input: arc(plan),
-                grouping,
-                aggregates: items,
-            },
-            s.span,
-        );
-        if let Some(h) = &s.having {
-            let predicate = self.expr(h)?;
-            // As Spark's AstBuilder: a `HAVING` that is not a predicate is
-            // cast to boolean.
-            let predicate = arc(if is_predicate(&predicate) {
-                predicate
-            } else {
-                let span = h.span;
-                self.ex(
-                    ExprNode::Cast {
-                        expr: arc(predicate),
-                        to: krishiv_types::DataType::Boolean,
-                        mode: CastMode::Default,
+            );
+        } else {
+            let grouping = match &s.group_by {
+                Some(g) => self.grouping(g)?,
+                None => Grouping::GroupBy(Vec::new()),
+            };
+            plan = self.node(
+                PlanNode::Aggregate {
+                    input: arc(plan),
+                    grouping,
+                    aggregates: items,
+                },
+                s.span,
+            );
+            if let Some(h) = &s.having {
+                let predicate = self.expr(h)?;
+                // As Spark's AstBuilder: a `HAVING` that is not a predicate is
+                // cast to boolean.
+                let predicate = arc(if is_predicate(&predicate) {
+                    predicate
+                } else {
+                    let span = h.span;
+                    self.ex(
+                        ExprNode::Cast {
+                            expr: arc(predicate),
+                            to: krishiv_types::DataType::Boolean,
+                            mode: CastMode::Default,
+                        },
+                        span,
+                    )
+                });
+                plan = self.node(
+                    PlanNode::Filter {
+                        input: arc(plan),
+                        predicate,
                     },
-                    span,
-                )
-            });
+                    s.span,
+                );
+            }
+        }
+        if let Some(q) = &s.qualify {
+            // `QUALIFY`, as Spark's `AstBuilder` shapes it: a filter with
+            // the qualify predicate over the select list's projection (the
+            // analyzer resolves it like `HAVING`, extracting window
+            // functions the same way). The predicate is wrapped so the
+            // analyzer tells it apart from `WHERE` and `HAVING`; the
+            // wrapper is stripped during analysis and never reaches the
+            // executor.
+            let inner = arc(self.expr(q)?);
+            let predicate = arc(self.ex(
+                ExprNode::Function(FunctionCall {
+                    name: "qualify".to_owned(),
+                    args: vec![inner],
+                    distinct: false,
+                    filter: None,
+                }),
+                q.span,
+            ));
             plan = self.node(
                 PlanNode::Filter {
                     input: arc(plan),
@@ -647,7 +669,17 @@ impl Lowerer {
         }
         let all_plain = plain.len() == g.items.len();
         match (&g.with, all_plain) {
-            (None, true) => return Ok(Grouping::GroupBy(plain)),
+            (None, true) => {
+                // `GROUP BY ALL` reads as a column named `all` here; the
+                // analyzer expands it (or resolves the column). The key
+                // keeps the whole clause's span, so the analyzer's
+                // `UNRESOLVED_ALL_IN_GROUP_BY` cites `group by all`.
+                if plain.len() == 1 && Self::is_group_by_all(&g.items[0]) {
+                    let node = plain[0].node.clone();
+                    plain[0] = arc(IrExpr::new(node).with_origin(self.origin(g.span)));
+                }
+                return Ok(Grouping::GroupBy(plain));
+            }
             (Some(GroupWith::Rollup), true) => return Ok(Grouping::Rollup(plain)),
             (Some(GroupWith::Cube), true) => return Ok(Grouping::Cube(plain)),
             (Some(GroupWith::GroupingSets(sets)), true) => {
@@ -762,6 +794,18 @@ impl Lowerer {
         s.exprs.iter().map(|e| Ok(arc(self.expr(e)?))).collect()
     }
 
+    /// Whether a `GROUP BY` item is a bare `ALL` (`GROUP BY ALL`), written as
+    /// a column of that name by the parser (see `column_named_all`).
+    fn is_group_by_all(item: &GroupItem) -> bool {
+        let GroupItemKind::Expr(e) = &item.kind else {
+            return false;
+        };
+        let ExprKind::Column(parts) = &e.kind else {
+            return false;
+        };
+        matches!(&parts[..], [p] if p.value.eq_ignore_ascii_case("all"))
+    }
+
     fn from(&mut self, f: &FromClause) -> R<LogicalPlan> {
         if f.pivot.is_some() || f.unpivot.is_some() {
             return Err(unsupported("PIVOT and UNPIVOT", f.span));
@@ -797,15 +841,8 @@ impl Lowerer {
             let RelationExt::Join(j) = ext else {
                 return Err(unsupported("PIVOT and UNPIVOT", r.span));
             };
-            if j.natural || j.lateral {
-                return Err(unsupported(
-                    if j.natural {
-                        "NATURAL JOIN"
-                    } else {
-                        "LATERAL joins"
-                    },
-                    j.span,
-                ));
+            if j.lateral {
+                return Err(unsupported("LATERAL joins", j.span));
             }
             let kind = match j.kind {
                 JoinKind::Inner => IrJoin::Inner,
@@ -817,11 +854,18 @@ impl Lowerer {
                 JoinKind::LeftAnti => IrJoin::LeftAnti,
             };
             let right = self.factor(&j.right)?;
-            let condition = match &j.constraint {
-                JoinConstraint::None => JoinCondition::None,
-                JoinConstraint::On(e) => JoinCondition::On(arc(self.expr(e)?)),
-                JoinConstraint::Using(cols) => {
-                    JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
+            let condition = if j.natural {
+                // `NATURAL JOIN` has no condition in the syntax tree (the
+                // parser leaves it empty); the analyzer computes the
+                // common columns.
+                JoinCondition::Natural
+            } else {
+                match &j.constraint {
+                    JoinConstraint::None => JoinCondition::None,
+                    JoinConstraint::On(e) => JoinCondition::On(arc(self.expr(e)?)),
+                    JoinConstraint::Using(cols) => {
+                        JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
+                    }
                 }
             };
             plan = self.node(
@@ -949,18 +993,17 @@ impl Lowerer {
                 name.extend(fields.into_iter().rev());
                 self.column(name, sp)
             }
-            ExprKind::Wildcard { qualifier, except } => {
-                if !except.is_empty() {
-                    return Err(unsupported("SELECT * EXCEPT", sp));
-                }
-                self.ex(
-                    ExprNode::Star(Star {
-                        qualifier: qualifier.iter().map(|p| p.value.clone()).collect(),
-                        plan_id: None,
-                    }),
-                    sp,
-                )
-            }
+            ExprKind::Wildcard { qualifier, except } => self.ex(
+                ExprNode::Star(Star {
+                    qualifier: qualifier.iter().map(|p| p.value.clone()).collect(),
+                    except: except
+                        .iter()
+                        .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
+                        .collect(),
+                    plan_id: None,
+                }),
+                sp,
+            ),
             ExprKind::Unary(op, inner) => {
                 let name = match op {
                     // Unary `-` keeps `"-"` so the analyzer sees it apart

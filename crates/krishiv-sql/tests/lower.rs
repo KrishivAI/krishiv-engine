@@ -9,7 +9,7 @@
 use std::fmt::Write as _;
 use std::path::Path;
 
-use krishiv_plan::{Plan, SourceId};
+use krishiv_plan::{ExprNode, Grouping, JoinCondition, JoinKind, Plan, PlanNode, SourceId};
 use krishiv_sql::{ParserOptions, parse_and_lower};
 
 fn lower(sql: &str) -> Result<Plan, krishiv_sql::ParseError> {
@@ -247,4 +247,126 @@ fn nested_grouping_sets_cap_counts_inside_the_loop() {
         sql.find("GROUPING SETS").expect("the item"),
         "the cap cites the GROUPING SETS item, not GROUP BY"
     );
+}
+
+/// `GROUP BY ALL` lowers to a lone `all` key carrying the whole clause's
+/// span (the analyzer expands it, or resolves the column); any case goes.
+#[test]
+fn group_by_all_lowers_to_a_clause_spanned_all_key() {
+    for (sql, clause) in [
+        ("SELECT a, COUNT(*) FROM t GROUP BY ALL", "GROUP BY ALL"),
+        ("SELECT a, COUNT(*) FROM t GROUP BY aLl", "GROUP BY aLl"),
+    ] {
+        let plan = lower(sql).unwrap();
+        let PlanNode::Aggregate { grouping, .. } = &plan.root().node else {
+            panic!("{sql}: expected an Aggregate, got {}", plan.root());
+        };
+        let Grouping::GroupBy(keys) = grouping else {
+            panic!("{sql}: expected GROUP BY, got {grouping:?}");
+        };
+        assert_eq!(keys.len(), 1, "{sql}");
+        let ExprNode::Column(c) = &keys[0].node else {
+            panic!("{sql}: expected a column key, got {}", keys[0]);
+        };
+        assert!(
+            c.name.len() == 1 && c.name[0].eq_ignore_ascii_case("all"),
+            "{sql}: {c:?}"
+        );
+        let (source, span) = keys[0].origin.sql.expect("a SQL span");
+        assert_eq!(source, SourceId(0), "{sql}");
+        let at = sql.find(clause).expect("the clause");
+        assert_eq!(
+            (span.start, span.end),
+            (
+                u32::try_from(at).unwrap(),
+                u32::try_from(at + clause.len()).unwrap()
+            ),
+            "{sql}: the key cites the clause, not the column"
+        );
+    }
+}
+
+/// `NATURAL` joins lower with a marker condition (the analyzer computes
+/// the common columns); `ORDER BY ALL` lowers as a plain `all` key (the
+/// analyzer expands it).
+#[test]
+fn natural_join_lowers_to_a_marker_condition() {
+    for (sql, kind) in [
+        ("SELECT * FROM t NATURAL JOIN u", JoinKind::Inner),
+        ("SELECT * FROM t NATURAL LEFT JOIN u", JoinKind::LeftOuter),
+    ] {
+        let plan = lower(sql).unwrap();
+        let PlanNode::Project { input, .. } = &plan.root().node else {
+            panic!("{sql}: expected a Project, got {}", plan.root());
+        };
+        let PlanNode::Join {
+            kind: got,
+            condition,
+            ..
+        } = &input.node
+        else {
+            panic!("{sql}: expected a Join, got {input}");
+        };
+        assert_eq!(*got, kind, "{sql}");
+        assert!(
+            matches!(condition, JoinCondition::Natural),
+            "{sql}: expected a NATURAL marker, got {condition:?}"
+        );
+    }
+    let plan = lower("SELECT * FROM t ORDER BY ALL").unwrap();
+    let PlanNode::Sort { order, .. } = &plan.root().node else {
+        panic!("expected a Sort, got {}", plan.root());
+    };
+    assert_eq!(order.len(), 1);
+    assert!(
+        matches!(&order[0].expr.node, ExprNode::Column(_)),
+        "ORDER BY ALL stays a column for the analyzer, got {}",
+        order[0].expr
+    );
+}
+
+/// `QUALIFY` lowers to a filter with a wrapped predicate (the analyzer
+/// tells it apart from `WHERE` and `HAVING` by the wrapper).
+#[test]
+fn qualify_lowers_to_a_wrapped_filter() {
+    let plan = lower("SELECT a, RANK() OVER (ORDER BY b) AS r FROM t QUALIFY r > 1").unwrap();
+    let PlanNode::Filter { predicate, .. } = &plan.root().node else {
+        panic!("expected a Filter, got {}", plan.root());
+    };
+    let ExprNode::Function(f) = &predicate.node else {
+        panic!("expected the qualify wrapper, got {predicate}");
+    };
+    assert_eq!((f.name.as_str(), f.args.len()), ("qualify", 1));
+}
+
+/// `* EXCEPT` lowers onto the star: bare and qualified entries, including
+/// nested paths (the analyzer drops the former and refuses the latter).
+#[test]
+fn star_except_lowers_onto_the_star() {
+    for (sql, qualifier, except) in [
+        (
+            "SELECT * EXCEPT (a, b) FROM t",
+            Vec::new(),
+            vec![vec!["a".to_owned()], vec!["b".to_owned()]],
+        ),
+        (
+            "SELECT t.* EXCEPT (t.a, b.c) FROM t",
+            vec!["t".to_owned()],
+            vec![
+                vec!["t".to_owned(), "a".to_owned()],
+                vec!["b".to_owned(), "c".to_owned()],
+            ],
+        ),
+    ] {
+        let plan = lower(sql).unwrap();
+        let PlanNode::Project { exprs, .. } = &plan.root().node else {
+            panic!("{sql}: expected a Project, got {}", plan.root());
+        };
+        assert_eq!(exprs.len(), 1, "{sql}");
+        let ExprNode::Star(s) = &exprs[0].node else {
+            panic!("{sql}: expected a star, got {}", exprs[0]);
+        };
+        assert_eq!(s.qualifier, qualifier, "{sql}");
+        assert_eq!(s.except, except, "{sql}");
+    }
 }
