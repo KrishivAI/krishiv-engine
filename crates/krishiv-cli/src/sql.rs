@@ -2,11 +2,13 @@
 //! `krishiv sql`: runs SQL from `-e`, `-f` or stdin and prints the rows.
 
 use std::fmt::Write as _;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::common::{build_session, key_value, read_input, split_statements};
 use clap::{Args, ValueEnum};
+use krishiv::DataFrame;
 use krishiv::arrow::array::cast::AsArray;
 use krishiv::arrow::array::types::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
@@ -14,7 +16,6 @@ use krishiv::arrow::array::types::{
 };
 use krishiv::arrow::array::{Array, RecordBatch};
 use krishiv::arrow::datatypes::{DataType, TimeUnit};
-use krishiv::{DataFrame, Session};
 
 /// Output formats of a result set.
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -68,13 +69,6 @@ pub(crate) struct SqlArgs {
     json: bool,
 }
 
-fn key_value(s: &str) -> Result<(String, String), String> {
-    match s.split_once('=') {
-        Some((k, v)) if !k.trim().is_empty() => Ok((k.trim().to_owned(), v.to_owned())),
-        _ => Err(format!("expected KEY=VALUE, got `{s}`")),
-    }
-}
-
 /// Runs the command; the process exit code (0 ok, 1 query or I/O error).
 pub(crate) fn run(args: &SqlArgs) -> i32 {
     match run_inner(args) {
@@ -86,36 +80,9 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
     }
 }
 
-fn read_input(args: &SqlArgs) -> Result<String, String> {
-    if let Some(sql) = &args.execute {
-        return Ok(sql.clone());
-    }
-    match &args.file {
-        Some(p) if p.as_os_str() != "-" => {
-            std::fs::read_to_string(p).map_err(|e| format!("cannot read {}: {e}", p.display()))
-        }
-        _ => {
-            let mut s = String::new();
-            io::stdin()
-                .read_to_string(&mut s)
-                .map_err(|e| format!("cannot read stdin: {e}"))?;
-            Ok(s)
-        }
-    }
-}
-
 fn run_inner(args: &SqlArgs) -> Result<(), String> {
-    let input = read_input(args)?;
-    let mut builder = Session::builder();
-    for (k, v) in &args.conf {
-        builder = builder.config(k, v);
-    }
-    let session = builder.build().map_err(|e| e.to_string())?;
-    for (name, path) in &args.table {
-        let df = session.read().parquet([path.as_str()]);
-        futures::executor::block_on(df.create_or_replace_temp_view(name))
-            .map_err(|e| format!("--table {name}={path}: {e}"))?;
-    }
+    let input = read_input(args.execute.as_ref(), args.file.as_ref())?;
+    let session = build_session(&args.conf, &args.table)?;
     let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
     for (line_offset, stmt) in split_statements(&input) {
         let start = Instant::now();
@@ -461,74 +428,6 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Splits `input` at `;` outside quotes and comments; blank statements are
-/// dropped. Each statement comes with the number of input lines before it.
-fn split_statements(input: &str) -> Vec<(usize, String)> {
-    let mut out = Vec::new();
-    let mut done_lines = 0;
-    let mut cur = String::new();
-    let mut chars = input.chars().peekable();
-    let mut quote: Option<char> = None;
-    let mut code = false;
-    while let Some(c) = chars.next() {
-        cur.push(c);
-        match quote {
-            Some(q) => {
-                if c == '\\' && q != '`' {
-                    if let Some(n) = chars.next() {
-                        cur.push(n);
-                    }
-                } else if c == q {
-                    quote = None;
-                }
-            }
-            None => match c {
-                '\'' | '"' | '`' => {
-                    code = true;
-                    quote = Some(c);
-                }
-                '-' if chars.peek() == Some(&'-') => {
-                    for n in chars.by_ref() {
-                        cur.push(n);
-                        if n == '\n' {
-                            break;
-                        }
-                    }
-                }
-                '/' if chars.peek() == Some(&'*') => {
-                    let mut prev = '\0';
-                    for n in chars.by_ref() {
-                        cur.push(n);
-                        if prev == '*' && n == '/' {
-                            break;
-                        }
-                        prev = n;
-                    }
-                }
-                ';' => {
-                    cur.pop();
-                    push_stmt(&mut out, &mut done_lines, &mut cur, code);
-                    code = false;
-                }
-                c if !c.is_whitespace() => code = true,
-                _ => {}
-            },
-        }
-    }
-    push_stmt(&mut out, &mut done_lines, &mut cur, code);
-    out
-}
-
-fn push_stmt(out: &mut Vec<(usize, String)>, done_lines: &mut usize, cur: &mut String, code: bool) {
-    if code {
-        let leading = cur.len() - cur.trim_start().len();
-        let skipped = cur[..leading].matches('\n').count();
-        out.push((*done_lines + skipped, cur.trim().to_owned()));
-    }
-    *done_lines += cur.matches('\n').count();
-    cur.clear();
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -541,29 +440,6 @@ mod tests {
     use krishiv::arrow::datatypes::{DataType, Field, Schema};
 
     use super::*;
-
-    #[test]
-    fn splits_outside_quotes_and_comments() {
-        let s = split_statements("select 'a;b'; -- x;y\nselect 2; /* ; */ select `c;`;;");
-        assert_eq!(s.len(), 3, "{s:?}");
-        assert_eq!(s[0].1, "select 'a;b'");
-        assert_eq!(s[1].0, 0);
-        let t = split_statements("select 1;\n\n  select 2");
-        assert_eq!(t[1], (2, "select 2".to_owned()));
-        // Comment-only fragments are not statements.
-        let c = split_statements("-- only\n; /* x */ ; select 1 -- tail\n;\n-- end");
-        assert_eq!(c, vec![(1, "select 1 -- tail".to_owned())]);
-        let esc = split_statements("select 'it\\'s;' ; select 2");
-        assert_eq!(esc.len(), 2, "{esc:?}");
-    }
-
-    #[test]
-    fn key_value_parsing() {
-        assert_eq!(key_value("a=b=c"), Ok(("a".into(), "b=c".into())));
-        assert_eq!(key_value(" k = v"), Ok(("k".into(), " v".into())));
-        assert!(key_value("novalue").is_err());
-        assert!(key_value("=v").is_err());
-    }
 
     #[test]
     fn csv_and_json_escaping() {
@@ -665,7 +541,7 @@ mod tests {
 
     #[test]
     fn caret_is_empty_for_non_parse_errors() {
-        let e = Session::new()
+        let e = krishiv::Session::new()
             .and_then(|s| futures::executor::block_on(s.sql("select * from nope")).map(|_| ()))
             .expect_err("unknown table");
         assert_eq!(caret("select * from nope", 0, &e), "");

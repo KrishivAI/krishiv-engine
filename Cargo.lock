@@ -1449,6 +1449,7 @@ dependencies = [
  "krishiv-sql",
  "libmimalloc-sys",
  "mimalloc",
+ "serde_json",
  "tempfile",
 ]
 
