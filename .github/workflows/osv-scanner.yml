@@ -13,6 +13,8 @@ name: OSV-Scanner
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   schedule:
@@ -42,8 +44,17 @@ jobs:
         --experimental-exclude=ui
         ./
 
+  # Merge queue: the pull-request scan diffs against the PR base branch, which a
+  # merge-group run does not have, and it already ran on the PR. This caller
+  # reports the same check name (`scan-pr / osv-scan`) with a no-op reusable job.
+  scan-pr-merge-group:
+    name: scan-pr
+    if: github.event_name == 'merge_group'
+    uses: $/.github/workflows/merge-group-noop.yml
+    permissions: {}
+
   scan:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
     uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
     permissions:
       # Required by the reusable workflow: read the code and its runs,

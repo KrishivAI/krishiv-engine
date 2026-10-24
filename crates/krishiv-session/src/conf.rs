@@ -13,18 +13,23 @@ const BUILD_TIME: &[&str] = &["krishiv.memory.", "krishiv.spill.", "krishiv.io."
 
 /// The configuration of a session, shared by its clones. Queries read an
 /// immutable snapshot ([`Self::snapshot`]).
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct ConfStore {
     /// The configuration and its version, bumped on every change: analysis
     /// results are reused only within one version. One lock holds both, so
     /// a snapshot never pairs a configuration with another one's version.
     current: RwLock<(Arc<Config>, u64)>,
+    /// The configuration the session was built with: `RESET` restores it,
+    /// so values from the builder survive resets as Spark's startup values
+    /// do (static entries never change at runtime either way).
+    initial: Config,
 }
 
 impl ConfStore {
     pub(crate) fn new(config: Config) -> Self {
         Self {
-            current: RwLock::new((Arc::new(config), 0)),
+            current: RwLock::new((Arc::new(config.clone()), 0)),
+            initial: config,
         }
     }
 
@@ -47,6 +52,22 @@ impl ConfStore {
         f(&mut next)?;
         *current = (Arc::new(next), current.1.wrapping_add(1));
         Ok(())
+    }
+
+    /// Restores the configuration the session was built with, bumping the
+    /// version so running analyses are redone (`RESET` with no key).
+    pub(crate) fn reset(&self) {
+        let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        *current = (Arc::new(self.initial.clone()), current.1.wrapping_add(1));
+    }
+
+    /// Restores `key` to the value the session was built with: the
+    /// builder's value, or the default when neither sets it (`RESET key`).
+    pub(crate) fn reset_key(&self, key: &str) {
+        let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        let mut next = Config::clone(&current.0);
+        next.reset_key(key, &self.initial);
+        *current = (Arc::new(next), current.1.wrapping_add(1));
     }
 }
 
@@ -128,7 +149,8 @@ impl RuntimeConf {
         self.store.update(|c| c.set(key, value).map(drop))
     }
 
-    /// Resets `key` to its default.
+    /// Resets `key` to the value the session was built with: the
+    /// builder's value, or the default when neither sets it.
     ///
     /// ```
     /// # let session = krishiv_session::Session::new()?;
@@ -147,10 +169,8 @@ impl RuntimeConf {
             }
             .into());
         }
-        self.store.update(|c| {
-            c.unset(key);
-            Ok(())
-        })
+        self.store.reset_key(key);
+        Ok(())
     }
 
     /// Whether `key` can be set at runtime.

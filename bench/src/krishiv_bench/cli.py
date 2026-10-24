@@ -14,6 +14,32 @@ from .runner import run_suite
 ABBA_DATASET = {"tpch": "tpch-duckdb", "tpcds": "tpcds", "clickbench": "clickbench"}
 
 
+def _add_memcap_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--rows", default="10m", help="memcap: sales rows, a whole number of millions (10m, 50m, 150m)")
+    p.add_argument("--cap", default="4.5g", help="memcap: hard memory cap of the process tree (cgroup MemoryMax)")
+    p.add_argument("--engine-memory", default="3g", help="memcap: the engine's own memory setting (3g, or 1g to spill)")
+
+
+def _memcap_engines(ap: argparse.ArgumentParser, names: list[str]) -> list[str]:
+    from .memcap import ENGINES as MEMCAP_ENGINES
+
+    out = ["spark" if n == "spark-local" else n for n in names]
+    bad = [n for n in out if n not in MEMCAP_ENGINES]
+    if bad:
+        ap.error(f"memcap engines are {', '.join(MEMCAP_ENGINES)} (got {', '.join(bad)})")
+    return out
+
+
+def _run_memcap(ap: argparse.ArgumentParser, a, engines: list[str]) -> None:
+    from .memcap import resolve_queries, run_memcap
+
+    try:
+        qs = resolve_queries(a.queries.split(",")) if a.queries else None
+        run_memcap(a.rows, a.cap, _memcap_engines(ap, engines), a.engine_memory, a.reps, qs, a.timeout or None)
+    except (ValueError, FileNotFoundError) as e:
+        ap.error(str(e))
+
+
 RUNNER_HELP = "krishiv-bench-runner binary (wins over $KRISHIV_BENCH_RUNNER)"
 
 
@@ -53,14 +79,14 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a suite on an engine, write JSON to $KRISHIV_DATA/results")
-    r.add_argument("--engine", required=True, choices=ENGINES)
-    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", *H2O_SUITES])
+    r.add_argument("--engine", required=True, choices=[*ENGINES, "spark"])
+    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "memcap", *H2O_SUITES])
     add_h2o_args(r)
     r.add_argument("--sf", type=float, default=1)
     r.add_argument(
         "--dataset", help="dataset dir name under $KRISHIV_DATA (default per suite; tpch-dbgen = official-answer data)"
     )
-    r.add_argument("--iterations", type=int, help="timed runs per query (default 5; 3 for h2o-*)")
+    r.add_argument("--iterations", type=int, help="timed runs per query (default 5; 3 for h2o-* and memcap)")
     r.add_argument("--warmup", type=int, help="discarded warm-up runs per query (default 2; 1 for h2o-*)")
     r.add_argument("--queries", help="comma list, e.g. q01,q05")
     r.add_argument("--spark-remote", default="sc://127.0.0.1:15002")
@@ -68,6 +94,7 @@ def main(argv=None) -> None:
     r.add_argument("--duckdb-memory-limit", default="12GB")
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
     r.add_argument("--runner", help=RUNNER_HELP)
+    _add_memcap_args(r)
     ab = sub.add_parser(
         "abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the dist-profile runner binary"
     )
@@ -103,7 +130,7 @@ def main(argv=None) -> None:
         "reproduce",
         help="reference engines side by side: correctness vs DuckDB, then ours (interleaved) and/or theirs (best of N)",
     )
-    rr.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", *H2O_SUITES])
+    rr.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", "memcap", *H2O_SUITES])
     add_h2o_args(rr)
     rr.add_argument("--sf", type=float, default=10)
     rr.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
@@ -121,18 +148,22 @@ def main(argv=None) -> None:
     rr.add_argument("--their-timeout", type=float, help="per-run timeout for theirs (default: the source's)")
     rr.add_argument("--runner", help=RUNNER_HELP)
     rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
+    _add_memcap_args(rr)
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
     add_h2o_args(rp)
     rp.add_argument("--sf", type=float, default=1)
     rp.add_argument("--dataset")
+    rp.add_argument("--rows", default="10m", help="memcap: sales rows of the results to report")
     rp.add_argument("--baseline", default="duckdb")
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
     a = ap.parse_args(argv)
     _set_runner(getattr(a, "runner", None))
     if a.cmd in ("reproduce", "ab") and h2o.is_h2o(a.suite):
         _, a.dataset, a.sf = h2o_target(ap, a)
-    if a.cmd == "reproduce":
+    if a.cmd == "reproduce" and a.suite == "memcap":
+        _run_memcap(ap, a, a.engines.split(",") if a.engines else ["krishiv", "duckdb", "polars", "spark"])
+    elif a.cmd == "reproduce":
         from .reproduce import run_reproduce
 
         methods = tuple(m.strip() for m in a.methods.split(",") if m.strip())
@@ -190,7 +221,12 @@ def main(argv=None) -> None:
             a.a_sha,
             a.b_sha,
         )
+    elif a.cmd == "run" and a.suite == "memcap":
+        a.reps = a.iterations if a.iterations is not None else 3
+        _run_memcap(ap, a, [a.engine])
     elif a.cmd == "run":
+        if a.engine == "spark":
+            ap.error("--engine spark is a memcap engine; use spark-connect or spark-local elsewhere")
         is_h2o = h2o.is_h2o(a.suite)
         iterations = a.iterations or (3 if is_h2o else 5)
         warmup = a.warmup if a.warmup is not None else (1 if is_h2o else 2)
@@ -232,6 +268,10 @@ def main(argv=None) -> None:
             a.dataset,
         )
         print(f"result: {f}")
+    elif a.suite == "memcap":
+        from .memcap import write_memcap_report
+
+        print(f"report: {write_memcap_report(a.rows)}")
     else:
         if h2o.is_h2o(a.suite):
             root, _, a.sf = h2o_target(ap, a)

@@ -4,7 +4,7 @@ Python (uv) harness that runs query suites against engine adapters and records J
 Datasets and results live **outside the repo** in `$KRISHIV_DATA` (default `~/krishiv-data`):
 
 ```
-$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/
+$KRISHIV_DATA/tpch/sf1/*.parquet   tpcds/sf1/   clickbench/   nexmark/   zipf/   memcap/v1/<rows>/
 $KRISHIV_DATA/manifests/*.sha256   (sha256sum -c compatible, relative paths)
 $KRISHIV_DATA/results/*.json       report_<suite>_sf<N>.md
 ```
@@ -61,6 +61,61 @@ returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket
   and version-pinned like every other engine here, so there is no separate download, checksum or PATH step; the engine is the same ClickHouse release. TPC-DS is not run for ClickHouse (`load_queries` stops with the reason).
 - Adding Flink etc.: subclass `Engine`, register in `adapters/__init__.py`.
 Per-engine SQL dialect overrides: `queries/<suite>/<engine>/qNN.sql` (TPC-H ClickHouse only; ClickBench is fetched and adapted in code).
+
+## Memory-capped data engineering (`--suite memcap`)
+Four data-engineering queries over a seeded synthetic star schema, each run in a fresh process under a hard memory cap.
+```bash
+uv run krishiv-datasets memcap --rows 10m 50m 150m     # -> $KRISHIV_DATA/memcap/v1/<rows>/ + manifests/memcap-v1-<rows>.sha256
+uv run krishiv-bench reproduce --suite memcap --rows 150m --cap 4.5g --engines krishiv,duckdb,polars,spark --reps 3
+uv run krishiv-bench reproduce --suite memcap --rows 150m --cap 4.5g --engines krishiv,duckdb --engine-memory 1g   # spill
+uv run krishiv-bench run --engine duckdb --suite memcap --rows 10m --queries q3      # one engine (spark-local is accepted as spark)
+uv run krishiv-bench report --suite memcap --rows 150m                                # -> $KRISHIV_DATA/results/report_memcap_150m.md
+```
+* **Data**: `sales` fact (`--rows` 10m/50m/150m; 5M-row part files, snappy, about 3.2 GB at 150m) and a 50,000-row `products` dimension; about 10 orders per customer.
+  Fixed seed (`20261019`, one RNG stream per 5M-row chunk). `digest.json` in the dataset directory records the seed, the chunking, versions and sha256 content digests of the
+  logical rows (independent of the Parquet encoder); the file digests are in the manifest. A dataset directory is never regenerated in place: a generator change is a new version directory (`v2`).
+* **Queries** (`memcap_queries.py`): `q1_filter_agg` (filter on timestamp and status, group by store and status), `q2_join_agg` (fact-dimension join, group by category and brand),
+  `q3_window_latest` (latest order per customer, `ROW_NUMBER()`), `q4_highcard_agg` (group by customer, about 15M groups at 150m). One SQL text for DuckDB, Krishiv and Spark (Krishiv spells the q1 timestamp literal as a cast to `TIMESTAMP_NTZ`, `sql_for`); Polars runs the same logic as expressions.
+* **Runs**: `systemd-run --user --scope -p MemoryMax=<cap> -p MemorySwapMax=0` around one `memcap_child` process per (engine, query), 8 threads, so the kernel kills the whole tree above the cap.
+  Engine memory settings (`--engine-memory`, default `3g`): DuckDB `memory_limit`, Krishiv `--memory-limit`, Spark `spark.driver.memory`; Polars has none. The result is written as Parquet inside the timed span.
+  A run is `finished`, `killed` (the scope's `oom_kill` counter moved, or SIGKILL with the scope within 5% of the cap), `timeout` or `failed`; only finished runs are timed.
+  Recorded per run: wall time (process start to exit, so it includes imports and session start, and the scope's start), the highest resident set of the tree (sampled every 10 ms from the scope's `memory.stat`:
+  anonymous + mapped file + shared pages), the scope's `memory.peak` (`peak_cgroup_bytes`; what the cap acts on, includes reclaimable page cache), and the peak size of the engine's scratch directory as `spill_bytes`
+  (DuckDB temp directory, Krishiv `krishiv.spill.dir`, Spark local dir; none for Polars). The scope disappears with its last process, so a kill is read from the last poll; the SIGKILL-near-cap rule covers a missed event.
+* **Correctness before timing**: per query every engine first runs once untimed (validation); DuckDB's result is the reference (it runs first, even when it is not a reported engine) and each result is
+  checksummed with DuckDB (row count, integer sums exactly, float sums within 1e-9 relative). An engine whose result differs is never timed on that query (verdict `mismatch`); an engine that could not
+  produce a validated result keeps `unverified` until a later finished run is checked. Then `--reps` repetitions (default 3) with the engine order rotated per repetition.
+* **Output**: `$KRISHIV_DATA/results/<ts>_memcap_<rows>_<cap>_<engine memory>.json` (machine, git, dataset digests, every run, per-engine summary); `report` gives, per query and engine, the median wall time of
+  finished runs, finished n/N, median peak memory (`>cap (killed)` when none finished), spill and the verdict. The newest result per (engine, engine memory) is shown. The run holds `$KRISHIV_DATA/.bench.lock`.
+* Needs systemd user scopes with the memory controller (Linux, cgroup v2), Java 21 for Spark and the `dist` runner for Krishiv (see Adapters). Run 50m/150m on the benchmark server.
+
+### Provenance and licence
+The schema, seed, generator and the four queries are taken from the public MIT-licensed repository `engine-bench` by Firat Celik (https://github.com/firfircelik/engine-bench: `gen_data.py`, `queries.py`),
+adapted here (output layout, content digests, versioned directory, checksums). The licence notice that goes with that use:
+
+```
+MIT License
+
+Copyright (c) 2026 Firat Celik
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
@@ -181,9 +236,8 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   the benchmark specifications and query templates are (c) Transaction Processing Performance Council, whose end-user licence permits their use for
   benchmarking. Results from this harness are *TPC-derived* and not audited TPC results; they must not be published as official TPC-H/TPC-DS numbers.
   The harness pins `duckdb==2.0.0` (`pyproject.toml`). TPC-H `dbgen` text columns differ between DuckDB versions, and `tpch_answers()`
-  matches the `dbgen` of the same version, so the `tpch-dbgen` reference dataset is generated by the pinned version (SF1 was regenerated with
-  DuckDB 2.0.0 `dbgen`, all 22 answer checks pass). `tpch-dbgen/sf10` is still 1.5.6-generated and must be regenerated with
-  `datasets/gen.sh tpch-dbgen --sf 10 --force` before its answer checks count (without `--force` a non-empty directory is skipped).
+  matches the `dbgen` of the same version, so `tpch-dbgen` reference datasets are versioned by generator (see below); answer checks
+  run only when the dataset's generator version matches the running DuckDB.
 * **ClickBench** (ClickHouse/ClickBench, licensed **CC BY-NC-SA 4.0**): the query texts are **fetched, not redistributed**. They are not in this repository.
   On first use the harness downloads two files from the pinned upstream commit `0e10b8434eef001b43156b860a4e2e3665a35d51`
   (`duckdb-parquet/queries.sql` for every engine but ClickHouse, `clickhouse/queries.sql` for ClickHouse), checks their SHA-256 (pinned in
@@ -192,6 +246,17 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   a modified copy: `STRLEN(x)` becomes `length(x)`; date-string bounds on `EventDate` become day numbers and `extract(minute FROM EventTime)` /
   `DATE_TRUNC('minute', EventTime)` become integer arithmetic (the raw Parquet columns are a day count and epoch seconds, read without a view); and
   q11, q18, q19, q22, q23, q25, q31-q33, q39-q41 get tie-break sort keys (`TIE_BREAK`) so `LIMIT` / `OFFSET` results are deterministic across engines.
+
+The harness pins `duckdb==2.0.0` (`pyproject.toml`). TPC-H `dbgen` output differs between DuckDB versions (text columns in every
+table), and `tpch_answers()` matches only the `dbgen` output of the same version. Datasets are versioned by generator:
+
+- `tpch-dbgen/sf1` (and `sf10`): unversioned, generated by DuckDB 1.5.6. Answer checks apply only under 1.5.6.
+- `tpch-dbgen/sf1-dbgen-2.0.0`: generated by DuckDB 2.0.0 `dbgen` (`uv run krishiv-datasets tpch-dbgen`). All 22 answer checks
+  pass with the pinned version. Select it with `--dataset tpch-dbgen@2.0.0`.
+
+A dataset is never regenerated in place. A new generator version gets a new versioned directory, and the existing one stays.
+Results and Spark goldens stay tied to the dataset they were produced from (recorded in each result JSON and its manifest under
+`$KRISHIV_DATA/manifests/`). A harness run checks answers only when the dataset's generator version matches the running DuckDB.
 
 ### ClickHouse queries and dialect differences
 * **TPC-H**: `queries/tpch/clickhouse/qNN.sql` are ClickHouse's own TPC-H queries, `tests/benchmarks/tpc-h/queries/query_NN.sql` in
