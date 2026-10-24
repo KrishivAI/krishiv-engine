@@ -11,12 +11,12 @@
 //! option form: it never survives `redact_sql` or reaches an error.
 #![no_main]
 
-use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
 };
+use krishiv_sql::lexer::{Sym, TokenKind, tokenize};
 use krishiv_sql::{ParserOptions, lower, parse_query, redact_sql};
 use krishiv_testkit::golden::sql_spans::{check_spans, respaced};
 use libfuzzer_sys::fuzz_target;
@@ -49,14 +49,19 @@ fuzz_target!(|data: &[u8]| {
             let again = parse_query(&respaced(&sql), &options);
             assert!(matches!(again, Ok(r) if r == q), "differential mismatch");
             if let Ok(plan) = lower(&q, SourceId(0)) {
-                assert!(!plan.root().is_resolved(), "a lowered plan is unresolved");
+                // A lowered plan may already be resolved (`SELECT 1` is a
+                // literal over one row): the analysis below checks it too.
                 let col = |name: &str| TableColumn {
                     name: name.to_owned(),
                     data_type: krishiv_types::DataType::Integer,
                     nullable: true,
                 };
-                let catalog = MemoryCatalog::new("spark_catalog")
-                    .with_table(&["default"], "t", vec![col("a"), col("b")], None);
+                let catalog = MemoryCatalog::new("spark_catalog").with_table(
+                    &["default"],
+                    "t",
+                    vec![col("a"), col("b")],
+                    None,
+                );
                 let ctx = context(catalog, ResolutionConf::default());
                 if let Ok(a) = block_on(DefaultAnalyzer.analyze(&plan, &ctx)) {
                     assert!(a.plan.root().is_resolved(), "unresolved node left");
@@ -114,7 +119,8 @@ fn nesting(sql: &str) -> usize {
         let prefix = matches!(
             t.kind,
             TokenKind::Sym(Sym::Plus | Sym::Minus | Sym::Tilde | Sym::Bang)
-        ) || (t.kind == TokenKind::Word && t.span.text(sql).eq_ignore_ascii_case("NOT"));
+        ) || (t.kind == TokenKind::Word
+            && t.span.text(sql).eq_ignore_ascii_case("NOT"));
         run = if prefix { run + 1 } else { 0 };
         longest = longest.max(run);
         max = max.max(depth);
