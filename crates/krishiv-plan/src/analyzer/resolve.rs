@@ -133,6 +133,8 @@ pub(super) struct Resolver<'a> {
     depth: usize,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
+    /// Constant folding's values over this pass (see `fold::Memo`).
+    pub(super) folds: std::cell::RefCell<super::fold::Memo>,
 }
 
 type Resolved = (
@@ -159,6 +161,7 @@ pub(super) fn resolve(
         depth: 0,
         op_outer: None,
         root_env: None,
+        folds: std::cell::RefCell::default(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -454,6 +457,90 @@ impl Resolver<'_> {
             carriers,
             agg: None,
             widen: None,
+        }
+    }
+
+    /// Spark's checks of a `LIMIT` or `OFFSET` (`name`) value: it must be
+    /// foldable (`IS_UNFOLDABLE` when it is not: a column, a nondeterministic
+    /// call, a subquery), to a value that is not NULL and not negative
+    /// (cited at the expression, `at`); what folding raises (`2147483647 + 1`
+    /// under ANSI) is raised as is. `unfoldable` reports the first check
+    /// without folding. A foldable expression this folder cannot evaluate
+    /// (a cast or call the kernels lack here) is not an error: it passes
+    /// through for the executor to evaluate once at run time, as before.
+    /// The folded value, when it is an integral.
+    #[inline(never)]
+    pub(super) fn check_limit(
+        &self,
+        b: &super::exprs::Bound,
+        name: &str,
+        unfoldable: bool,
+        at: Origin,
+        operator: Origin,
+    ) -> Result<Option<i64>, AnalysisError> {
+        use krishiv_common::error::{
+            InvalidLimitLikeExpressionIsNegative, InvalidLimitLikeExpressionIsNull,
+            InvalidLimitLikeExpressionIsUnfoldable,
+        };
+        // A nondeterministic expression is pulled out of the operator into
+        // an attribute of this name before Spark checks it.
+        let nondeterministic = {
+            let mut found = false;
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(&b.expr), |n| {
+                if let crate::walk::Node::Expr(x) = n
+                    && let ExprNode::Resolved(crate::ResolvedExpr::Function(f)) = &x.node
+                    && !f.deterministic
+                {
+                    found = true;
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+            found
+        };
+        let text = if nondeterministic {
+            "\"_nondeterministic\"".to_owned()
+        } else {
+            format!("\"{}\"", super::exprs::pretty(&b.shown()))
+        };
+        let name = name.to_owned();
+        let folded = if unfoldable {
+            None
+        } else {
+            self.fold(&b.expr, self.ctx.conf.ansi)
+        };
+        match folded {
+            // An attribute carries no position of its own: Spark cites the
+            // input there, the expression otherwise.
+            // Not foldable to Spark either: `IS_UNFOLDABLE` without folding.
+            None if unfoldable => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsUnfoldable { expr: text, name },
+                if matches!(
+                    b.expr.node,
+                    ExprNode::Resolved(crate::ResolvedExpr::Column(_))
+                ) {
+                    operator
+                } else {
+                    b.expr.origin
+                },
+            )),
+            Some(super::Constant::Error(e)) => Err(AnalysisError::new(e, b.expr.origin)),
+            Some(super::Constant::Null) => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNull { expr: text, name },
+                at,
+            )),
+            Some(super::Constant::Integral(v)) if v < 0 => Err(AnalysisError::new(
+                InvalidLimitLikeExpressionIsNegative {
+                    expr: text,
+                    name,
+                    v: v.to_string(),
+                },
+                at,
+            )),
+            Some(super::Constant::Integral(v)) => Ok(Some(v)),
+            // Foldable, but not evaluated here (or not an integral): pass
+            // the expression through for the downstream folders and the
+            // executor to read at run time.
+            None | Some(_) => Ok(None),
         }
     }
 

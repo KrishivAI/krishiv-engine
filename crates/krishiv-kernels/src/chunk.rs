@@ -19,11 +19,11 @@ use arrow_array::{Array, ArrowPrimitiveType};
 use arrow_buffer::bit_chunk_iterator::BitChunks;
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 
-use crate::dispatch::KernelCtx;
+use crate::dispatch::Dispatch;
 use crate::error::{KernelError, with_capacity};
 use crate::ops::Operand;
 use crate::policy::{Action, Fault, Overflow};
-use crate::unsafe_dispatch::{Kernel, run};
+use crate::unsafe_dispatch::{Kernel, run, scalar_loops};
 
 /// Rows per chunk: one validity word.
 pub(crate) const CHUNK: usize = 64;
@@ -51,6 +51,29 @@ pub(crate) trait LaneOp<T>: Copy {
 pub(crate) enum Side<'a, T> {
     Array(&'a [T]),
     Scalar(T),
+}
+
+impl<'a, T: Copy> Side<'a, T> {
+    /// This side as an array of `len` values: a scalar is repeated into
+    /// `buf` (for a dispatch without scalar loops, see
+    /// `unsafe_dispatch::Run::SCALAR_LOOPS`).
+    pub(crate) fn to_array<'b>(
+        self,
+        len: usize,
+        buf: &'b mut Vec<T>,
+    ) -> Result<Side<'b, T>, KernelError>
+    where
+        'a: 'b,
+    {
+        Ok(match self {
+            Side::Array(a) => Side::Array(a),
+            Side::Scalar(v) => {
+                *buf = with_capacity(len)?;
+                buf.resize(len, v);
+                Side::Array(buf)
+            }
+        })
+    }
 }
 
 /// Operands resolved once per batch.
@@ -124,7 +147,7 @@ fn checks<T, L: LaneOp<T>, O: Overflow>() -> bool {
 /// Runs `op` over two resolved sides (`len` rows; `nulls` is the input
 /// validity). A raised fault becomes the error `raise(row, fault)`.
 pub(crate) fn compute<T, L, O>(
-    ctx: &KernelCtx,
+    ctx: &impl Dispatch,
     l: Side<'_, T>,
     r: Side<'_, T>,
     nulls: Option<NullBuffer>,
@@ -147,12 +170,12 @@ where
     let mut null_words = with_capacity::<u64>(if may_null { n_words } else { 0 })?;
     let n = nulls.as_ref();
     macro_rules! go {
-        ($ls:literal, $rs:literal) => {
+        ($ls:literal, $rs:literal, $l:expr, $r:expr) => {
             run(
                 ctx,
                 Chunks::<'_, T, L, O, $ls, $rs> {
-                    l,
-                    r,
+                    l: $l,
+                    r: $r,
                     validity: n,
                     out: &mut out,
                     null_words: &mut null_words,
@@ -163,10 +186,20 @@ where
             )
         };
     }
-    let raised = match (l, r) {
-        (Side::Array(_), Side::Array(_)) => go!(false, false),
-        (Side::Array(_), Side::Scalar(_)) => go!(false, true),
-        (Side::Scalar(_), _) => go!(true, false),
+    let raised = if scalar_loops(ctx) {
+        match (l, r) {
+            (Side::Array(_), Side::Array(_)) => go!(false, false, l, r),
+            (Side::Array(_), Side::Scalar(_)) => go!(false, true, l, r),
+            (Side::Scalar(_), _) => go!(true, false, l, r),
+        }
+    } else {
+        let (mut lb, mut rb) = (Vec::new(), Vec::new());
+        go!(
+            false,
+            false,
+            l.to_array(len, &mut lb)?,
+            r.to_array(len, &mut rb)?
+        )
     };
     if let Some((row, fault)) = raised {
         return Err(raise(row, fault));
@@ -459,7 +492,7 @@ mod tests {
         nulls: Option<NullBuffer>,
     ) -> Result<Computed<i32>, KernelError> {
         compute::<i32, Div, O>(
-            &KernelCtx::new(),
+            &crate::KernelCtx::new(),
             Side::Array(a),
             Side::Array(b),
             nulls,

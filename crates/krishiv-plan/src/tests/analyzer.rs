@@ -1906,6 +1906,57 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
     assert!(try_add.output[0].nullable);
 }
 
+/// Built-in functions plus `rand`, a nondeterministic `DOUBLE` function as
+/// in Spark (the engine does not implement it yet; `sqrt`'s signature
+/// stands in for its typing).
+struct WithRand(crate::analyzer::BuiltinFunctions);
+
+impl crate::analyzer::FunctionRegistry for WithRand {
+    fn lookup(&self, name: &[String], profile: SparkProfile) -> crate::analyzer::FunctionLookup {
+        use crate::analyzer::FunctionLookup;
+        if name.len() == 1 && name[0].eq_ignore_ascii_case("rand") {
+            return match self.0.lookup(&["sqrt".to_owned()], profile) {
+                FunctionLookup::Found(mut e) => {
+                    e.deterministic = false;
+                    FunctionLookup::Found(e)
+                }
+                other => other,
+            };
+        }
+        self.0.lookup(name, profile)
+    }
+
+    fn version(&self) -> u64 {
+        self.0.version()
+    }
+}
+
+/// `OFFSET rand(1)` is `IS_UNFOLDABLE` (cited as `_nondeterministic`), not
+/// `DATA_TYPE` for its `DOUBLE`: Spark checks foldability first (Spark 4.2.0
+/// raises the same for `OFFSET rand()`).
+#[test]
+fn a_nondeterministic_count_is_unfoldable_before_its_type() {
+    let mut cx = ctx();
+    cx.functions = Arc::new(WithRand(crate::analyzer::BuiltinFunctions::new()));
+    let rand = || Expr::function("rand", vec![Expr::from(Literal::Integer(1))]);
+    for (plan, name) in [
+        (LogicalPlan::table(["t"]).offset(rand()), "offset"),
+        (LogicalPlan::table(["t"]).limit(rand()), "limit"),
+    ] {
+        let e = run(plan, &cx).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidLimitLikeExpressionIsUnfoldable,
+            "{e:?}"
+        );
+        let msg = e.error.to_string();
+        assert!(
+            msg.contains("\"_nondeterministic\"") && msg.contains(name),
+            "{msg}"
+        );
+    }
+}
+
 /// An unused CTE is not resolved: its column errors never fail the query.
 /// Spark's golden `cte` case 50 keeps an unused `cte3` whose projection
 /// over the duplicate-case columns of `cte2` would be ambiguous.
