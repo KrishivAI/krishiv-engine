@@ -344,6 +344,7 @@ impl Session {
     pub(crate) async fn exec_declare(
         &self,
         v: &DeclareVariable,
+        original: &str,
         text: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
         let mut keys = Vec::with_capacity(v.names.len());
@@ -393,7 +394,9 @@ impl Session {
                     }
                     .into());
                 }
-                let slice = text.fragment(default.span.start..default.span.end);
+                let slice = original
+                    .get(default.span.start..default.span.end)
+                    .unwrap_or_default();
                 let sql = match declared {
                     Some(t) => padded_select(
                         "SELECT CAST(",
@@ -433,6 +436,7 @@ impl Session {
     pub(crate) async fn exec_set_variable(
         &self,
         v: &SetVariable,
+        original: &str,
         text: &RedactedSql,
     ) -> Result<DataFrame, KrishivError> {
         match &v.kind {
@@ -472,7 +476,9 @@ impl Session {
                         if contains_default(&a.value) && !has_default_var {
                             return Err(DefaultPlacementInvalid {}.into());
                         }
-                        let slice = text.fragment(a.value.span.start..a.value.span.end);
+                        let slice = original
+                            .get(a.value.span.start..a.value.span.end)
+                            .unwrap_or_default();
                         let sql = padded_select(
                             "SELECT CAST(",
                             slice,
@@ -519,7 +525,9 @@ impl Session {
                 }
                 // The row query's static output: the arity check needs it
                 // even when the query returns no rows.
-                let inner = text.fragment(query.span.start..query.span.end);
+                let inner = original
+                    .get(query.span.start..query.span.end)
+                    .unwrap_or_default();
                 let inner_sql = padded_select("", inner, query.span.start, "");
                 let inner_analysis = self
                     .analyze_variable_query(&inner_sql)
@@ -1039,14 +1047,14 @@ fn is_bare_default(e: &Expr) -> bool {
 /// there, and a subquery inside one is not the top-level subquery these
 /// checks look for.
 fn expr_any(e: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
-    if pred(e) {
-        return true;
+    let mut stack = vec![e];
+    while let Some(node) = stack.pop() {
+        if pred(node) {
+            return true;
+        }
+        node.for_each_child(&mut |child| stack.push(child));
     }
-    let mut hit = false;
-    e.for_each_child(&mut |child| {
-        hit = expr_any(child, pred) || hit;
-    });
-    hit
+    false
 }
 
 /// Whether the top-level expression tree holds a bare `DEFAULT` that is

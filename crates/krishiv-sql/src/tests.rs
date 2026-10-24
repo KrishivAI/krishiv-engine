@@ -2772,7 +2772,6 @@ fn variable_statements() {
         "SET VARIABLE (var1) = SELECT 1",
         "SET VARIABLE (var1) = (SELECT 1",
         "SET VARIABLE (var1 = (SELECT 1)",
-        "SET VAR",
         "SET VARIABLE var1",
         "SET VARIABLE var1 = ",
     ] {
@@ -2781,6 +2780,28 @@ fn variable_statements() {
             ErrorClass::ParseSyntaxError,
             "{sql}"
         );
+    }
+    // Bare `VAR`/`VARIABLE` keys still read as configuration, not as
+    // session variables.
+    for (sql, key, value) in [
+        ("SET VAR", "VAR", None),
+        ("SET VARIABLE", "VARIABLE", None),
+        ("SET VAR = 1", "VAR", Some("1")),
+        ("SET var.foo = 1", "var.foo", Some("1")),
+    ] {
+        match parse_statement(sql, &d).unwrap() {
+            Statement::Set(s) => match (&s.kind, value) {
+                (ast::SetKind::Show { key: k, .. }, None) => assert_eq!(k, key, "{sql}"),
+                (
+                    ast::SetKind::Assign {
+                        key: k, value: v, ..
+                    },
+                    Some(want),
+                ) => assert_eq!((k.as_str(), v.as_str()), (key, want), "{sql}"),
+                kind => panic!("{sql} is {kind:?}"),
+            },
+            other => panic!("{sql} is {other:?}"),
+        }
     }
     // `DROP TEMPORARY VARIABLE`.
     let drop = |sql: &str| match parse_statement(sql, &d).unwrap() {

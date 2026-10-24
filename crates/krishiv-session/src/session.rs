@@ -358,8 +358,8 @@ impl Session {
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
             Statement::DropView(v) => self.exec_drop_view(&v).await,
-            Statement::DeclareVariable(v) => self.exec_declare(&v, &redacted).await,
-            Statement::SetVariable(v) => self.exec_set_variable(&v, &redacted).await,
+            Statement::DeclareVariable(v) => self.exec_declare(&v, query, &redacted).await,
+            Statement::SetVariable(v) => self.exec_set_variable(&v, query, &redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, &redacted).await,
             _ => Err(unsupported_statement("statements other than queries")),
         }

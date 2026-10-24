@@ -1287,10 +1287,16 @@ impl<'s> Parser<'s> {
         // fails under `EXPLAIN` as in Spark when it is a command (a command
         // explains; it never reads as a query).
         let statement = if self.kw_at(0, "SET") {
-            // `SET VAR | VARIABLE ...` assigns session variables; anything
+            // `SET VAR | VARIABLE ...` assigns session variables only when
+            // a variable form follows (a target list or a name); anything
             // else is the configuration command (a backquoted `` `VAR` ``
-            // is a key, not the keyword, as `kw_at` only matches words).
-            if self.kw_at(1, "VAR") || self.kw_at(1, "VARIABLE") {
+            // is a key, not the keyword, as `kw_at` only matches words),
+            // so bare keys like `var.foo`, `VAR` or `VAR = 1` still read
+            // as configuration.
+            if (self.kw_at(1, "VAR") || self.kw_at(1, "VARIABLE"))
+                && (matches!(self.kind(2), Some(TokenKind::Word | TokenKind::QuotedIdent))
+                    || self.sym_at(2, Sym::LParen))
+            {
                 self.set_variable_command()?
             } else {
                 self.set_command()?

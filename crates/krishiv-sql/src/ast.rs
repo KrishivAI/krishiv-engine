@@ -1931,7 +1931,7 @@ impl Expr {
     /// are not expressions and are not visited; window specifications after
     /// `OVER` are visited (their partitioning, ordering and frame-offset
     /// expressions).
-    pub fn for_each_child(&self, f: &mut impl FnMut(&Self)) {
+    pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Self)) {
         match &self.kind {
             ExprKind::Literal(_)
             | ExprKind::Parameter(_)
@@ -2017,7 +2017,7 @@ impl Expr {
 
 /// Calls `f` on each expression of the inline window specification `window`
 /// (a named window holds none).
-fn for_each_window_expr(window: &WindowRef, f: &mut impl FnMut(&Expr)) {
+fn for_each_window_expr<'a>(window: &'a WindowRef, f: &mut impl FnMut(&'a Expr)) {
     let WindowRef::Spec(spec) = window else {
         return;
     };
