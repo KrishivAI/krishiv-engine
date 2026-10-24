@@ -919,6 +919,7 @@ async fn bucket_readers_race_on_threads() {
             compute_threads: 4,
             io_threads: 1,
             blocking_threads: 4,
+            io_blocking_threads: 2,
         })
         .unwrap(),
     );
