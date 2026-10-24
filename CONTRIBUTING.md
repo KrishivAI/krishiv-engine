@@ -107,6 +107,42 @@ The mapping from each required CI check to a precheck step is in `xtask/src/prec
 `xtask/tests/precheck.rs` fails when a required check has no mapping. When branch protection gains a required check,
 add it to `REQUIRED_CI_CHECKS` and map it.
 
+## Profiling a query
+
+`cargo xtask profile` builds the release CLI with line tables, records the query profile as JSON, and samples
+a second run for a flamegraph:
+
+```text
+cargo xtask profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph]
+```
+
+`<QUERY>` is SQL text, or a file with `-f`. `--table` registers a Parquet file or directory as a temp view
+(repeatable); `--conf` sets a session entry (repeatable). The out directory defaults to
+`target/xtask-profile/<UTC timestamp>` and is never overwritten; pass `--out DIR` to choose it.
+
+The sampler is chosen by `--tool` (`auto` by default): `perf` runs
+`perf record -F 999 -g --call-graph dwarf` and pipes `perf script` through `inferno-collapse-perf` and
+`inferno-flamegraph`; `samply` runs `samply record --save-only`. `auto` prefers `perf` when `perf` and both
+inferno binaries are on `PATH`, and falls back to `samply` otherwise. Install what is missing with the
+distribution's `linux-tools` package (for `perf`), `cargo install inferno` (for the two inferno binaries) or
+`cargo install samply`. When no sampler is installed the command reports the profile JSON as done and then
+fails with the install hints.
+
+Output files are `<out>/profile.json` (the query profile, one JSON line, as printed by
+`krishiv sql --explain-analyze --json`; `samply` instead writes its own format to `<out>/profile.json.gz`)
+and, for `perf`, `<out>/perf.data` with `<out>/flamegraph.svg`. `--no-flamegraph` skips the sampling run.
+The command ends with a summary: the output paths, the query wall time and the three slowest operators by
+compute time.
+
+The profile JSON (`format` `krishiv.query-profile`, version 1) holds the query wall time, per-pipeline driver
+counts and the per-operator counters (rows in and out, compute time, blocked time, spills, peak memory);
+the schema is `docs/reference/query-profile-v1.schema.json`. The SVG shows where the sampled run spent time;
+wide boxes are the functions to look at first.
+
+`perf record` needs the kernel to allow unprivileged profiling. When it refuses, the command prints the
+`perf_event_paranoid` note: a privileged user lowers the setting (for example
+`sysctl kernel.perf_event_paranoid=1`). xtask never changes the setting and never runs `sudo`.
+
 ## Python quality
 
 All Python (`python/`, `bench/`, `tests/scripts/`) is checked with the Astral toolchain: ruff (lint and format) and
