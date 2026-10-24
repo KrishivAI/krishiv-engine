@@ -199,3 +199,11 @@ pub(crate) fn count_distinct_of(cols: Vec<PyColumn>) -> PyResult<PyColumn> {
         cols.into_iter().map(|c| c.inner),
     )))
 }
+
+/// Parses `text` as a SQL expression (`F.expr`) with the default parser
+/// options; parse and lowering errors become the engine's exceptions.
+#[pyfunction(name = "expr")]
+pub(crate) fn expression(py: Python<'_>, text: &str) -> PyResult<PyColumn> {
+    let column = krishiv_session::functions::expr(text).map_err(|e| to_py(py, &e))?;
+    Ok(PyColumn::wrap(column))
+}

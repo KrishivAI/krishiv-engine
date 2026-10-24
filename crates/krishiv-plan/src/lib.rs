@@ -113,6 +113,7 @@ pub mod function;
 mod literal;
 mod origin;
 mod plan;
+pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
 mod walk;

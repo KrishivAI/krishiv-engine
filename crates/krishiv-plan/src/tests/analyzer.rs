@@ -306,9 +306,35 @@ fn plan_id_references_resolve_as_spark_connect_does() {
     assert!(raised.contains("AMBIGUOUS_COLUMN_REFERENCE"));
 }
 
+/// `TIMESTAMP` and `TIMESTAMP_NTZ` literals are named as Spark's
+/// `Literal.sql` prints them (`SELECT TIMESTAMP '2024-01-01 00:00:00'` in
+/// Spark 4.2); SQL does not lower timestamp literals yet, so the plan is
+/// built by hand.
+#[test]
+fn timestamp_literals_are_named_as_spark_sql() {
+    let lit = |v: Literal| Expr::from(v);
+    let r = run(
+        LogicalPlan::table(["t"]).project(vec![
+            lit(Literal::Timestamp(1_704_067_200_000_000)),
+            lit(Literal::TimestampNtz(1_704_067_200_123_456)),
+            lit(Literal::Timestamp(-1)),
+        ]),
+        &ctx(),
+    );
+    let names: Vec<String> = r.unwrap().output.iter().map(|c| c.name.clone()).collect();
+    assert_eq!(
+        names,
+        [
+            "TIMESTAMP '2024-01-01 00:00:00'",
+            "TIMESTAMP_NTZ '2024-01-01 00:00:00.123456'",
+            "TIMESTAMP '1969-12-31 23:59:59.999999'",
+        ]
+    );
+}
+
 /// The select list of the generated-names statement of the corpus.
 fn names_query() -> Vec<Expr> {
-    use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Negative, Remainder, Subtract};
+    use crate::Builtin::{EqNullSafe, IsNotNull, IsNull, Remainder, Subtract};
     let lit = |v: Literal| Expr::from(v);
     let date = lit(Literal::Date(18263));
     let decimal = lit(Literal::Decimal {
@@ -318,7 +344,9 @@ fn names_query() -> Vec<Expr> {
     let op = |b, args| Expr::builtin(b, args);
     vec![
         add(c("a"), int(1)),
-        op(Negative, vec![c("a")]),
+        // Unary `-` lowers as `"-"` (see `builtin_op`): the function
+        // `negative(x)` is a registry function instead.
+        Expr::function("-", vec![c("a")]),
         eq(c("a"), int(1)),
         op(crate::Builtin::Not, vec![eq(c("a"), int(1))]),
         op(crate::Builtin::Not, vec![eq(c("a"), int(1))]),
@@ -1904,6 +1932,21 @@ fn try_arithmetic_casts_its_arguments_in_try_mode() {
     );
     // A TRY cast of a string may be NULL; `try_*` results are nullable anyway.
     assert!(try_add.output[0].nullable);
+}
+
+/// A conditional with `FILTER` names the filter once: the shown call takes
+/// only the function's own arguments, not the filter child.
+#[test]
+fn conditional_with_filter_names_the_filter_once() {
+    let ctx = ctx();
+    let call = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "nvl".to_owned(),
+        args: vec![Arc::new(c("a")), Arc::new(int(1))],
+        distinct: false,
+        filter: Some(Arc::new(eq(c("b"), s("x")))),
+    }));
+    let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
+    assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");
 }
 
 /// Built-in functions plus `rand`, a nondeterministic `DOUBLE` function as

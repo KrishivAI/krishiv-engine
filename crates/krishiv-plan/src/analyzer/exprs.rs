@@ -169,6 +169,98 @@ fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> 
     differs.then(|| with_children(expr, kids.iter().map(Bound::shown).collect()))
 }
 
+/// A conditional function rewritten during analysis (Spark's
+/// `RuntimeReplaceable`).
+#[derive(Clone, Copy)]
+enum Conditional {
+    /// `if(c, t, e)`: `CASE WHEN c THEN t ELSE e END`.
+    If,
+    /// `nvl(a, b)` / `ifnull(a, b)`: `coalesce(a, b)`.
+    Coalesce,
+    /// `nvl2(x, t, e)`: `CASE WHEN x IS NOT NULL THEN t ELSE e END`.
+    Nvl2,
+    /// `nullif(a, b)`: `a` at its own type with the `=`-cast `b` to compare
+    /// against.
+    NullIf,
+    /// `nullifzero(x)`: `nullif(x, 0)`.
+    NullIfZero,
+    /// `zeroifnull(x)`: `coalesce(x, 0)` at the met type.
+    ZeroIfNull,
+    /// `nanvl(a, b)`: both sides are `float`/`double` already.
+    Nanvl,
+}
+
+impl Conditional {
+    /// Which conditional `name` is, ASCII case-insensitively (function
+    /// names are); `None` for any other function, `coalesce` included.
+    fn of(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "if" => Self::If,
+            "nvl" | "ifnull" => Self::Coalesce,
+            "nvl2" => Self::Nvl2,
+            "nullif" => Self::NullIf,
+            "nullifzero" => Self::NullIfZero,
+            "zeroifnull" => Self::ZeroIfNull,
+            "nanvl" => Self::Nanvl,
+            _ => return None,
+        })
+    }
+}
+
+/// Whether `t` is a numeric type.
+fn is_conditional_numeric(t: &DataType) -> bool {
+    matches!(
+        t,
+        DataType::Byte
+            | DataType::Short
+            | DataType::Integer
+            | DataType::Long
+            | DataType::Float
+            | DataType::Double
+            | DataType::Decimal(_)
+    )
+}
+
+/// The cast `b` needs for a legacy `nullif(a, b)` comparison that `=`
+/// refuses (`None` when no legacy shape applies): the string side meets
+/// the other side's type, a number meets a boolean at `BOOLEAN`. `None` as
+/// the cast (rather than a type) leaves `b` as it is: `a` is the side the
+/// evaluator casts in place.
+fn legacy_nullif_cast(a: &Bound, b: &Bound) -> Option<Option<DataType>> {
+    let (x, y) = (a.ty.data_type.as_ref(), b.ty.data_type.as_ref());
+    match (x, y) {
+        (Some(DataType::String), _) => Some(None),
+        (_, Some(DataType::String)) => Some(x.cloned()),
+        (Some(DataType::Boolean), Some(n)) if is_conditional_numeric(n) => {
+            Some(Some(DataType::Boolean))
+        }
+        (Some(n), Some(DataType::Boolean)) if is_conditional_numeric(n) => Some(None),
+        _ => None,
+    }
+}
+
+/// The literal zero of `t`: what `zeroifnull` meets its argument with (`'0'`
+/// for a legacy `STRING`). `None` for any other type, which a met argument
+/// never has (it always meets the hidden `INT`, so never stays a narrower
+/// integral type).
+fn zero_literal(t: &DataType, origin: Origin) -> Option<Arc<Expr>> {
+    let literal = match t {
+        DataType::Integer => Literal::Integer(0),
+        DataType::Long => Literal::Long(0),
+        DataType::Float => Literal::Float(0.0),
+        DataType::Double => Literal::Double(0.0),
+        DataType::Decimal(d) => Literal::Decimal {
+            unscaled: 0,
+            data_type: *d,
+        },
+        DataType::String => Literal::String("0".to_owned()),
+        _ => return None,
+    };
+    Some(Arc::new(
+        Expr::new(ExprNode::Literal(literal)).with_origin(origin),
+    ))
+}
+
 /// Spark's error for a cast of `arg` to `to` it refuses.
 fn bad_cast(
     bad: BadCast,
@@ -515,7 +607,7 @@ impl Resolver<'_> {
                 if let Some(which) = GroupingFn::from_name(&f.name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
-                if let Some(op) = Builtin::from_name(&f.name) {
+                if let Some(op) = builtin_op(&f.name, n) {
                     return self.operator_call(op, e.origin, &kids[..n]);
                 }
                 let entry = match self
@@ -539,6 +631,9 @@ impl Resolver<'_> {
                 };
                 if !window_fn {
                     call_checks(&entry, e, kids, n)?;
+                }
+                if let Some(which) = Conditional::of(&f.name) {
+                    return self.conditional_call(which, &entry, e, f, kids);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
@@ -922,6 +1017,242 @@ impl Resolver<'_> {
             outer: kids.iter().filter_map(|k| k.outer).min(),
             lateral,
         })
+    }
+
+    /// A conditional function rewritten during analysis (Spark's
+    /// `RuntimeReplaceable`): `if` and `nvl2` become `CASE WHEN`, `nvl` and
+    /// `ifnull` become `coalesce`, `zeroifnull` becomes `coalesce` with a
+    /// zero, and `nullif` / `nullifzero` become a same-typed `nullif` the
+    /// evaluator runs once. `coalesce` keeps its name (the evaluator lowers
+    /// it lazily), as does `nanvl` (both sides are `float`/`double`).
+    fn conditional_call(
+        &mut self,
+        which: Conditional,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+    ) -> Result<Bound, AnalysisError> {
+        let n = f.args.len();
+        // The arity and the input checks quote the call as written.
+        let (mut call_kids, ty) = self.typed_call(entry, e, &kids[..n])?;
+        call_kids.extend(kids.get(n).cloned());
+        let origin = e.origin;
+        let node = |node: ExprNode| Arc::new(Expr::new(node).with_origin(origin));
+        // The call as written (before casts), naming the output and quoting
+        // errors: never the rewritten form.
+        let shown = node(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: entry.id.clone(),
+                kind: entry.kind,
+                args: kids[..n].iter().map(Bound::shown).collect(),
+                distinct: f.distinct,
+                filter: kids.get(n).map(Bound::shown),
+                data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                nullable: ty.nullable,
+                deterministic: entry.deterministic,
+            },
+        )));
+        let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
+        let resolved =
+            |id: FunctionId, args: Vec<Arc<Expr>>, distinct: bool, filter: Option<Arc<Expr>>| {
+                node(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        id,
+                        kind: FunctionKind::Scalar,
+                        args,
+                        distinct,
+                        filter,
+                        data_type: data_type.clone(),
+                        nullable: ty.nullable,
+                        deterministic: entry.deterministic,
+                    },
+                )))
+            };
+        let expr = match which {
+            // `if(c, t, e)`: the branches' common type, as `when` types it.
+            Conditional::If => {
+                let args = call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
+                resolved(
+                    FunctionId::Builtin(Builtin::When),
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+            // `nvl(a, b)` / `ifnull(a, b)`: `coalesce`, cast likewise.
+            Conditional::Coalesce => {
+                let args = call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
+                self.coalesce_node(
+                    origin,
+                    e,
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                    &ty,
+                )?
+            }
+            // `nvl2(x, t, e)`: `t` where `x` is not null, else `e`.
+            Conditional::Nvl2 => {
+                let cond = self.operator_call(Builtin::IsNotNull, origin, &call_kids[..1])?;
+                let mut args = vec![cond.expr];
+                args.extend(call_kids[1..n].iter().map(|k| Arc::clone(&k.expr)));
+                resolved(
+                    FunctionId::Builtin(Builtin::When),
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+            // `nullif(a, b)`: `NULL` where `a = b`, else `a` (evaluated
+            // once by the evaluator); `b` carries the analyzer's own `=`
+            // cast, `a` keeps its type.
+            Conditional::NullIf => {
+                let other =
+                    self.nullif_other(&call_kids[0], &call_kids[1], &shown, kids, f, origin)?;
+                resolved(
+                    entry.id.clone(),
+                    vec![Arc::clone(&call_kids[0].expr), other],
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+            // `nullifzero(x)`: `nullif(x, 0)`, named as written.
+            Conditional::NullIfZero => {
+                let zero = Bound {
+                    expr: node(ExprNode::Literal(Literal::Integer(0))),
+                    ty: arg_type(DataType::Integer, false),
+                    agg: None,
+                    win: None,
+                    outer: None,
+                    lateral: Vec::new(),
+                    shown: None,
+                };
+                let other = self.nullif_other(&call_kids[0], &zero, &shown, kids, f, origin)?;
+                resolved(
+                    entry.id.clone(),
+                    vec![Arc::clone(&call_kids[0].expr), other],
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+            // `zeroifnull(x)`: `coalesce(x, 0)` at the met type.
+            Conditional::ZeroIfNull => {
+                let Some(to) = ty.data_type.as_ref() else {
+                    return Err(unsupported("zeroifnull of an untyped NULL", origin));
+                };
+                let Some(zero) = zero_literal(to, origin) else {
+                    return Err(unsupported(format!("zeroifnull of {}", to.sql()), origin));
+                };
+                let args = vec![Arc::clone(&call_kids[0].expr), zero];
+                self.coalesce_node(
+                    origin,
+                    e,
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                    &ty,
+                )?
+            }
+            // `nanvl(a, b)`: `b` where `a` is NaN, else `a`; both sides are
+            // already `float`/`double`.
+            Conditional::Nanvl => {
+                let args = call_kids[..n].iter().map(|k| Arc::clone(&k.expr)).collect();
+                resolved(
+                    entry.id.clone(),
+                    args,
+                    f.distinct,
+                    call_kids.get(n).map(|k| Arc::clone(&k.expr)),
+                )
+            }
+        };
+        let mut lateral: Vec<AttrId> = Vec::new();
+        for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+            if !lateral.contains(id) {
+                lateral.push(*id);
+            }
+        }
+        Ok(Bound {
+            expr,
+            ty: ArgType {
+                data_type: ty.data_type.clone(),
+                nullable: ty.nullable,
+            },
+            agg: kids.iter().find_map(|k| k.agg),
+            win: kids.iter().find_map(|k| k.win),
+            outer: kids.iter().filter_map(|k| k.outer).min(),
+            lateral,
+            shown: Some(shown),
+        })
+    }
+
+    /// A resolved `coalesce` call: `nvl` / `ifnull` / `zeroifnull` keep the
+    /// result type their own casts met at.
+    fn coalesce_node(
+        &mut self,
+        origin: Origin,
+        e: &Arc<Expr>,
+        args: Vec<Arc<Expr>>,
+        distinct: bool,
+        filter: Option<Arc<Expr>>,
+        ty: &ArgType,
+    ) -> Result<Arc<Expr>, AnalysisError> {
+        let id = match self
+            .ctx
+            .functions
+            .lookup(&["coalesce".to_owned()], self.ctx.profile)
+        {
+            FunctionLookup::Found(entry) => entry.id,
+            _ => return Err(unsupported("function coalesce", e.origin)),
+        };
+        Ok(Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id,
+                    kind: FunctionKind::Scalar,
+                    args,
+                    distinct,
+                    filter,
+                    data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                    nullable: ty.nullable,
+                    deterministic: true,
+                },
+            )))
+            .with_origin(origin),
+        ))
+    }
+
+    /// The second argument of `nullif(a, b)`: `b` cast to the type `=`
+    /// compares at, through the analyzer's own comparison coercion. In
+    /// legacy mode `=` leaves two shapes to P2-T071d (a string against
+    /// another type, a boolean against a number); there Spark casts the
+    /// string to the other side's type and the number to `BOOLEAN`, which
+    /// this mirrors so `nullif` keeps Spark's rows.
+    fn nullif_other(
+        &mut self,
+        a: &Bound,
+        b: &Bound,
+        shown: &Arc<Expr>,
+        kids: &[Bound],
+        f: &FunctionCall,
+        origin: Origin,
+    ) -> Result<Arc<Expr>, AnalysisError> {
+        let args = [arg_of(a), arg_of(b)];
+        let ansi = self.ctx.conf.ansi;
+        match coerce::operator(
+            Builtin::Eq,
+            &args,
+            ansi,
+            self.ctx.conf.decimal_precision_loss,
+        ) {
+            Ok(typed) => Ok(self.implicit_cast(b, typed.casts[1].clone()).expr),
+            Err(m) => {
+                if !ansi && let Some(to) = legacy_nullif_cast(a, b) {
+                    return Ok(self.implicit_cast(b, to).expr);
+                }
+                Err(self.mismatch(m, shown, kids, &f.name, origin))
+            }
+        }
     }
 
     /// `(values) IN (subquery)`: the values and the subquery's columns, each
@@ -1517,6 +1848,21 @@ fn call_checks(
     Ok(())
 }
 
+/// The canonical operator for an unresolved call, if it is one.
+///
+/// Unary `-` (lowered as `"-"` with one argument) is `Negative`; the
+/// function `negative(x)` is not an operator but a registry function (as
+/// Spark's `UnaryMinus` with alias `negative` is), so it never maps here.
+fn builtin_op(name: &str, arity: usize) -> Option<crate::Builtin> {
+    if name == "-" && arity == 1 {
+        return Some(crate::Builtin::Negative);
+    }
+    if name.eq_ignore_ascii_case("negative") {
+        return None;
+    }
+    crate::Builtin::from_name(name)
+}
+
 /// Spark's generated name for an unaliased expression (`toPrettySQL`):
 /// `(a + 1)`, `count(1)`, `CASE WHEN ... END`. Built bottom-up with an
 /// explicit stack, once per distinct node.
@@ -1612,15 +1958,15 @@ fn pretty_node(x: &Expr, k: &[&str]) -> String {
         ExprNode::Star(_) => "*".to_owned(),
         ExprNode::Window(w) => pretty_window(w, k),
         ExprNode::Function(FunctionCall { name, distinct, .. }) => {
-            call(name, Builtin::from_name(name), *distinct, k)
+            call(name, Builtin::from_name(name), *distinct, k, None)
         }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),
-                FunctionId::Registry { name, .. } => Builtin::from_name(name),
+                FunctionId::Registry { name, .. } => builtin_op(name, f.args.len()),
             };
             let n = f.args.len().min(k.len());
-            let text = call(f.id.name(), op, f.distinct, &k[..n]);
+            let text = call(f.id.name(), op, f.distinct, &k[..n], Some(&f.data_type));
             match k.get(n) {
                 Some(filter) => format!("{text} FILTER (WHERE {filter})"),
                 None => text,
@@ -1707,7 +2053,13 @@ pub(super) const fn order_sql(o: &crate::SortOrder) -> &'static str {
     }
 }
 
-fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
+fn call(
+    name: &str,
+    op: Option<Builtin>,
+    distinct: bool,
+    k: &[&str],
+    data_type: Option<&DataType>,
+) -> String {
     let infix = |sym: &str| format!("({} {sym} {})", k[0], k[1]);
     match (op, k.len()) {
         (Some(Builtin::Eq), 2) => infix("="),
@@ -1741,14 +2093,90 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
             }
             s + " END"
         }
-        // Spark's own spellings of `if`, `positive` and `mod`.
+        // Spark's own spellings of `if` and `positive`.
         _ if name.eq_ignore_ascii_case("if") && k.len() == 3 => {
             format!("(IF({}, {}, {}))", k[0], k[1], k[2])
         }
         _ if name.eq_ignore_ascii_case("positive") && k.len() == 1 => format!("(+ {})", k[0]),
-        _ if name.eq_ignore_ascii_case("mod") && k.len() == 2 => infix("%"),
         _ if name.eq_ignore_ascii_case("extract") && k.len() == 2 => {
             format!("extract({} FROM {})", k[0], k[1])
+        }
+        // `trim` family: one argument is `trim(src)` / `ltrim(src)` /
+        // `rtrim(src)` / `btrim(...)`; two are Spark's `TRIM(...)` form.
+        // The analyzer keeps `trim(trimStr, src)` (characters first, as
+        // Spark's two-parameter call is) and `btrim(src, chars)` last.
+        _ if name.eq_ignore_ascii_case("trim") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("trim({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("trim") && k.len() == 2 => {
+            format!("TRIM(BOTH {} FROM {})", k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("ltrim") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("ltrim({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("ltrim") && k.len() == 2 => {
+            format!("TRIM(LEADING {} FROM {})", k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("rtrim") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("rtrim({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("rtrim") && k.len() == 2 => {
+            format!("TRIM(TRAILING {} FROM {})", k[0], k[1])
+        }
+        // Spark fills in the missing arguments: `substr(s, p)` is
+        // `substr(s, p, 2147483647)`, `lpad(s, n)` is `lpad(s, n, ' ')`
+        // (`X'00'` for binary), `replace(s, search)` is
+        // `replace(s, search, '')`, `round(x)` is `round(x, 0)` and `log(x)`
+        // is `LOG(E(), x)`.
+        _ if name.eq_ignore_ascii_case("substr") && k.len() == 2 => {
+            format!("substr({}, {}, 2147483647)", k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("substring") && k.len() == 2 => {
+            format!("substring({}, {}, 2147483647)", k[0], k[1])
+        }
+        _ if (name.eq_ignore_ascii_case("lpad") || name.eq_ignore_ascii_case("rpad"))
+            && k.len() == 2 =>
+        {
+            let pad = if data_type == Some(&DataType::Binary) {
+                "X'00'"
+            } else {
+                " "
+            };
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{}, {}, {pad})", name.to_lowercase(), k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("replace") && k.len() == 2 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("replace({d}{}, {}, )", k[0], k[1])
+        }
+        _ if (name.eq_ignore_ascii_case("round") || name.eq_ignore_ascii_case("bround"))
+            && k.len() == 1 =>
+        {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{}, 0)", name.to_lowercase(), k[0])
+        }
+        _ if name.eq_ignore_ascii_case("ceil") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("CEIL({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("floor") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("FLOOR({d}{})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("log") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("LOG({d}E(), {})", k[0])
+        }
+        _ if name.eq_ignore_ascii_case("log") && k.len() == 2 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("LOG({d}{}, {})", k[0], k[1])
+        }
+        _ if name.eq_ignore_ascii_case("ln") && k.len() == 1 => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("ln({d}{})", k[0])
         }
         // Spark's name of `first(x, ignoreNulls)` leaves the flag out.
         _ if k.len() == 2
@@ -1760,6 +2188,14 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{})", name.to_lowercase(), k[0])
         }
+        // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
+        // two-argument math (`power`, `atan2`, `hypot`) print upper case,
+        // as Spark's `UnaryMathExpression` / `BinaryMathExpression` do;
+        // aliases (`pow`, `sign`) and the rest print lower case.
+        _ if is_upper_math(name) => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("{}({d}{})", name.to_uppercase(), k.join(", "))
+        }
         _ => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{})", name.to_lowercase(), k.join(", "))
@@ -1767,20 +2203,90 @@ fn call(name: &str, op: Option<Builtin>, distinct: bool, k: &[&str]) -> String {
     }
 }
 
+/// Whether Spark prints `name` upper case: the `UnaryMathExpression` /
+/// `BinaryMathExpression` functions without an alias (`sec` is `SEC`,
+/// `power` is `POWER`), while aliases (`pow`, `sign`) and `ln` stay lower.
+fn is_upper_math(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "sqrt"
+            | "cbrt"
+            | "exp"
+            | "expm1"
+            | "log10"
+            | "log2"
+            | "log1p"
+            | "sin"
+            | "cos"
+            | "tan"
+            | "asin"
+            | "acos"
+            | "atan"
+            | "sinh"
+            | "cosh"
+            | "tanh"
+            | "asinh"
+            | "acosh"
+            | "atanh"
+            | "cot"
+            | "csc"
+            | "sec"
+            | "degrees"
+            | "radians"
+            | "rint"
+            | "signum"
+            | "power"
+            | "atan2"
+            | "hypot"
+            | "log"
+            | "pi"
+            | "e"
+    )
+}
+
 fn pretty_literal(v: &Literal) -> String {
-    let text = v.to_string();
     match v {
         // A URL's credentials never reach a name (ADR 0038).
         Literal::String(s) => krishiv_common::secret::SecretUrl::parse(s)
             .map_or_else(|| s.clone(), |url| url.to_string()),
         Literal::Null(_) => "NULL".to_owned(),
-        Literal::Byte(_) | Literal::Short(_) | Literal::Long(_) => {
-            text.trim_end_matches(['Y', 'S', 'L']).to_owned()
+        Literal::Boolean(v) => v.to_string(),
+        Literal::Byte(v) => v.to_string(),
+        Literal::Short(v) => v.to_string(),
+        Literal::Integer(v) => v.to_string(),
+        Literal::Long(v) => v.to_string(),
+        Literal::Float(v) if v.is_finite() => crate::spark_fmt::float(*v),
+        Literal::Float(v) => format!("CAST('{}' AS FLOAT)", special_float(f64::from(*v))),
+        Literal::Double(v) if v.is_finite() => crate::spark_fmt::double(*v),
+        Literal::Double(v) => format!("CAST('{}' AS DOUBLE)", special_float(*v)),
+        Literal::Decimal {
+            unscaled,
+            data_type,
+        } => crate::spark_fmt::decimal(*unscaled, u32::from(data_type.scale())),
+        Literal::Binary(b) => {
+            use std::fmt::Write as _;
+            let mut out = String::from("X'");
+            for byte in b {
+                let _ = write!(out, "{byte:02X}");
+            }
+            out.push('\'');
+            out
         }
-        Literal::Float(x) => format!("{x:?}"),
-        Literal::Double(x) => format!("{x:?}"),
-        Literal::Decimal { .. } => text.trim_end_matches("BD").to_owned(),
-        _ => text,
+        Literal::Date(days) => crate::spark_fmt::date(*days),
+        Literal::Timestamp(us) => crate::spark_fmt::timestamp(*us, false),
+        Literal::TimestampNtz(us) => crate::spark_fmt::timestamp(*us, true),
+        _ => v.to_string(),
+    }
+}
+
+/// `NaN`, `Infinity` or `-Infinity`, as Spark spells them in a name.
+fn special_float(v: f64) -> &'static str {
+    if v.is_nan() {
+        "NaN"
+    } else if v > 0.0 {
+        "Infinity"
+    } else {
+        "-Infinity"
     }
 }
 
