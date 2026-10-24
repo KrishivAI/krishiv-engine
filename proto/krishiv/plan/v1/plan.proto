@@ -50,14 +50,17 @@ message PhysicalPlan {
   // Expressions in post-order; an expression's inputs are earlier entries.
   repeated Expr exprs = 10;
   // The ids of the features the plan uses, sorted and without duplicates.
+  // ignorable: a reader that predates features checks min_reader_version.
   repeated string features = 11;
   // The wire epoch, written explicitly (1). Absent marks a plan written
   // before the feature header existed: its features follow from its
   // content.
+  // ignorable: a reader that predates features checks min_reader_version.
   uint32 epoch = 12;
 }
 
 // The header fields of a `PhysicalPlan`, read without decoding its tables.
+// ignorable: a reader-side view of `PhysicalPlan`, never written as such.
 message PlanHeader {
   uint32 format_version = 1;
   uint32 min_reader_version = 2;
