@@ -12,6 +12,8 @@
 //! | ANSI cast to a narrower integral type | `CAST_OVERFLOW` |
 //! | ANSI string to decimal with over 38 integral digits | `NUMERIC_OUT_OF_SUPPORTED_RANGE` |
 //! | a date or timestamp outside the microsecond range | `DATETIME_OVERFLOW` |
+//! | `make_date` with a field out of range (ANSI) | `DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION` |
+//! | `next_day` with an unknown weekday name (ANSI) | `ILLEGAL_DAY_OF_WEEK` |
 //! | a `LIKE` pattern ending in its escape, or escaping a character that cannot be escaped | `INVALID_FORMAT.ESC_AT_THE_END`, `INVALID_FORMAT.ESC_IN_THE_MIDDLE` |
 //! | ANSI `BINARY` -> `STRING` of bytes that are not UTF-8 | `INVALID_UTF8_STRING` |
 //! | decimal `%` whose integral quotient exceeds 39 significant digits (every mode) | `KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE` |
@@ -24,8 +26,9 @@
 //! [`crate::version::SparkVersion`].
 
 use krishiv_common::error::{
-    ArithmeticOverflow, BinaryArithmeticOverflow, CastInvalidInput, CastOverflow, DatetimeOverflow,
-    DivideByZero, ErrorClass, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
+    ArithmeticOverflow, BinaryArithmeticOverflow, CastInvalidInput, CastOverflow,
+    DatetimeFieldOutOfBoundsWithSuggestion, DatetimeOverflow, DivideByZero, ErrorClass,
+    IllegalDayOfWeek, InternalError, InvalidFormatEscAtTheEnd, InvalidFormatEscInTheMiddle,
     InvalidUtf8String, KrishivDecimalRemainderImpossible, KrishivError, KrishivUnsupportedFeature,
     NumericOutOfSupportedRange, NumericValueOutOfRangeWithSuggestion,
     NumericValueOutOfRangeWithoutSuggestion, RemainderByZero, UnableToAcquireMemory,
@@ -234,6 +237,30 @@ impl KernelError {
             row: Some(row),
             error: DatetimeOverflow {
                 operation: operation.to_owned(),
+            }
+            .into(),
+        }
+    }
+
+    /// `ILLEGAL_DAY_OF_WEEK`: the weekday name of `next_day` is not one.
+    pub(crate) fn illegal_day_of_week(row: usize, name: &str) -> Self {
+        Self {
+            row: Some(row),
+            error: IllegalDayOfWeek {
+                string: name.to_owned(),
+            }
+            .into(),
+        }
+    }
+
+    /// `DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION`: `message` is the text
+    /// of the `DateTimeException` Spark's `java.time` call raised.
+    pub(crate) fn datetime_field_out_of_bounds(row: usize, message: String) -> Self {
+        Self {
+            row: Some(row),
+            error: DatetimeFieldOutOfBoundsWithSuggestion {
+                ansi_config: ANSI_CONF.to_owned(),
+                range_message: message,
             }
             .into(),
         }

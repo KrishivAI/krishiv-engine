@@ -42,6 +42,16 @@ Paths are relative to this crate.
 - New scalar function: a signature in `src/registry/`, a catalog row (regenerate with `tests/scripts/gen_function_registry.py`), a binding in its family module under `src/scalar/`, tests in `src/scalar/tests/`.
 - New function family: a `src/scalar/<family>.rs` with `NAMES` and `bind`, wired into `bind_scalar` in `src/scalar/mod.rs`.
 
+- `scalar/datetime`: the field accessors (`year` ... `second`, `dayofweek`, `weekday`, `weekofyear`, `quarter`), `monthname`/`dayname`,
+  `unix_date`, `add_months`, `last_day`, `next_day`, `trunc`, `date_trunc`, `months_between`, `make_date`, `from_utc_timestamp`/
+  `to_utc_timestamp` and `convert_timezone`. Only offset zones resolve (`UTC`, `+08:00`; `FixedOffset::parse`): any other zone id
+  (a region such as `Asia/Seoul`, a short id such as `CET`) is `KRISHIV_UNSUPPORTED_FEATURE` until the time-zone database, and text no
+  zone can have is `INVALID_TIMEZONE`. A literal zone is resolved when the call is bound, a column per row. A `timestamp_ntz`
+  argument of `date_trunc`, `months_between`, `from_utc_timestamp` and `to_utc_timestamp` (and a `timestamp` of `convert_timezone`)
+  is read in the session zone, as the implicit cast does. Not registered: `make_timestamp`, `try_make_timestamp` and the `_ltz`/
+  `_ntz` forms (their types need `TIME`, and `make_timestamp` follows `spark.sql.timestampType`), `timestampadd`/`timestampdiff` and
+  the unit forms of `dateadd`/`datediff` (the parser lowers them to calls the registry has no row for), `make_interval` and the
+  other interval functions (no interval type).
 - `scalar/regex` (`regexp`, `regexp_like`, `regexp_extract`, `regexp_count`,
   `regexp_instr`, `regexp_substr`, `regexp_replace`): Java patterns are
   translated to `fancy_regex` by `regex/java.rs` (ASCII `\d\w\s`, Java's

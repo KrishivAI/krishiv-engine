@@ -46,7 +46,14 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   field extraction (`DatePart`: `year`, `month`, `day`, `extract`/`date_part` incl. ISO week and `SECOND` as
   `decimal(8,6)`), `date`/`timestamp` ± interval (`date_add_months` clamps the day; `timestamp_add_day_time` adds whole
   days as calendar days in the zone and keeps the start's offset in a DST overlap, like `ZonedDateTime.plusDays`), and
-  `current_date` from the query-start instant. Zones come in as `TimeZoneRules`, never as names. The cast module also
+  `current_date` from the query-start instant. The calendar functions live in `datetime/calendar.rs`: `monthname`/`dayname`,
+  `unix_date`, `last_day`, `next_day` (`ILLEGAL_DAY_OF_WEEK` under ANSI, NULL without), `trunc`/`date_trunc` (`TruncUnit`:
+  Spark's unit names and aliases; an hour or a day keeps the start's offset in a DST overlap, the date levels start the local
+  day), `months_between` (31-day months, whole months for equal or last days, the time of day in whole seconds counted from the
+  instant the local day starts), `make_date` (`DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION` with the `java.time` message under
+  ANSI, NULL without) and the zone conversions `from_utc_timestamp`/`to_utc_timestamp`/`convert_timezone` (`Zones`: one zone, or
+  one per row with `None` for a NULL zone). Field accessors (`dayofweek`, `weekday`, `hour`, ...) are `extract_date`/
+  `extract_timestamp` with a `DatePart`. Zones come in as `TimeZoneRules`, never as names. The cast module also
   parses `string -> TIMESTAMP[_NTZ]` (`cast/timestamp.rs`: the full Spark grammar; a region id in the text and a bare
   time of day are `KRISHIV_UNSUPPORTED_FEATURE` until the tz database / query clock reach the kernels).
 - `math` (P2-T026): the `double` functions (`UnaryFn`/`BinaryFn`: `sqrt` .. `signum`, `pow`, `atan2`, `hypot`, `log`; pure-Rust `libm`
