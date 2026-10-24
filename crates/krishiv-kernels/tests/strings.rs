@@ -575,4 +575,16 @@ fn mask_replaces_each_class_or_retains_on_null() {
         rows(&out),
         [Some("lXdo".to_owned()), Some("lBdo".to_owned())]
     );
+    // Letter numbers keep their case but are other characters, and a
+    // non-ASCII decimal digit is a digit (Spark 4.2: `mask('a1Ⅻⅻ٣')` is
+    // `xnⅫⅻn`).
+    let out = mask(
+        S::Array(&strs(&[Some("a1Ⅻⅻ٣")])),
+        S::Scalar(Some("X")),
+        S::Scalar(Some("x")),
+        S::Scalar(Some("n")),
+        S::Scalar(None),
+    )
+    .unwrap();
+    assert_eq!(rows(&out), [Some("xnⅫⅻn".to_owned())]);
 }

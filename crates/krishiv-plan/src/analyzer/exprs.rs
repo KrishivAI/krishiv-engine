@@ -175,6 +175,25 @@ fn shown_call(expr: &Expr, kids: &[Bound], cast: &[Bound]) -> Option<Arc<Expr>> 
     differs.then(|| with_children(expr, kids.iter().map(Bound::shown).collect()))
 }
 
+/// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
+/// with casts stripped as Spark's `toPrettySQL` strips them.
+fn assert_message(cond: &Bound, origin: Origin, zone: Option<i32>) -> Bound {
+    let mut shown = cond.shown();
+    while let ExprNode::Cast { expr, .. } = &shown.node {
+        shown = Arc::clone(expr);
+    }
+    let message = format!("'{}' is not true!", pretty(&shown, zone));
+    Bound {
+        expr: Arc::new(Expr::new(ExprNode::Literal(Literal::String(message))).with_origin(origin)),
+        ty: arg_type(DataType::String, false),
+        agg: None,
+        win: None,
+        outer: None,
+        lateral: Vec::new(),
+        shown: None,
+    }
+}
+
 /// A conditional function rewritten during analysis (Spark's
 /// `RuntimeReplaceable`).
 #[derive(Clone, Copy)]
@@ -908,8 +927,23 @@ impl Resolver<'_> {
                 if !window_fn {
                     call_checks(&entry, e, &kids, n)?;
                 }
+                // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
+                // Spark's constructor materializes the default message, so
+                // the schema names it (`assert_true(true, 'true' is not
+                // true!)`) and the kernel raises it.
+                let mut owned: Vec<Bound>;
+                let (kids, n) = if entry.id.name() == "assert_true" && n == 1 {
+                    owned = kids.clone();
+                    owned.insert(
+                        1,
+                        assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
+                    );
+                    (&owned[..], 2)
+                } else {
+                    (&kids[..], n)
+                };
                 if let Some(which) = Conditional::of(lookup_name) {
-                    return self.conditional_call(which, &entry, e, f, &kids);
+                    return self.conditional_call(which, &entry, e, f, kids);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
                 if lookup_name.eq_ignore_ascii_case("mask") {
@@ -928,7 +962,7 @@ impl Resolver<'_> {
                     deterministic: entry.deterministic,
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
-                let shown = self.call_shown(lookup_name, &expr, &kids, &call_kids);
+                let shown = self.call_shown(lookup_name, &expr, kids, &call_kids);
                 Bound {
                     agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
@@ -1556,9 +1590,10 @@ impl Resolver<'_> {
             _ => return Err(unsupported("a LIKE ANY, SOME or ALL form", e.origin)),
         };
         let origin = e.origin;
-        let Some((child, patterns)) = kids.split_first() else {
+        let Some((written, patterns)) = kids.split_first() else {
             return Err(unsupported("a LIKE ANY, SOME or ALL form", origin));
         };
+        let child = written;
         let lower = if insensitive {
             let FunctionLookup::Found(entry) = self
                 .ctx
@@ -1627,20 +1662,59 @@ impl Resolver<'_> {
         let Some(acc) = acc else {
             return Err(unsupported("a LIKE ANY, SOME or ALL form", origin));
         };
-        let shown = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-            ResolvedFunction {
-                id: FunctionId::Builtin(which),
-                kind: FunctionKind::Scalar,
-                args: kids.iter().map(Bound::shown).collect(),
-                distinct: false,
-                filter: None,
-                data_type: DataType::Boolean,
-                nullable: acc.ty.nullable,
-                deterministic: true,
-            },
-        )));
+        // Spark's name: with only non-NULL string literal patterns it builds
+        // `LikeAny`/`LikeAll` (shown `likeany(child)`, the child lowered for
+        // ILIKE); otherwise the chain of single `LIKE`s or `ilike` calls.
+        let nullable = acc.ty.nullable;
+        let shown_call = |op: Builtin, args: Vec<Arc<Expr>>| {
+            Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                    ResolvedFunction {
+                        id: FunctionId::Builtin(op),
+                        kind: FunctionKind::Scalar,
+                        args,
+                        distinct: false,
+                        filter: None,
+                        data_type: DataType::Boolean,
+                        nullable,
+                        deterministic: true,
+                    },
+                )))
+                .with_origin(origin),
+            )
+        };
+        let ansi = self.ctx.conf.ansi;
+        let literal_patterns = patterns
+            .iter()
+            .all(|p| matches!(self.fold(&p.expr, ansi), Some(Constant::String(_))));
+        let shown = if literal_patterns {
+            shown_call(which, vec![child.shown()])
+        } else {
+            let single = if insensitive {
+                Builtin::ILike
+            } else {
+                Builtin::Like
+            };
+            patterns
+                .iter()
+                .map(|p| {
+                    let one = shown_call(single, vec![written.shown(), p.shown()]);
+                    if negated {
+                        shown_call(Builtin::Not, vec![one])
+                    } else {
+                        one
+                    }
+                })
+                .reduce(|done, next| {
+                    shown_call(
+                        if all { Builtin::And } else { Builtin::Or },
+                        vec![done, next],
+                    )
+                })
+                .unwrap_or_else(|| shown_call(which, vec![child.shown()]))
+        };
         Ok(Bound {
-            shown: Some(Arc::new(shown.with_origin(origin))),
+            shown: Some(shown),
             ..acc
         })
     }
@@ -2881,12 +2955,13 @@ fn call(
     data_type: Option<&DataType>,
 ) -> String {
     let infix = |sym: &str| format!("({} {sym} {})", k[0], k[1]);
-    // `a [NOT] LIKE|ILIKE ANY|SOME|ALL (p, ...)`.
-    let quantified = |negated: bool, insensitive: bool, all: bool| {
-        let not = if negated { " NOT" } else { "" };
-        let like = if insensitive { "ILIKE" } else { "LIKE" };
-        let any = if all { "ALL" } else { "ANY" };
-        format!("{}{not} {like} {any} ({})", k[0], k[1..].join(", "))
+    // `[NOT] LIKE|ILIKE ANY|SOME|ALL` with literal patterns: Spark's
+    // `LikeAny`-family name, `likeany(child)` (the child is `lower(child)`
+    // for ILIKE; the patterns are not shown), in both its name and SQL form.
+    let quantified = |negated: bool, _insensitive: bool, all: bool| {
+        let not = if negated { "not" } else { "" };
+        let any = if all { "all" } else { "any" };
+        format!("{not}like{any}({})", k[0])
     };
     match (op, k.len()) {
         (Some(Builtin::LikeAny), n) if n >= 1 => quantified(false, false, false),
@@ -3022,6 +3097,14 @@ fn call(
         {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{})", name.to_lowercase(), k[0])
+        }
+        // The bitwise operators show infix (`(20181117 >> 2)`), `~`
+        // prefix; `to_varchar` shows as `to_char`.
+        _ if k.len() == 2 && matches!(name, "&" | "|" | "^" | "<<" | ">>" | ">>>") => infix(name),
+        _ if k.len() == 1 && name == "~" => format!("~{}", k[0]),
+        _ if name.eq_ignore_ascii_case("to_varchar") => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("to_char({d}{})", k.join(", "))
         }
         // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
         // two-argument math (`power`, `atan2`, `hypot`) print upper case,
@@ -3349,7 +3432,7 @@ mod tests {
                 None,
                 None
             ),
-            "c LIKE ANY ('%oo%', 'fa%')"
+            "likeany(c)"
         );
         assert_eq!(
             call(
@@ -3360,7 +3443,7 @@ mod tests {
                 None,
                 None
             ),
-            "c NOT ILIKE ALL ('a')"
+            "notlikeall(c)"
         );
     }
 

@@ -376,24 +376,59 @@ fn ilike_with_escape_keeps_the_escape_but_hides_it() {
     assert_eq!(names(&r), ["ilike(s, a%b)"]);
 }
 
+/// Spark 4.2's names (checked on Spark): literal patterns build its
+/// `LikeAny` family, `likeany(child)` with the child lowered for ILIKE;
+/// any other pattern (here `NULL` or a column) builds the chain of single
+/// `LIKE`s or `ilike` calls.
 #[test]
 fn like_quantified_rewrites_to_chains_with_its_name() {
-    for (which, name) in [
-        (Builtin::LikeAny, "s LIKE ANY (a%, %b)"),
-        (Builtin::LikeAll, "s LIKE ALL (a%, %b)"),
-        (Builtin::NotLikeAny, "s NOT LIKE ANY (a%, %b)"),
-        (Builtin::NotLikeAll, "s NOT LIKE ALL (a%, %b)"),
-        (Builtin::ILikeAny, "s ILIKE ANY (a%, %b)"),
-        (Builtin::ILikeAll, "s ILIKE ALL (a%, %b)"),
-        (Builtin::NotILikeAny, "s NOT ILIKE ANY (a%, %b)"),
-        (Builtin::NotILikeAll, "s NOT ILIKE ALL (a%, %b)"),
+    for (which, literal, chain) in [
+        (Builtin::LikeAny, "likeany(s)", "(s LIKE a% OR s LIKE NULL)"),
+        (
+            Builtin::LikeAll,
+            "likeall(s)",
+            "(s LIKE a% AND s LIKE NULL)",
+        ),
+        (
+            Builtin::NotLikeAny,
+            "notlikeany(s)",
+            "((NOT s LIKE a%) OR (NOT s LIKE NULL))",
+        ),
+        (
+            Builtin::NotLikeAll,
+            "notlikeall(s)",
+            "((NOT s LIKE a%) AND (NOT s LIKE NULL))",
+        ),
+        (
+            Builtin::ILikeAny,
+            "likeany(lower(s))",
+            "(ilike(s, a%) OR ilike(s, NULL))",
+        ),
+        (
+            Builtin::ILikeAll,
+            "likeall(lower(s))",
+            "(ilike(s, a%) AND ilike(s, NULL))",
+        ),
+        (
+            Builtin::NotILikeAny,
+            "notlikeany(lower(s))",
+            "((NOT ilike(s, a%)) OR (NOT ilike(s, NULL)))",
+        ),
+        (
+            Builtin::NotILikeAll,
+            "notlikeall(lower(s))",
+            "((NOT ilike(s, a%)) AND (NOT ilike(s, NULL)))",
+        ),
     ] {
         let r = analyze(vec![Expr::builtin(which, vec![c("s"), s("a%"), s("%b")])]).unwrap();
-        assert_eq!(names(&r), [name]);
+        assert_eq!(names(&r), [literal]);
+        let null = Expr::new(ExprNode::Literal(Literal::Null(None)));
+        let r = analyze(vec![Expr::builtin(which, vec![c("s"), s("a%"), null])]).unwrap();
+        assert_eq!(names(&r), [chain]);
     }
-    // One pattern needs no chain.
+    // One pattern is still the `LikeAll` form.
     let r = analyze(vec![Expr::builtin(Builtin::LikeAll, vec![c("s"), s("a%")])]).unwrap();
-    assert_eq!(names(&r), ["s LIKE ALL (a%)"]);
+    assert_eq!(names(&r), ["likeall(s)"]);
 }
 
 #[test]

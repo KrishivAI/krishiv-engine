@@ -42,6 +42,7 @@ impl SqlFrontend for Frontend {
             o.legacy_bang_equals_not,
             o.legacy_interval,
             o.timestamp_ntz,
+            o.legacy_identifier_clause,
         ]
         .iter()
         .fold(0, |acc, b| acc << 1 | u64::from(*b))

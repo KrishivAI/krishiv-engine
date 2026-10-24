@@ -15,13 +15,29 @@ pub enum CodecError {
     /// protobuf, a reference out of range, a count that does not match.
     #[error("corrupt plan: {0}")]
     Corrupt(String),
-    /// The plan uses features of a newer format than this reader knows.
+    /// A plan written before the feature header that needs a newer reader
+    /// version than the frozen format version.
     #[error("the plan needs reader version {required}, this reader implements {supported}")]
     TooNew {
         /// The writer's `min_reader_version`.
         required: u32,
         /// The version this reader implements.
         supported: u32,
+    },
+    /// The plan is of a wire epoch this reader does not implement.
+    #[error("the plan is of epoch {epoch}, this reader implements epoch {supported}")]
+    UnsupportedEpoch {
+        /// The plan's epoch.
+        epoch: u32,
+        /// The epoch this reader implements.
+        supported: u32,
+    },
+    /// The plan uses features this reader does not implement (ids unknown to
+    /// it, or left out of its [`ReaderFeatures`](crate::ReaderFeatures)).
+    #[error("the plan uses features [{}] that this reader does not implement", missing.join(", "))]
+    UnsupportedFeatures {
+        /// The ids of the missing features, sorted.
+        missing: Vec<String>,
     },
     /// The plan is larger or deeper than the decoder's [`Limits`](crate::Limits).
     #[error("the plan exceeds a decode limit: {0}")]

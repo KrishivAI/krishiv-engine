@@ -11,7 +11,7 @@ use crate::ast::{DataTypeKind, DataTypeSpec};
 
 impl fmt::Display for DataTypeSpec {
     /// The type as a canonical DDL string (`decimal(10,2)`,
-    /// `array<struct<a:int>>`).
+    /// `array<struct<a:int>>`), with any `COLLATE ...` suffix.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             DataTypeKind::Primitive { name, args } if args.is_empty() => f.write_str(name),
@@ -50,7 +50,23 @@ impl fmt::Display for DataTypeSpec {
                 }
                 f.write_str(">")
             }
+        }?;
+        if let Some(collation) = &self.collation {
+            let name = collation
+                .parts
+                .iter()
+                .map(|p| {
+                    if p.quoted {
+                        format!("`{}`", p.value.replace('`', "``"))
+                    } else {
+                        p.value.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(".");
+            write!(f, " collate {name}")?;
         }
+        Ok(())
     }
 }
 

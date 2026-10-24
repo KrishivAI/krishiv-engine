@@ -587,7 +587,10 @@ fn results_are_checked_against_the_binding() {
     assert!(err.to_string().contains("returned 1 rows of Utf8"), "{err}");
 }
 
+mod bitwise;
 mod families;
+mod number;
+mod predicate;
 
 #[test]
 fn session_user_and_local_clock() {

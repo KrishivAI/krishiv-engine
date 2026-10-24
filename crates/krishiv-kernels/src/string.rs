@@ -463,7 +463,8 @@ pub fn match_binary<O: OffsetSizeTrait>(
 /// characters that are not alphabetic. This approximates Java's
 /// `DECIMAL_DIGIT_NUMBER`: letter numbers such as `Ⅷ` are alphabetic and
 /// count as other characters, but `No` numbers such as `²` count as digits
-/// here while Spark counts them as other characters.
+/// here while Spark counts them as other characters. Likewise symbols with a
+/// case (`Ⓐ`) count as letters here and as other characters in Spark.
 fn is_digit(c: char) -> bool {
     c.is_ascii_digit() || (!c.is_alphabetic() && c.is_numeric())
 }
@@ -502,9 +503,11 @@ pub fn mask<O: OffsetSizeTrait>(
         );
         scratch.clear();
         for c in input.at(i).chars() {
-            let replacement = if c.is_uppercase() {
+            // Letter numbers (`Ⅻ`, `ⅻ`) carry a case but are not letters:
+            // Spark leaves them to `otherChar`.
+            let replacement = if c.is_uppercase() && !c.is_numeric() {
                 u
-            } else if c.is_lowercase() {
+            } else if c.is_lowercase() && !c.is_numeric() {
                 l
             } else if is_digit(c) {
                 d

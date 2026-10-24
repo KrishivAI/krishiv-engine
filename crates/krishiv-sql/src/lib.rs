@@ -4,8 +4,10 @@
 //! [`parse_query`] parses a Spark 4.2 query statement (`SELECT`, `WITH`,
 //! `VALUES`, `TABLE`, `FROM ... SELECT`, set operations) into the syntax tree
 //! of [`ast`], whose nodes carry source spans; [`parse_statement`] also
-//! accepts `EXPLAIN`. [`parse_data_type`], [`parse_table_schema`] and
-//! [`parse_ddl_type`] parse type strings with the same grammar. The parser is hand-written:
+//! accepts commands (`SET`, `RESET`, `CREATE`/`DROP` views, tables and
+//! namespaces, `USE`) and `EXPLAIN`. [`parse_data_type`],
+//! [`parse_table_schema`] and [`parse_ddl_type`] parse type strings with the
+//! same grammar. The parser is hand-written:
 //! a lexer ([`lexer`]) and a recursive-descent parser with precedence
 //! climbing for expressions. Errors are Spark's error classes
 //! ([`ParseError`]).
@@ -73,6 +75,10 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.bangEqualsNot`: `!` may stand for `NOT` inside a
     /// predicate (`a ! IN (1)`).
     pub legacy_bang_equals_not: bool,
+    /// `spark.sql.legacy.identifierClause`: only the legacy
+    /// `IDENTIFIER(expression)` function syntax is allowed;
+    /// `IDENTIFIER('name')` is not an identifier.
+    pub legacy_identifier_clause: bool,
     /// `spark.sql.legacy.interval.enabled`: an interval literal may mix
     /// year-month and day-time fields.
     pub legacy_interval: bool,
@@ -95,6 +101,7 @@ impl ParserOptions {
             legacy_setops_precedence: on("spark.sql.legacy.setopsPrecedence.enabled", false),
             escaped_string_literals: on("spark.sql.parser.escapedStringLiterals", false),
             legacy_bang_equals_not: on("spark.sql.legacy.bangEqualsNot", false),
+            legacy_identifier_clause: on("spark.sql.legacy.identifierClause", false),
             legacy_interval: on("spark.sql.legacy.interval.enabled", false),
             timestamp_ntz: conf("spark.sql.timestampType")
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
@@ -123,8 +130,10 @@ pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, Par
 }
 
 /// Parses one statement, optionally followed by `;`: a query, `SET`,
-/// `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW`, or `EXPLAIN
-/// [EXTENDED | FORMATTED | CODEGEN | COST]` of a statement.
+/// `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW`, `CREATE TABLE` (or
+/// `CREATE TABLE ... LIKE`), `DROP TABLE`, `CREATE`/`DROP`
+/// `DATABASE`|`SCHEMA`|`NAMESPACE`, `USE`, or `EXPLAIN [EXTENDED |
+/// FORMATTED | CODEGEN | COST]` of a statement.
 ///
 /// ```
 /// use krishiv_sql::ast::{ExplainMode, Statement};
@@ -267,6 +276,7 @@ pub fn parse_ddl_type(sql: &str, options: &ParserOptions) -> Result<ast::DataTyp
         let end = columns.last().map_or(sql.len(), |c| c.span.end);
         Ok(ast::DataTypeSpec {
             kind: ast::DataTypeKind::Struct(Some(columns)),
+            collation: None,
             span: ast::Span::new(start, end),
         })
     })
