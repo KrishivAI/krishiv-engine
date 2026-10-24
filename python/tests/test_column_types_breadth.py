@@ -768,16 +768,20 @@ def test_range_spans_chunks(spark: SparkSession) -> None:
 def test_catalog_hides_dataframe_tables(spark: SparkSession) -> None:
     import pyarrow as pa
 
+    before = set(spark._native.temp_table_names())
     df = spark.createDataFrame(pa.table({"a": [1]}))
+    # The generated name: its number comes from a counter shared by all sessions.
+    [arrow_name] = set(spark._native.temp_table_names()) - before
     df.createOrReplaceTempView("visible_view")
     try:
         names = [r.name for r in spark.catalog.listTables().collect()]
         assert "visible_view" in names
         assert not any(n.lower().startswith("__krishiv_arrow_") for n in names)
         assert spark.catalog.tableExists("visible_view")
-        assert not spark.catalog.tableExists("__krishiv_arrow_0")
-        assert spark.catalog.dropTempView("__krishiv_arrow_0") is False
-        assert spark.catalog.dropTempView("__KRISHIV_ARROW_0") is False
+        assert not spark.catalog.tableExists(arrow_name)
+        assert spark.catalog.dropTempView(arrow_name) is False
+        assert spark.catalog.dropTempView(arrow_name.upper()) is False
+        assert arrow_name in spark._native.temp_table_names()
         assert df.count() == 1
     finally:
         spark.catalog.dropTempView("visible_view")

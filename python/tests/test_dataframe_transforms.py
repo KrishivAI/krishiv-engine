@@ -574,8 +574,9 @@ def test_drop_duplicates_on_every_column(spark: SparkSession) -> None:
     assert df.dropDuplicates(["k", "v"]).sort("k").collect() == [Row(k=1, v="a"), Row(k=2, v="b")]
     one = spark.createDataFrame([(1,), (1,)], ["a"])
     assert one.dropDuplicates(["a"]).collect() == [Row(a=1)]
-    with pytest.raises(errors.AnalysisException):
+    with pytest.raises(errors.AnalysisException) as bad:
         _ = one.dropDuplicates(["missing"]).columns
+    assert (bad.value.getCondition() or "").startswith("UNRESOLVED_COLUMN")
 
 
 def test_drop_and_rename_keep_duplicate_join_columns(spark: SparkSession) -> None:
