@@ -3,15 +3,19 @@
 //! `sql-session-variables.sql` replayed in file order in one session.
 //!
 //! Every statement runs through [`Session::sql`] exactly as the golden
-//! lists it. Statements the engine supports claim Spark's result exactly
-//! (empty shape, schema and rows, or error class and message parameters);
-//! [`Expect::Skip`] runs the statement but asserts nothing: it needs a
-//! feature the engine does not have yet (inline `VALUES`, `RANGE`,
-//! `EXECUTE IMMEDIATE`, SQL functions like `typeof` or `RAND`, `CREATE
+//! lists it. Statements the engine supports assert Spark's result exactly
+//! (empty shape, schema and rows, or error class and message parameters).
+//! [`Expect::Skip`] runs the statement but asserts nothing, only where the
+//! outcome needs a feature the engine does not have yet (inline `VALUES`,
+//! `RANGE`, `EXECUTE IMMEDIATE`, SQL functions like `typeof`, `CREATE
 //! TABLE`, persistent views, `INTERVAL` values, `LATERAL` subqueries or
-//! struct, map and array values), and the comment names it. The second
-//! golden file, `session-variable-precedence.sql`, needs `CREATE TABLE`
-//! throughout and is skipped as a whole.
+//! struct, map and array values), and the comment names it. Statements that
+//! fail deterministically without the feature assert the engine's exact
+//! error instead (the `RAND` declarations, the struct variable). The second
+//! golden file, `session-variable-precedence.sql`, needs `DECLARE all` (a
+//! reserved word here), `GROUP BY ALL` / `ORDER BY ALL` and `CREATE TABLE`
+//! throughout and is skipped as a whole; precedence without them is covered
+//! by `variable_precedence_over_tables` instead.
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -37,7 +41,9 @@ enum Expect {
         class: ErrorClass,
         params: &'static [(&'static str, &'static str)],
     },
-    /// Run but not asserted: needs an unsupported feature (named).
+    /// Run but not asserted: needs an unsupported feature (named), and the
+    /// outcome is not a deterministic error (deterministic failures assert
+    /// `Error` instead).
     Skip(&'static str),
 }
 
@@ -254,14 +260,30 @@ const CASES: &[(&str, Expect)] = &[
         "SET VARIABLE title = 'Dropped struct variable -- field access vs qualified name'",
         E,
     ),
+    // Struct values are unsupported, so the declaration fails; the field
+    // access then has no variable to resolve against, and the drop has
+    // nothing to drop. Each asserts the engine's exact error, so adding
+    // struct support must update this case.
     (
         "DECLARE OR REPLACE VARIABLE session STRUCT<a INT> = NAMED_STRUCT('a', 1)",
-        S("function NAMED_STRUCT and STRUCT values"),
+        Err {
+            class: ErrorClass::KrishivUnsupportedFeature,
+            params: &[("feature", "nested data types (\"STRUCT\")")],
+        },
     ),
-    ("SELECT session.a", S("needs the STRUCT variable above")),
+    (
+        "SELECT session.a",
+        Err {
+            class: ErrorClass::UnresolvedColumnWithoutSuggestion,
+            params: &[("objectName", "`session`.`a`")],
+        },
+    ),
     (
         "DROP TEMPORARY VARIABLE session",
-        S("the STRUCT variable was never declared"),
+        Err {
+            class: ErrorClass::VariableNotFound,
+            params: &[("variableName", "`system`.`session`.`session`")],
+        },
     ),
     (
         "SELECT session.a",
@@ -365,9 +387,16 @@ const CASES: &[(&str, Expect)] = &[
             rows: &[&["1", "1"]],
         },
     ),
+    // `RAND` is unsupported, so the declaration fails and `var1` keeps its
+    // `INT` value of 1: the `SELECT` below asserts the retained value, and
+    // asserts nothing about the golden `DOUBLE`. Pinning the failure here
+    // means `RAND` support must update this case.
     (
         "DECLARE OR REPLACE VARIABLE var1 DOUBLE DEFAULT 1 + RAND(5)",
-        S("function RAND"),
+        Err {
+            class: ErrorClass::KrishivUnsupportedFeature,
+            params: &[("feature", "function RAND")],
+        },
     ),
     (
         "SELECT true AS Expected, var1 >= 1 AS result",
@@ -582,17 +611,26 @@ const CASES: &[(&str, Expect)] = &[
     ("DECLARE VARIABLE var1, var2, var3 INT", E),
     (
         "DECLARE VARIABLE var4, var5, var6 INT DEFAULT CAST(RAND(0) * 10 AS INT)",
-        S("function RAND"),
+        Err {
+            class: ErrorClass::KrishivUnsupportedFeature,
+            params: &[("feature", "function RAND")],
+        },
     ),
     ("DECLARE VARIABLE var7, var8, var9 DEFAULT 5", E),
     (
         "SELECT var4 = var5, var4 = var6, var5 = var6",
-        S("needs the RAND declaration above"),
+        Err {
+            class: ErrorClass::UnresolvedColumnWithoutSuggestion,
+            params: &[("objectName", "`var4`")],
+        },
     ),
     ("DECLARE OR REPLACE VARIABLE var1, var2, var3 DOUBLE", E),
     (
         "DECLARE OR REPLACE VARIABLE var4, var5, var6 DOUBLE DEFAULT RAND(0)",
-        S("function RAND"),
+        Err {
+            class: ErrorClass::KrishivUnsupportedFeature,
+            params: &[("feature", "function RAND")],
+        },
     ),
     (
         "DECLARE OR REPLACE VARIABLE var7, var8, var9 DEFAULT 1.5",
@@ -600,22 +638,34 @@ const CASES: &[(&str, Expect)] = &[
     ),
     (
         "SELECT var4 = var5, var4 = var6, var5 = var6",
-        S("needs RAND; the golden schema inlines variable values"),
+        Err {
+            class: ErrorClass::UnresolvedColumnWithoutSuggestion,
+            params: &[("objectName", "`var4`")],
+        },
     ),
     ("DROP TEMPORARY VARIABLE var1", E),
     ("DROP TEMPORARY VARIABLE var2", E),
     ("DROP TEMPORARY VARIABLE var3", E),
     (
         "DROP TEMPORARY VARIABLE var4",
-        S("never declared: RAND is unsupported"),
+        Err {
+            class: ErrorClass::VariableNotFound,
+            params: &[("variableName", "`system`.`session`.`var4`")],
+        },
     ),
     (
         "DROP TEMPORARY VARIABLE var5",
-        S("never declared: RAND is unsupported"),
+        Err {
+            class: ErrorClass::VariableNotFound,
+            params: &[("variableName", "`system`.`session`.`var5`")],
+        },
     ),
     (
         "DROP TEMPORARY VARIABLE var6",
-        S("never declared: RAND is unsupported"),
+        Err {
+            class: ErrorClass::VariableNotFound,
+            params: &[("variableName", "`system`.`session`.`var6`")],
+        },
     ),
     ("DROP TEMPORARY VARIABLE var7", E),
     ("DROP TEMPORARY VARIABLE var8", E),
@@ -1158,6 +1208,44 @@ fn variable_precedence_over_tables() {
         "SELECT * FROM t WHERE EXISTS (SELECT 1 FROM (SELECT 1 AS x) AS u WHERE x = var1)",
     );
     assert!(found.is_empty());
+    // An output alias beats the variable too: `GROUP BY a` groups by the
+    // `col1` alias (two groups), not by the constant variable `a` (which
+    // would give one group). `GROUP BY ALL` / `ORDER BY ALL` cannot be
+    // covered: the engine has no `ALL` grouping yet.
+    s.register_batches(
+        "u",
+        Arc::new(Schema::new(vec![
+            Field::new("col1", ArrowType::Int32, false),
+            Field::new("col2", ArrowType::Int32, false),
+        ])),
+        vec![
+            arrow_array::RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("col1", ArrowType::Int32, false),
+                    Field::new("col2", ArrowType::Int32, false),
+                ])),
+                vec![
+                    Arc::new(arrow_array::Int32Array::from(vec![1, 1, 2])),
+                    Arc::new(arrow_array::Int32Array::from(vec![10, 20, 30])),
+                ],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    block_on(s.sql("DECLARE OR REPLACE VARIABLE a INT DEFAULT 1")).unwrap();
+    let (schema, found) = rows(
+        &s,
+        "SELECT col1 AS a, SUM(col2) AS s FROM u GROUP BY a ORDER BY a",
+    );
+    assert_eq!(schema, "struct<a:int,s:bigint>");
+    assert_eq!(
+        found,
+        [
+            vec!["1".to_owned(), "30".to_owned()],
+            vec!["2".to_owned(), "30".to_owned()]
+        ]
+    );
 }
 
 /// A cached resolved plan is never reused after a variable changed: the same frame sees the new value on its next action.
@@ -1257,6 +1345,86 @@ fn set_row_assignment_through_queries() {
             ("numExpr".to_owned(), "1".to_owned())
         ]
     );
+}
+
+/// Single assignments through scalar subqueries: one row assigns, no rows
+/// assign NULL, several rows and several columns fail with the golden
+/// classes, an overflowing cast fails, and every failure keeps the old
+/// value.
+#[test]
+fn set_single_assignment_through_queries() {
+    let s = session();
+    s.register_batches(
+        "q",
+        Arc::new(Schema::new(vec![
+            Field::new("id", ArrowType::Int32, false),
+            Field::new("name", ArrowType::Utf8, true),
+        ])),
+        vec![
+            arrow_array::RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("id", ArrowType::Int32, false),
+                    Field::new("name", ArrowType::Utf8, true),
+                ])),
+                vec![
+                    Arc::new(arrow_array::Int32Array::from(vec![7])),
+                    Arc::new(arrow_array::StringArray::from(vec![Some("seven")])),
+                ],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    for sql in [
+        "DECLARE OR REPLACE VARIABLE var1 INT DEFAULT 5",
+        "DECLARE OR REPLACE VARIABLE var2 STRING DEFAULT 'hello'",
+    ] {
+        block_on(s.sql(sql)).unwrap();
+    }
+    block_on(s.sql("SET VARIABLE var1 = (SELECT id FROM q)")).unwrap();
+    let (_, found) = rows(&s, "SELECT var1, var2");
+    assert_eq!(found, [vec!["7".to_owned(), "hello".to_owned()]]);
+    // No rows assign NULL with the variables' types.
+    block_on(s.sql("SET VARIABLE var1 = (SELECT id FROM q WHERE 1 = 0)")).unwrap();
+    let (schema, found) = rows(&s, "SELECT var1, var2");
+    assert_eq!(schema, "struct<var1:int,var2:string>");
+    assert_eq!(found, [vec!["NULL".to_owned(), "hello".to_owned()]]);
+    // Several rows, several columns and an overflowing cast fail, and each
+    // failure keeps the old value.
+    block_on(s.sql("SET VARIABLE var1 = (SELECT id FROM q)")).unwrap();
+    let e = error(
+        &s,
+        "SET VARIABLE var1 = (SELECT id FROM q UNION ALL SELECT id FROM q)",
+    );
+    assert_eq!(e.error_class(), ErrorClass::ScalarSubqueryTooManyRows);
+    assert!(e.message_parameters().is_empty());
+    let e = error(&s, "SET VARIABLE var1 = (SELECT id, name FROM q)");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn
+    );
+    assert_eq!(
+        e.message_parameters()
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect::<Vec<_>>(),
+        [("number".to_owned(), "2".to_owned())]
+    );
+    let e = error(&s, "SET VARIABLE var1 = (SELECT 1.0E10)");
+    assert_eq!(e.error_class(), ErrorClass::CastOverflow);
+    assert_eq!(
+        e.message_parameters()
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("value".to_owned(), "1.0E10D".to_owned()),
+            ("sourceType".to_owned(), "\"DOUBLE\"".to_owned()),
+            ("targetType".to_owned(), "\"INT\"".to_owned()),
+        ]
+    );
+    let (_, found) = rows(&s, "SELECT var1, var2");
+    assert_eq!(found, [vec!["7".to_owned(), "hello".to_owned()]]);
 }
 
 /// Declaring without `OR REPLACE` over an existing variable fails, and

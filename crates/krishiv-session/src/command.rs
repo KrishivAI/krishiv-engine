@@ -26,12 +26,11 @@ use krishiv_common::error::{
     VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::redact::RedactedSql;
-use krishiv_plan::analyzer::TableColumn;
+use krishiv_plan::analyzer::{TableColumn, variable_name};
 use krishiv_plan::{Literal, LogicalPlan, PlanNode, SourceId};
 use krishiv_sql::ast::{
-    CreateView, DataTypeSpec, DeclareVariable, DropVariable, DropView, Expr, ExprKind,
-    FrameBoundKind, ObjectName, Reset, Set, SetKind, SetVariable, SetVariableKind, Span, TimeZone,
-    WindowRef,
+    CreateView, DataTypeSpec, DeclareVariable, DropVariable, DropView, Expr, ExprKind, ObjectName,
+    Reset, Set, SetKind, SetVariable, SetVariableKind, Span, TimeZone,
 };
 use krishiv_types::{DataType, DecimalType};
 
@@ -429,6 +428,8 @@ impl Session {
     /// right-hand sides are evaluated before any is assigned, a row query
     /// assigns its single row (no rows assign NULL) and `DEFAULT` reads
     /// the variable's default. Returns Spark's empty result shape.
+    /// Evaluate-then-assign spans no lock: concurrent writers must be
+    /// externally synchronized.
     pub(crate) async fn exec_set_variable(
         &self,
         v: &SetVariable,
@@ -601,9 +602,10 @@ impl Session {
                 self.empty_frame().await
             }
             // Later `SET VARIABLE` forms.
-            _ => Err(crate::session::internal(
-                "unknown SET VARIABLE form".to_owned(),
-            )),
+            _ => Err(KrishivUnsupportedFeature {
+                feature: "this SET VARIABLE form".to_owned(),
+            }
+            .into()),
         }
     }
 
@@ -764,23 +766,20 @@ fn duplicate_targets(keys: &[String]) -> Result<(), KrishivError> {
 
 /// The parts of a plain `SET key = ...` assignment when the key is shaped
 /// like a variable (`v`, `session.v` or `system.session.v`, in any letter
-/// case): a backquoted key is one part, whatever dots it holds.
+/// case): a backquoted key is one part, whatever dots it holds. The shape
+/// check is [`variable_name`]'s, so resolution here cannot drift from the
+/// analyzer's.
 fn assign_variable_parts(key: &str, key_span: Span, text: &RedactedSql) -> Option<Vec<String>> {
+    if key.is_empty() {
+        return None;
+    }
     let parts: Vec<String> = if text.fragment(key_span.start..key_span.end).starts_with('`') {
         vec![key.to_owned()]
     } else {
         key.split('.').map(str::to_owned).collect()
     };
-    match &parts[..] {
-        [_] if !key.is_empty() => Some(parts),
-        [s, _] if s.eq_ignore_ascii_case("session") => Some(parts),
-        [system, s, _]
-            if system.eq_ignore_ascii_case("system") && s.eq_ignore_ascii_case("session") =>
-        {
-            Some(parts)
-        }
-        _ => None,
-    }
+    let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+    variable_name(&refs).is_some().then_some(parts)
 }
 
 /// `prefix + slice + suffix` with `slice` starting at its offset in the
@@ -901,8 +900,10 @@ fn map_variable_error(
     }
 }
 
-/// The value of `array` at `row` as a typed literal; anything the engine
-/// cannot hold in a variable fails naming its Arrow type.
+/// The value of `array` at `row` as a typed literal. The type comes from
+/// the single [`arrow_krishiv_type`] map, so a NULL slot and a value never
+/// disagree; anything the engine cannot hold in a variable fails there,
+/// naming its Arrow type.
 fn arrow_value(
     array: &arrow_array::ArrayRef,
     row: usize,
@@ -911,13 +912,10 @@ fn arrow_value(
         Date32Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
         TimestampMicrosecondType,
     };
+    let data_type = arrow_krishiv_type(array.data_type())?;
     // A `NULL` array holds no validity bitmap (`is_null` is false), but
     // every slot is logically NULL.
-    if matches!(array.data_type(), ArrowType::Null) {
-        return Ok((DataType::Null, Literal::Null(None)));
-    }
-    if array.is_null(row) {
-        let data_type = arrow_krishiv_type(array.data_type())?;
+    if matches!(array.data_type(), ArrowType::Null) || array.is_null(row) {
         let value = if data_type == DataType::Null {
             Literal::Null(None)
         } else {
@@ -925,99 +923,64 @@ fn arrow_value(
         };
         return Ok((data_type, value));
     }
-    match array.data_type() {
-        ArrowType::Boolean => Ok((
-            DataType::Boolean,
-            Literal::Boolean(array.as_boolean().value(row)),
-        )),
-        ArrowType::Int8 => Ok((
-            DataType::Byte,
-            Literal::Byte(array.as_primitive::<Int8Type>().value(row)),
-        )),
-        ArrowType::Int16 => Ok((
-            DataType::Short,
-            Literal::Short(array.as_primitive::<Int16Type>().value(row)),
-        )),
-        ArrowType::Int32 => Ok((
-            DataType::Integer,
-            Literal::Integer(array.as_primitive::<Int32Type>().value(row)),
-        )),
-        ArrowType::Int64 => Ok((
-            DataType::Long,
-            Literal::Long(array.as_primitive::<Int64Type>().value(row)),
-        )),
-        ArrowType::Float32 => Ok((
-            DataType::Float,
-            Literal::Float(
-                array
-                    .as_primitive::<arrow_array::types::Float32Type>()
-                    .value(row),
-            ),
-        )),
-        ArrowType::Float64 => Ok((
-            DataType::Double,
-            Literal::Double(
-                array
-                    .as_primitive::<arrow_array::types::Float64Type>()
-                    .value(row),
-            ),
-        )),
-        ArrowType::Decimal128(precision, scale) => {
-            let data_type = decimal_type(*precision, *scale)?;
-            let unscaled = array.as_primitive::<Decimal128Type>().value(row);
-            Ok((
-                DataType::Decimal(data_type),
-                Literal::Decimal {
-                    unscaled,
-                    data_type,
-                },
-            ))
-        }
-        ArrowType::Utf8 => Ok((
-            DataType::String,
-            Literal::String(array.as_string::<i32>().value(row).to_owned()),
-        )),
-        ArrowType::LargeUtf8 => Ok((
-            DataType::String,
-            Literal::String(array.as_string::<i64>().value(row).to_owned()),
-        )),
-        ArrowType::Utf8View => Ok((
-            DataType::String,
-            Literal::String(array.as_string_view().value(row).to_owned()),
-        )),
-        ArrowType::Binary => Ok((
-            DataType::Binary,
-            Literal::Binary(array.as_binary::<i32>().value(row).to_owned()),
-        )),
-        ArrowType::LargeBinary => Ok((
-            DataType::Binary,
-            Literal::Binary(array.as_binary::<i64>().value(row).to_owned()),
-        )),
-        ArrowType::BinaryView => Ok((
-            DataType::Binary,
-            Literal::Binary(array.as_binary_view().value(row).to_owned()),
-        )),
-        ArrowType::Date32 => Ok((
-            DataType::Date,
-            Literal::Date(array.as_primitive::<Date32Type>().value(row)),
-        )),
-        ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => {
-            let micros = array.as_primitive::<TimestampMicrosecondType>().value(row);
-            match array.data_type() {
-                ArrowType::Timestamp(_, Some(_)) => {
-                    Ok((DataType::Timestamp, Literal::Timestamp(micros)))
-                }
-                _ => Ok((DataType::TimestampNtz, Literal::TimestampNtz(micros))),
+    let value = match array.data_type() {
+        ArrowType::Boolean => Literal::Boolean(array.as_boolean().value(row)),
+        ArrowType::Int8 => Literal::Byte(array.as_primitive::<Int8Type>().value(row)),
+        ArrowType::Int16 => Literal::Short(array.as_primitive::<Int16Type>().value(row)),
+        ArrowType::Int32 => Literal::Integer(array.as_primitive::<Int32Type>().value(row)),
+        ArrowType::Int64 => Literal::Long(array.as_primitive::<Int64Type>().value(row)),
+        ArrowType::Float32 => Literal::Float(
+            array
+                .as_primitive::<arrow_array::types::Float32Type>()
+                .value(row),
+        ),
+        ArrowType::Float64 => Literal::Double(
+            array
+                .as_primitive::<arrow_array::types::Float64Type>()
+                .value(row),
+        ),
+        ArrowType::Decimal128(_, _) => {
+            let DataType::Decimal(decimal) = &data_type else {
+                return Err(crate::session::internal(
+                    "a variable decimal changed type".to_owned(),
+                ));
+            };
+            Literal::Decimal {
+                unscaled: array.as_primitive::<Decimal128Type>().value(row),
+                data_type: *decimal,
             }
         }
-        other => Err(KrishivUnsupportedFeature {
-            feature: format!("session variable values of type {other}"),
+        ArrowType::Utf8 => Literal::String(array.as_string::<i32>().value(row).to_owned()),
+        ArrowType::LargeUtf8 => Literal::String(array.as_string::<i64>().value(row).to_owned()),
+        ArrowType::Utf8View => Literal::String(array.as_string_view().value(row).to_owned()),
+        ArrowType::Binary => Literal::Binary(array.as_binary::<i32>().value(row).to_owned()),
+        ArrowType::LargeBinary => Literal::Binary(array.as_binary::<i64>().value(row).to_owned()),
+        ArrowType::BinaryView => Literal::Binary(array.as_binary_view().value(row).to_owned()),
+        ArrowType::Date32 => Literal::Date(array.as_primitive::<Date32Type>().value(row)),
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, _) => {
+            let micros = array.as_primitive::<TimestampMicrosecondType>().value(row);
+            match &data_type {
+                DataType::Timestamp => Literal::Timestamp(micros),
+                DataType::TimestampNtz => Literal::TimestampNtz(micros),
+                _ => {
+                    return Err(crate::session::internal(
+                        "a variable timestamp changed type".to_owned(),
+                    ));
+                }
+            }
         }
-        .into()),
-    }
+        // `arrow_krishiv_type` above already failed on any other type.
+        _ => {
+            return Err(crate::session::internal(
+                "a variable value changed type".to_owned(),
+            ));
+        }
+    };
+    Ok((data_type, value))
 }
 
-/// The Krishiv type of Arrow `data_type`, for NULL variable values.
+/// The Krishiv type of Arrow `data_type`: the single Arrow-to-Krishiv
+/// type map [`arrow_value`] reads, so NULL slots and values agree.
 fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, KrishivError> {
     match data_type {
         ArrowType::Null => Ok(DataType::Null),
@@ -1070,160 +1033,37 @@ fn is_bare_default(e: &Expr) -> bool {
     }
 }
 
-/// Whether the top-level expression tree holds a bare `DEFAULT` that is
-/// not the whole value: there it cannot read a default, as in Spark.
-/// Subquery plans are not crossed (a `DEFAULT` there resolves as a
-/// column or fails as one).
-fn contains_default(e: &Expr) -> bool {
-    if is_bare_default(e) {
+/// Whether any node of the top-level expression tree `e` (windows
+/// included) matches `pred`. Subquery plans are not crossed: a `Query` is
+/// not an [`Expr`], so a `DEFAULT` inside one still resolves as a column
+/// there, and a subquery inside one is not the top-level subquery these
+/// checks look for.
+fn expr_any(e: &Expr, pred: &dyn Fn(&Expr) -> bool) -> bool {
+    if pred(e) {
         return true;
     }
-    match &e.kind {
-        ExprKind::Field(inner, _)
-        | ExprKind::Unary(_, inner)
-        | ExprKind::Not(inner)
-        | ExprKind::Nested(inner)
-        | ExprKind::IsNull { expr: inner, .. }
-        | ExprKind::IsTruth { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. } => contains_default(inner),
-        ExprKind::Subscript(first, second) | ExprKind::Binary(first, _, second) => {
-            contains_default(first) || contains_default(second)
-        }
-        ExprKind::IsDistinctFrom { left, right, .. } => {
-            contains_default(left) || contains_default(right)
-        }
-        ExprKind::Between {
-            expr, low, high, ..
-        } => contains_default(expr) || contains_default(low) || contains_default(high),
-        ExprKind::InList { expr, list, .. } => {
-            contains_default(expr) || list.iter().any(contains_default)
-        }
-        ExprKind::InSubquery { expr, .. } => contains_default(expr),
-        ExprKind::Like { expr, pattern, .. } | ExprKind::RLike { expr, pattern, .. } => {
-            contains_default(expr) || contains_default(pattern)
-        }
-        ExprKind::LikeQuantified { expr, patterns, .. } => {
-            contains_default(expr) || patterns.iter().any(contains_default)
-        }
-        ExprKind::Case {
-            operand,
-            branches,
-            else_result,
-        } => {
-            operand.as_ref().is_some_and(|o| contains_default(o))
-                || branches
-                    .iter()
-                    .any(|b| contains_default(&b.condition) || contains_default(&b.result))
-                || else_result.as_ref().is_some_and(|o| contains_default(o))
-        }
-        ExprKind::Function(f) => {
-            f.args.iter().any(|a| contains_default(&a.expr))
-                || f.filter.as_ref().is_some_and(|o| contains_default(o))
-                || f.within_group.iter().any(|s| contains_default(&s.expr))
-                || f.over.as_ref().is_some_and(contains_default_window)
-        }
-        ExprKind::Lambda { body, .. } => contains_default(body),
-        ExprKind::Row(items) | ExprKind::Struct(items) => {
-            items.iter().any(|i| contains_default(&i.expr))
-        }
-        _ => false,
-    }
+    let mut hit = false;
+    e.for_each_child(&mut |child| {
+        hit = expr_any(child, pred) || hit;
+    });
+    hit
 }
 
-/// Whether the window of `over` holds a bare `DEFAULT`.
-fn contains_default_window(over: &WindowRef) -> bool {
-    let WindowRef::Spec(spec) = over else {
-        return false;
-    };
-    spec.partition_by.iter().any(contains_default)
-        || spec.order_by.iter().any(|s| contains_default(&s.expr))
-        || spec.frame.as_ref().is_some_and(|f| {
-            [&f.start]
-                .into_iter()
-                .chain(f.end.as_ref())
-                .any(|b| match &b.kind {
-                    FrameBoundKind::Preceding(e) | FrameBoundKind::Following(e) => {
-                        contains_default(e)
-                    }
-                    _ => false,
-                })
-        })
+/// Whether the top-level expression tree holds a bare `DEFAULT` that is
+/// not the whole value: there it cannot read a default, as in Spark.
+fn contains_default(e: &Expr) -> bool {
+    expr_any(e, &is_bare_default)
 }
 
 /// Whether the top-level expression tree holds a subquery: a default
-/// cannot hold one, as in Spark. The first subquery node reports, so
-/// subquery plans are never crossed.
+/// cannot hold one, as in Spark.
 fn contains_subquery(e: &Expr) -> bool {
-    match &e.kind {
-        ExprKind::Exists(_) | ExprKind::Subquery(_) | ExprKind::InSubquery { .. } => true,
-        ExprKind::Field(inner, _)
-        | ExprKind::Unary(_, inner)
-        | ExprKind::Not(inner)
-        | ExprKind::Nested(inner)
-        | ExprKind::IsNull { expr: inner, .. }
-        | ExprKind::IsTruth { expr: inner, .. }
-        | ExprKind::Cast { expr: inner, .. } => contains_subquery(inner),
-        ExprKind::Subscript(first, second) | ExprKind::Binary(first, _, second) => {
-            contains_subquery(first) || contains_subquery(second)
-        }
-        ExprKind::IsDistinctFrom { left, right, .. } => {
-            contains_subquery(left) || contains_subquery(right)
-        }
-        ExprKind::Between {
-            expr, low, high, ..
-        } => contains_subquery(expr) || contains_subquery(low) || contains_subquery(high),
-        ExprKind::InList { expr, list, .. } => {
-            contains_subquery(expr) || list.iter().any(contains_subquery)
-        }
-        ExprKind::Like { expr, pattern, .. } | ExprKind::RLike { expr, pattern, .. } => {
-            contains_subquery(expr) || contains_subquery(pattern)
-        }
-        ExprKind::LikeQuantified { expr, patterns, .. } => {
-            contains_subquery(expr) || patterns.iter().any(contains_subquery)
-        }
-        ExprKind::Case {
-            operand,
-            branches,
-            else_result,
-        } => {
-            operand.as_ref().is_some_and(|o| contains_subquery(o))
-                || branches
-                    .iter()
-                    .any(|b| contains_subquery(&b.condition) || contains_subquery(&b.result))
-                || else_result.as_ref().is_some_and(|o| contains_subquery(o))
-        }
-        ExprKind::Function(f) => {
-            f.args.iter().any(|a| contains_subquery(&a.expr))
-                || f.filter.as_ref().is_some_and(|o| contains_subquery(o))
-                || f.within_group.iter().any(|s| contains_subquery(&s.expr))
-                || f.over.as_ref().is_some_and(contains_subquery_window)
-        }
-        ExprKind::Lambda { body, .. } => contains_subquery(body),
-        ExprKind::Row(items) | ExprKind::Struct(items) => {
-            items.iter().any(|i| contains_subquery(&i.expr))
-        }
-        _ => false,
-    }
-}
-
-/// Whether the window of `over` holds a subquery.
-fn contains_subquery_window(over: &WindowRef) -> bool {
-    let WindowRef::Spec(spec) = over else {
-        return false;
-    };
-    spec.partition_by.iter().any(contains_subquery)
-        || spec.order_by.iter().any(|s| contains_subquery(&s.expr))
-        || spec.frame.as_ref().is_some_and(|f| {
-            [&f.start]
-                .into_iter()
-                .chain(f.end.as_ref())
-                .any(|b| match &b.kind {
-                    FrameBoundKind::Preceding(e) | FrameBoundKind::Following(e) => {
-                        contains_subquery(e)
-                    }
-                    _ => false,
-                })
-        })
+    expr_any(e, &|node| {
+        matches!(
+            node.kind,
+            ExprKind::Exists(_) | ExprKind::Subquery(_) | ExprKind::InSubquery { .. }
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1273,8 +1113,10 @@ mod tests {
     }
 
     /// A window over `bound` as its frame start, for the expression walks.
-    fn window_with(bound: Expr) -> WindowRef {
-        use krishiv_sql::ast::{FrameBound, FrameUnits, Span, WindowFrame, WindowSpec};
+    fn window_with(bound: Expr) -> krishiv_sql::ast::WindowRef {
+        use krishiv_sql::ast::{
+            FrameBound, FrameBoundKind, FrameUnits, Span, WindowFrame, WindowRef, WindowSpec,
+        };
         WindowRef::Spec(Box::new(WindowSpec {
             partitioning: None,
             partition_by: Vec::new(),
@@ -1290,6 +1132,36 @@ mod tests {
             }),
             span: Span::default(),
         }))
+    }
+
+    /// A `f(1)` call over `window`, for the expression walks.
+    fn function_over(window: krishiv_sql::ast::WindowRef) -> Expr {
+        use krishiv_sql::ast::{Function, FunctionArg, Ident, ObjectName, Span};
+        let ident = |value: &str| Ident {
+            value: value.to_owned(),
+            quoted: false,
+            span: Span::default(),
+        };
+        Expr {
+            kind: ExprKind::Function(Box::new(Function {
+                name: ObjectName {
+                    parts: vec![ident("f")],
+                    span: Span::default(),
+                },
+                quantifier: None,
+                args: vec![FunctionArg {
+                    name: None,
+                    expr: named_expr("1"),
+                    span: Span::default(),
+                }],
+                within_group: Vec::new(),
+                filter: None,
+                null_treatment: None,
+                over: Some(window),
+                span: Span::default(),
+            })),
+            span: Span::default(),
+        }
     }
 
     /// Parses `sql` as a named expression, for the expression walks.
@@ -1534,8 +1406,12 @@ mod tests {
         assert!(contains_default(&named_expr(
             "sum(x) OVER (ORDER BY DEFAULT)"
         )));
-        assert!(contains_default_window(&window_with(named_expr("DEFAULT"))));
-        assert!(!contains_default_window(&window_with(named_expr("1"))));
+        assert!(contains_default(&function_over(window_with(named_expr(
+            "DEFAULT"
+        )))));
+        assert!(!contains_default(&function_over(window_with(named_expr(
+            "1"
+        )))));
         for sql in [
             "(SELECT 1)",
             "1 + (SELECT 1)",
@@ -1548,10 +1424,12 @@ mod tests {
             assert!(!contains_subquery(&named_expr(sql)), "{sql}");
         }
         // A subquery through a window frame counts too.
-        assert!(contains_subquery_window(&window_with(named_expr(
+        assert!(contains_subquery(&function_over(window_with(named_expr(
             "(SELECT 1)"
-        ))));
-        assert!(!contains_subquery_window(&window_with(named_expr("1"))));
+        )))));
+        assert!(!contains_subquery(&function_over(window_with(named_expr(
+            "1"
+        )))));
     }
 
     /// Execution errors from variable evaluation gain Spark's contexts.

@@ -1925,3 +1925,112 @@ pub enum ExprKind {
     /// `(expr)`.
     Nested(Box<Expr>),
 }
+
+impl Expr {
+    /// Calls `f` on each direct child expression, in order. Subquery plans
+    /// are not expressions and are not visited; window specifications after
+    /// `OVER` are visited (their partitioning, ordering and frame-offset
+    /// expressions).
+    pub fn for_each_child(&self, f: &mut impl FnMut(&Self)) {
+        match &self.kind {
+            ExprKind::Literal(_)
+            | ExprKind::Parameter(_)
+            | ExprKind::Keyword(_)
+            | ExprKind::Column(_)
+            | ExprKind::Wildcard { .. }
+            | ExprKind::Exists(_)
+            | ExprKind::Subquery(_) => {}
+            ExprKind::Field(inner, _)
+            | ExprKind::Unary(_, inner)
+            | ExprKind::Not(inner)
+            | ExprKind::Nested(inner)
+            | ExprKind::IsNull { expr: inner, .. }
+            | ExprKind::IsTruth { expr: inner, .. }
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Lambda { body: inner, .. } => f(inner),
+            ExprKind::Subscript(first, second) | ExprKind::Binary(first, _, second) => {
+                f(first);
+                f(second);
+            }
+            ExprKind::IsDistinctFrom { left, right, .. } => {
+                f(left);
+                f(right);
+            }
+            ExprKind::Between {
+                expr, low, high, ..
+            } => {
+                f(expr);
+                f(low);
+                f(high);
+            }
+            ExprKind::InList { expr, list, .. } => {
+                f(expr);
+                list.iter().for_each(&mut *f);
+            }
+            ExprKind::InSubquery { expr, .. } => f(expr),
+            ExprKind::Like { expr, pattern, .. } | ExprKind::RLike { expr, pattern, .. } => {
+                f(expr);
+                f(pattern);
+            }
+            ExprKind::LikeQuantified { expr, patterns, .. } => {
+                f(expr);
+                patterns.iter().for_each(&mut *f);
+            }
+            ExprKind::Case {
+                operand,
+                branches,
+                else_result,
+            } => {
+                if let Some(inner) = operand {
+                    f(inner);
+                }
+                for branch in branches {
+                    f(&branch.condition);
+                    f(&branch.result);
+                }
+                if let Some(inner) = else_result {
+                    f(inner);
+                }
+            }
+            ExprKind::Function(function) => {
+                for arg in &function.args {
+                    f(&arg.expr);
+                }
+                if let Some(inner) = function.filter.as_ref() {
+                    f(inner);
+                }
+                for item in &function.within_group {
+                    f(&item.expr);
+                }
+                if let Some(over) = &function.over {
+                    for_each_window_expr(over, f);
+                }
+            }
+            ExprKind::Row(items) | ExprKind::Struct(items) => {
+                for item in items {
+                    f(&item.expr);
+                }
+            }
+        }
+    }
+}
+
+/// Calls `f` on each expression of the inline window specification `window`
+/// (a named window holds none).
+fn for_each_window_expr(window: &WindowRef, f: &mut impl FnMut(&Expr)) {
+    let WindowRef::Spec(spec) = window else {
+        return;
+    };
+    spec.partition_by.iter().for_each(&mut *f);
+    for item in &spec.order_by {
+        f(&item.expr);
+    }
+    if let Some(frame) = &spec.frame {
+        for bound in [&frame.start].into_iter().chain(frame.end.as_ref()) {
+            match &bound.kind {
+                FrameBoundKind::Preceding(expr) | FrameBoundKind::Following(expr) => f(expr),
+                _ => {}
+            }
+        }
+    }
+}

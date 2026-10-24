@@ -42,16 +42,26 @@ impl VariableSnapshot {
     /// are not a variable's shape or name no variable.
     #[must_use]
     pub fn get(&self, parts: &[String]) -> Option<&SessionVariable> {
-        let name = match parts {
-            [v] => v,
-            [s, v] if s.eq_ignore_ascii_case("session") => v,
-            [system, s, v]
-                if system.eq_ignore_ascii_case("system") && s.eq_ignore_ascii_case("session") =>
-            {
-                v
-            }
-            _ => return None,
-        };
+        let refs: Vec<&str> = parts.iter().map(String::as_str).collect();
+        let name = variable_name(&refs)?;
         self.variables.get(&name.to_lowercase())
+    }
+}
+
+/// The unqualified variable name `parts` names (`v`, `session.v` or
+/// `system.session.v`, in any letter case), or `None` when the parts are
+/// not a variable's shape. The single source of truth for that shape:
+/// execution resolves names through this too.
+#[must_use]
+pub fn variable_name<'a>(parts: &[&'a str]) -> Option<&'a str> {
+    match parts {
+        [v] => Some(v),
+        [s, v] if s.eq_ignore_ascii_case("session") => Some(v),
+        [system, s, v]
+            if system.eq_ignore_ascii_case("system") && s.eq_ignore_ascii_case("session") =>
+        {
+            Some(v)
+        }
+        _ => None,
     }
 }

@@ -1874,9 +1874,13 @@ impl Resolver<'_> {
         // change is needed; the expression keeps the spelling it was
         // written with for names and errors.
         if let Some(var) = self.ctx.variables.get(&c.name) {
+            let Some(name) = c.name.last() else {
+                debug_assert!(false, "a variable name is never empty");
+                return Err(unresolved(&c.name, cx.scope, origin));
+            };
             let col = BoundColumn {
                 id: self.fresh(),
-                name: c.name.last().cloned().unwrap_or_default(),
+                name: name.clone(),
                 data_type: var.data_type.clone(),
                 nullable: matches!(var.value, Literal::Null(_)),
             };

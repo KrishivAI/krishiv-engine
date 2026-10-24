@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_plan::Literal;
-use krishiv_plan::analyzer::{SessionVariable, VariableSnapshot};
+use krishiv_plan::analyzer::{SessionVariable, VariableSnapshot, variable_name};
 use krishiv_sql::ast::ObjectName;
 use krishiv_types::DataType;
 
@@ -40,6 +40,11 @@ pub(crate) const RESOLVE_SEARCH_PATH: &str =
 
 /// The session's variables, by lower-case unqualified name, with a version
 /// bumped under the write lock after every change.
+///
+/// Each `put` and `remove` is atomic, but a command that evaluates and then
+/// assigns (one `SET VARIABLE` with several targets) spans no lock: writers
+/// must be externally synchronized, as a concurrent command can interleave
+/// its snapshot between the evaluation and the assignment.
 #[derive(Debug, Default)]
 pub(crate) struct SessionVariables {
     map: RwLock<BTreeMap<String, StoredVariable>>,
@@ -50,7 +55,8 @@ impl SessionVariables {
     /// The snapshot one query resolves, with the version it was taken at.
     /// The bump happens under the write lock, so a snapshot never pairs
     /// newer contents with an older version (only the reverse, which
-    /// re-resolves).
+    /// re-resolves). The snapshot clones every value: variables hold small
+    /// scalars, and the clone is not memory-accounted.
     pub(crate) fn snapshot(&self) -> Arc<VariableSnapshot> {
         let map = self.map.read().unwrap_or_else(PoisonError::into_inner);
         let variables = map
@@ -100,19 +106,10 @@ impl SessionVariables {
 
 /// The storage key of `name` (`v`, `session.v` or `system.session.v`, in
 /// any letter case): the lower-case unqualified name. `None` when the
-/// parts are not a variable's shape.
+/// parts are not a variable's shape, by [`variable_name`].
 pub(crate) fn variable_key(name: &ObjectName) -> Option<String> {
     let parts: Vec<&str> = name.parts.iter().map(|p| p.value.as_str()).collect();
-    match &parts[..] {
-        [v] => Some(v.to_lowercase()),
-        [s, v] if s.eq_ignore_ascii_case("session") => Some(v.to_lowercase()),
-        [system, s, v]
-            if system.eq_ignore_ascii_case("system") && s.eq_ignore_ascii_case("session") =>
-        {
-            Some(v.to_lowercase())
-        }
-        _ => None,
-    }
+    variable_name(&parts).map(str::to_lowercase)
 }
 
 /// `name` as Spark quotes it in errors: `` `v` ``, `` `session`.`v` ``.

@@ -97,7 +97,7 @@ pub use catalog::{
     PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend,
     TableColumn, TableIdent, TableKind, TableMeta,
 };
-pub use variables::{SessionVariable, VariableSnapshot};
+pub use variables::{SessionVariable, VariableSnapshot, variable_name};
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 
