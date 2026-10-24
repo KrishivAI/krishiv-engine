@@ -149,7 +149,15 @@
       "Bash(*twine*)",
       "Bash(*maturin upload*)",
       "Bash(*cargo release*)",
-      "Bash(*release-plz release*)"
+      "Bash(*release-plz release*)",
+      "Bash(*--no-verify*)",
+      "Bash(git commit -n *)",
+      "Bash(git commit * -n *)",
+      "Bash(git commit * -n)",
+      "Bash(*git commit -n *)",
+      "Bash(*git commit * -n *)",
+      "Bash(*core.hooksPath*)",
+      "Bash(*SKIP_CLIPPY*)"
     ]
   },
   "hooks": {
