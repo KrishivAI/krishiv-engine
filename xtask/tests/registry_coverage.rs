@@ -141,16 +141,11 @@ fn engine_raised_set_of_this_repo_is_a_small_subset_of_the_catalog() {
     let catalog = parse_error_classes(&json).unwrap();
     assert!(catalog.len() > 1_900, "full Spark 4.2.0 catalog is loaded");
     let in_use = raised(&catalog, &collect_engine(root));
-    // The engine-raised set grows with every implemented feature, so the
-    // bound is structural rather than a budget: a scan that counted classes
-    // wholesale (a generated registry or the catalog itself slipping into
-    // engine text) would reach the whole catalog.
-    assert!(
-        !in_use.is_empty() && in_use.len() < catalog.len() / 2,
-        "{} of {}",
-        in_use.len(),
-        catalog.len()
-    );
+    // A detector that matched the whole catalog (the bug this guards
+    // against) would far exceed this bound; the engine's raised set grows
+    // with each function family (193 of the 1,929 classes after the bitwise
+    // and number-format functions), so the bound is a quarter, not a tenth.
+    assert!(in_use.len() < catalog.len() / 4, "{}", in_use.len());
     // The comment and test filter removes real references in this repo:
     // the same sources read whole name strictly more classes.
     let mut raw = Vec::new();

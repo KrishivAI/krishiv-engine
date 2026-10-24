@@ -4,6 +4,7 @@ function registry when the query is analyzed, so one that is not registered fail
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from krishiv import _native
@@ -40,7 +41,7 @@ def call_function(funcName: str, *cols: Any) -> Column:
     return _call(funcName, *cols)
 
 
-def _unary(name: str, doc: str) -> Any:
+def _unary(name: str, doc: str) -> Callable[[ColumnOrName], Column]:
     def f(col: ColumnOrName) -> Column:
         return _call(name, col)
 

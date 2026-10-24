@@ -32,6 +32,8 @@ mod regex;
 mod session;
 mod string;
 
+pub use regex::{extract_all_pieces, split_regex};
+
 use std::fmt;
 use std::sync::Arc;
 
