@@ -804,7 +804,7 @@ fn python_wheel_tests(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool) -> Ste
             "no python/ change and krishiv-python is not affected",
         );
     }
-    const SCRIPT: &str = r#"set -e; V=$1; trap 'rm -rf "$V"' EXIT; rm -rf "$V"; uv venv -q "$V"; uv pip install -q --python "$V/bin/python" maturin pytest; cd python; VIRTUAL_ENV="$V" PATH="$V/bin:$PATH" maturin develop -q; "$V/bin/pytest" tests -q"#;
+    const SCRIPT: &str = r#"set -e; V=$(realpath -m "$1"); trap 'rm -rf "$V"' EXIT; rm -rf "$V"; uv venv -q "$V"; uv pip install -q --python "$V/bin/python" maturin pytest; cd python; VIRTUAL_ENV="$V" PATH="$V/bin:$PATH" maturin develop -q; "$V/bin/pytest" tests -q"#;
     needs(
         "python-wheel-tests",
         "uv",
