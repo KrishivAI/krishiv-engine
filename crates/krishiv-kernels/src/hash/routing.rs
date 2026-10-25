@@ -25,9 +25,7 @@
 //!   little-endian whatever the machine's byte order, so `h` is the same on
 //!   every platform.
 //! - **One key column:** `h` is that column's hash, bit-identical to the
-//!   runtime filters' Bloom hash, so a join build can feed its stored `h`
-//!   to a Bloom filter and a scan checking Parquet Bloom filters computes
-//!   the same value.
+//!   runtime filters' Bloom hash (the Parquet Bloom-filter hash).
 //! - **Several key columns:** `h = FOLD_INIT`, then for each column in key
 //!   order `h = mix(h ^ h_col)` ([`fold_column`]), a folded multiply by a
 //!   fixed odd constant. Starting from a constant (not from the first
@@ -44,13 +42,15 @@
 //!   any count `n <= 4096` an exchange partition owns a contiguous range of key
 //!   groups ([`partition_of`], [`key_group_range`]), so rescaling and AQE
 //!   coalescing move or merge whole ranges and never rehash;
-//! - top `R0` bits: a breaker's in-memory radix partition ([`radix`]): a
-//!   radix partition is a union of exchange partitions when `n = 2^k` with
-//!   `k >= R0`, so a fused local exchange needs no repartitioning.
+//! - top `R0` bits: a radix partition of `2^R0` ([`radix`]), a union of
+//!   exchange partitions when `n = 2^k` with `k >= R0`.
 //!
-//! Tables never place rows by `h` directly: their salt, directory slot and
-//! grace bits come from a seeded finalizer of `h`, local to one operator
-//! instance (P2-T157 Appendix C).
+//! In-memory hash tables (aggregate, join) do not use `H_kg`: they keep
+//! the row layout's faster seedless table hash, which never leaves the
+//! process, and place rows by a seeded finalizer of it, local to one
+//! operator instance (P2-T157 Appendix C; the P2-T171 §5.1 fallback).
+//! `H_kg` is computed only where a value is observable across processes:
+//! exchange routing, key groups, and anything in a plan or in state.
 
 use std::ops::Range;
 

@@ -1,18 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Hash flooding (P2-T175; design P2-T171 §5.1, P2-T157 Appendix C).
 //!
-//! The stored row hash `h` is the seedless routing hash, so anyone can
-//! craft keys whose `h` agree in chosen bits. The salted directory places
+//! The stored row hash `h` is seedless (see the layout's module docs), so
+//! anyone can craft keys whose `h` agree in chosen bits. The salted directory places
 //! rows by the seeded `g = fin(h ^ seed)`, so crafted partial collisions
 //! scatter like ordinary keys. Full 64-bit collisions of `h` (feasible only
-//! by attacking XXH64) stay correct, because keys are compared, and lengthen
+//! by attacking the hash) stay correct, because keys are compared, and lengthen
 //! probe runs only by the number of colliding keys.
 
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, Int64Array};
 use arrow_schema::DataType;
-use krishiv_kernels::hash::routing;
 
 use super::*;
 
@@ -111,13 +110,25 @@ fn check_finds(
 fn crafted_partial_collisions_scatter() {
     const N: usize = 2048;
     const MASK: u64 = 0xFFF;
-    let crafted: Vec<i64> = (0i64..)
-        .filter(|&k| routing::i64_hash(k) & MASK == 0x5A5)
-        .take(N)
-        .collect();
-    let ordinary: Vec<i64> = (0..i64::try_from(N).unwrap_or(0)).collect();
     let layout = layout();
     let hashes = |keys: &[i64]| encode(&layout, keys, &[], 0).hashes().to_vec();
+    // Search key blocks with the layout's own hash, as an attacker would.
+    let mut crafted = Vec::with_capacity(N);
+    for block in (0i64..).step_by(1 << 20) {
+        let keys: Vec<i64> = (block..block + (1 << 20)).collect();
+        let h = hashes(&keys);
+        crafted.extend(
+            keys.iter()
+                .zip(&h)
+                .filter(|&(_, h)| h & MASK == 0x5A5)
+                .map(|(&k, _)| k),
+        );
+        if crafted.len() >= N {
+            break;
+        }
+    }
+    crafted.truncate(N);
+    let ordinary: Vec<i64> = (0..i64::try_from(N).unwrap_or(0)).collect();
     let crafted_h = hashes(&crafted);
     assert!(crafted_h.iter().all(|h| h & MASK == 0x5A5));
     assert_eq!(salted_bytes(N), 4096 * 8, "the mask is the directory's");

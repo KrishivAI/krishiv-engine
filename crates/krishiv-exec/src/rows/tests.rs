@@ -119,12 +119,13 @@ fn nulls_nan_and_signed_zero_group_like_spark() {
 }
 
 proptest! {
-    /// The stored hash `h` the layout computes while it writes rows is the
-    /// routing hash `H_kg` of the key columns (P2-T175), for every key
-    /// type, NULLs, `-0.0`/NaN, short and long strings, one or several
-    /// columns, nullable or join (`=`) layouts.
+    /// The stored hash `h` depends only on the key values: every string
+    /// and binary carrier of a value hashes alike, alone or next to other
+    /// columns, and a join (`=`) layout stores the same `h` as a nullable
+    /// one for NULL-free rows, for every key type, `-0.0`/NaN, short and
+    /// long strings.
     #[test]
-    fn stored_hash_is_the_routing_hash(
+    fn stored_hash_depends_only_on_the_values(
         rows in prop::collection::vec(
             (
                 prop::option::of(any::<i64>()),
@@ -174,28 +175,22 @@ proptest! {
         let all = [
             i64s, i32s, i16s, f64s, f32s, view, utf8, large, bins, dec128, dec64, dec32, bools,
         ];
-        let routed = |cols: &[ArrayRef]| {
-            let refs: Vec<&dyn Array> = cols.iter().map(AsRef::as_ref).collect();
-            let mut h = Vec::new();
-            krishiv_kernels::hash::routing::hash_columns(&refs, &mut h)
-                .unwrap_or_else(|e| panic!("{e}"));
-            h
-        };
         let stored = |cols: &[ArrayRef]| {
             let types: Vec<DataType> = cols.iter().map(|c| c.data_type().clone()).collect();
             let layout = RowLayout::new(&types, &vec![true; cols.len()])
                 .unwrap_or_else(|e| panic!("{e}"));
             layout.encode(cols).unwrap_or_else(|e| panic!("{e}")).hashes().to_vec()
         };
-        for (i, a) in all.iter().enumerate() {
-            let one = [Arc::clone(a)];
-            prop_assert_eq!(stored(&one), routed(&one), "column {}", i);
-            let next = Arc::clone(&all[(i + 5) % all.len()]);
-            let two = [Arc::clone(a), next];
-            prop_assert_eq!(stored(&two), routed(&two), "columns {} and next", i);
+        // all[5..9]: view, utf8, large utf8 and binary of the same values.
+        let carriers = &all[5..9];
+        for (i, other) in all.iter().enumerate() {
+            let h = stored(&[Arc::clone(&carriers[0]), Arc::clone(other)]);
+            for c in &carriers[1..] {
+                prop_assert_eq!(&stored(&[Arc::clone(c)]), &stored(&carriers[..1]));
+                prop_assert_eq!(&stored(&[Arc::clone(c), Arc::clone(other)]), &h, "next to column {}", i);
+            }
         }
-        prop_assert_eq!(stored(&all), routed(&all));
-        // A join layout over NULL-free rows stores the same `h`.
+        // A join layout over NULL-free rows stores the nullable layout's `h`.
         let valid: Vec<usize> = (0..rows.len())
             .filter(|&r| all.iter().all(|c| c.is_valid(r)))
             .collect();
@@ -210,7 +205,9 @@ proptest! {
         let join = RowLayout::for_join(&types, &vec![false; types.len()])
             .unwrap_or_else(|e| panic!("{e}"));
         let h = join.encode(&dense).unwrap_or_else(|e| panic!("{e}")).hashes().to_vec();
-        prop_assert_eq!(h, routed(&dense));
+        let full = stored(&all);
+        let want: Vec<u64> = valid.iter().map(|&r| full[r]).collect();
+        prop_assert_eq!(h, want);
     }
 }
 

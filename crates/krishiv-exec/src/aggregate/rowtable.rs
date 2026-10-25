@@ -23,9 +23,10 @@
 //! is partition-local and mergeable).
 //!
 //! # Hashes (P2-T157 Appendix C)
-//! - `h`, stored at the start of the row, is the seedless routing hash
-//!   `H_kg` (P2-T175), the same for every operator instance and worker.
-//!   Radix partitions are its top bits; the per-partition [`Hll`]
+//! - `h`, stored at the start of the row, is seedless: the row layout's
+//!   column-wise hash, the same for every operator instance and worker
+//!   (not the routing hash `H_kg`, which only exchanges and key groups
+//!   use). Radix partitions are its top bits; the per-partition [`Hll`]
 //!   sketches are over it, so they merge across tables.
 //! - The index and spill partitions use `g = fin(h ^ seed)`, one folded
 //!   multiply with the operator's seed, so crafted keys cannot be aimed at
@@ -621,7 +622,7 @@ impl RowTable {
                 })
                 .collect::<Result<_>>()?
         };
-        // Seed 0: `h` is seedless (Appendix C).
+        // `h` is seedless (Appendix C).
         let keys = layout(&self.core)?.encode(&keys)?;
         let mut counts = [0; PARTS];
         let mut heap_counts = Vec::new();
