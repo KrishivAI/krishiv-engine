@@ -354,7 +354,8 @@ class SparkSession:
                 if len(row) != width:
                     raise _axis_length_mismatch(width, len(row))
                 valued.append(list(row))
-        timestamp_ntz = self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ").strip().upper() == "TIMESTAMP_NTZ"
+        timestamp_type = self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "TIMESTAMP_LTZ"
+        timestamp_ntz = timestamp_type.strip().upper() == "TIMESTAMP_NTZ"
         return self._from_rows(valued, infer_schema(valued, names, timestamp_ntz), verify, Row)
 
     def stop(self) -> None:
