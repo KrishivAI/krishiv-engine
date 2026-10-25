@@ -82,6 +82,8 @@
 //! | `PlanNode::Distinct` | U | - | - |
 //! | `PlanNode::SetOp` | U | - | - |
 //! | `PlanNode::ReplicateRows` | R | - | - |
+//! | `PlanNode::Pivot` | U | - | - |
+//! | `PlanNode::Unpivot` | U | - | - |
 //! | `PlanNode::Expand` | R | - | - |
 //! | `PlanNode::InlineTable` | U | - | - |
 //! | `PlanNode::Window` | R | - | - |
@@ -130,8 +132,9 @@ pub use function::{Builtin, FunctionId, FunctionKind};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use plan::{
-    Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, Plan,
-    PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
+    Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan,
+    PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
+    UnpivotColumnSet,
 };
 pub use raises::{conjuncts, may_raise};
 pub use walk::{MAX_DEPTH, check_depth};

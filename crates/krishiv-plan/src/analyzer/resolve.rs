@@ -624,6 +624,27 @@ impl Resolver<'_> {
             PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
             PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
+            PlanNode::Pivot {
+                input,
+                pivot_columns,
+                values,
+                aggregates,
+            } => self.pivot(p, input, pivot_columns, values, aggregates, env),
+            PlanNode::Unpivot {
+                input,
+                value_columns,
+                name_column,
+                column_sets,
+                include_nulls,
+            } => self.unpivot(
+                p,
+                input,
+                value_columns,
+                name_column,
+                column_sets,
+                *include_nulls,
+                env,
+            ),
             PlanNode::Window {
                 input,
                 exprs,
@@ -759,6 +780,8 @@ impl Resolver<'_> {
             | PlanNode::Hint { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
+            | PlanNode::Pivot { .. }
+            | PlanNode::Unpivot { .. }
             | PlanNode::SetOp { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
