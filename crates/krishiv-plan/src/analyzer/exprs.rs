@@ -1706,7 +1706,17 @@ impl Resolver<'_> {
         origin: Origin,
     ) -> AnalysisError {
         let zone = self.ctx.conf.session_zone;
-        let sql_expr = format!("\"{}\"", pretty(call, zone));
+        // `mask` materializes its omitted arguments before typing (Spark's
+        // constructor writes them into the call), so an input-type error
+        // quotes the expanded call, as Spark does
+        // (`mask(c1, replaceArg, x, n, NULL)`).
+        let sql_expr = match function {
+            "mask" if kids.len() == 5 => {
+                let args: Vec<String> = kids.iter().map(|k| pretty(&k.shown(), zone)).collect();
+                format!("\"{function}({})\"", args.join(", "))
+            }
+            _ => format!("\"{}\"", pretty(call, zone)),
+        };
         let error: KrishivError = match m {
             Mismatch::DiffTypes(left, right) => DatatypeMismatchBinaryOpDiffTypes {
                 sql_expr,
