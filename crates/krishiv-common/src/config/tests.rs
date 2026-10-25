@@ -395,6 +395,7 @@ fn positive_ints_reject_zero_and_negatives() {
         "spark.sql.files.minPartitionNum",
         "spark.sql.files.maxPartitionNum",
         "spark.sql.leafNodeDefaultParallelism",
+        "spark.sql.sources.bucketing.maxBuckets",
     ] {
         let mut c = Config::new();
         for bad in ["0", "-3", "x"] {

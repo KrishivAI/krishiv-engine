@@ -153,6 +153,7 @@ fn every_expression_form_prints() {
         (
             Expr::new(ExprNode::Star(Star {
                 qualifier: vec!["t".to_owned()],
+                except: Vec::new(),
                 plan_id: Some(PlanId(4)),
             })),
             "t.*@plan4",

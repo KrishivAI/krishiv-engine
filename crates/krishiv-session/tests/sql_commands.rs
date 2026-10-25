@@ -213,6 +213,56 @@ fn set_failures_come_from_the_config() {
 }
 
 #[test]
+fn bucketing_max_buckets_limit_is_configured_and_validated() {
+    let s = Session::new().unwrap();
+    // Invalid values are rejected by the session configuration.
+    for bad in ["0", "-2", "many"] {
+        let e = block_on(s.sql(&format!(
+            "SET spark.sql.sources.bucketing.maxBuckets = {bad}"
+        )))
+        .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivInvalidConfigValue,
+            "{bad}"
+        );
+    }
+    // The default limit applies: above 100,000 buckets fails.
+    let over = "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 100001 BUCKETS";
+    assert_eq!(class(block_on(s.sql(over))), ErrorClass::InvalidBucketCount);
+    // The configured limit applies to later statements.
+    block_on(s.sql("SET spark.sql.sources.bucketing.maxBuckets = 2")).unwrap();
+    let e = block_on(s.sql("CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 3 BUCKETS")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InvalidBucketCount);
+    assert!(e.to_string().contains("(`2`). Got `3`"), "{e}");
+    // A count within it passes validation (CREATE TABLE itself is not a
+    // session statement).
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 2 BUCKETS"
+        ))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // Resetting restores the default limit.
+    block_on(s.sql("RESET spark.sql.sources.bucketing.maxBuckets")).unwrap();
+    assert_eq!(class(block_on(s.sql(over))), ErrorClass::InvalidBucketCount);
+    // The engine key aliases the Spark one: setting through it applies the
+    // same limit, and resetting through it restores the default.
+    block_on(s.sql("SET krishiv.sql.sources.bucketing.maxBuckets = 2")).unwrap();
+    let e = block_on(s.sql("CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 3 BUCKETS")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InvalidBucketCount);
+    assert!(e.to_string().contains("(`2`). Got `3`"), "{e}");
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 2 BUCKETS"
+        ))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    block_on(s.sql("RESET krishiv.sql.sources.bucketing.maxBuckets")).unwrap();
+    assert_eq!(class(block_on(s.sql(over))), ErrorClass::InvalidBucketCount);
+}
+
+#[test]
 fn reset_restores_the_session() {
     let s = Session::builder()
         .config("spark.sql.ansi.enabled", "false")

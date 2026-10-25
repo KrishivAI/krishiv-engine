@@ -258,7 +258,10 @@ fn check_function(
     // them itself.
     let builtin_op = crate::Builtin::from_name(name).is_some();
     // `grouping` and `grouping_id` are the analyzer's too (grouping sets).
-    let grouping = super::analytics::GroupingFn::from_name(name).is_some();
+    // `qualify` is lowering's marker for a `QUALIFY` predicate, resolved
+    // (and stripped) by the analyzer's filter path, never a routine.
+    let grouping = super::analytics::GroupingFn::from_name(name).is_some()
+        || super::ops::is_qualify_wrapper(name);
     let registry = if builtin_op || grouping {
         None
     } else {

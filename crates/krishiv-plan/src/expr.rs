@@ -119,6 +119,10 @@ pub struct ColumnRef {
 pub struct Star {
     /// The qualifier parts; empty for a bare `*`.
     pub qualifier: Vec<String>,
+    /// `* EXCEPT (cols)`: excluded column paths, each as written (a
+    /// top-level column like `id`, or qualified like `t.id`; longer paths
+    /// name nested struct fields and are rejected by the analyzer).
+    pub except: Vec<Vec<String>>,
     /// The DataFrame the star expands, for PySpark's `df["*"]`; resolved
     /// as for [`ColumnRef::plan_id`].
     pub plan_id: Option<PlanId>,

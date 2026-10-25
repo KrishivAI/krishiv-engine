@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      4,
+      6,
+      7,
+      8
+    ]
+  },
+  "file": "subquery/in-subquery/in-nullability",
+  "format_version": 1
+}

@@ -178,6 +178,29 @@ fn options_follow_spark_confs() {
         ParserOptions::from_conf(|k| pairs.iter().find(|(key, _)| *key == k).map(|(_, v)| *v))
     };
     assert_eq!(conf(&[]), ParserOptions::default());
+    assert_eq!(conf(&[]).max_buckets, 100_000);
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", " 4 ")]).max_buckets,
+        4
+    );
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", "many")]).max_buckets,
+        100_000
+    );
+    // Spark declares the limit a positive `Int`: zero and values above
+    // `i32::MAX` fall back to the default, `i32::MAX` itself is accepted.
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", "0")]).max_buckets,
+        100_000
+    );
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", "2147483648")]).max_buckets,
+        100_000
+    );
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", "2147483647")]).max_buckets,
+        2_147_483_647
+    );
     let all = conf(&[
         ("spark.sql.ansi.enforceReservedKeywords", "true"),
         ("spark.sql.ansi.doubleQuotedIdentifiers", " TRUE "),
@@ -1796,17 +1819,261 @@ fn create_table_like_statements() {
     assert!(matches!(t.name, DdlName::Parts(_)));
     assert!(matches!(t.source, DdlName::Parts(_)));
     assert!(t.using.is_none() && t.location.is_none() && t.tblproperties.is_empty());
-    let sql = "CREATE TABLE t LIKE s USING parquet ROW FORMAT SERDE 'x' STORED AS parquet \
+    let sql = "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' STORED AS parquet \
         LOCATION '/tmp/t' TBLPROPERTIES ('a' = '1')";
     let t = like(sql);
-    assert!(t.using.is_some() && t.row_format.is_some() && t.file_format.is_some());
+    assert!(t.using.is_none() && t.row_format.is_some() && t.file_format.is_some());
     assert_eq!(t.location.as_deref(), Some("/tmp/t"));
     assert_eq!(t.tblproperties.len(), 1);
     assert_eq!(t.span.text(sql), sql);
+    assert_eq!(t.duplicate_clause, None);
+    let sql = "CREATE TABLE t LIKE s USING parquet LOCATION '/tmp/t'";
+    assert!(like(sql).using.is_some());
     // `OR REPLACE` takes no `LIKE`: the name is followed by `LIKE`.
     let e = parse_statement("CREATE OR REPLACE TABLE t LIKE s", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     assert_eq!(e.span.range(), 26..30);
+}
+
+/// A clause written twice in `CREATE TABLE ... LIKE` is `DUPLICATE_CLAUSES`,
+/// the first in Spark's check order (`USING` is `PROVIDER` there).
+#[test]
+fn create_table_like_duplicate_clauses() {
+    use ast::Statement;
+    let d = ParserOptions::default();
+    for (clause, text) in [
+        ("PROVIDER", "USING parquet"),
+        ("STORED AS/BY", "STORED AS parquet"),
+        ("ROW FORMAT", "ROW FORMAT DELIMITED"),
+        ("LOCATION", "LOCATION '/a'"),
+        ("TBLPROPERTIES", "TBLPROPERTIES ('a' = 'b')"),
+    ] {
+        let sql = format!("CREATE TABLE t LIKE s {text} {text}");
+        let e = parse_statement(&sql, &d).unwrap_err();
+        assert_eq!(e.error.error_class(), ErrorClass::DuplicateClauses, "{sql}");
+        assert_eq!(
+            e.error.to_string(),
+            format!(
+                "[DUPLICATE_CLAUSES] Found duplicate clauses: {clause}. Please, remove one of \
+                 them. SQLSTATE: 42614"
+            ),
+            "{sql}"
+        );
+        assert_eq!(
+            e.error.message_parameters(),
+            [("clauseName", clause.to_owned())],
+            "{sql}"
+        );
+        assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
+        // The AST records it; the statement is otherwise as written.
+        let Statement::CreateTableLike(t) =
+            crate::parser::parse_statement_unchecked(&sql, d).unwrap()
+        else {
+            panic!("{sql}");
+        };
+        assert_eq!(t.duplicate_clause, Some(clause), "{sql}");
+    }
+    // The first in Spark's order wins over the order in the text, and a
+    // different clause twice does not count.
+    let e = parse_statement(
+        "CREATE TABLE t LIKE s LOCATION '/a' LOCATION '/b' STORED AS orc STORED AS orc",
+        &d,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error.message_parameters(),
+        [("clauseName", "STORED AS/BY".to_owned())]
+    );
+    assert!(
+        parse_statement(
+            "CREATE TABLE t LIKE s LOCATION '/a' TBLPROPERTIES ('a' = 'b') ROW FORMAT DELIMITED",
+            &d
+        )
+        .is_ok()
+    );
+}
+
+/// `USING` beside `STORED AS` / `ROW FORMAT` is `INVALID_STATEMENT_OR_CLAUSE`
+/// (Spark's `invalidStatement`), in `CREATE TABLE` and `CREATE TABLE ... LIKE`.
+/// The text follows `SerdeInfo.describe` of Spark 4.2: `STORED AS` keeps a
+/// space before an empty serde clause.
+#[test]
+fn using_with_a_serde_clause_is_invalid() {
+    let d = ParserOptions::default();
+    for (sql, operation) in [
+        (
+            "CREATE TABLE t (a INT) USING parquet STORED AS orc",
+            "CREATE TABLE ... USING ... STORED AS orc ",
+        ),
+        (
+            "CREATE TABLE t (a INT) USING parquet ROW FORMAT SERDE 'com.example.S'",
+            "CREATE TABLE ... USING ... ROW FORMAT SERDE com.example.S",
+        ),
+        (
+            "CREATE TABLE t (a INT) USING parquet ROW FORMAT DELIMITED FIELDS TERMINATED BY ','",
+            "CREATE TABLE ... USING ... ROW FORMAT DELIMITED",
+        ),
+        (
+            "CREATE TABLE t (a INT) USING parquet ROW FORMAT DELIMITED",
+            "CREATE TABLE ... USING ... ",
+        ),
+        (
+            "CREATE TABLE t (a INT) USING parquet STORED AS textfile ROW FORMAT DELIMITED \
+             LINES TERMINATED BY '\n'",
+            "CREATE TABLE ... USING ... STORED AS textfile ROW FORMAT DELIMITED",
+        ),
+        (
+            "CREATE TABLE t USING parquet STORED AS `orc` AS SELECT 1",
+            "CREATE TABLE ... USING ... STORED AS `orc` ",
+        ),
+        (
+            "CREATE TABLE t (a INT) USING parquet STORED BY 'com.example.H'",
+            "STORED BY",
+        ),
+        (
+            "CREATE TABLE t LIKE s USING parquet STORED AS orc",
+            "CREATE TABLE LIKE ... USING ... STORED AS orc ",
+        ),
+        (
+            "CREATE TABLE t LIKE s ROW FORMAT SERDE 'x' USING parquet",
+            "CREATE TABLE LIKE ... USING ... ROW FORMAT SERDE x",
+        ),
+    ] {
+        let e = parse_statement(sql, &d).unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidStatementOrClause,
+            "{sql}"
+        );
+        assert_eq!(
+            e.error.message_parameters(),
+            [("operation", operation.to_owned())],
+            "{sql}"
+        );
+        assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
+    }
+    // Either clause alone, a serde clause without `USING`, and a CTAS
+    // query over `USING` are fine.
+    for sql in [
+        "CREATE TABLE t (a INT) USING parquet",
+        "CREATE TABLE t (a INT) STORED AS orc",
+        "CREATE TABLE t (a INT) ROW FORMAT DELIMITED STORED AS textfile",
+        "CREATE TABLE t USING parquet AS SELECT 1",
+        "CREATE TABLE t LIKE s STORED AS orc",
+        "CREATE TABLE t LIKE s USING parquet",
+    ] {
+        assert!(parse_statement(sql, &d).is_ok(), "{sql}");
+    }
+    // The order of the checks: a repeated clause comes before it, and it
+    // comes before the CTAS query's own errors.
+    let e = parse_statement(
+        "CREATE TABLE t (a INT) USING parquet STORED AS orc STORED AS orc",
+        &d,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::DuplicateClauses);
+    let e = parse_statement(
+        "CREATE TABLE t USING parquet STORED AS orc AS SELECT DATE '2020-13-45'",
+        &d,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidStatementOrClause);
+}
+
+/// `CLUSTERED BY ... INTO n BUCKETS` needs `0 < n <= 100000`
+/// (`INVALID_BUCKET_COUNT`, reported at the clause), after the repeated and
+/// `SKEWED BY` checks and before `USING` with a serde clause.
+#[test]
+fn bucket_count_must_be_in_range() {
+    let d = ParserOptions::default();
+    let prefix = "CREATE TABLE t (a INT) ";
+    for (count, valid) in [
+        ("1", true),
+        ("100000", true),
+        ("0", false),
+        ("100001", false),
+        ("4294967296", false),
+    ] {
+        let clause = format!("CLUSTERED BY (a) SORTED BY (a DESC) INTO {count} BUCKETS");
+        let sql = format!("{prefix}{clause} COMMENT 'x'");
+        let parsed = parse_statement(&sql, &d);
+        if valid {
+            assert!(parsed.is_ok(), "{sql}");
+            continue;
+        }
+        let e = parsed.unwrap_err();
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidBucketCount,
+            "{sql}"
+        );
+        assert_eq!(
+            e.error.message_parameters(),
+            [
+                ("bucketingMaxBuckets", "100000".to_owned()),
+                ("numBuckets", count.to_owned())
+            ],
+            "{sql}"
+        );
+        assert_eq!(
+            e.error.to_string(),
+            format!(
+                "[INVALID_BUCKET_COUNT] Number of buckets should be greater than 0 but less \
+                 than or equal to bucketing.maxBuckets (`100000`). Got `{count}`. SQLSTATE: 22003"
+            ),
+            "{sql}"
+        );
+        assert_eq!(e.span.text(&sql), clause, "{sql}");
+    }
+    for (sql, class) in [
+        (
+            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 0 BUCKETS COMMENT 'x' COMMENT 'y'",
+            ErrorClass::DuplicateClauses,
+        ),
+        (
+            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 0 BUCKETS SKEWED BY (a) ON (1)",
+            ErrorClass::InvalidStatementOrClause,
+        ),
+        (
+            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 0 BUCKETS OPTIONS (k DATE '2020-13-45')",
+            ErrorClass::InvalidBucketCount,
+        ),
+        (
+            "CREATE TABLE t (a INT) USING parquet STORED AS orc CLUSTERED BY (a) INTO 0 BUCKETS",
+            ErrorClass::InvalidBucketCount,
+        ),
+    ] {
+        assert_eq!(
+            parse_statement(sql, &d).unwrap_err().error.error_class(),
+            class,
+            "{sql}"
+        );
+    }
+    // The session's `spark.sql.sources.bucketing.maxBuckets` moves the limit.
+    let two = ParserOptions::from_conf(|k| {
+        (k == "spark.sql.sources.bucketing.maxBuckets").then_some("2")
+    });
+    assert_eq!(two.max_buckets, 2);
+    assert!(
+        parse_statement(
+            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 2 BUCKETS",
+            &two
+        )
+        .is_ok()
+    );
+    let e = parse_statement(
+        "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 3 BUCKETS",
+        &two,
+    )
+    .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidBucketCount);
+    assert_eq!(
+        e.error.message_parameters(),
+        [
+            ("bucketingMaxBuckets", "2".to_owned()),
+            ("numBuckets", "3".to_owned())
+        ]
+    );
 }
 
 /// `CREATE TABLE` column constraints, identity columns and `IDENTIFIER` names.

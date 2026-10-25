@@ -229,6 +229,7 @@ impl Display for NodeLine<'_> {
                     JoinCondition::None => Ok(()),
                     JoinCondition::On(e) => write!(f, ", {}", Text(e)),
                     JoinCondition::Using(cols) => write!(f, ", USING ({})", cols.join(", ")),
+                    JoinCondition::Natural => write!(f, ", NATURAL"),
                 }
             }
             PlanNode::Sort { order, global, .. } => {
@@ -609,7 +610,13 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 format!("{}.", Name(&s.qualifier))
             };
             let id = s.plan_id.map(|id| format!("@plan{id}")).unwrap_or_default();
-            out.push(Piece::Owned(format!("{q}*{id}")));
+            let mut text = format!("{q}*{id}");
+            if !s.except.is_empty() {
+                let cols: Vec<String> =
+                    s.except.iter().map(|path| Name(path).to_string()).collect();
+                text.push_str(&format!(" EXCEPT ({})", cols.join(", ")));
+            }
+            out.push(Piece::Owned(text));
         }
         ExprNode::Function(FunctionCall {
             name,

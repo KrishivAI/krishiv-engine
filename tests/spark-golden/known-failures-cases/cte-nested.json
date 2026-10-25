@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "query-features": [
+      3,
+      4,
+      5
+    ]
+  },
+  "file": "cte-nested",
+  "format_version": 1
+}

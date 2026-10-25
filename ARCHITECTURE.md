@@ -87,7 +87,7 @@ the four connector crates.
 | File formats and the scan | `crates/krishiv-io/src/` (`format.rs`, `scan.rs`, `scan_gate.rs`, `parquet/`, `csv/`, `text/`, `split/`); path listing in `crates/krishiv-exec/src/files.rs` |
 | Runtime filters | produced and consumed in `crates/krishiv-io/src/runtime_filter/`; planned in `crates/krishiv-exec/src/planner/runtime_filter.rs`; operator in `crates/krishiv-exec/src/operators/runtime_filter.rs` |
 | Golden tests | `crates/krishiv-testkit/src/golden/` (runner over `tests/spark-golden/`, exclusions in `tests/spark-golden/exclusions.json`); generated fixtures in `tests/fixtures/` with generators in `tests/scripts/gen_*.py` |
-| Ratchets | `crates/krishiv-plan-codec/tests/ratchet.rs` (TPC-H and TPC-DS plans round-trip, with a list of unplanned queries that may only shrink); manifests in `tests/fixtures/analysis/` checked by `crates/krishiv-testkit/tests/{type_coercion,registry_matrix}.rs` |
+| Ratchets | `crates/krishiv-plan-codec/tests/ratchet.rs` (TPC-H and TPC-DS plans round-trip, with a list of unplanned queries that may only shrink); manifests in `tests/fixtures/analysis/` (one file per function or coercion file) checked by `crates/krishiv-testkit/tests/{type_coercion,registry_matrix}.rs` |
 | Benchmarks | `bench/` (harness `src/krishiv_bench/`, adapters in `adapters/`, queries in `queries/`); Rust runner `crates/krishiv-bench-runner/` |
 | EXPLAIN ANALYZE and query profiles | `crates/krishiv-exec/src/profile/`, `crates/krishiv-session/src/profile.rs`, `docs/reference/` |
 | The Python facade | `python/krishiv/sql/` (PySpark-shaped API, `types.py`), `python/krishiv/_native.pyi` (stubs), `crates/krishiv-python/` (PyO3 bindings), tests in `python/tests/` |
@@ -130,7 +130,7 @@ Do not edit these by hand; each names its generator.
 | `crates/krishiv-connect/src/proto/` | `tools/connect-protogen` |
 | `crates/krishiv-common/vendored/spark-error-conditions.json` | `tests/scripts/gen_error_classes.py` |
 | `crates/krishiv-functions/vendored/spark-functions.tsv` | `tests/scripts/gen_function_registry.py` |
-| `tests/fixtures/spark-*/` and `tests/fixtures/analysis/*-manifest.json` | the `tests/scripts/gen_*.py` scripts and `KRISHIV_UPDATE_MANIFEST=1` |
+| `tests/fixtures/spark-*/` and `tests/fixtures/analysis/` (one file per function or coercion file) | the `tests/scripts/gen_*.py` scripts and `KRISHIV_UPDATE_MANIFEST=1` |
 | `tests/spark-golden/v4.2.0/` | `tests/scripts/import_spark_golden.sh` |
 | Config and error-class reference text | `cargo xtask docs-config`, `cargo xtask docs-errors` (print to stdout or a path) |
 

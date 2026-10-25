@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "isnull#1f87a03f0d8b/ansi_on",
+      "reason": "SELECT isnull(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "isnull#1f87a03f0d8b/ansi_off",
+      "reason": "SELECT isnull(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "isnull#2013e66b962e/ansi_on",
+      "reason": "SELECT isnull(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+    },
+    {
+      "id": "isnull#2013e66b962e/ansi_off",
+      "reason": "SELECT isnull(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+    },
+    {
+      "id": "isnull#3b045f12ca67/ansi_on",
+      "reason": "SELECT isnull(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "isnull#3b045f12ca67/ansi_off",
+      "reason": "SELECT isnull(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "isnull#56c254dd036b/ansi_on",
+      "reason": "SELECT isnull(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "isnull#56c254dd036b/ansi_off",
+      "reason": "SELECT isnull(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "isnull#ca1c1fc4fce7/ansi_on",
+      "reason": "SELECT isnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+    },
+    {
+      "id": "isnull#ca1c1fc4fce7/ansi_off",
+      "reason": "SELECT isnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+    }
+  ],
+  "format_version": 1,
+  "function": "isnull"
+}

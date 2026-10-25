@@ -1,0 +1,126 @@
+{
+  "entries": [
+    {
+      "id": "replace#1aa9e8eccba9/ansi_on",
+      "reason": "SELECT replace(named_struct('a', 1, 'b', 'x'), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#1aa9e8eccba9/ansi_off",
+      "reason": "SELECT replace(named_struct('a', 1, 'b', 'x'), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#1ead83cf0d2e/ansi_on",
+      "reason": "SELECT replace('ABCabc', 'abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#1ead83cf0d2e/ansi_off",
+      "reason": "SELECT replace('ABCabc', 'abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#45892c6e41c2/ansi_on",
+      "reason": "SELECT replace('ABCabc', array(1, 2), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#45892c6e41c2/ansi_off",
+      "reason": "SELECT replace('ABCabc', array(1, 2), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#5c277e88fd2d/ansi_on",
+      "reason": "SELECT replace('ABCabc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#5c277e88fd2d/ansi_off",
+      "reason": "SELECT replace('ABCabc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#773d4608b460/ansi_on",
+      "reason": "SELECT replace('ABCabc', 'abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#773d4608b460/ansi_off",
+      "reason": "SELECT replace('ABCabc', 'abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#7994c08a31a3/ansi_on",
+      "reason": "SELECT replace(array(1, 2), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#7994c08a31a3/ansi_off",
+      "reason": "SELECT replace(array(1, 2), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#8abe9653048f/ansi_on",
+      "reason": "SELECT replace('ABCabc', INTERVAL '1 02:03:04' DAY TO SECOND, 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#8abe9653048f/ansi_off",
+      "reason": "SELECT replace('ABCabc', INTERVAL '1 02:03:04' DAY TO SECOND, 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#8f3797458fc0/ansi_on",
+      "reason": "SELECT replace(map('a', 1), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#8f3797458fc0/ansi_off",
+      "reason": "SELECT replace(map('a', 1), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#b4f9fb44df97/ansi_on",
+      "reason": "SELECT replace('ABCabc', INTERVAL '1-2' YEAR TO MONTH, 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#b4f9fb44df97/ansi_off",
+      "reason": "SELECT replace('ABCabc', INTERVAL '1-2' YEAR TO MONTH, 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#bc3da4b48ee0/ansi_on",
+      "reason": "SELECT replace(INTERVAL '1 02:03:04' DAY TO SECOND, 'abc', 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#bc3da4b48ee0/ansi_off",
+      "reason": "SELECT replace(INTERVAL '1 02:03:04' DAY TO SECOND, 'abc', 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#bf27e8ab957c/ansi_on",
+      "reason": "SELECT replace('ABCabc', 'abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#bf27e8ab957c/ansi_off",
+      "reason": "SELECT replace('ABCabc', 'abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#d9f91490acc7/ansi_on",
+      "reason": "SELECT replace('ABCabc', map('a', 1), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#d9f91490acc7/ansi_off",
+      "reason": "SELECT replace('ABCabc', map('a', 1), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#df1872ed019e/ansi_on",
+      "reason": "SELECT replace('ABCabc', named_struct('a', 1, 'b', 'x'), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#df1872ed019e/ansi_off",
+      "reason": "SELECT replace('ABCabc', named_struct('a', 1, 'b', 'x'), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "replace#e9035df3e654/ansi_on",
+      "reason": "SELECT replace(INTERVAL '1-2' YEAR TO MONTH, 'abc', 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#e9035df3e654/ansi_off",
+      "reason": "SELECT replace(INTERVAL '1-2' YEAR TO MONTH, 'abc', 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#f575ee663c8f/ansi_on",
+      "reason": "SELECT replace('ABCabc', 'abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "replace#f575ee663c8f/ansi_off",
+      "reason": "SELECT replace('ABCabc', 'abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "replace"
+}
