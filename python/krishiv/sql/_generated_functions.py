@@ -28,6 +28,7 @@ __all__ = [
     "abs",
     "acos",
     "acosh",
+    "add_months",
     "asin",
     "asinh",
     "assert_true",
@@ -64,10 +65,14 @@ __all__ = [
     "date_diff",
     "date_part",
     "date_sub",
+    "date_trunc",
     "dateadd",
     "datediff",
     "day",
+    "dayname",
     "dayofmonth",
+    "dayofweek",
+    "dayofyear",
     "degrees",
     "dense_rank",
     "e",
@@ -80,10 +85,12 @@ __all__ = [
     "first_value",
     "floor",
     "format_number",
+    "from_utc_timestamp",
     "getbit",
     "greatest",
     "hash",
     "hex",
+    "hour",
     "hypot",
     "ifnull",
     "isnan",
@@ -91,6 +98,7 @@ __all__ = [
     "isnull",
     "lag",
     "last",
+    "last_day",
     "last_value",
     "lcase",
     "lead",
@@ -104,13 +112,18 @@ __all__ = [
     "lower",
     "lpad",
     "ltrim",
+    "make_date",
     "max",
     "md5",
     "mean",
     "min",
+    "minute",
     "month",
+    "monthname",
+    "months_between",
     "nanvl",
     "negative",
+    "next_day",
     "now",
     "nth_value",
     "ntile",
@@ -123,6 +136,7 @@ __all__ = [
     "pmod",
     "positive",
     "pow",
+    "quarter",
     "radians",
     "raise_error",
     "rank",
@@ -140,6 +154,7 @@ __all__ = [
     "rpad",
     "rtrim",
     "sec",
+    "second",
     "session_user",
     "sha",
     "sha1",
@@ -165,8 +180,10 @@ __all__ = [
     "toRadians",
     "to_char",
     "to_number",
+    "to_utc_timestamp",
     "to_varchar",
     "trim",
+    "trunc",
     "try_add",
     "try_divide",
     "try_mod",
@@ -175,8 +192,11 @@ __all__ = [
     "try_to_number",
     "ucase",
     "unhex",
+    "unix_date",
     "upper",
     "user",
+    "weekday",
+    "weekofyear",
     "xxhash64",
     "year",
     "zeroifnull",
@@ -196,6 +216,11 @@ def acos(col: ColumnOrName) -> Column:
 def acosh(col: ColumnOrName) -> Column:
     """Calls the registry function ``acosh``."""
     return _call("acosh", _named(col, "col"))
+
+
+def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
+    """Calls the registry function ``add_months``."""
+    return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
 
 
 def asin(col: ColumnOrName) -> Column:
@@ -379,6 +404,11 @@ def date_sub(start: ColumnOrName, days: ColumnOrName | int) -> Column:
     return _call("date_sub", _named(start, "start"), _int_or_col(days, "days"))
 
 
+def date_trunc(format: str, timestamp: ColumnOrName) -> Column:
+    """Calls the registry function ``date_trunc``."""
+    return _call("date_trunc", _lit(format, "format"), _named(timestamp, "timestamp"))
+
+
 def dateadd(start: ColumnOrName, days: ColumnOrName | int) -> Column:
     """Calls the registry function ``dateadd``."""
     return _call("dateadd", _named(start, "start"), _int_or_col(days, "days"))
@@ -394,9 +424,24 @@ def day(col: ColumnOrName) -> Column:
     return _call("day", _named(col, "col"))
 
 
+def dayname(col: ColumnOrName) -> Column:
+    """Calls the registry function ``dayname``."""
+    return _call("dayname", _named(col, "col"))
+
+
 def dayofmonth(col: ColumnOrName) -> Column:
     """Calls the registry function ``dayofmonth``."""
     return _call("dayofmonth", _named(col, "col"))
+
+
+def dayofweek(col: ColumnOrName) -> Column:
+    """Calls the registry function ``dayofweek``."""
+    return _call("dayofweek", _named(col, "col"))
+
+
+def dayofyear(col: ColumnOrName) -> Column:
+    """Calls the registry function ``dayofyear``."""
+    return _call("dayofyear", _named(col, "col"))
 
 
 def degrees(col: ColumnOrName) -> Column:
@@ -459,6 +504,11 @@ def format_number(col: ColumnOrName, d: int) -> Column:
     return _call("format_number", _named(col, "col"), _lit(d, "d"))
 
 
+def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
+    """Calls the registry function ``from_utc_timestamp``."""
+    return _call("from_utc_timestamp", _named(timestamp, "timestamp"), _lit(tz, "tz"))
+
+
 def getbit(col: ColumnOrName, pos: ColumnOrName) -> Column:
     """Calls the registry function ``getbit``."""
     return _call("getbit", _named(col, "col"), _named(pos, "pos"))
@@ -478,6 +528,11 @@ def hash(*cols: ColumnOrName) -> Column:
 def hex(col: ColumnOrName) -> Column:
     """Calls the registry function ``hex``."""
     return _call("hex", _named(col, "col"))
+
+
+def hour(col: ColumnOrName) -> Column:
+    """Calls the registry function ``hour``."""
+    return _call("hour", _named(col, "col"))
 
 
 def hypot(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column:
@@ -513,6 +568,11 @@ def lag(col: ColumnOrName, offset: int = 1, default: Any | None = None) -> Colum
 def last(col: ColumnOrName, ignorenulls: bool = False) -> Column:
     """Calls the registry function ``last``."""
     return _call("last", _named(col, "col"), _lit(ignorenulls, "ignorenulls"))
+
+
+def last_day(date: ColumnOrName) -> Column:
+    """Calls the registry function ``last_day``."""
+    return _call("last_day", _named(date, "date"))
 
 
 def last_value(col: ColumnOrName, ignoreNulls: bool | Column | None = None) -> Column:
@@ -581,6 +641,11 @@ def ltrim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
     return _call("ltrim", *_opt(_named, trim, "trim"), _named(col, "col"))
 
 
+def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Column:
+    """Calls the registry function ``make_date``."""
+    return _call("make_date", _named(year, "year"), _named(month, "month"), _named(day, "day"))
+
+
 def max(col: ColumnOrName) -> Column:
     """Calls the registry function ``max``."""
     return _call("max", _named(col, "col"))
@@ -601,9 +666,24 @@ def min(col: ColumnOrName) -> Column:
     return _call("min", _named(col, "col"))
 
 
+def minute(col: ColumnOrName) -> Column:
+    """Calls the registry function ``minute``."""
+    return _call("minute", _named(col, "col"))
+
+
 def month(col: ColumnOrName) -> Column:
     """Calls the registry function ``month``."""
     return _call("month", _named(col, "col"))
+
+
+def monthname(col: ColumnOrName) -> Column:
+    """Calls the registry function ``monthname``."""
+    return _call("monthname", _named(col, "col"))
+
+
+def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool = True) -> Column:
+    """Calls the registry function ``months_between``."""
+    return _call("months_between", _named(date1, "date1"), _named(date2, "date2"), _lit(roundOff, "roundOff"))
 
 
 def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column:
@@ -614,6 +694,11 @@ def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column:
 def negative(col: ColumnOrName) -> Column:
     """Calls the registry function ``negative``."""
     return _call("negative", _named(col, "col"))
+
+
+def next_day(date: ColumnOrName, dayOfWeek: str) -> Column:
+    """Calls the registry function ``next_day``."""
+    return _call("next_day", _named(date, "date"), _lit(dayOfWeek, "dayOfWeek"))
 
 
 def now() -> Column:
@@ -674,6 +759,11 @@ def positive(col: ColumnOrName) -> Column:
 def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column:
     """Calls the registry function ``power``."""
     return _call("power", _num_or_col(col1, "col1"), _num_or_col(col2, "col2"))
+
+
+def quarter(col: ColumnOrName) -> Column:
+    """Calls the registry function ``quarter``."""
+    return _call("quarter", _named(col, "col"))
 
 
 def radians(col: ColumnOrName) -> Column:
@@ -759,6 +849,11 @@ def rtrim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
 def sec(col: ColumnOrName) -> Column:
     """Calls the registry function ``sec``."""
     return _call("sec", _named(col, "col"))
+
+
+def second(col: ColumnOrName) -> Column:
+    """Calls the registry function ``second``."""
+    return _call("second", _named(col, "col"))
 
 
 def session_user() -> Column:
@@ -892,6 +987,11 @@ def to_number(col: ColumnOrName, format: ColumnOrName) -> Column:
     return _call("to_number", _named(col, "col"), _named(format, "format"))
 
 
+def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
+    """Calls the registry function ``to_utc_timestamp``."""
+    return _call("to_utc_timestamp", _named(timestamp, "timestamp"), _lit(tz, "tz"))
+
+
 def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``to_varchar``."""
     return _call("to_varchar", _named(col, "col"), _named(format, "format"))
@@ -900,6 +1000,11 @@ def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column:
 def trim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``trim``."""
     return _call("trim", *_opt(_named, trim, "trim"), _named(col, "col"))
+
+
+def trunc(date: ColumnOrName, format: str) -> Column:
+    """Calls the registry function ``trunc``."""
+    return _call("trunc", _named(date, "date"), _lit(format, "format"))
 
 
 def try_add(left: ColumnOrName, right: ColumnOrName) -> Column:
@@ -942,6 +1047,11 @@ def unhex(col: ColumnOrName) -> Column:
     return _call("unhex", _named(col, "col"))
 
 
+def unix_date(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unix_date``."""
+    return _call("unix_date", _named(col, "col"))
+
+
 def upper(col: ColumnOrName) -> Column:
     """Calls the registry function ``upper``."""
     return _call("upper", _named(col, "col"))
@@ -950,6 +1060,16 @@ def upper(col: ColumnOrName) -> Column:
 def user() -> Column:
     """Calls the registry function ``user``."""
     return _call("user")
+
+
+def weekday(col: ColumnOrName) -> Column:
+    """Calls the registry function ``weekday``."""
+    return _call("weekday", _named(col, "col"))
+
+
+def weekofyear(col: ColumnOrName) -> Column:
+    """Calls the registry function ``weekofyear``."""
+    return _call("weekofyear", _named(col, "col"))
 
 
 def xxhash64(*cols: ColumnOrName) -> Column:
