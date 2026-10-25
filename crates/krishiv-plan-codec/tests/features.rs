@@ -106,6 +106,23 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         None
     );
+    for (scheme, feature) in [
+        (krishiv_exec::physical::HashScheme::Unpinned, None),
+        (
+            krishiv_exec::physical::HashScheme::KeyGroupV1,
+            Some(Feature::KeyGroupHash),
+        ),
+    ] {
+        assert_eq!(
+            feature_of(Construct::Partitioning(
+                &krishiv_exec::physical::Partitioning::Hash {
+                    keys: vec![0],
+                    scheme
+                }
+            )),
+            feature
+        );
+    }
     assert_eq!(
         feature_of(Construct::Window(
             &krishiv_exec::window::WindowFunction::RowNumber

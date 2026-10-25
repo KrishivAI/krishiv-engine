@@ -572,7 +572,7 @@ fn hash_buckets<'p>(input: &'p PhysNode, keys: &[SortKey]) -> Option<&'p [usize]
     let PhysNode::Exchange(e) = input else {
         return None;
     };
-    let Partitioning::Hash { keys: hash } = &e.partitioning else {
+    let Partitioning::Hash { keys: hash, .. } = &e.partitioning else {
         return None;
     };
     let mut lead: Vec<usize> = keys.get(..hash.len())?.iter().map(|k| k.column).collect();

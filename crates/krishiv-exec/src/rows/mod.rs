@@ -57,6 +57,8 @@ mod pages;
 mod table;
 
 #[cfg(test)]
+mod flooding_tests;
+#[cfg(test)]
 mod tests;
 
 pub(crate) use hll::Hll;

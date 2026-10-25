@@ -1123,7 +1123,7 @@ fn run_rows(c: Cand, x: &Ctx<'_>) -> Timing {
             let Some(b) = x.data.batches.get(i) else {
                 break;
             };
-            let keys = layout.encode(&key_cols(b, nk), 0).expect("encode");
+            let keys = layout.encode(&key_cols(b, nk)).expect("encode");
             let (v, d) = vals(b, nk);
             let n = keys.len();
             let hs = keys.hashes();
@@ -1327,7 +1327,7 @@ fn run_enc(x: &Ctx<'_>) -> Timing {
             let Some(b) = x.data.batches.get(i) else {
                 break;
             };
-            let keys = layout.encode(&key_cols(b, nk), 0).expect("encode");
+            let keys = layout.encode(&key_cols(b, nk)).expect("encode");
             let (v, d) = vals(b, nk);
             for (k, &h) in keys.hashes().iter().enumerate() {
                 acc = acc.wrapping_add(fin(h) ^ v[k] as u64 ^ d[k] as u64);

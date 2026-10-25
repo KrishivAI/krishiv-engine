@@ -17,14 +17,16 @@
 //! row with a NULL in a key compared with `=` can never match, so the join
 //! marks it in [`Encoded::valid`] and never probes or stores it.
 //!
+//! `h` is the routing hash `H_kg` (P2-T175, `krishiv_kernels::hash::routing`):
+//! XXH64 of the normalized key bytes, folded over several columns.
+//!
 //! The seed is per join instance: the deterministic-mode seed when set,
 //! else random, so keys with different `h` cannot be aimed at one bucket,
 //! slot run or grace sub-partition without the seed. Keys with equal `h`
 //! share `g` under every seed: full collisions of the seedless `h` are the
 //! residual risk P2-T171 §5.1 accepts (keys are still compared, so results
-//! stay correct; probe runs grow). P2-T175 fixes the routing hash and adds
-//! the adversarial-keys bound; until then `h` is the layout's own
-//! column-wise mix with seed 0.
+//! stay correct; probe runs grow only with the number of colliding keys,
+//! as `rows::tests` shows with crafted keys).
 
 use std::hash::BuildHasher;
 use std::sync::Arc;
@@ -39,9 +41,6 @@ use crate::hash::{HashSeed, KeyEncoder, MAX_LEVEL, PARTITION_BITS, spill_partiti
 use crate::rows::{EncodedKeys, RowLayout, finalize};
 
 pub(crate) use crate::hash::PARTITIONS;
-
-/// The seed of the row layout's stored hash `h`: none (see the module docs).
-const SEEDLESS: u64 = 0;
 
 /// The most level-0 radix bits of the row layout (`krishiv.exec.join.radixBits`):
 /// the top bits of `h`. Finalize builds one table per partition on the
@@ -258,7 +257,7 @@ impl KeyCodec {
                 NullBuffer::union(acc.as_ref(), c.logical_nulls().as_ref())
             });
         let rows = match (&self.layout, hashing.rows) {
-            (Some(layout), true) => KeyRows::Layout(layout.encode(columns, SEEDLESS)?),
+            (Some(layout), true) => KeyRows::Layout(layout.encode(columns)?),
             (None, true) => return Err(internal("join keys have no row layout".to_owned())),
             (_, false) => {
                 let rows = self.encoder.encode(columns)?;
@@ -339,9 +338,15 @@ mod tests {
         for &h in a.hashes() {
             assert_ne!(finalize(h, ja.g_seed()), finalize(h, jb.g_seed()));
         }
-        // Every run (process) computes the same `h`: no seed enters it.
-        // Pinned until P2-T175 replaces the interim function.
-        assert_eq!(a.hashes()[0], 4_733_552_696_251_797_926);
+        // Every run (process) computes the same `h`: no seed enters it. It
+        // is `H_kg` of the key columns, what an exchange routes by.
+        let mut routed = Vec::new();
+        krishiv_kernels::hash::routing::hash_columns(
+            &[cols[0].as_ref(), cols[1].as_ref()],
+            &mut routed,
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(a.hashes(), routed.as_slice());
     }
 
     #[test]
