@@ -36,11 +36,14 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::Arc;
 
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::AggregateFunction;
 use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
+use krishiv_plan::{Expr, ExprNode, Literal, ResolvedExpr};
+use krishiv_types::DataType;
 
 /// The `min_reader_version` of a plan that uses no feature (the epoch-1
 /// baseline): the format of version 2.
@@ -117,6 +120,7 @@ registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
+    (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -158,6 +162,35 @@ pub enum Construct<'a> {
     Frame(&'a WindowFrame),
     /// An aggregate function (of an aggregate or a window).
     Aggregate(AggregateFunction),
+    /// A Spark type in an expression or a column.
+    Type(&'a DataType),
+    /// An Arrow type the plan carries as IPC bytes (an aggregate's argument,
+    /// a subquery's value, a runtime filter's key, a window offset function's
+    /// value, the plan's output schema).
+    ArrowType(&'a arrow_schema::DataType),
+}
+
+/// Whether an Arrow type is or contains an array, map or struct.
+fn arrow_nested(t: &arrow_schema::DataType) -> bool {
+    use arrow_schema::DataType as A;
+    match t {
+        A::List(_)
+        | A::LargeList(_)
+        | A::FixedSizeList(..)
+        | A::ListView(_)
+        | A::LargeListView(_)
+        | A::Map(..)
+        | A::Struct(_) => true,
+        A::Dictionary(_, value) => arrow_nested(value),
+        A::RunEndEncoded(_, value) => arrow_nested(value.data_type()),
+        _ => false,
+    }
+}
+
+/// Whether the encoder must list the nested-types feature for an Arrow type
+/// it writes (kept in step with [`feature_of`] for [`Construct::ArrowType`]).
+pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
+    arrow_nested(t)
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -217,6 +250,13 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 Some(Feature::WindowOffsetFunctions)
             }
         },
+        // A type Krishiv does not know cannot be encoded at all. A later
+        // feature for a type that can sit inside an array, map or struct
+        // (variant, char/varchar, intervals) must look through them: its
+        // arm walks the element, key, value and field types, so that
+        // `array<variant>` needs it too.
+        Construct::Type(t) => t.is_nested().then_some(Feature::NestedTypes),
+        Construct::ArrowType(t) => arrow_nested(t).then_some(Feature::NestedTypes),
         // The `Window` node's format carries every frame between unbounded
         // and current-row bounds; an offset bound is newer. `FrameBound` is
         // non-exhaustive, so a bound added later counts as newer too.
@@ -282,6 +322,107 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. } => {}
     }
+    for t in types_of(node) {
+        f(Construct::Type(t));
+    }
+    for t in arrow_types_of(node) {
+        f(Construct::ArrowType(t));
+    }
+}
+
+/// The Arrow types `node` carries as IPC bytes.
+fn arrow_types_of(node: &PhysNode) -> Vec<&arrow_schema::DataType> {
+    fn window<'a>(function: &'a WindowFunction, out: &mut Vec<&'a arrow_schema::DataType>) {
+        match function {
+            WindowFunction::Aggregate(a) => out.push(&a.arg_type),
+            WindowFunction::Offset { data_type, .. }
+            | WindowFunction::NthValue { data_type, .. } => out.push(data_type),
+            WindowFunction::RowNumber
+            | WindowFunction::Rank
+            | WindowFunction::DenseRank
+            | WindowFunction::PercentRank
+            | WindowFunction::CumeDist
+            | WindowFunction::Ntile(_) => {}
+        }
+    }
+    let mut out = Vec::new();
+    let subqueries = match node {
+        PhysNode::Filter { subqueries, .. }
+        | PhysNode::Project { subqueries, .. }
+        | PhysNode::Expand { subqueries, .. } => Some(subqueries),
+        _ => None,
+    };
+    match node {
+        PhysNode::Window { window: w, .. } => {
+            w.functions
+                .iter()
+                .for_each(|f| window(&f.function, &mut out));
+        }
+        PhysNode::Aggregate { aggregate, .. } => {
+            out.extend(aggregate.aggregates.iter().map(|a| &a.arg_type));
+        }
+        PhysNode::Scan(scan) => out.extend(scan.runtime_filters.iter().map(|f| &f.key_type)),
+        _ => {}
+    }
+    out.extend(subqueries.into_iter().flatten().map(|s| &s.data_type));
+    out
+}
+
+/// The Spark types `node` holds: those of its scan columns and of every
+/// expression in it (columns, casts, functions, aliases, typed NULLs).
+fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
+    fn items(items: &[ProjectItemPlan]) -> impl Iterator<Item = &Arc<Expr>> {
+        items.iter().filter_map(|i| match i {
+            ProjectItemPlan::Expr { expr, .. } => Some(expr),
+            ProjectItemPlan::Column { .. } | ProjectItemPlan::NullOf { .. } => None,
+        })
+    }
+    let mut roots: Vec<&'a Arc<Expr>> = Vec::new();
+    let mut out: Vec<&'a DataType> = Vec::new();
+    match node {
+        PhysNode::Scan(scan) => {
+            out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+            roots.extend(scan.filter.iter().map(|f| &f.predicate));
+        }
+        PhysNode::Filter { predicate, .. } => roots.push(predicate),
+        PhysNode::Project { items: i, .. } => roots.extend(items(i)),
+        PhysNode::Expand { projections, .. } => {
+            roots.extend(projections.iter().flat_map(|p| items(p)));
+        }
+        PhysNode::ReplicateRows { count, .. } => roots.push(count),
+        PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::OneRow
+        | PhysNode::Limit { .. }
+        | PhysNode::Sort { .. }
+        | PhysNode::TopN { .. }
+        | PhysNode::Window { .. }
+        | PhysNode::WindowGroupLimit { .. }
+        | PhysNode::Aggregate { .. }
+        | PhysNode::Union { .. }
+        | PhysNode::WriteFiles { .. }
+        | PhysNode::Exchange(_) => {}
+    }
+    // Expressions share subtrees: each is visited once.
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = roots;
+    while let Some(e) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(e)) {
+            continue;
+        }
+        match &e.node {
+            ExprNode::Cast { to, .. } => out.push(to),
+            ExprNode::Literal(Literal::Null(Some(t))) => out.push(t),
+            ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                out.push(&c.data_type);
+            }
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
+            _ => {}
+        }
+        e.for_each_child(&mut |c| stack.push(c));
+    }
+    out
 }
 
 /// The features `plan` uses: a pure function of its content. Subquery plans
@@ -293,6 +434,9 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     while let Some(node) = stack.pop() {
         constructs_of(node, &mut |c| out.extend(feature_of(c)));
         stack.extend(node.children());
+    }
+    for field in plan.schema().fields() {
+        out.extend(feature_of(Construct::ArrowType(field.data_type())));
     }
     out
 }

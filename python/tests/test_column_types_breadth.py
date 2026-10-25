@@ -219,9 +219,10 @@ def test_try_cast(spark: SparkSession) -> None:
     assert df.select(df.name.try_cast(T.LongType()).alias("n")).dtypes == [("n", "bigint")]
     with pytest.raises(errors.PySparkTypeError):
         df.name.try_cast(1)  # ty: ignore[invalid-argument-type]
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
+    # Arrays are a supported type; a string simply cannot be cast to one.
+    with pytest.raises(errors.AnalysisException) as bad:
         _ = df.select(df.name.try_cast(T.ArrayType(T.StringType()))).columns
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+    assert bad.value.getCondition() == "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
 
 
 # types ---------------------------------------------------------------------------

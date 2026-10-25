@@ -42,11 +42,11 @@
     },
     {
       "id": "hash#16de041f73d5/ansi_on",
-      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#16de041f73d5/ansi_off",
-      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#17ae377c1c3e/ansi_on",
@@ -167,14 +167,6 @@
     {
       "id": "hash#51a176d3611e/ansi_off",
       "reason": "SELECT hash('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
-    },
-    {
-      "id": "hash#52e23c98a0c0/ansi_on",
-      "reason": "SELECT hash('Spark', CAST(NULL AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "id": "hash#52e23c98a0c0/ansi_off",
-      "reason": "SELECT hash('Spark', CAST(NULL AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
     },
     {
       "id": "hash#5556de897838/ansi_on",
@@ -394,11 +386,11 @@
     },
     {
       "id": "hash#be26072f51ea/ansi_on",
-      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#be26072f51ea/ansi_off",
-      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#cca3887f32a9/ansi_on",
