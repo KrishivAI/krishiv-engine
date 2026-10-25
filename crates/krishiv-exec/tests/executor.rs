@@ -68,6 +68,7 @@ fn executor(threads: usize) -> Arc<TokioExecutor> {
         compute_threads: threads,
         io_threads: 1,
         blocking_threads: threads,
+        io_blocking_threads: 2,
     })
     .unwrap()
 }
@@ -722,6 +723,15 @@ fn config_join_row_layout_keys() {
     assert_eq!(on.join_radix_bits, 5);
     assert_eq!(read("1").join_radix_bits, 3);
     assert_eq!(read("9").join_radix_bits, 6);
+}
+
+/// Sort hash buckets are on by default; `krishiv.exec.sort.hashBuckets`
+/// turns them off.
+#[test]
+fn config_sort_hash_buckets_key() {
+    assert!(ExecConfig::from_config(&Config::new()).sort_hash_buckets);
+    let (config, _) = Config::from_pairs([("krishiv.exec.sort.hashBuckets", "false")]).unwrap();
+    assert!(!ExecConfig::from_config(&config).sort_hash_buckets);
 }
 
 /// `krishiv.exec.batchSize` sizes the batches; morsels feed several drivers;

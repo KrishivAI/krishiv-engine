@@ -131,6 +131,43 @@ fn command_plan(statement: &Statement) -> Result<String, KrishivError> {
                 format!("DROP VIEW `{}`", v.name.value.replace('`', "``"))
             }
         }
+        Statement::DeclareVariable(v) => {
+            let mut text = if v.or_replace {
+                "DECLARE OR REPLACE ".to_owned()
+            } else {
+                "DECLARE ".to_owned()
+            };
+            text.push_str(
+                &v.names
+                    .iter()
+                    .map(|n| {
+                        n.parts
+                            .iter()
+                            .map(|p| format!("`{}`", p.value.replace('`', "``")))
+                            .collect::<Vec<_>>()
+                            .join(".")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+            text.push_str(" AS ...");
+            text
+        }
+        Statement::SetVariable(_) => "SET VARIABLE ...".to_owned(),
+        Statement::DropVariable(v) => {
+            let name = v
+                .name
+                .parts
+                .iter()
+                .map(|p| format!("`{}`", p.value.replace('`', "``")))
+                .collect::<Vec<_>>()
+                .join(".");
+            if v.if_exists {
+                format!("DROP TEMPORARY VARIABLE IF EXISTS {name}")
+            } else {
+                format!("DROP TEMPORARY VARIABLE {name}")
+            }
+        }
         Statement::Explain(_) => {
             return Err(KrishivUnsupportedFeature {
                 feature: "EXPLAIN of an EXPLAIN in sessions".to_owned(),

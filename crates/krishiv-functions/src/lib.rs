@@ -14,6 +14,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(test)]
+mod python_wrappers;
 pub mod registry;
 pub mod scalar;
 pub mod signature;
