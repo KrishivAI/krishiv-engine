@@ -1158,6 +1158,9 @@ fn staleness_and_attribution_are_checked_unless_allowed() {
         let st = std::process::Command::new("git")
             .args(args)
             .current_dir(dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
             .env("GIT_AUTHOR_NAME", "t")
             .env("GIT_AUTHOR_EMAIL", "t@example.com")
             .env("GIT_COMMITTER_NAME", "t")
@@ -1170,6 +1173,9 @@ fn staleness_and_attribution_are_checked_unless_allowed() {
         let out = std::process::Command::new(&cmds[0].program)
             .args(&cmds[0].args)
             .current_dir(dir.path())
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
             .output()
             .unwrap();
         assert_eq!(
@@ -1205,10 +1211,15 @@ fn staleness_and_attribution_are_checked_unless_allowed() {
     let Action::Run(cmds) = &step(&steps, "policy").action else {
         panic!("policy should run");
     };
-    assert!(
-        cmds.iter()
-            .any(|c| c.args.iter().any(|a| a.contains("check-ai-attribution")))
-    );
+    // The attribution check is the repository's script, run by `bash` over the selected base and
+    // `HEAD` (the base is `origin/main` unless `--base` says otherwise).
+    assert!(cmds.iter().any(|c| c.program == "bash"
+        && c.args
+            == [
+                ".github/scripts/check-ai-attribution.sh",
+                "origin/main",
+                "HEAD"
+            ]));
 }
 
 #[test]
@@ -1217,10 +1228,17 @@ fn python_wheel_tests_follow_python_and_the_bindings_crate() {
     // `common` has no dependent named krishiv-python in the fixture workspace.
     assert!(skip_reason(&none, "python-wheel-tests").is_some());
     let py = make_plan(&detect(&["python/krishiv/a.py"]), &opts(&[]), true);
-    assert!(matches!(
-        step(&py, "python-wheel-tests").action,
-        Action::Run(_)
-    ));
+    let Action::Run(cmds) = &step(&py, "python-wheel-tests").action else {
+        panic!("python-wheel-tests should run");
+    };
+    // One `bash -c` script: a per-run temporary environment, then maturin and pytest in it.
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0].program, "bash");
+    assert_eq!(cmds[0].args[0], "-c");
+    let script = &cmds[0].args[1];
+    assert!(script.contains("mktemp -d"), "{script}");
+    assert!(script.contains("maturin develop"), "{script}");
+    assert!(script.contains("/bin/pytest"), "{script}");
     let fast = make_plan(&detect(&["python/krishiv/a.py"]), &opts(&["--fast"]), true);
     assert_eq!(skip_reason(&fast, "python-wheel-tests"), Some("--fast"));
 }

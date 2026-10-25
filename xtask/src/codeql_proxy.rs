@@ -271,13 +271,18 @@ fn message_is_sensitive(args: &[String], skip: usize) -> bool {
     })
 }
 
-/// Sink calls in `src` (the whole file, so a call may span lines) that put a credential-named
-/// value in their message and touch a line for which `added` is true. The finding is on the
-/// line of the macro name. A `codeql-allow` on any line of the call exempts it.
-#[must_use]
-pub fn scan_calls(file: &str, src: &str, added: &dyn Fn(usize) -> bool) -> Vec<Finding> {
+/// One sink call of a source file: where it starts, its arguments, the macro's operand count to
+/// skip before the message, and its 1-based first and last lines.
+struct SinkCall {
+    args: Vec<String>,
+    skip: usize,
+    first: usize,
+    last: usize,
+}
+
+/// Every sink call in `src` (the whole file, so a call may span lines).
+fn sink_calls(src: &str) -> Vec<SinkCall> {
     let code = blank_comments(src);
-    let lines: Vec<&str> = src.lines().collect();
     let line_of = |off: usize| code[..off].bytes().filter(|&b| b == b'\n').count() + 1;
     let mut out = Vec::new();
     let sinks = LOG_SINKS
@@ -297,20 +302,61 @@ pub fn scan_calls(file: &str, src: &str, added: &dyn Fn(usize) -> bool) -> Vec<F
             let Some((args, end)) = call_args(&code, open) else {
                 continue;
             };
-            let (first, last) = (line_of(at), line_of(end.saturating_sub(1)));
-            let in_call = |f: usize| lines.get(f - 1).copied().unwrap_or("");
-            if !(first..=last).any(added)
-                || (first..=last).any(|l| in_call(l).contains("codeql-allow"))
-                || !message_is_sensitive(&args, skip)
-            {
-                continue;
-            }
-            out.push(Finding {
-                file: file.to_owned(),
-                line: first,
-                text: in_call(first).trim().to_owned(),
+            out.push(SinkCall {
+                args,
+                skip,
+                first: line_of(at),
+                last: line_of(end.saturating_sub(1)),
             });
         }
+    }
+    out
+}
+
+/// Whether a line of `src` carries the `codeql-allow` marker.
+fn has_allow(lines: &[&str], line: usize) -> bool {
+    lines
+        .get(line - 1)
+        .is_some_and(|l| l.contains("codeql-allow"))
+}
+
+/// Every line of a sink call that carries `codeql-allow` on any of its lines: the marker exempts
+/// the whole call, also from the line-based pass.
+#[must_use]
+pub fn allowed_call_lines(src: &str) -> BTreeSet<usize> {
+    let lines: Vec<&str> = src.lines().collect();
+    sink_calls(src)
+        .into_iter()
+        .filter(|c| (c.first..=c.last).any(|l| has_allow(&lines, l)))
+        .flat_map(|c| c.first..=c.last)
+        .collect()
+}
+
+/// Sink calls in `src` (the whole file, so a call may span lines) that put a credential-named
+/// value in their message and touch a line for which `added` is true. The finding is on the
+/// line of the macro name. A `codeql-allow` on any line of the call exempts it.
+#[must_use]
+pub fn scan_calls(file: &str, src: &str, added: &dyn Fn(usize) -> bool) -> Vec<Finding> {
+    let lines: Vec<&str> = src.lines().collect();
+    let mut out = Vec::new();
+    for call in sink_calls(src) {
+        let (first, last) = (call.first, call.last);
+        if !(first..=last).any(added)
+            || (first..=last).any(|l| has_allow(&lines, l))
+            || !message_is_sensitive(&call.args, call.skip)
+        {
+            continue;
+        }
+        out.push(Finding {
+            file: file.to_owned(),
+            line: first,
+            text: lines
+                .get(first - 1)
+                .copied()
+                .unwrap_or("")
+                .trim()
+                .to_owned(),
+        });
     }
     out
 }
@@ -432,6 +478,18 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
             found.extend(scan_source(file, &src));
         }
     }
+    // `codeql-allow` anywhere in a call exempts the whole call from the line-based pass too.
+    let mut allowed: BTreeMap<String, BTreeSet<usize>> = BTreeMap::new();
+    found.retain(|f| {
+        !allowed
+            .entry(f.file.clone())
+            .or_insert_with(|| {
+                std::fs::read_to_string(root.join(&f.file))
+                    .map(|src| allowed_call_lines(&src))
+                    .unwrap_or_default()
+            })
+            .contains(&f.line)
+    });
     found.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
     found.dedup_by(|a, b| a.file == b.file && a.line == b.line);
     if found.is_empty() {
@@ -450,7 +508,9 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
+    // `core.quotePath=false`: non-ASCII paths reach the `.rs` filters unquoted.
     let out = Command::new("git")
+        .args(["-c", "core.quotePath=false"])
         .args(args)
         .current_dir(root)
         .output()
@@ -550,9 +610,19 @@ mod tests {
     }
 
     fn git(dir: &Path, args: &[&str]) {
+        // Local overrides: the test must not depend on the developer's signing or hook setup.
         let st = Command::new("git")
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ])
             .args(args)
             .current_dir(dir)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
             .env("GIT_AUTHOR_NAME", "t")
             .env("GIT_AUTHOR_EMAIL", "t@example.com")
             .env("GIT_COMMITTER_NAME", "t")
@@ -662,5 +732,51 @@ mod tests {
         assert!(err.contains("1 line(s)"), "{err}");
         let err = run(d, &["--base", "nope"]).unwrap_err();
         assert!(err.contains("git fetch"), "{err}");
+    }
+
+    #[test]
+    fn one_allow_marker_exempts_a_multi_line_call_in_every_pass() {
+        let w = word();
+        let src = format!(
+            "fn f() {{\n    println!( // codeql-allow\n        \"value: {{{w}}}\",\n    );\n}}\n"
+        );
+        assert_eq!(allowed_call_lines(&src), BTreeSet::from([2, 3, 4]));
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        git(d, &["init", "-q", "-b", "main"]);
+        std::fs::write(d.join("a.rs"), "fn a() {}\n").unwrap();
+        git(d, &["add", "."]);
+        git(d, &["commit", "-q", "-m", "base"]);
+        // Untracked (whole-file scan) and tracked-and-modified (diff scan).
+        std::fs::write(d.join("new.rs"), &src).unwrap();
+        assert!(run(d, &["--base", "main"]).is_ok());
+        git(d, &["add", "."]);
+        git(d, &["commit", "-q", "-m", "more"]);
+        git(d, &["branch", "base", "HEAD~1"]);
+        assert!(run(d, &["--base", "base"]).is_ok());
+        // Without the marker the same call is flagged.
+        std::fs::write(d.join("new.rs"), src.replace(" // codeql-allow", "")).unwrap();
+        assert!(run(d, &["--base", "base"]).is_err());
+    }
+
+    #[test]
+    fn non_ascii_paths_are_scanned() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        git(d, &["init", "-q", "-b", "main"]);
+        std::fs::write(d.join("a.rs"), "fn a() {}\n").unwrap();
+        git(d, &["add", "."]);
+        git(d, &["commit", "-q", "-m", "base"]);
+        let w = word();
+        std::fs::write(
+            d.join("na\u{ef}ve.rs"),
+            format!("fn a() {{ println!(\"{{{w}}}\"); }}\n"),
+        )
+        .unwrap();
+        git(d, &["add", "."]);
+        git(d, &["commit", "-q", "-m", "tracked"]);
+        git(d, &["branch", "base", "HEAD~1"]);
+        let err = run(d, &["--base", "base"]).unwrap_err();
+        assert!(err.contains("1 line(s)"), "{err}");
     }
 }

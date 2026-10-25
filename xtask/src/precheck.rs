@@ -804,7 +804,9 @@ fn python_wheel_tests(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool) -> Ste
             "no python/ change and krishiv-python is not affected",
         );
     }
-    const SCRIPT: &str = r#"set -e; V=$(realpath -m "$1"); trap 'rm -rf "$V"' EXIT; rm -rf "$V"; uv venv -q "$V"; uv pip install -q --python "$V/bin/python" maturin pytest; cd python; VIRTUAL_ENV="$V" PATH="$V/bin:$PATH" maturin develop -q; "$V/bin/pytest" tests -q"#;
+    // A fresh virtual environment per run (`mktemp -d` beside the base path), so two prechecks at
+    // once never remove each other's environment; only this run's directory is removed on exit.
+    const SCRIPT: &str = r#"set -e; B=$(realpath -m "$1"); mkdir -p "$(dirname "$B")"; V=$(mktemp -d "$B.XXXXXX"); trap 'rm -rf "$V"' EXIT; uv venv -q "$V"; uv pip install -q --python "$V/bin/python" maturin pytest; cd python; VIRTUAL_ENV="$V" PATH="$V/bin:$PATH" maturin develop -q; "$V/bin/pytest" tests -q"#;
     needs(
         "python-wheel-tests",
         "uv",
