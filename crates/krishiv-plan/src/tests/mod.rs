@@ -14,6 +14,7 @@ mod files;
 mod function_call_forms;
 mod inventory;
 mod nodes;
+mod pivot;
 mod props;
 mod rewrite;
 mod secrets;

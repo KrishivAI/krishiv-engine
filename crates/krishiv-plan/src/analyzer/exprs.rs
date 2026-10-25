@@ -658,7 +658,7 @@ impl Resolver<'_> {
         kids
     }
 
-    fn is_aggregate(&self, e: &Expr) -> bool {
+    pub(super) fn is_aggregate(&self, e: &Expr) -> bool {
         match &e.node {
             ExprNode::Function(f) => matches!(
                 self.ctx.functions.lookup(std::slice::from_ref(&f.name), self.ctx.profile),
