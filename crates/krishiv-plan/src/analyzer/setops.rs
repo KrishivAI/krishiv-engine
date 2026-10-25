@@ -641,6 +641,8 @@ impl Resolver<'_> {
         for (name, tag) in ["l", "r"].into_iter().zip(&u.out[n..]) {
             let sum = Arc::new(Expr::new(ExprNode::Function(FunctionCall {
                 name: "sum".to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args: vec![col_expr(&tag.col, Origin::UNKNOWN)],
                 distinct: false,
                 filter: None,

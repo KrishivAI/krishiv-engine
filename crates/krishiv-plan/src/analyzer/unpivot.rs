@@ -235,6 +235,7 @@ impl Resolver<'_> {
         let filter_cx = Self::cx(&expanded.out, &rels, env, "Filter");
         let coalesce = Expr::new(ExprNode::Function(FunctionCall {
             name: "coalesce".to_owned(),
+            qualifier: Vec::new(),
             args: value_columns
                 .iter()
                 .map(|name| {
@@ -247,13 +248,16 @@ impl Resolver<'_> {
                     )
                 })
                 .collect(),
+            arg_names: Vec::new(),
             distinct: false,
             filter: None,
         }))
         .with_origin(p.origin);
         let predicate = Expr::new(ExprNode::Function(FunctionCall {
             name: Builtin::IsNotNull.name().to_owned(),
+            qualifier: Vec::new(),
             args: vec![Arc::new(coalesce)],
+            arg_names: Vec::new(),
             distinct: false,
             filter: None,
         }))

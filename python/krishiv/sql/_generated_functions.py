@@ -113,6 +113,7 @@ __all__ = [
     "lpad",
     "ltrim",
     "make_date",
+    "mask",
     "max",
     "md5",
     "mean",
@@ -644,6 +645,24 @@ def ltrim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
 def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Column:
     """Calls the registry function ``make_date``."""
     return _call("make_date", _named(year, "year"), _named(month, "month"), _named(day, "day"))
+
+
+def mask(
+    col: ColumnOrName,
+    upperChar: ColumnOrName | None = None,
+    lowerChar: ColumnOrName | None = None,
+    digitChar: ColumnOrName | None = None,
+    otherChar: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``mask``."""
+    return _call(
+        "mask",
+        _named(col, "col"),
+        *_opt(_named, upperChar, "upperChar"),
+        *_opt(_named, lowerChar, "lowerChar"),
+        *_opt(_named, digitChar, "digitChar"),
+        *_opt(_named, otherChar, "otherChar"),
+    )
 
 
 def max(col: ColumnOrName) -> Column:

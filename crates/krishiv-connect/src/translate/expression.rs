@@ -167,6 +167,8 @@ impl Translator<'_> {
             .collect::<Result<Vec<_>>>()?;
         let call = |name: &str, args: Vec<Arc<Expr>>, distinct: bool| FunctionCall {
             name: name.to_owned(),
+            qualifier: Vec::new(),
+            arg_names: Vec::new(),
             args,
             distinct,
             filter: None,

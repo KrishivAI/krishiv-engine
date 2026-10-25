@@ -289,6 +289,8 @@ impl Resolver<'_> {
         }
         let call = FunctionCall {
             name: which.name().to_owned(),
+            qualifier: Vec::new(),
+            arg_names: Vec::new(),
             args: kids.iter().map(|k| Arc::clone(&k.expr)).collect(),
             distinct: false,
             filter: None,
@@ -676,6 +678,8 @@ impl Resolver<'_> {
                 let call = Arc::new(
                     Expr::new(ExprNode::Function(FunctionCall {
                         name: f.id.name().to_owned(),
+                        qualifier: Vec::new(),
+                        arg_names: Vec::new(),
                         args: f.args.clone(),
                         distinct: f.distinct,
                         filter: f.filter.clone(),
