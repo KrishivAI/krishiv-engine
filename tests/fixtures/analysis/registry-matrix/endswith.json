@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "endswith#3b9e39c48ee6/ansi_on",
+      "reason": "SELECT endswith('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "endswith#3b9e39c48ee6/ansi_off",
+      "reason": "SELECT endswith('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "endswith#3d0006240ac7/ansi_on",
+      "reason": "SELECT endswith('Spark SQL', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#3d0006240ac7/ansi_off",
+      "reason": "SELECT endswith('Spark SQL', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#3d0b927b5d71/ansi_on",
+      "reason": "SELECT endswith('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#3d0b927b5d71/ansi_off",
+      "reason": "SELECT endswith('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#4e2ec4ba4758/ansi_on",
+      "reason": "SELECT endswith(named_struct('a', 1, 'b', 'x'), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#4e2ec4ba4758/ansi_off",
+      "reason": "SELECT endswith(named_struct('a', 1, 'b', 'x'), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#7e3b0530126c/ansi_on",
+      "reason": "SELECT endswith(map('a', 1), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#7e3b0530126c/ansi_off",
+      "reason": "SELECT endswith(map('a', 1), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#7fc3b35cb0fa/ansi_on",
+      "reason": "SELECT endswith(INTERVAL '1-2' YEAR TO MONTH, 'SQL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "endswith#7fc3b35cb0fa/ansi_off",
+      "reason": "SELECT endswith(INTERVAL '1-2' YEAR TO MONTH, 'SQL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "endswith#9d22842205a0/ansi_on",
+      "reason": "SELECT endswith(array(1, 2), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#9d22842205a0/ansi_off",
+      "reason": "SELECT endswith(array(1, 2), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#b18796f06dfa/ansi_on",
+      "reason": "SELECT endswith('Spark SQL', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "endswith#b18796f06dfa/ansi_off",
+      "reason": "SELECT endswith('Spark SQL', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "endswith#db6f4211cf83/ansi_on",
+      "reason": "SELECT endswith('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#db6f4211cf83/ansi_off",
+      "reason": "SELECT endswith('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "endswith#dd88f7cef81d/ansi_on",
+      "reason": "SELECT endswith(INTERVAL '1 02:03:04' DAY TO SECOND, 'SQL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "endswith#dd88f7cef81d/ansi_off",
+      "reason": "SELECT endswith(INTERVAL '1 02:03:04' DAY TO SECOND, 'SQL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "endswith"
+}

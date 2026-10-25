@@ -203,6 +203,29 @@ fn visit<'a>(
                     next.push((Node::Plan(input), Arc::from(scope)));
                     return Ok(());
                 }
+                // Row calls are checked by the Resolve stage, not here: an
+                // unknown routine is `UNRESOLVED_ROUTINE` there, and a call
+                // Spark cannot evaluate in an inline table is
+                // `INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE`.
+                // Subquery plans are still entered, so their tables load.
+                PlanNode::InlineTable { .. } => {
+                    // Expressions are DAGs: a shared subexpression is
+                    // visited once, so the walk is linear in distinct
+                    // nodes (as `check_inline_cell` does).
+                    let mut seen = HashSet::new();
+                    let mut stack = Vec::new();
+                    walk::children(Node::Plan(p), &mut stack);
+                    while let Some(node) = stack.pop() {
+                        if !seen.insert(node.key()) {
+                            continue;
+                        }
+                        match node {
+                            Node::Plan(q) => next.push((Node::Plan(q), Arc::clone(env))),
+                            Node::Expr(e) => walk::children(Node::Expr(e), &mut stack),
+                        }
+                    }
+                    return Ok(());
+                }
                 _ => {}
             }
             p.for_each_expr(&mut |e| next.push((Node::Expr(e), Arc::clone(env))));
@@ -229,6 +252,11 @@ fn check_function(ctx: &AnalysisContext, name: &str, origin: Origin) -> Result<(
     }
     // `grouping` and `grouping_id` are the analyzer's too (grouping sets).
     if super::analytics::GroupingFn::from_name(name).is_some() {
+        return Ok(());
+    }
+    // `qualify` is lowering's marker for a `QUALIFY` predicate, resolved
+    // (and stripped) by the analyzer's filter path, never a routine.
+    if super::ops::is_qualify_wrapper(name) {
         return Ok(());
     }
     match ctx

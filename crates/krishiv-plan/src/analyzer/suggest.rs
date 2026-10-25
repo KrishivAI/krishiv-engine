@@ -7,24 +7,30 @@
 //! `UNRESOLVED_ROUTINE` and `TABLE_OR_VIEW_NOT_FOUND`, carry none, so their
 //! errors do not use this.
 
+use super::catalog::quoted;
+
 /// How many names Spark proposes at most.
 const MAX_PROPOSALS: usize = 5;
 
 /// Up to five of `candidates` (each a name as its parts) closest to
-/// `target` (the name as written, parts joined by `.`), by edit distance
-/// between the candidate's parts joined by `.` and `target`. Ties are
-/// ordered by the candidate's parts, as Spark orders them, so the result
-/// depends only on the names and not on their order in `candidates`.
+/// `target` (the name as written, parts joined by `.`, unquoted), by edit
+/// distance between the candidate as it is quoted in the message
+/// (`` `a`.`b` ``) and `target`. Ties are ordered by the quoted candidate,
+/// as Spark orders them, so the result depends only on the names and not on
+/// their order in `candidates`.
 pub(super) fn closest(target: &str, candidates: Vec<Vec<String>>) -> Vec<Vec<String>> {
-    let mut ranked: Vec<(usize, Vec<String>)> = candidates
+    let mut ranked: Vec<(usize, String, Vec<String>)> = candidates
         .into_iter()
-        .map(|parts| (levenshtein(&parts.join("."), target), parts))
+        .map(|parts| {
+            let q = quoted(&parts);
+            (levenshtein(&q, target), q, parts)
+        })
         .collect();
     ranked.sort();
     ranked
         .into_iter()
         .take(MAX_PROPOSALS)
-        .map(|(_, parts)| parts)
+        .map(|(_, _, parts)| parts)
         .collect()
 }
 
@@ -76,10 +82,14 @@ mod tests {
     }
 
     #[test]
-    fn a_typo_of_two_edits_ranks_ahead_of_unrelated_names() {
+    fn the_quote_marks_count_in_the_distance() {
+        // Candidates are compared as quoted in the message (`` `name` ``),
+        // against the unquoted target, so a short name can outrank a closer
+        // spelling.
         let found = closest("nxye", names(&[&["zzzzzz"], &["name"], &["id"]]));
-        assert_eq!(levenshtein("name", "nxye"), 2);
-        assert_eq!(flat(&found), ["name", "id", "zzzzzz"]);
+        assert_eq!(levenshtein("`name`", "nxye"), 4);
+        assert_eq!(levenshtein("`id`", "nxye"), 4);
+        assert_eq!(flat(&found), ["id", "name", "zzzzzz"]);
     }
 
     #[test]
@@ -105,8 +115,8 @@ mod tests {
     }
 
     #[test]
-    fn qualified_candidates_are_compared_as_written() {
+    fn qualified_candidates_are_compared_as_quoted() {
         let found = closest("t.nme", names(&[&["name"], &["t", "name"], &["u", "name"]]));
-        assert_eq!(flat(&found), ["t.name", "u.name", "name"]);
+        assert_eq!(flat(&found), ["name", "t.name", "u.name"]);
     }
 }

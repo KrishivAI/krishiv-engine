@@ -244,6 +244,7 @@ fn exprs() -> Vec<(Expr, usize)> {
         (
             Expr::new(ExprNode::Star(crate::Star {
                 qualifier: Vec::new(),
+                except: Vec::new(),
                 plan_id: None,
             })),
             0,

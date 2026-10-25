@@ -557,6 +557,10 @@ impl Emit {
                     Shape::Whole => (None, None),
                     Shape::RunningRows => (Some(Fold::new(a, env.ansi)?), None),
                     Shape::RunningPeers => (None, Some(Fold::new(a, env.ansi)?)),
+                    // Refused before the copy (`spill.rs`).
+                    Shape::Frame => {
+                        return Err(internal("a frame evaluated from disk".to_owned()));
+                    }
                 },
                 WindowFunction::CumeDist => {
                     lead = true;
@@ -682,6 +686,12 @@ impl Emit {
                         })
                         .collect::<Result<Vec<_>>>()?,
                 )),
+                // Refused before the copy (`spill.rs`).
+                WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+                    return Err(internal(
+                        "an offset function evaluated from disk".to_owned(),
+                    ));
+                }
                 WindowFunction::Aggregate(_) => match f.shape()? {
                     Shape::Whole => {
                         let v = self.disk.whole[j].as_ref().ok_or_else(|| {
@@ -696,6 +706,9 @@ impl Emit {
                             .as_mut()
                             .ok_or_else(|| internal("a running fold missing".to_owned()))?;
                         fold_batch(env, j, fold, &b, &vec![true; n])?
+                    }
+                    Shape::Frame => {
+                        return Err(internal("a frame evaluated from disk".to_owned()));
                     }
                     Shape::RunningPeers => {
                         let lead = self

@@ -5,8 +5,9 @@
 
 use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchValueOutOfRange, InvalidExtractField, KrishivError, LegacyErrorTemp1210,
-    NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    DatatypeMismatchValueOutOfRange, InvalidExtractField, InvalidParameterValueBoolean,
+    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210, NonFoldableArgument,
+    SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -165,6 +166,24 @@ fn date_sub(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 fn first_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = c.data_type(0).cloned().unwrap_or(DataType::String);
     typed(t, c)
+}
+
+fn always_null_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Date, true))
+}
+
+fn always_null_timestamp(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Timestamp, true))
+}
+
+fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Double, c)
+}
+
+/// `make_date`: an invalid date is NULL with ANSI off, so the result may be
+/// null then whatever the arguments.
+fn make_date_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Date, !c.ansi() || c.any_nullable()))
 }
 
 fn clock_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -346,6 +365,64 @@ fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     })
 }
 
+/// `TimestampType` as `date_trunc` and `months_between` expect it: other
+/// types are cast to `TIMESTAMP` or refused naming it, but a
+/// `TIMESTAMP_NTZ` is kept (Spark casts it, as the binding does, in the
+/// session zone).
+fn instant_input(c: &CallTypes<'_>, i: usize) -> InputType {
+    if c.data_type(i) == Some(&DataType::TimestampNtz) {
+        InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz])
+    } else {
+        exact(DataType::Timestamp)
+    }
+}
+
+fn date_trunc_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![exact(DataType::String), instant_input(c, 1)]
+}
+
+fn months_between_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![
+        instant_input(c, 0),
+        instant_input(c, 1),
+        exact(DataType::Boolean),
+    ]
+}
+
+/// `TimestampNTZType` as `convert_timezone` expects it: a `TIMESTAMP` is
+/// kept (Spark casts it, as the binding does, to the wall clock of the
+/// session zone).
+fn wall_clock_input(c: &CallTypes<'_>, i: usize) -> InputType {
+    if c.data_type(i) == Some(&DataType::Timestamp) {
+        InputType::OneOf(vec![DataType::TimestampNtz, DataType::Timestamp])
+    } else {
+        exact(DataType::TimestampNtz)
+    }
+}
+
+fn zone_shift_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![instant_input(c, 0), exact(DataType::String)]
+}
+
+fn convert_timezone_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    match c.args().len() {
+        2 => vec![exact(DataType::String), wall_clock_input(c, 1)],
+        _ => vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            wall_clock_input(c, 2),
+        ],
+    }
+}
+
+fn timestamp_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Timestamp, c)
+}
+
+fn timestamp_ntz_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::TimestampNtz, c)
+}
+
 fn datetime() -> Vec<Spec> {
     let days = InputType::OneOf(vec![DataType::Integer, DataType::Short, DataType::Byte]);
     let day_inputs = Inputs::Expects(vec![exact(DataType::Date), days]);
@@ -356,10 +433,74 @@ fn datetime() -> Vec<Spec> {
         &Inputs::Expects(vec![exact(DataType::Date)]),
         int,
     ));
+    let date_only = Inputs::Expects(vec![exact(DataType::Date)]);
     out.extend(scalar(
-        &["year", "month", "day", "dayofmonth"],
-        &Inputs::Expects(vec![exact(DataType::Date)]),
+        &[
+            "year",
+            "month",
+            "day",
+            "dayofmonth",
+            "dayofweek",
+            "dayofyear",
+            "weekofyear",
+            "weekday",
+            "quarter",
+        ],
+        &date_only,
         int,
+    ));
+    // `UnixDate` expects a date and casts nothing else to one.
+    out.extend(scalar(
+        &["unix_date"],
+        &Inputs::Expects(vec![InputType::Strict(DataType::Date)]),
+        int,
+    ));
+    // The time fields read a timestamp of either kind; a date is cast to
+    // one.
+    let any_timestamp = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    out.extend(scalar(
+        &["hour", "minute", "second"],
+        &Inputs::Expects(vec![any_timestamp]),
+        int,
+    ));
+    out.extend(scalar(&["monthname", "dayname"], &date_only, string));
+    out.extend(scalar(
+        &["add_months"],
+        &Inputs::Expects(vec![exact(DataType::Date), exact(DataType::Integer)]),
+        date,
+    ));
+    out.extend(scalar(&["last_day"], &date_only, date));
+    // `NextDay`, `TruncDate` and `TruncTimestamp` are nullable whatever
+    // their arguments: an unknown weekday or unit gives NULL.
+    out.extend(scalar(
+        &["next_day", "trunc"],
+        &Inputs::Expects(vec![exact(DataType::Date), exact(DataType::String)]),
+        always_null_date,
+    ));
+    out.extend(scalar(
+        &["date_trunc"],
+        &Inputs::Built(InputBuilder(date_trunc_inputs)),
+        always_null_timestamp,
+    ));
+    out.extend(scalar(
+        &["months_between"],
+        &Inputs::Built(InputBuilder(months_between_inputs)),
+        double,
+    ));
+    out.extend(scalar(
+        &["from_utc_timestamp", "to_utc_timestamp"],
+        &Inputs::Built(InputBuilder(zone_shift_inputs)),
+        timestamp_result,
+    ));
+    out.extend(scalar(
+        &["convert_timezone"],
+        &Inputs::Built(InputBuilder(convert_timezone_inputs)),
+        timestamp_ntz_result,
+    ));
+    out.extend(scalar(
+        &["make_date"],
+        &Inputs::Expects(vec![exact(DataType::Integer)]),
+        make_date_result,
     ));
     out.extend(scalar(
         &["extract", "date_part"],
@@ -457,8 +598,32 @@ fn last(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     pick(c, "last")
 }
 
+fn any_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pick(c, "any_value")
+}
+
+/// `bool_and`, `bool_or` and their aliases: `boolean`, NULL for no non-NULL
+/// input.
+fn nullable_boolean(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Boolean, true))
+}
+
+/// `max_by(x, y)`, `min_by(x, y)`: the type of `x`. The three-argument
+/// form (`max_by(x, y, k)`) returns an array of up to `k` values, which
+/// this engine has no type for yet.
+fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.args().len() > 2 {
+        return Err(KrishivUnsupportedFeature {
+            feature: "max_by and min_by with a third argument (they return an array)".to_owned(),
+        }
+        .into());
+    }
+    min_max(c)
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
+    let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
     vec![
         aggregate("count", Inputs::Any, count, Aggregate::Count),
         aggregate("sum", numeric(), sum, Aggregate::Sum),
@@ -470,6 +635,16 @@ fn aggregates() -> Vec<Spec> {
         aggregate("first_value", Inputs::Any, first, Aggregate::First),
         aggregate("last", Inputs::Any, last, Aggregate::Last),
         aggregate("last_value", Inputs::Any, last, Aggregate::Last),
+        aggregate("any_value", Inputs::Any, any_value, Aggregate::AnyValue),
+        // Spark runs these as `count`, `min` and `max` of a rewritten argument.
+        aggregate("count_if", boolean_arg(), count, Aggregate::Count),
+        aggregate("bool_and", boolean_arg(), nullable_boolean, Aggregate::Min),
+        aggregate("every", boolean_arg(), nullable_boolean, Aggregate::Min),
+        aggregate("bool_or", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("some", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("any", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("max_by", Inputs::Any, by, Aggregate::MaxBy),
+        aggregate("min_by", Inputs::Any, by, Aggregate::MinBy),
     ]
 }
 
@@ -547,8 +722,81 @@ fn ntile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     }
 }
 
+/// The `ignoreNulls` flag (argument `i`) of `name`, when given, must be a
+/// boolean literal (`INVALID_PARAMETER_VALUE.BOOLEAN`, Spark's builder).
+fn null_flag(c: &CallTypes<'_>, i: usize, name: &str) -> Result<(), KrishivError> {
+    if c.args().len() > i && !matches!(c.constant(i), Some(Constant::Boolean(_))) {
+        return Err(InvalidParameterValueBoolean {
+            function_name: format!("`{name}`"),
+            parameter: "`ignoreNulls`".to_owned(),
+            invalid_value: format!("\"{}\"", c.sql(i).unwrap_or_default()),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// `lag`/`lead(input, offset, default[, ignoreNulls])` (the parser fills
+/// `offset` 1 and `default` NULL): the input's type, nullable. The offset
+/// and the default are checked with the window (the frame they make).
+fn offset_value(c: &CallTypes<'_>, name: &str) -> Result<ArgType, KrishivError> {
+    null_flag(c, 3, name)?;
+    Ok(ArgType::new(
+        c.data_type(0).cloned().unwrap_or(DataType::Null),
+        true,
+    ))
+}
+
+fn lag(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    offset_value(c, "lag")
+}
+
+fn lead(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    offset_value(c, "lead")
+}
+
+/// `nth_value(input, offset[, ignoreNulls])`: the input's type, nullable.
+/// Spark's `NthValue` checks, in its order: `offset` foldable, then its
+/// value (implicitly an `INT`) above 0 (a NULL reads as 0).
+fn nth_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    null_flag(c, 2, "nth_value")?;
+    let sql = |i: usize| c.sql(i).unwrap_or_default();
+    let call = format!("\"nth_value({}, {})\"", sql(0), sql(1));
+    let Some(offset) = c.constant(1) else {
+        return Err(DatatypeMismatchNonFoldableInput {
+            sql_expr: call,
+            input_name: "`offset`".to_owned(),
+            input_type: "\"INT\"".to_owned(),
+            input_expr: format!("\"{}\"", sql(1)),
+        }
+        .into());
+    };
+    let value = match offset {
+        Constant::Integral(v) | Constant::Fractional(v) => *v,
+        Constant::String(t) => t.trim().parse::<i64>().unwrap_or(0),
+        Constant::Error(e) => return Err(e.clone()),
+        _ => 0,
+    };
+    if value <= 0 {
+        return Err(DatatypeMismatchValueOutOfRange {
+            sql_expr: call,
+            expr_name: "offset".to_owned(),
+            value_range: format!("(0, {}]", i64::MAX),
+            current_value: format!("{value}L"),
+        }
+        .into());
+    }
+    Ok(ArgType::new(
+        c.data_type(0).cloned().unwrap_or(DataType::Null),
+        true,
+    ))
+}
+
 fn windows() -> Vec<Spec> {
     vec![
+        window("lag", lag),
+        window("lead", lead),
+        window("nth_value", nth_value),
         window("row_number", rank_like),
         window("rank", rank_like),
         window("dense_rank", rank_like),

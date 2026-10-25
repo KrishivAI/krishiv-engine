@@ -28,6 +28,12 @@ use super::parse::{Expected, ExpectedError, ParseError, Statement, parse_results
 use super::setup::{FileSetup, SessionSetup};
 use super::{GoldenPair, GoldenSet, Jdk};
 
+/// The error class a statement that exceeds the runner's time limit fails
+/// with. It is a harness failure, never a baseline failure: [`FileResult`]
+/// keeps timeouts out of [`Case`] so [`crate::golden::known_failures`] never
+/// lists them, and the ratchet never asks for them to be removed.
+pub const TIMEOUT_CLASS: &str = "KRISHIV_GOLDEN_TIMEOUT";
+
 /// An engine failure on one statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EngineError {
@@ -140,6 +146,37 @@ pub struct FileResult {
     pub result: Tally,
     /// Spark errors without an error class (outside the negative denominator).
     pub unclassified_errors: u64,
+    /// Per-statement outcomes, in file order (the counted statements only).
+    pub cases: Vec<Case>,
+    /// Statements that timed out, kept out of the baseline comparison and
+    /// reported as harness failures instead.
+    pub timeouts: Vec<Case>,
+}
+
+/// What one statement of a file scored, merged over the file's runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Case {
+    /// Position of the statement in the file (0-based, over all statements).
+    pub index: u32,
+    /// Number 1, when the statement counts for it.
+    pub parse: Option<bool>,
+    /// Number 2, when the statement counts for it.
+    pub negative: Option<bool>,
+    /// Number 3, when the statement counts for it.
+    pub result: Option<bool>,
+    /// Why the statement failed in the first run it failed in (empty when it passed).
+    pub detail: String,
+}
+
+impl Case {
+    /// Whether every number the statement counts for passed.
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        [self.parse, self.negative, self.result]
+            .into_iter()
+            .flatten()
+            .all(|p| p)
+    }
 }
 
 /// A skipped file and what it would have counted for.
@@ -296,12 +333,14 @@ fn note_unregistered(statements: &[Statement], out: &mut BTreeSet<String>) {
 }
 
 /// What one statement scored in one run; `None` means it does not count for that number.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 struct Outcome {
     parse: Option<bool>,
     negative: Option<bool>,
     result: Option<bool>,
     unclassified: bool,
+    detail: String,
+    timeout: bool,
 }
 
 impl Outcome {
@@ -316,6 +355,12 @@ impl Outcome {
             negative: both(self.negative, other.negative),
             result: both(self.result, other.result),
             unclassified: self.unclassified,
+            detail: if self.detail.is_empty() {
+                other.detail
+            } else {
+                self.detail
+            },
+            timeout: self.timeout || other.timeout,
         }
     }
 }
@@ -362,8 +407,19 @@ pub fn run_file_with(
         runs: sessions.len() as u64,
         ..FileResult::default()
     };
-    let merged = merged.unwrap_or_default().into_iter().zip(kept);
-    for o in merged.filter_map(|(o, k)| k.then_some(o)) {
+    let merged = merged.unwrap_or_default().into_iter().zip(kept).enumerate();
+    for (index, o) in merged.filter_map(|(i, (o, k))| k.then_some((i, o))) {
+        let case = Case {
+            index: u32::try_from(index).unwrap_or(u32::MAX),
+            parse: o.parse,
+            negative: o.negative,
+            result: o.result,
+            detail: o.detail.clone(),
+        };
+        if o.timeout {
+            file.timeouts.push(case);
+            continue;
+        }
         for (tally, v) in [
             (&mut file.parse, o.parse),
             (&mut file.negative, o.negative),
@@ -374,12 +430,17 @@ pub fn run_file_with(
             }
         }
         file.unclassified_errors += u64::from(o.unclassified);
+        let mut case = case;
+        if case.passed() {
+            case.detail.clear();
+        }
+        file.cases.push(case);
     }
     file
 }
 
 fn failed(s: &Statement) -> Outcome {
-    outcome(s, false, None, None)
+    outcome(s, false, None)
 }
 
 fn run_session(engine: &mut dyn Engine, statements: &[Statement]) -> Vec<Outcome> {
@@ -390,38 +451,91 @@ fn run_session(engine: &mut dyn Engine, statements: &[Statement]) -> Vec<Outcome
         .iter()
         .map(|s| {
             let parsed = engine.parse(&s.query).is_ok();
-            outcome(s, parsed, Some(engine.execute(&s.query)), Some(&masker))
+            outcome(s, parsed, Some((engine.execute(&s.query), &masker)))
         })
         .collect()
 }
 
+/// A one-line description of an engine error, for [`Case::detail`].
+fn error_detail(e: &EngineError) -> String {
+    let message: String = e
+        .message
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(160)
+        .collect();
+    format!("error {}: {message}", e.class.as_deref().unwrap_or("-"))
+}
+
+/// What `s` scored: `executed` is the engine's answer with the run's masker, `None` when the
+/// statement could not run (the session could not be set up).
 fn outcome(
     s: &Statement,
     parsed: bool,
-    executed: Option<Result<QueryOutput, EngineError>>,
-    masker: Option<&Masker>,
+    executed: Option<(Result<QueryOutput, EngineError>, &Masker)>,
 ) -> Outcome {
+    let is_timeout = matches!(
+        &executed,
+        Some((Err(e), _)) if e.class.as_deref() == Some(TIMEOUT_CLASS)
+    );
+    let parse_detail = || {
+        if parsed {
+            String::new()
+        } else {
+            "parse failed; ".to_owned()
+        }
+    };
     match &s.expected {
-        Expected::Rows(output) => Outcome {
-            parse: Some(parsed),
-            result: Some(
-                executed
-                    .and_then(Result::ok)
-                    .zip(masker)
-                    .is_some_and(|(got, m)| result_matches(s, output, &got, m)),
-            ),
-            ..Outcome::default()
-        },
-        Expected::Error(e) => Outcome {
-            parse: (!e.is_parse_error()).then_some(parsed),
-            negative: e.error_class.as_deref().map(|class| {
-                executed
-                    .and_then(Result::err)
-                    .is_some_and(|got| error_matches(e, class, &got))
-            }),
-            unclassified: e.error_class.is_none(),
-            ..Outcome::default()
-        },
+        Expected::Rows(output) => {
+            let (passed, why) = match executed {
+                Some((Ok(got), m)) => match result_mismatch(s, output, &got, m) {
+                    None => (true, String::new()),
+                    Some(why) => (false, why),
+                },
+                Some((Err(e), _)) => (false, error_detail(&e)),
+                None => (false, "not executed".to_owned()),
+            };
+            Outcome {
+                parse: Some(parsed),
+                result: Some(passed),
+                detail: if passed && parsed {
+                    String::new()
+                } else {
+                    format!("{}{why}", parse_detail())
+                },
+                timeout: is_timeout,
+                ..Outcome::default()
+            }
+        }
+        Expected::Error(e) => {
+            let counts_parse = !e.is_parse_error();
+            let (negative, why) = match e.error_class.as_deref() {
+                None => (None, String::new()),
+                Some(class) => match executed {
+                    Some((Err(got), _)) if error_matches(e, class, &got) => {
+                        (Some(true), String::new())
+                    }
+                    Some((Err(got), _)) => (Some(false), error_detail(&got)),
+                    Some((Ok(_), _)) => (Some(false), "no error".to_owned()),
+                    None => (Some(false), "not executed".to_owned()),
+                },
+            };
+            let parse_failed = counts_parse && !parsed;
+            Outcome {
+                parse: counts_parse.then_some(parsed),
+                negative,
+                unclassified: e.error_class.is_none(),
+                detail: if parse_failed {
+                    format!("{}{why}", parse_detail())
+                } else {
+                    why
+                },
+                timeout: is_timeout,
+                ..Outcome::default()
+            }
+        }
     }
 }
 
@@ -433,14 +547,15 @@ fn error_matches(expected: &ExpectedError, class: &str, got: &EngineError) -> bo
             .is_none_or(|st| got.sql_state.as_ref() == Some(st))
 }
 
-fn result_matches(
+/// Why `got` does not match the recorded result, or `None` when it does.
+fn result_mismatch(
     s: &Statement,
     expected_output: &str,
     got: &QueryOutput,
     masker: &Masker,
-) -> bool {
+) -> Option<String> {
     if got.schema != s.schema {
-        return false;
+        return Some(format!("schema {} (want {})", got.schema, s.schema));
     }
     // `getNormalizedQueryExecutionResult`: mask each row, then sort unless the plan is sorted.
     let mut rows: Vec<String> = got
@@ -453,7 +568,26 @@ fn result_matches(
         rows.sort_unstable_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
     }
     // `normalizeTestResults` on both sides.
-    normalize_test_results(&rows.join("\n")) == normalize_test_results(expected_output)
+    let (got, want) = (
+        normalize_test_results(&rows.join("\n")),
+        normalize_test_results(expected_output),
+    );
+    if got == want {
+        return None;
+    }
+    let clip = |s: Option<&&str>| -> String {
+        s.map_or_else(|| "<none>".to_owned(), |s| s.chars().take(80).collect())
+    };
+    // `split` keeps empty segments, so two different texts differ at some segment.
+    let (g, w): (Vec<&str>, Vec<&str>) = (got.split('\n').collect(), want.split('\n').collect());
+    let at = (0..g.len().max(w.len()))
+        .find(|&i| g.get(i) != w.get(i))
+        .unwrap_or_default();
+    Some(format!(
+        "rows differ at row {at}: got `{}`, want `{}`",
+        clip(g.get(at)),
+        clip(w.get(at))
+    ))
 }
 
 #[cfg(test)]
@@ -630,6 +764,136 @@ mod tests {
                 total: 2
             }
         );
+        Ok(())
+    }
+
+    #[test]
+    fn failed_cases_say_why() -> R {
+        let statements = parse_results(OUT)?;
+        let mut engine = Canned(vec![
+            (
+                "select a from t",
+                Ok(QueryOutput {
+                    schema: "struct<b:int>".into(),
+                    rows: vec![],
+                    sorted: None,
+                }),
+            ),
+            ("select a from t order by a desc", out(&["2", "3"])),
+            ("select 1/0", out(&["1"])),
+        ]);
+        let f = run_file(&mut engine, "t", &statements, &plain());
+        let details: Vec<&str> = f.cases.iter().map(|c| c.detail.as_str()).collect();
+        assert_eq!(
+            details,
+            [
+                "schema struct<b:int> (want struct<a:int>)",
+                "rows differ at row 1: got `3`, want `1`",
+                "no error",
+            ]
+        );
+        assert!(f.cases.iter().all(|c| !c.passed()));
+        assert_eq!(
+            f.cases.iter().map(|c| c.index).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        let f = run_file(&mut RejectAllEngine, "t", &statements, &plain());
+        assert_eq!(
+            f.cases[0].detail,
+            "parse failed; error -: RejectAllEngine rejects every statement"
+        );
+        assert_eq!(
+            f.cases[2].detail,
+            "parse failed; error -: RejectAllEngine rejects every statement"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_short_result_is_reported_at_its_first_missing_row() -> R {
+        let statements = parse_results(OUT)?;
+        let mut engine = Canned(vec![("select a from t order by a desc", out(&["2"]))]);
+        let f = run_file(&mut engine, "t", &statements, &plain());
+        assert_eq!(
+            f.cases[1].detail,
+            "rows differ at row 1: got `<none>`, want `1`"
+        );
+        Ok(())
+    }
+
+    /// An engine whose sessions cannot be set up.
+    struct NoSession;
+
+    impl Engine for NoSession {
+        fn name(&self) -> &str {
+            "no-session"
+        }
+        fn reset(&mut self, _setup: &SessionSetup) -> Result<(), EngineError> {
+            Err(RejectAllEngine::reject())
+        }
+        fn parse(&mut self, _sql: &str) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn execute(&mut self, _sql: &str) -> Result<QueryOutput, EngineError> {
+            Err(RejectAllEngine::reject())
+        }
+    }
+
+    #[test]
+    fn a_session_that_cannot_start_fails_every_statement_unrun() -> R {
+        let statements = parse_results(OUT)?;
+        let f = run_file(&mut NoSession, "t", &statements, &plain());
+        let details: Vec<&str> = f.cases.iter().map(|c| c.detail.as_str()).collect();
+        assert_eq!(
+            details,
+            [
+                "parse failed; not executed",
+                "parse failed; not executed",
+                "parse failed; not executed"
+            ]
+        );
+        assert_eq!(f.result.passed + f.negative.passed + f.parse.passed, 0);
+        let mut e = NoSession;
+        assert_eq!(e.name(), "no-session");
+        assert!(e.parse("x").is_ok() && e.execute("x").is_err());
+        Ok(())
+    }
+
+    /// An engine that times out on every statement.
+    struct TimeoutEngine;
+
+    impl Engine for TimeoutEngine {
+        fn name(&self) -> &str {
+            "timeout"
+        }
+        fn reset(&mut self, _setup: &SessionSetup) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn parse(&mut self, _sql: &str) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn execute(&mut self, sql: &str) -> Result<QueryOutput, EngineError> {
+            let _ = sql;
+            Err(EngineError {
+                class: Some(TIMEOUT_CLASS.to_owned()),
+                sql_state: None,
+                message: "no answer within 0ns".to_owned(),
+            })
+        }
+    }
+
+    #[test]
+    fn timeouts_stay_out_of_the_baseline_comparison() -> R {
+        let statements = parse_results(OUT)?;
+        let f = run_file(&mut TimeoutEngine, "t", &statements, &plain());
+        // Timeouts are harness failures: no tallies, no baseline cases.
+        assert!(f.timeouts.len() == 3, "{f:?}");
+        assert!(f.cases.is_empty(), "{f:?}");
+        assert_eq!((f.parse.total, f.negative.total, f.result.total), (0, 0, 0));
+        assert_eq!(f.unclassified_errors, 0);
+        let detail = &f.timeouts[0].detail;
+        assert!(detail.contains(TIMEOUT_CLASS), "{detail}");
+        assert_eq!(f.timeouts[0].index, 0);
         Ok(())
     }
 }

@@ -2,7 +2,7 @@
 //! Expression binding: names, stars, functions, casts, subqueries, output
 //! names (Spark's `toPrettySQL`) and semantic keys.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_common::error::{
@@ -12,9 +12,9 @@ use krishiv_common::error::{
     DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
     DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchUnexpectedInputType,
-    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    ExceptOverlappingColumns, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
-    InvalidUsageOfStarOrRegex, KrishivError, NestedAggregateFunction,
+    InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature, NestedAggregateFunction,
     UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
     WrongNumArgsWithoutSuggestion,
 };
@@ -654,7 +654,7 @@ impl Resolver<'_> {
         kids
     }
 
-    fn is_aggregate(&self, e: &Expr) -> bool {
+    pub(super) fn is_aggregate(&self, e: &Expr) -> bool {
         match &e.node {
             ExprNode::Function(f) => matches!(
                 self.ctx.functions.lookup(std::slice::from_ref(&f.name), self.ctx.profile),
@@ -736,7 +736,81 @@ impl Resolver<'_> {
             ));
         }
         out.iter().for_each(|a| self.used(a));
-        Ok(out)
+        if s.except.is_empty() {
+            return Ok(out);
+        }
+        self.apply_except(s, &out, origin)
+    }
+
+    /// What `* EXCEPT (cols)` drops from `out` (the star's own expansion).
+    /// Each entry names one of those columns, bare or qualified with the
+    /// table (as in `ids.id`); longer paths name nested struct fields,
+    /// which need struct support (`KRISHIV_UNSUPPORTED_FEATURE`), and
+    /// unknown names are `UNRESOLVED_COLUMN`. Overlapping entries are
+    /// `EXCEPT_OVERLAPPING_COLUMNS`, checked before anything resolves (as
+    /// Spark checks them).
+    fn apply_except(
+        &mut self,
+        s: &Star,
+        out: &[Attr],
+        origin: Origin,
+    ) -> Result<Vec<Attr>, AnalysisError> {
+        let cs = self.ctx.conf.case_sensitive;
+        let folded: Vec<Vec<String>> = s
+            .except
+            .iter()
+            .map(|p| p.iter().map(|x| fold_case(x, cs)).collect())
+            .collect();
+        for (i, a) in folded.iter().enumerate() {
+            for (j, b) in folded.iter().enumerate().take(i) {
+                if is_prefix(b, a) || is_prefix(a, b) {
+                    return Err(AnalysisError::new(
+                        ExceptOverlappingColumns {
+                            columns: format!(
+                                "{}, {}",
+                                s.except[j].join("."),
+                                s.except[i].join(".")
+                            ),
+                        },
+                        origin,
+                    ));
+                }
+            }
+        }
+        let mut dropped: Vec<(AttrId, String)> = Vec::new();
+        for path in &s.except {
+            let raw = path.join(".");
+            match self.except_target(path, out, cs)? {
+                ExceptTarget::Top(a) => {
+                    if let Some((_, first)) = dropped.iter().find(|(id, _)| *id == a.col.id) {
+                        return Err(AnalysisError::new(
+                            ExceptOverlappingColumns {
+                                columns: format!("{first}, {raw}"),
+                            },
+                            origin,
+                        ));
+                    }
+                    dropped.push((a.col.id, raw));
+                }
+                ExceptTarget::Nested => {
+                    return Err(AnalysisError::new(
+                        KrishivUnsupportedFeature {
+                            feature: format!("SELECT * EXCEPT with nested column `{raw}`"),
+                        },
+                        origin,
+                    ));
+                }
+                ExceptTarget::Missing => {
+                    return Err(unresolved(path, out, origin));
+                }
+            }
+        }
+        let gone: HashSet<AttrId> = dropped.into_iter().map(|(id, _)| id).collect();
+        Ok(out
+            .iter()
+            .filter(|a| !gone.contains(&a.col.id))
+            .cloned()
+            .collect())
     }
 
     /// Records a column of a securable as referenced.
@@ -746,6 +820,71 @@ impl Resolver<'_> {
         {
             set.insert(name.to_string());
         }
+    }
+
+    /// The column of `out` an `EXCEPT` entry names: a top-level column
+    /// (`Top`), a field below one (`Nested`), or nothing (`Missing`). A
+    /// bare name matches by column name; a longer path matches when its
+    /// last part names the column and the leading parts match the
+    /// qualifier (as in `ids.id`).
+    fn except_target(
+        &self,
+        path: &[String],
+        out: &[Attr],
+        cs: bool,
+    ) -> Result<ExceptTarget, AnalysisError> {
+        if path.is_empty() {
+            return Err(unsupported("an empty EXCEPT entry", Origin::UNKNOWN));
+        }
+        match self.except_top(path, out, cs)[..] {
+            [ref a] => Ok(ExceptTarget::Top(a.clone())),
+            [] => {
+                // A field below a top-level column when a strict prefix of
+                // the entry names one (as in `t.id.sub`, or `id.sub`).
+                let nested = path.len() > 1
+                    && (1..path.len()).any(|j| !self.except_top(&path[..j], out, cs).is_empty());
+                if nested {
+                    Ok(ExceptTarget::Nested)
+                } else {
+                    Ok(ExceptTarget::Missing)
+                }
+            }
+            _ => Err(AnalysisError::new(
+                AmbiguousReference {
+                    name: quoted(path),
+                    reference_names: format!("[{}]", names(out, false)),
+                },
+                Origin::UNKNOWN,
+            )),
+        }
+    }
+
+    /// The columns of `out` an `EXCEPT` entry prefix names: a bare name
+    /// matches by column name; a longer path matches when its last part
+    /// names the column and the leading parts match the qualifier (as in
+    /// `ids.id`).
+    fn except_top(&self, path: &[String], out: &[Attr], cs: bool) -> Vec<Attr> {
+        let Some((last, leading)) = path.split_last() else {
+            return Vec::new();
+        };
+        if leading.is_empty() {
+            return out
+                .iter()
+                .filter(|a| same(&a.col.name, last, cs))
+                .cloned()
+                .collect();
+        }
+        out.iter()
+            .filter(|a| {
+                same(&a.col.name, last, cs)
+                    && leading.len() <= a.qual.len()
+                    && a.qual[a.qual.len() - leading.len()..]
+                        .iter()
+                        .zip(leading)
+                        .all(|(x, y)| same(x, y, cs))
+            })
+            .cloned()
+            .collect()
     }
 
     fn expr_node(
@@ -1866,6 +2005,37 @@ impl Resolver<'_> {
                 ));
             }
         }
+        // A name no column or outer reference has may be a session
+        // variable (`v`, `session.v` or `system.session.v`): Spark
+        // resolves columns and outer references first, then variables. A
+        // name of another shape, or one naming no variable, stays an
+        // unresolved column. The reference becomes the variable's current
+        // value as a typed literal, so no physical, executor or plan-codec
+        // change is needed; the expression keeps the spelling it was
+        // written with for names and errors.
+        if let Some(var) = self.ctx.variables.get(&c.name) {
+            let Some(name) = c.name.last() else {
+                debug_assert!(false, "a variable name is never empty");
+                return Err(unresolved(&c.name, cx.scope, origin));
+            };
+            let col = BoundColumn {
+                id: self.fresh(),
+                name: name.clone(),
+                data_type: var.data_type.clone(),
+                nullable: matches!(var.value, Literal::Null(_)),
+            };
+            return Ok(Bound {
+                expr: Arc::new(Expr::new(ExprNode::Literal(var.value.clone())).with_origin(origin)),
+                ty: column(&col),
+                agg: None,
+                win: None,
+                outer: None,
+                lateral: Vec::new(),
+                shown: Some(Arc::new(
+                    Expr::new(ExprNode::Column(c.clone())).with_origin(origin),
+                )),
+            });
+        }
         Err(unresolved(&c.name, cx.scope, origin))
     }
 
@@ -2005,8 +2175,39 @@ fn carriers(cx: &Cx<'_>, id: crate::PlanId) -> Vec<Attr> {
         .collect()
 }
 
+/// One `EXCEPT` entry, resolved against its star's expansion.
+#[derive(Debug, Clone)]
+enum ExceptTarget {
+    /// A top-level column to drop.
+    Top(Attr),
+    /// A field below a top-level column: struct support is needed.
+    Nested,
+    /// Nothing by that name.
+    Missing,
+}
+
+/// `name` folded for a case-insensitive comparison when `case_sensitive`
+/// is off.
+fn fold_case(name: &str, case_sensitive: bool) -> String {
+    if case_sensitive {
+        name.to_owned()
+    } else {
+        name.to_lowercase()
+    }
+}
+
+/// Whether folded path `a` is a prefix of (or equal to) folded path `b`.
+fn is_prefix(a: &[String], b: &[String]) -> bool {
+    a.len() <= b.len() && a.iter().zip(b).all(|(x, y)| x == y)
+}
+
 /// `UNRESOLVED_COLUMN`, with up to five of `scope`'s columns ranked by edit
 /// distance (qualified by their last qualifier part when `parts` is).
+/// Distances are over the quoted candidate and the unquoted target with
+/// ties in name order, as Spark's `orderSuggestedIdentifiersBySimilarity`
+/// orders them (checked against Spark 4.2.0: `` `id`, `name`, `power`,
+/// `city`, `country` `` for `non_exist`, `` `id`, `name`, `data` `` for
+/// `invalid_column`).
 pub(super) fn unresolved(parts: &[String], scope: &[Attr], origin: Origin) -> AnalysisError {
     let qualified = parts.len() > 1;
     let candidates = scope
@@ -2206,6 +2407,26 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall { name, distinct, .. }) => {
             call(name, Builtin::from_name(name), *distinct, k, None)
+        }
+        // Spark's `lag`/`lead` show `input, offset, default`, and
+        // `nth_value` `input, offset` then ` ignore nulls` when set.
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Window
+                && matches!(f.id.name(), "lag" | "lead" | "nth_value")
+                && f.filter.is_none() =>
+        {
+            let shown = if f.id.name() == "nth_value" { 2 } else { 3 };
+            let n = shown.min(k.len());
+            let text = call(f.id.name(), None, f.distinct, &k[..n], Some(&f.data_type));
+            let ignore = matches!(
+                f.args.get(shown).map(|a| &a.node),
+                Some(ExprNode::Literal(Literal::Boolean(true)))
+            );
+            if ignore && f.id.name() == "nth_value" {
+                format!("{text} ignore nulls")
+            } else {
+                text
+            }
         }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {
@@ -2428,7 +2649,7 @@ fn call(
         // Spark's name of `first(x, ignoreNulls)` leaves the flag out.
         _ if k.len() == 2
             && matches!(k[1], "true" | "false")
-            && ["first", "last", "first_value", "last_value"]
+            && ["first", "last", "first_value", "last_value", "any_value"]
                 .iter()
                 .any(|n| name.eq_ignore_ascii_case(n)) =>
         {

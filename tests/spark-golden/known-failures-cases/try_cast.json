@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "cast-matrix": [
+      22,
+      23,
+      24,
+      27,
+      28
+    ],
+    "nested-interval-types": [
+      20,
+      21
+    ]
+  },
+  "file": "try_cast",
+  "format_version": 1
+}
