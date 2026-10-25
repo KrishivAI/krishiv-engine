@@ -10,11 +10,11 @@
     },
     {
       "id": "reverse#27d73e6b9b7a/ansi_on",
-      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "reverse#27d73e6b9b7a/ansi_off",
-      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "reverse#2a2c3e312d76/ansi_on",
@@ -34,19 +34,19 @@
     },
     {
       "id": "reverse#61dbbe3b92fa/ansi_on",
-      "reason": "SELECT reverse(CAST(NULL AS array<int>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT reverse(CAST(NULL AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#61dbbe3b92fa/ansi_off",
-      "reason": "SELECT reverse(CAST(NULL AS array<int>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT reverse(CAST(NULL AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#6d11d9d7634a/ansi_on",
-      "reason": "SELECT reverse(CAST(array() AS array<int>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT reverse(CAST(array() AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "reverse#6d11d9d7634a/ansi_off",
-      "reason": "SELECT reverse(CAST(array() AS array<int>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT reverse(CAST(array() AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "reverse#b32c7db50969/ansi_on",
