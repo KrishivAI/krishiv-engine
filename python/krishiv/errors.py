@@ -17,8 +17,10 @@ from collections.abc import Iterable
 from enum import Enum
 from typing import Any
 
-# The message templates of the client-side errors this package raises (the wording of
-# PySpark 4.2's error classes of the same names).
+# The message templates of the client-side errors this package raises: the wording of the
+# same-named classes in PySpark 4.2.0's `pyspark/errors/error-conditions.json` (the client-side
+# file; the JVM `error-conditions.json` vendored in krishiv-common carries none of these,
+# not even the pre-existing ones like `NOT_EXPECTED_TYPE`).
 _TEMPLATES = {
     "NOT_IMPLEMENTED": "<feature> is not implemented.",
     "CANNOT_SET_TOGETHER": "<arg_list> should not be set together.",
@@ -47,7 +49,14 @@ _TEMPLATES = {
         "Numeric aggregation function can only be applied on numeric columns, got <invalid_columns>."
     ),
     "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
+    "NEGATIVE_VALUE": "Value for `<arg_name>` must be greater than or equal to 0, got '<arg_value>'.",
+    "ARGUMENT_REQUIRED": "Argument `<arg_name>` is required when <condition>.",
+    "MIXED_TYPE_REPLACEMENT": "Mixed type replacements are not supported.",
+    "LENGTH_SHOULD_BE_THE_SAME": (
+        "<arg1> and <arg2> should be of the same length, got <arg1_length> and <arg2_length>."
+    ),
     "VALUE_NOT_ALLOWED": "Value for `<arg_name>` has to be amongst the following values: <allowed_values>.",
+    "VALUE_NOT_PEARSON": "Value for `<arg_name>` only supports 'pearson', got '<arg_value>'.",
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
     "WRONG_NUM_COLUMNS": "Function `<func_name>` should take at least <num_cols> columns.",
     "UNSUPPORTED_DATA_TYPE": "Unsupported DataType `<data_type>`.",
