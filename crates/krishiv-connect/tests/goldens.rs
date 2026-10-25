@@ -24,10 +24,6 @@ use prost_reflect::{DescriptorPool, DynamicMessage};
 const UNSUPPORTED: &[(&str, ErrorClass)] = &[
     ("alias_multi", ErrorClass::KrishivUnsupportedFeature),
     ("aggregate_pivot", ErrorClass::KrishivUnsupportedFeature),
-    (
-        "cast_unsupported_type",
-        ErrorClass::KrishivUnsupportedFeature,
-    ),
     ("distinct", ErrorClass::KrishivUnsupportedFeature),
     (
         "filter_expression_string",

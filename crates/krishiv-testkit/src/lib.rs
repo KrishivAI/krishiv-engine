@@ -7,6 +7,7 @@
 //! * [`kernel_eval`]: runs the arithmetic/comparison/cast matrix cells on `krishiv-kernels` (P2-T021a).
 //! * [`batch_stream`]: batch == bounded-stream invariant harness (ADR 0015/0017).
 //! * [`golden`]: Spark `SQLQueryTestSuite` golden-file runner, exclusion manifest and three-number report.
+//! * [`manifest_dir`]: split test manifests, one small JSON file per key.
 //! * [`slt`]: sqllogictest runner stub.
 #![forbid(unsafe_code)]
 
@@ -16,6 +17,7 @@ pub mod fn_matrix;
 pub mod golden;
 pub mod hash_fixture;
 pub mod kernel_eval;
+pub mod manifest_dir;
 pub mod slt;
 
 use std::path::PathBuf;

@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "shiftrightunsigned#5a87b30b960f/ansi_on",
+      "reason": "SELECT shiftrightunsigned(map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#5a87b30b960f/ansi_off",
+      "reason": "SELECT shiftrightunsigned(map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#5b6f5e1feb81/ansi_on",
+      "reason": "SELECT shiftrightunsigned(4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#5b6f5e1feb81/ansi_off",
+      "reason": "SELECT shiftrightunsigned(4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#9748b962de44/ansi_on",
+      "reason": "SELECT shiftrightunsigned(4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#9748b962de44/ansi_off",
+      "reason": "SELECT shiftrightunsigned(4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#9deada350e37/ansi_on",
+      "reason": "SELECT shiftrightunsigned(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#9deada350e37/ansi_off",
+      "reason": "SELECT shiftrightunsigned(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#a296dcfd561b/ansi_on",
+      "reason": "SELECT shiftrightunsigned(INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#a296dcfd561b/ansi_off",
+      "reason": "SELECT shiftrightunsigned(INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#a32a12e9c87d/ansi_on",
+      "reason": "SELECT shiftrightunsigned(4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#a32a12e9c87d/ansi_off",
+      "reason": "SELECT shiftrightunsigned(4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#a98abd591825/ansi_on",
+      "reason": "SELECT shiftrightunsigned(INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#a98abd591825/ansi_off",
+      "reason": "SELECT shiftrightunsigned(INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#b48148d54ec4/ansi_on",
+      "reason": "SELECT shiftrightunsigned(4, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#b48148d54ec4/ansi_off",
+      "reason": "SELECT shiftrightunsigned(4, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#e92fea19ed31/ansi_on",
+      "reason": "SELECT shiftrightunsigned(4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#e92fea19ed31/ansi_off",
+      "reason": "SELECT shiftrightunsigned(4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#ec55dd819003/ansi_on",
+      "reason": "SELECT shiftrightunsigned(named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "shiftrightunsigned#ec55dd819003/ansi_off",
+      "reason": "SELECT shiftrightunsigned(named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "shiftrightunsigned"
+}

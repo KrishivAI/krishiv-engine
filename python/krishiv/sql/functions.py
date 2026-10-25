@@ -1,17 +1,48 @@
 # SPDX-License-Identifier: Apache-2.0
 """``pyspark.sql.functions``: column builders. A function resolves by name in the engine's
-function registry when the query is analyzed, so one that is not registered fails there."""
+function registry when the query is analyzed, so one that is not registered fails there.
+
+The wrappers of the registered functions are generated (``_generated_functions``, from the registry and
+PySpark's signatures) and re-exported here; the ones that are not plain calls are written below.
+``__all__`` is the generated names plus ``_HAND_WRITTEN``, so a new registry function needs no edit here.
+
+A name in ``__all__`` is a function with PySpark's signature that builds the registry call; it does not mean the
+engine runs every one end to end. The ranking and window-only functions (``row_number``, ``rank``,
+``dense_rank``, ``cume_dist``, ``percent_rank``, ``ntile``, ``first_value``, ``last_value``, ``lag``, ``lead``,
+``nth_value``) are exported, but
+``Column`` has no ``over`` yet, so they cannot be used. ``coalesce`` / ``nvl`` with a string literal and
+``sha2`` over a string fail in the engine's analyzer."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
 from krishiv import _native
 from krishiv.errors import not_expected_type
-from krishiv.sql.column import Column, _literal, _named, _operand
+from krishiv.sql import _generated_functions
+from krishiv.sql._function_support import ColumnOrName, _call, _lit, _named, _num_or_col
+from krishiv.sql._generated_functions import *  # noqa: F403  # re-exported through `__all__`
+from krishiv.sql.column import Column, _literal, _operand
 
-ColumnOrName = Column | str
+#: The functions written by hand below; every other name in ``__all__`` is generated.
+_HAND_WRITTEN = [
+    "asc",
+    "call_function",
+    "col",
+    "column",
+    "concat",
+    "convert_timezone",
+    "count",
+    "countDistinct",
+    "count_distinct",
+    "desc",
+    "expr",
+    "lit",
+    "log",
+    "when",
+]
+
+__all__ = [*_generated_functions.__all__, *_HAND_WRITTEN]
 
 #: The builtin ``str``, kept under its own name: :func:`expr` names its
 #: parameter ``str`` (as PySpark does), which shadows the builtin there.
@@ -40,43 +71,16 @@ def expr(str: str) -> Column:
     return Column(_native.expr(str))
 
 
-def _call(name: str, *cols: Any) -> Column:
-    return Column(_native.call_function(name, [_named(c, "col") for c in cols]))
-
-
 def call_function(funcName: str, *cols: Any) -> Column:
     """A call of the registered function ``funcName``."""
-    return _call(funcName, *cols)
-
-
-def _unary(name: str, doc: str) -> Callable[[ColumnOrName], Column]:
-    def f(col: ColumnOrName) -> Column:
-        return _call(name, col)
-
-    f.__name__ = name
-    f.__qualname__ = name
-    f.__doc__ = doc
-    return f
-
-
-# Aggregates.
-sum = _unary("sum", "The sum of the group.")
-avg = _unary("avg", "The average of the group.")
-min = _unary("min", "The minimum of the group.")
-max = _unary("max", "The maximum of the group.")
-first = _unary("first", "The first value of the group.")
-
-
-def mean(col: ColumnOrName) -> Column:
-    """Alias of :func:`avg`."""
-    return avg(col)
+    return _call(funcName, *[_named(c, "col") for c in cols])
 
 
 def count(col: ColumnOrName) -> Column:
     """The number of rows where ``col`` is not null (``count("*")``: all rows)."""
     if isinstance(col, str) and col == "*":
         return Column(_native.count_star())
-    return _call("count", col)
+    return _call("count", _named(col, "col"))
 
 
 def count_distinct(col: ColumnOrName, *cols: ColumnOrName) -> Column:
@@ -86,34 +90,30 @@ def count_distinct(col: ColumnOrName, *cols: ColumnOrName) -> Column:
 countDistinct = count_distinct
 
 
-# Scalar functions (a subset; the registry decides which exist).
-abs = _unary("abs", "The absolute value.")
-sqrt = _unary("sqrt", "The square root.")
-floor = _unary("floor", "The largest integer not above the value.")
-ceil = _unary("ceil", "The smallest integer not below the value.")
-upper = _unary("upper", "The string in upper case.")
-lower = _unary("lower", "The string in lower case.")
-length = _unary("length", "The length of the string or binary.")
-trim = _unary("trim", "The string without surrounding spaces.")
-ltrim = _unary("ltrim", "The string without leading spaces.")
-rtrim = _unary("rtrim", "The string without trailing spaces.")
+def log(arg1: ColumnOrName | float, arg2: ColumnOrName | None = None) -> Column:
+    """The natural logarithm of ``arg1``, or with ``arg2`` the logarithm of ``arg2`` to the base ``arg1``."""
+    if arg2 is None:
+        return _call("ln", _named(arg1, "arg1"))
+    return _call("log", _num_or_col(arg1, "arg1"), _named(arg2, "arg2"))
 
 
-def coalesce(*cols: ColumnOrName) -> Column:
-    """The first column that is not null."""
-    return _call("coalesce", *cols)
+def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: ColumnOrName) -> Column:
+    """Converts ``sourceTs`` from the ``sourceTz`` time zone to ``targetTz``.
+
+    When ``sourceTz`` is None the current session time zone is used.
+    """
+    if sourceTz is None:
+        return _call("convert_timezone", _lit(targetTz, "targetTz"), _named(sourceTs, "sourceTs"))
+    return _call(
+        "convert_timezone",
+        _lit(sourceTz, "sourceTz"),
+        _lit(targetTz, "targetTz"),
+        _named(sourceTs, "sourceTs"),
+    )
 
 
 def concat(*cols: ColumnOrName) -> Column:
-    return _call("concat", *cols)
-
-
-def greatest(*cols: ColumnOrName) -> Column:
-    return _call("greatest", *cols)
-
-
-def least(*cols: ColumnOrName) -> Column:
-    return _call("least", *cols)
+    return _call("concat", *[_named(c, "cols") for c in cols])
 
 
 def when(condition: Column, value: Any) -> Column:

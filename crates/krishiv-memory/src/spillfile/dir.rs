@@ -30,12 +30,13 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, SchemaRef};
 use krishiv_common::config::{
-    Config, ConfigValue, SPILL_COMPRESSION, SPILL_DIR, SPILL_MAX_BYTES, SPILL_ZSTD_LEVEL,
+    Config, ConfigValue, SPILL_COMPRESSION, SPILL_DIR, SPILL_DROP_BEHIND_BYTES, SPILL_MAX_BYTES,
+    SPILL_ZSTD_LEVEL,
 };
 
 use super::writer::SpillWriter;
@@ -44,6 +45,11 @@ use crate::Reservation;
 
 const PREFIX: &str = "krishiv-spill-";
 const LOCK_SUFFIX: &str = ".lock";
+/// Prefix of a lock file not yet published under its final name; startup
+/// scans ignore it (it does not start with [`PREFIX`]).
+const PENDING_PREFIX: &str = ".krishiv-spill-new-";
+/// How long an unpublished lock file may exist before its start is taken for dead.
+const PENDING_STALE_AFTER: Duration = Duration::from_secs(60);
 const ID_ATTEMPTS: u32 = 16;
 
 /// Where and how to spill.
@@ -57,6 +63,9 @@ pub struct SpillConfig {
     pub codec: SpillCodec,
     /// `krishiv.spill.zstd.level`: used when `codec` is [`SpillCodec::Zstd`].
     pub zstd_level: i64,
+    /// `krishiv.spill.dropBehindBytes`: the drop-behind window of writers
+    /// (see [`SpillWriter`](super::SpillWriter)); 0 disables it.
+    pub drop_behind: u64,
 }
 
 impl Default for SpillConfig {
@@ -85,11 +94,16 @@ impl SpillConfig {
             .get(&SPILL_ZSTD_LEVEL)
             .and_then(ConfigValue::as_int)
             .unwrap_or(1);
+        let drop_behind = config
+            .get(&SPILL_DROP_BEHIND_BYTES)
+            .and_then(ConfigValue::as_size)
+            .unwrap_or(8 << 20);
         Self {
             dir,
             max_bytes,
             codec,
             zstd_level,
+            drop_behind,
         }
     }
 }
@@ -102,6 +116,7 @@ pub(crate) struct ManagerInner {
     used: AtomicU64,
     codec: SpillCodec,
     zstd_level: i64,
+    pub(crate) drop_behind: u64,
     next_scope: AtomicU64,
     stale_removed: usize,
     /// Holds the advisory lock; released by the kernel when dropped or when
@@ -192,25 +207,29 @@ impl SpillManager {
         for attempt in 0..ID_ATTEMPTS {
             let id = new_id(attempt);
             let lock_path = root.join(format!("{PREFIX}{id}{LOCK_SUFFIX}"));
-            let lock = match create_new_file(&lock_path) {
+            // The lock file is created under a name the stale-session scan
+            // ignores, locked, and only then published by a hard link (which
+            // fails if the name exists). Created in place it was reclaimable
+            // by a concurrent start between its creation and our lock, and
+            // under load a start could lose that race on every attempt.
+            let pending = root.join(format!("{PENDING_PREFIX}{id}"));
+            let lock = match create_new_file(&pending) {
                 Ok(f) => f,
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(SpillError::io("create", &lock_path, e)),
+                Err(e) => return Err(SpillError::io("create", &pending, e)),
             };
-            match lock.try_lock() {
-                Ok(()) => {}
-                // A concurrent start is reclaiming what it took for a stale
-                // session: it removes the file, and we take another id.
-                Err(std::fs::TryLockError::WouldBlock) => continue,
-                Err(std::fs::TryLockError::Error(e)) => {
-                    let _ = fs::remove_file(&lock_path);
-                    return Err(SpillError::io("lock", &lock_path, e));
+            let locked = lock.try_lock().map_err(|e| match e {
+                std::fs::TryLockError::Error(e) => e,
+                std::fs::TryLockError::WouldBlock => {
+                    io::Error::new(io::ErrorKind::WouldBlock, "a fresh lock file is held")
                 }
-            }
-            // A concurrent start may have reclaimed the file between its
-            // creation and our lock; then our lock guards nothing. Retry.
-            if !lock_path.exists() {
-                continue;
+            });
+            let published = locked.and_then(|()| fs::hard_link(&pending, &lock_path));
+            let _ = fs::remove_file(&pending);
+            match published {
+                Ok(()) => {}
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(SpillError::io("lock", &lock_path, e)),
             }
             let session_dir = root.join(format!("{PREFIX}{id}"));
             if let Err(e) = create_private_dir(&session_dir, false) {
@@ -225,6 +244,7 @@ impl SpillManager {
                     used: AtomicU64::new(0),
                     codec: config.codec,
                     zstd_level: config.zstd_level,
+                    drop_behind: config.drop_behind,
                     next_scope: AtomicU64::new(0),
                     stale_removed,
                     _lock: lock,
@@ -419,6 +439,30 @@ fn remove_stale_sessions(root: &Path) -> usize {
     let mut removed = 0;
     for entry in entries.flatten() {
         let name = entry.file_name();
+        if let Some(pending) = name.to_str().filter(|n| n.starts_with(PENDING_PREFIX)) {
+            // A start that died between creating and publishing its lock.
+            // A live start holds the file for microseconds but is not locked
+            // until after it is created, so only a file left for a minute is
+            // taken for dead (locking an old file cannot race its creator).
+            let path = entry.path();
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age >= PENDING_STALE_AFTER);
+            if old
+                && entry.file_type().is_ok_and(|t| t.is_file())
+                && valid_id(&pending[PENDING_PREFIX.len()..])
+                && OpenOptions::new()
+                    .write(true)
+                    .open(&path)
+                    .is_ok_and(|f| f.try_lock().is_ok())
+            {
+                let _ = fs::remove_file(&path);
+            }
+            continue;
+        }
         let Some(rest) = name.to_str().and_then(|n| n.strip_prefix(PREFIX)) else {
             continue;
         };

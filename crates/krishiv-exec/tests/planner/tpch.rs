@@ -78,6 +78,18 @@ pub(crate) fn parquet_files(
     ansi: bool,
     rt: &tokio::runtime::Runtime,
 ) -> Tpch {
+    parquet_files_with(dir, sources, ansi, &[], rt)
+}
+
+/// As [`parquet_files`], with `settings` in the session the tables are
+/// opened under (format options such as `krishiv.io.lateMaterialization`).
+pub(crate) fn parquet_files_with(
+    dir: &Path,
+    sources: &[(&str, Vec<String>)],
+    ansi: bool,
+    settings: &[(&str, &str)],
+    rt: &tokio::runtime::Runtime,
+) -> Tpch {
     let store = Arc::new(LocalFileSystem::new_with_prefix(dir).unwrap());
     let sched = IoScheduler::new(IoConfig::default());
     let id = StoreId::new("file://");
@@ -92,6 +104,19 @@ pub(crate) fn parquet_files(
             if ansi { "true" } else { "false" },
         )
         .unwrap();
+    for (k, v) in settings {
+        config.set(k, v).unwrap();
+    }
+    // Format options fall back to the session's settings.
+    let options = if settings.is_empty() {
+        options
+    } else {
+        ParquetFormat
+            .options()
+            .parse(&Default::default(), &config)
+            .unwrap()
+            .0
+    };
     let mut catalog = MemoryCatalog::new("spark_catalog");
     let mut tables = MemoryTables::new();
     for (t, paths) in sources {
@@ -178,6 +203,22 @@ impl Tpch {
         self.plan_sql_in(text, order, None)
     }
 
+    /// `text` parsed, analyzed and optimized (joins ordered by `order`).
+    pub(crate) fn optimized(&self, text: &str, order: Order) -> Result<Plan, KrishivError> {
+        let plan =
+            krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .map_err(KrishivError::from)?;
+        let plan: Plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))?.plan;
+        Ok(match order {
+            Order::Statistics => {
+                let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
+                krishiv_optimizer::optimize_with(&plan, &stats)?
+            }
+            Order::Defaults => krishiv_optimizer::optimize(&plan)?,
+            Order::Written => krishiv_optimizer::optimize_as_written(&plan)?,
+        })
+    }
+
     /// As [`Self::plan_sql_with`], its operators spilling into `spill`.
     pub(crate) fn plan_sql_in(
         &self,
@@ -185,18 +226,7 @@ impl Tpch {
         order: Order,
         spill: Option<&SpillScope>,
     ) -> Result<Runnable, KrishivError> {
-        let plan =
-            krishiv_sql::parse_and_lower(text, &krishiv_sql::ParserOptions::default(), SourceId(0))
-                .map_err(KrishivError::from)?;
-        let plan: Plan = block_on(DefaultAnalyzer.analyze(&plan, &self.ctx))?.plan;
-        let plan = match order {
-            Order::Statistics => {
-                let stats = ProviderStatistics(Arc::clone(&self.tables) as _);
-                krishiv_optimizer::optimize_with(&plan, &stats)?
-            }
-            Order::Defaults => krishiv_optimizer::optimize(&plan)?,
-            Order::Written => krishiv_optimizer::optimize_as_written(&plan)?,
-        };
+        let plan = self.optimized(text, order)?;
         let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config));
         let mut runnable = Runnable::new(
             DefaultPlanner.plan(&plan, &cx)?,

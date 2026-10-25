@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "depends-on-command": [
+      39
+    ],
+    "sql-commands": [
+      38,
+      40
+    ]
+  },
+  "file": "postgreSQL/window_part1",
+  "format_version": 1
+}

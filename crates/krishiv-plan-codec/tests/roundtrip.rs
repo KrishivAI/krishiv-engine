@@ -293,8 +293,11 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             "window_ranking" | "window_aggregates" => 4,
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
-            "window_group_limit" => 6,
+            "window_group_limit" | "nested_types" => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
+            "hash_join_existence" | "hash_join_single_match" | "nested_loop_existence" => {
+                POST_MIGRATION_READER_VERSION
+            }
             "window_frames" | "window_offset_values" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
@@ -467,6 +470,85 @@ fn joins_that_build_their_preserved_side_are_a_feature() {
             "{name}"
         );
     }
+}
+
+/// The existence join type and the single-match flag are two semantic
+/// features (no equivalent plan exists without either), each refused by
+/// name by a reader without it; `distinct_build` needs none.
+#[test]
+fn existence_joins_and_single_match_are_features() {
+    for (name, feature) in [
+        ("hash_join_existence", Feature::ExistenceJoin),
+        ("nested_loop_existence", Feature::ExistenceJoin),
+        ("hash_join_single_match", Feature::JoinSingleMatch),
+    ] {
+        assert_eq!(feature.kind(), FeatureKind::Semantic);
+        let m = message(name);
+        assert_eq!(m.features, [feature.id()], "{name}");
+        assert_eq!(
+            m.min_reader_version, POST_MIGRATION_READER_VERSION,
+            "{name}"
+        );
+        // A reader without the feature refuses the plan, naming it.
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        let bytes = encode(&plan).unwrap();
+        let reader = ReaderFeatures::only([Feature::LimitOffset]);
+        let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec![feature.id().to_owned()]
+            },
+            "{name}"
+        );
+        // A reader with every feature reads it back exactly.
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+    assert_eq!(Feature::ExistenceJoin.to_string(), "existence_join");
+    assert_eq!(Feature::JoinSingleMatch.to_string(), "join_single_match");
+}
+
+/// `distinct_build` is only legal where the build's rows are never output
+/// nor read beyond their keys; anywhere else the plan is corrupt.
+#[test]
+fn a_misplaced_distinct_build_flag_is_corrupt() {
+    use pb::node::Kind;
+    // `hash_join` is an inner join with a residual condition.
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.distinct_build = true;
+    corrupt(
+        &m,
+        "a distinct build on a join that outputs or reads build rows",
+    );
+    // An existence join with a residual condition reads build columns.
+    let mut m = message("hash_join");
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.join_type = pb::JoinType::Existence as i32;
+    j.distinct_build = true;
+    m.features = vec!["existence_join".to_owned()];
+    corrupt(
+        &m,
+        "a distinct build on a join that outputs or reads build rows",
+    );
+}
+
+/// A single match on a join that is not left outer is corrupt.
+#[test]
+fn a_misplaced_single_match_flag_is_corrupt() {
+    use pb::node::Kind;
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.single_match = true;
+    corrupt(&m, "single match");
 }
 
 #[test]
@@ -780,4 +862,71 @@ fn an_exchange_without_a_partitioning_kind_is_corrupt() {
     };
     e.partitioning = Some(pb::Partitioning { kind: None });
     corrupt(&m, "partitioning kind is missing");
+}
+
+/// `any_value`, `max_by` and `min_by` have no ids in the format yet: a plan
+/// holding one is refused with the typed error (not encoded as another
+/// function), in an aggregate node and as a window function.
+#[test]
+fn aggregates_the_format_does_not_know_are_refused() {
+    use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
+    use krishiv_exec::physical::AggregatePlan;
+    use krishiv_exec::window::{WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan};
+    let exprs = [
+        AggregateExpr::new(
+            AggregateFunction::AnyValue { ignore_nulls: true },
+            0,
+            arrow_schema::DataType::Int32,
+            "a",
+        ),
+        AggregateExpr::by(
+            AggregateFunction::MaxBy,
+            (0, 1),
+            (
+                arrow_schema::DataType::Utf8View,
+                arrow_schema::DataType::Int64,
+            ),
+            "b",
+        ),
+        AggregateExpr::by(
+            AggregateFunction::MinBy,
+            (0, 1),
+            (
+                arrow_schema::DataType::Int32,
+                arrow_schema::DataType::Float64,
+            ),
+            "c",
+        ),
+    ];
+    for e in exprs {
+        let refused = |plan: &PhysicalPlan| {
+            let err = encode(plan).unwrap_err();
+            assert!(
+                matches!(&err, CodecError::Unsupported(m) if m.contains("aggregate function")),
+                "{err:?}"
+            );
+        };
+        refused(&plan_of(PhysNode::Aggregate {
+            input: Box::new(inventory::scan()),
+            aggregate: AggregatePlan {
+                group_by: vec![0],
+                aggregates: vec![e.clone()],
+                distinct: vec![false],
+                output: AggregateOutput::Final,
+            },
+        }));
+        refused(&plan_of(PhysNode::Window {
+            input: Box::new(inventory::scan()),
+            window: WindowPlan {
+                partition_by: Vec::new(),
+                order_by: Vec::new(),
+                functions: vec![WindowFunctionPlan {
+                    function: WindowFunction::Aggregate(e),
+                    frame: WindowFrame::whole(krishiv_exec::window::FrameUnits::Rows),
+                    filter: None,
+                    name: "w".to_owned(),
+                }],
+            },
+        }));
+    }
 }

@@ -1,0 +1,36 @@
+{
+  "cases": {
+    "depends-on-command": [
+      8,
+      10,
+      12,
+      18,
+      19,
+      24,
+      25,
+      32,
+      34,
+      36,
+      42,
+      43,
+      48,
+      49,
+      60,
+      66,
+      67,
+      72,
+      73,
+      84,
+      90,
+      91,
+      96,
+      97,
+      110,
+      112,
+      134,
+      136
+    ]
+  },
+  "file": "order-by-and-having-on-top-of-aggregate-with-join",
+  "format_version": 1
+}

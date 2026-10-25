@@ -146,17 +146,24 @@ pub struct RunnerConfig {
 }
 
 impl RunnerConfig {
-    /// The executor sizes: `threads` compute and blocking threads, and
-    /// `io_threads` I/O threads (the executor's default when unset).
-    pub fn executor_config(&self) -> ExecutorConfig {
+    /// The executor sizes: `threads` compute and blocking threads,
+    /// `io_threads` I/O threads (the executor's default when unset) and the
+    /// executor settings of `--conf` (`krishiv.io.blockingThreads`).
+    ///
+    /// # Errors
+    /// A `--conf` value that is not valid for its key.
+    pub fn executor_config(&self) -> Result<ExecutorConfig, RunnerError> {
         let threads = self.threads.max(1);
-        ExecutorConfig {
+        let (config, _) = Config::from_pairs(self.conf.iter().map(|(k, v)| (k, v)))?;
+        Ok(ExecutorConfig {
             compute_threads: threads,
             io_threads: self
                 .io_threads
                 .unwrap_or(ExecutorConfig::default().io_threads),
             blocking_threads: threads,
+            ..ExecutorConfig::default()
         }
+        .with_config(&config))
     }
 
     /// The configuration from `args` (without the program name).
@@ -227,7 +234,7 @@ impl Runner {
     /// # Errors
     /// The data directory is unreadable or holds no Parquet tables, or the session cannot start.
     pub fn new(config: &RunnerConfig) -> Result<Self, RunnerError> {
-        let executor = TokioExecutor::new(&config.executor_config())?;
+        let executor = TokioExecutor::new(&config.executor_config()?)?;
         // `SessionBuilder::build` drops configuration warnings; an unknown key would leave the A/B sides
         // identical without saying so, so reject it here.
         let pairs = std::iter::once(("krishiv.memory.limit", config.memory_limit.as_str()))

@@ -4,7 +4,7 @@
 //! (pruning keeps a superset), so anything not understood is left out of a
 //! conjunction and makes a disjunction or negation untranslatable.
 
-use krishiv_io::{CmpOp, ColumnPath, PushdownExpr, ScalarValue};
+use krishiv_io::{CmpOp, ColumnPath, PushdownExpr, RowLevel, ScalarValue};
 use krishiv_plan::{
     BoundColumn, Builtin, Expr, ExprNode, FunctionId, Literal, ResolvedExpr, ResolvedFunction,
 };
@@ -12,6 +12,72 @@ use krishiv_plan::{
 /// The typed form of `e` over the columns of `scan`, when there is one.
 pub(crate) fn translate(e: &Expr, scan: &[BoundColumn]) -> Option<PushdownExpr> {
     tr(e, scan, false)
+}
+
+/// What a scan may drop rows by before the filter `e` sees them, under
+/// `spark.sql.ansi.enabled = ansi`.
+///
+/// The filter evaluates its conjuncts in written order, each on the rows
+/// no earlier one is FALSE on (Kleene `AND` with short circuit). So while
+/// no conjunct may raise ([`krishiv_plan::may_raise`]), dropping any row
+/// the filter drops is invisible: [`RowLevel::Full`]. Otherwise a row may
+/// be dropped only where a conjunct written before the first raising one
+/// is FALSE: each such conjunct becomes `c OR col IS NULL` for every
+/// column it reads (it is NULL only where one of them is, being a
+/// comparison of columns with non-null literals), translated exactly.
+/// Untranslatable conjuncts are left out (fewer rows dropped).
+pub(crate) fn row_level(e: &Expr, scan: &[BoundColumn], ansi: bool) -> RowLevel {
+    let conjuncts = krishiv_plan::conjuncts(e);
+    let Some(first) = conjuncts
+        .iter()
+        .position(|c| krishiv_plan::may_raise(c, ansi))
+    else {
+        return RowLevel::Full;
+    };
+    let mut prefix: Vec<PushdownExpr> = conjuncts[..first]
+        .iter()
+        .filter_map(|c| not_false(c, scan))
+        .collect();
+    RowLevel::Prefix(match prefix.len() {
+        0 | 1 => prefix.pop(),
+        _ => Some(PushdownExpr::And(prefix)),
+    })
+}
+
+/// A typed predicate TRUE on every row `c` is not FALSE on, and never NULL.
+fn not_false(c: &Expr, scan: &[BoundColumn]) -> Option<PushdownExpr> {
+    let t = tr(c, scan, true)?;
+    let mut columns = Vec::new();
+    columns_of(&t, &mut columns);
+    if columns.is_empty() {
+        return Some(t);
+    }
+    let mut any = vec![t];
+    any.extend(columns.into_iter().map(PushdownExpr::IsNull));
+    Some(PushdownExpr::Or(any))
+}
+
+/// The columns `e` reads, each once.
+fn columns_of(e: &PushdownExpr, out: &mut Vec<ColumnPath>) {
+    let mut add = |c: &ColumnPath| {
+        if !out.contains(c) {
+            out.push(c.clone());
+        }
+    };
+    match e {
+        PushdownExpr::Cmp { column, .. }
+        | PushdownExpr::In { column, .. }
+        | PushdownExpr::StartsWith { column, .. }
+        | PushdownExpr::Contains { column, .. }
+        | PushdownExpr::Membership { column, .. }
+        | PushdownExpr::IsNull(column)
+        | PushdownExpr::IsNotNull(column) => add(column),
+        PushdownExpr::And(xs) | PushdownExpr::Or(xs) => {
+            xs.iter().for_each(|x| columns_of(x, out));
+        }
+        PushdownExpr::Not(x) => columns_of(x, out),
+        _ => {}
+    }
 }
 
 /// `exact`: the translation must keep exactly the rows `e` keeps (under a
@@ -283,5 +349,71 @@ mod tests {
             translate(&call(Builtin::Not, vec![e]), &scan),
             Some(PushdownExpr::Not(_))
         ));
+    }
+
+    /// `CAST(s AS INT) > 0` in `mode` (it may raise under ANSI).
+    fn cast_gt0(mode: krishiv_plan::CastMode) -> (Expr, BoundColumn) {
+        let s = BoundColumn {
+            id: AttrId(2),
+            name: "s".to_owned(),
+            data_type: DataType::String,
+            nullable: true,
+        };
+        let cast = Expr::new(ExprNode::Cast {
+            expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                s.clone(),
+            )))),
+            to: DataType::Integer,
+            mode,
+        });
+        (
+            call(
+                Builtin::Gt,
+                vec![cast, Expr::new(ExprNode::Literal(Literal::Integer(0)))],
+            ),
+            s,
+        )
+    }
+
+    #[test]
+    fn rows_are_dropped_only_by_conjuncts_written_before_one_that_may_raise() {
+        let (a, mut scan) = col();
+        let (cast, s) = cast_gt0(krishiv_plan::CastMode::Ansi);
+        let (legacy, _) = cast_gt0(krishiv_plan::CastMode::Legacy);
+        scan.push(s);
+        let a_is_1 = call(
+            Builtin::Eq,
+            vec![a, Expr::new(ExprNode::Literal(Literal::Integer(1)))],
+        );
+        let and = |l: &Expr, r: &Expr| call(Builtin::And, vec![l.clone(), r.clone()]);
+        // `a = 1` before the cast: rows where it is FALSE (not NULL).
+        let a1 = PushdownExpr::cmp(ColumnPath::new("a"), CmpOp::Eq, ScalarValue::Int32(1));
+        assert_eq!(
+            row_level(&and(&a_is_1, &cast), &scan, true),
+            RowLevel::Prefix(Some(PushdownExpr::Or(vec![
+                a1,
+                PushdownExpr::IsNull(ColumnPath::new("a")),
+            ])))
+        );
+        // Nothing before it; with ANSI off the cast gives NULL.
+        assert_eq!(
+            row_level(&and(&cast, &a_is_1), &scan, true),
+            RowLevel::Prefix(None)
+        );
+        assert_eq!(
+            row_level(&and(&legacy, &a_is_1), &scan, false),
+            RowLevel::Full
+        );
+        // `a IN (1, NULL)` is NULL, never FALSE, on rows it does not hold:
+        // it cannot drop a row before the cast.
+        let (in_null, _) = in_list(true);
+        assert_eq!(
+            row_level(&and(&in_null, &cast), &scan, true),
+            RowLevel::Prefix(None)
+        );
+        assert_eq!(
+            row_level(&and(&in_null, &a_is_1), &scan, true),
+            RowLevel::Full
+        );
     }
 }

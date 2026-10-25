@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! URL functions: `parse_url` and `try_parse_url`, `url_encode`,
-//! `url_decode` and `try_url_decode` (Spark 4.2's `urlExpressions`).
-//!
-//! `url_encode`/`url_decode` are `java.net.URLEncoder`/`URLDecoder` over
-//! UTF-8: the unreserved bytes `A-Za-z0-9.-*_` pass through, a space
-//! encodes as `+`, every other byte as `%XX` (uppercase hex). Decoding a
-//! cut-short or non-hex escape is `CANNOT_DECODE_URL` (`url_decode`) or
-//! NULL (`try_url_decode`); bytes that are not valid UTF-8 after decoding
-//! read with replacement, as the JVM decoder reads them.
+//! URL functions: `parse_url` and `try_parse_url` (Spark 4.2's
+//! `urlExpressions`). `url_encode`, `url_decode` and `try_url_decode` are
+//! the string-codec family's.
 //!
 //! `parse_url(url, part[, key])` follows `java.net.URI`: the parts `HOST`,
 //! `PATH`, `QUERY`, `REF`, `PROTOCOL`, `FILE`, `AUTHORITY` and `USERINFO`
@@ -41,22 +35,14 @@ use std::sync::Arc;
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
 use fancy_regex::{Regex, RegexBuilder};
-use krishiv_common::error::{
-    CannotDecodeUrl, InvalidUrl, KrishivError, KrishivRegexpBacktrackLimitExceeded,
-};
+use krishiv_common::error::{InvalidUrl, KrishivError, KrishivRegexpBacktrackLimitExceeded};
 
 use super::args::{Inputs, internal, is_string};
 use super::regex::{BACKTRACK_LIMIT, translate};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
-pub(super) const NAMES: &[&str] = &[
-    "parse_url",
-    "try_parse_url",
-    "try_url_decode",
-    "url_decode",
-    "url_encode",
-];
+pub(super) const NAMES: &[&str] = &["parse_url", "try_parse_url"];
 
 /// The shape of an argument list: `S` string, anything else `?`.
 fn shape(args: &[BindArg]) -> String {
@@ -71,34 +57,6 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
     let shape = shape(args);
     let text = DataType::Utf8;
     let binding = match (listed, shape.as_str()) {
-        ("url_encode" | "url_decode" | "try_url_decode", "S") => {
-            let decode = !listed.ends_with("encode");
-            let tolerant = listed.starts_with("try_");
-            Binding::new(text, move |x: &Inputs<'_>| {
-                let s = x.strings(0)?;
-                let mut out = Vec::with_capacity(s.len());
-                for i in 0..s.len() {
-                    if s.is_null(i) {
-                        out.push(None);
-                        continue;
-                    }
-                    let v = s.value(i);
-                    let r = if decode {
-                        url_decode_value(v)
-                    } else {
-                        Ok(url_encode_value(v))
-                    };
-                    match r {
-                        Ok(t) => out.push(Some(t)),
-                        Err(_) if tolerant => out.push(None),
-                        Err(e) => return Err(e),
-                    }
-                }
-                Ok(Arc::new(arrow_array::StringArray::from_iter(
-                    out.iter().map(|o| o.as_deref()),
-                )) as ArrayRef)
-            })
-        }
         ("parse_url" | "try_parse_url", "SS" | "SSS") => {
             // `parse_url` raises on an invalid URL under ANSI;
             // `try_parse_url` is NULL whatever the mode.
@@ -144,8 +102,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         Err(()) => out.push(None),
                         Ok(uri) => {
                             out.push(if keyed {
-                                let q = uri.query.unwrap_or_default();
-                                key_value(q, key, &mut keys_cache)?
+                                // No query component: NULL, the key is not read.
+                                match uri.query {
+                                    Some(q) => key_value(q, key, &mut keys_cache)?,
+                                    None => None,
+                                }
                             } else {
                                 extract_part(&uri, part)
                             });
@@ -160,71 +121,6 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };
     Some((listed, Ok(binding)))
-}
-
-/// `URLEncoder.encode` with UTF-8.
-fn url_encode_value(s: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'*' | b'_' => {
-                out.push(char::from(b));
-            }
-            b' ' => out.push('+'),
-            _ => {
-                out.push('%');
-                out.push(char::from(HEX[usize::from(b >> 4)]));
-                out.push(char::from(HEX[usize::from(b & 15)]));
-            }
-        }
-    }
-    out
-}
-
-/// A hex digit's value.
-fn hex_val(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        _ => None,
-    }
-}
-
-/// `URLDecoder.decode` with UTF-8: `+` reads as a space, `%XX` as its byte,
-/// and the bytes read as UTF-8 with replacement.
-///
-/// # Errors
-/// `CANNOT_DECODE_URL` for a cut-short or non-hex escape.
-fn url_decode_value(s: &str) -> Result<String, KrishivError> {
-    let bad = || KrishivError::from(CannotDecodeUrl { url: s.to_owned() });
-    let bytes = s.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' => {
-                let (Some(hi), Some(lo)) = (
-                    bytes.get(i + 1).copied().and_then(hex_val),
-                    bytes.get(i + 2).copied().and_then(hex_val),
-                ) else {
-                    return Err(bad());
-                };
-                out.push(hi << 4 | lo);
-                i += 3;
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 /// A URI split the way `java.net.URI` splits it: `None` is an undefined

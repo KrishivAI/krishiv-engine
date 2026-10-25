@@ -38,6 +38,9 @@
 )]
 mod template;
 
+mod render;
+pub use render::render_with_context;
+
 include!(concat!(env!("OUT_DIR"), "/error_classes.rs"));
 
 use std::sync::Arc;

@@ -32,6 +32,8 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     "third_party/",
     "crates/krishiv-ui-assets/assets/",
     ".github/ci-fixtures/",
+    // The Python wrappers generated from the function registry (`.py` and `.pyi`).
+    "python/krishiv/sql/_generated_functions.",
 ];
 /// Suffixes of machine-written files. Kept specific: a loose suffix such as
 /// `.out` or `.map` would also exclude hand-written files.

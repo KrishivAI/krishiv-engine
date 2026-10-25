@@ -7,7 +7,7 @@ use krishiv_session::Session;
 use pyo3::prelude::*;
 
 use crate::dataframe::{OwnedTable, PyDataFrame};
-use crate::errors::{block_on, to_py};
+use crate::errors::{block_on_sql, to_py};
 use crate::stream::ArrowStream;
 
 /// Numbers the tables `create_dataframe` registers.
@@ -46,8 +46,8 @@ impl PySession {
 
     /// Runs the SQL query `query` through analysis; its DataFrame.
     fn sql(&self, py: Python<'_>, query: &str) -> PyResult<PyDataFrame> {
-        let (session, query) = (self.inner.clone(), query.to_owned());
-        let inner = block_on(py, async move { session.sql(&query).await })?;
+        let (session, owned) = (self.inner.clone(), query.to_owned());
+        let inner = block_on_sql(py, query, async move { session.sql(&owned).await })?;
         Ok(PyDataFrame::new(inner))
     }
 

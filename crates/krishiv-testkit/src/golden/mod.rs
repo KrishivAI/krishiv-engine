@@ -9,12 +9,15 @@
 //! three separate numbers ([`report`]); [`manifest`] holds the exclusion manifest.
 
 pub mod cell;
+pub mod classify;
 pub mod fixtures;
+pub mod known_failures;
 pub mod manifest;
 pub mod normalise;
 pub mod parse;
 pub mod report;
 pub mod run;
+pub mod session_engine;
 pub mod setup;
 pub mod sorted;
 pub mod sql_parse;

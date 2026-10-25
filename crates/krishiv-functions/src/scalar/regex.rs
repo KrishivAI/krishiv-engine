@@ -74,8 +74,18 @@ pub(super) const NAMES: &[&str] = &[
 ];
 
 /// Binds the regular-expression function `name`.
+///
+/// `rlike` is Spark's `RLike` operator (the infix `RLIKE` and the `rlike`
+/// function form): the analyzer types it as `Builtin::RLike`, so it is not
+/// a registry function and stays out of [`NAMES`]. The executor binds it
+/// here to the `regexp_like` kernel, reporting Spark's `rlike` name in
+/// pattern errors.
 pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
-    let listed = listed(NAMES, name)?;
+    let listed = if name == "rlike" {
+        "rlike"
+    } else {
+        listed(NAMES, name)?
+    };
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
     let strings = |n: usize| types.len() == n && types.iter().all(is_string);
     let indexed = (types.len() == 2 && types.iter().all(is_string))
@@ -83,9 +93,10 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             && types[..2].iter().all(is_string)
             && matches!(types[2], DataType::Int8 | DataType::Int16 | DataType::Int32));
     let binding = match (listed, types.len()) {
-        ("regexp" | "regexp_like", 2) if strings(2) => {
+        ("regexp" | "regexp_like" | "rlike", 2) if strings(2) => {
             let function: &'static str = match listed {
                 "regexp" => "`regexp`",
+                "rlike" => "`rlike`",
                 _ => "`regexp_like`",
             };
             Binding::new(DataType::Boolean, move |x: &Inputs<'_>| find(x, function))
