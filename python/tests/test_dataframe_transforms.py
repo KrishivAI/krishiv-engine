@@ -309,16 +309,17 @@ def test_union_by_name_with_missing_columns(spark: SparkSession) -> None:
     ]
 
 
-def test_union_by_name_with_missing_string_columns_raises_the_engine_error(
-    spark: SparkSession,
-) -> None:
-    # The engine plans the null-filled branch but its physical planner rejects the union of a
-    # computed NULL string with a scanned one (`Utf8` vs `Utf8View`); the same fails in SQL.
+def test_union_by_name_with_missing_string_columns(spark: SparkSession) -> None:
+    # A computed NULL string beside a scanned one: the same Spark type in two Arrow carriers.
     left = make(spark, {"a": ["x"], "b": [1]})
     right = make(spark, {"b": [2], "c": ["y"]})
-    with pytest.raises(errors.SparkRuntimeException) as bad:
-        left.unionByName(right, allowMissingColumns=True).collect()
-    assert bad.value.getCondition() == "INTERNAL_ERROR"
+    assert dicts(left.unionByName(right, allowMissingColumns=True), "b") == [
+        {"a": "x", "b": 1, "c": None},
+        {"a": None, "b": 2, "c": "y"},
+    ]
+    make(spark, {"id": [2], "name": ["n"]}).createOrReplaceTempView("union_names")
+    sql = "SELECT 1 AS id, NULL AS name UNION ALL SELECT id, name FROM union_names"
+    assert dicts(spark.sql(sql), "id") == [{"id": 1, "name": None}, {"id": 2, "name": "n"}]
 
 
 def test_union_by_name_rejects_missing_without_allow_missing(spark: SparkSession) -> None:

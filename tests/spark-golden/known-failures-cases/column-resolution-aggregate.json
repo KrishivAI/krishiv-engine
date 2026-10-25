@@ -1,8 +1,7 @@
 {
   "cases": {
     "depends-on-command": [
-      8,
-      10
+      8
     ]
   },
   "file": "column-resolution-aggregate",

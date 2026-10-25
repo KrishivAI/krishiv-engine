@@ -179,6 +179,7 @@ impl Gen<'_> {
             1 => ExprNode::Literal(self.literal()),
             2 => ExprNode::Star(Star {
                 qualifier: self.many(0, 1, Gen::name),
+                except: Vec::new(),
                 plan_id: self.plan_ref(),
             }),
             3 => ExprNode::Resolved(ResolvedExpr::Column(self.bound())),
@@ -702,7 +703,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         ExprNode::Column(ColumnRef { name, .. }) => m_strings(name, w),
         ExprNode::Literal(v) => m_literal(v, w),
         ExprNode::TypedLiteral { value, .. } => m_string(value, w),
-        ExprNode::Star(Star { qualifier, .. }) => m_strings(qualifier, w),
+        ExprNode::Star(Star {
+            qualifier, except, ..
+        }) => m_strings(qualifier, w) || except.iter_mut().any(|path| m_strings(path, w)),
         ExprNode::Function(FunctionCall {
             name,
             args,
@@ -1037,13 +1040,15 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             site!(w, flip(kind, JoinKind::Inner, JoinKind::Cross));
             let other = match condition {
                 JoinCondition::None => JoinCondition::Using(vec!["x".to_owned()]),
-                JoinCondition::On(_) | JoinCondition::Using(_) => JoinCondition::None,
+                JoinCondition::On(_) | JoinCondition::Using(_) | JoinCondition::Natural => {
+                    JoinCondition::None
+                }
             };
             site!(w, *condition = other);
             let inside = match condition {
                 JoinCondition::On(e) => m_expr(e, w),
                 JoinCondition::Using(cols) => m_strings(cols, w),
-                JoinCondition::None => false,
+                JoinCondition::None | JoinCondition::Natural => false,
             };
             inside || m_plan(left, w) || m_plan(right, w)
         }

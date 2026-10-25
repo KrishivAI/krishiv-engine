@@ -3,7 +3,23 @@ name: CodSpeed
 on:
   # No merge_group trigger: CodSpeed rejects that event ("Event merge_group is not
   # supported by CodSpeed"), so its check is not required on main; PRs still get the report.
+  # Pull requests run the benchmarks only when they change the execution path the
+  # benchmarks measure; every push to main runs them all, so a regression from any
+  # other change still shows up on the next main run and is fixed forward.
   pull_request:
+    paths:
+      - "crates/krishiv-exec/**"
+      - "crates/krishiv-kernels/**"
+      - "crates/krishiv-memory/**"
+      - "crates/krishiv-io/**"
+      - "crates/krishiv-alloc/**"
+      - "crates/krishiv-types/**"
+      - "crates/krishiv-common/**"
+      - "crates/*/benches/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/codspeed.yml"
   push:
     branches: [main]
   workflow_dispatch:

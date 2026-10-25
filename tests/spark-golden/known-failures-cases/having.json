@@ -2,9 +2,6 @@
   "cases": {
     "depends-on-command": [
       3,
-      19,
-      21,
-      22,
       28,
       29,
       30,

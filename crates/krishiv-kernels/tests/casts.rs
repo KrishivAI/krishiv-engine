@@ -587,6 +587,22 @@ fn unsupported_and_identity() {
         &StringArray::from(vec!["\u{FFFD}(\u{FFFD}"]) as &dyn Array
     );
     assert_eq!(run(&bad, &DataType::Utf8, Try).unwrap().null_count(), 1);
+    // `STRING` bytes reinterpreted as `BINARY` never fail (Spark's
+    // `CAST(string AS BINARY)` is the UTF-8 bytes): the union planner uses
+    // this for binary-safe string branches, whose bytes are not necessarily
+    // valid UTF-8.
+    for mode in [Ansi, Legacy, Try] {
+        let bytes = run(
+            &StringArray::from(vec![Some("x"), None]),
+            &DataType::Binary,
+            mode,
+        )
+        .unwrap();
+        assert_eq!(
+            bytes.as_ref(),
+            &arrow_array::BinaryArray::from(vec![Some(&b"x"[..]), None]) as &dyn Array
+        );
+    }
     assert!(run(&s("1"), &DataType::Boolean, Ansi).is_err());
     let d: ArrayRef = Arc::new(Date32Array::from(vec![1]));
     assert!(run(&d, &DataType::Int32, Ansi).is_err());

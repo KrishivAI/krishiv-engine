@@ -254,6 +254,11 @@ fn check_function(ctx: &AnalysisContext, name: &str, origin: Origin) -> Result<(
     if super::analytics::GroupingFn::from_name(name).is_some() {
         return Ok(());
     }
+    // `qualify` is lowering's marker for a `QUALIFY` predicate, resolved
+    // (and stripped) by the analyzer's filter path, never a routine.
+    if super::ops::is_qualify_wrapper(name) {
+        return Ok(());
+    }
     match ctx
         .functions
         .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile)
