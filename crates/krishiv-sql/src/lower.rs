@@ -1361,6 +1361,7 @@ fn takes_null_treatment(name: &str) -> bool {
         "last",
         "first_value",
         "last_value",
+        "any_value",
         "lag",
         "lead",
         "nth_value",

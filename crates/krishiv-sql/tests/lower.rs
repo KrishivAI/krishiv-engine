@@ -128,6 +128,8 @@ fn null_treatment_sets_the_ignore_nulls_argument() {
         ("first(a, false) IGNORE NULLS", "first(a, true)"),
         ("last(a, true) RESPECT NULLS", "last(a, false)"),
         ("first(a, b) IGNORE NULLS", "first(a, b)"),
+        ("any_value(a) IGNORE NULLS", "any_value(a, true)"),
+        ("any_value(a, true) RESPECT NULLS", "any_value(a, false)"),
     ];
     for (call, shown_call) in cases {
         let plan = shown(&format!("SELECT {call} FROM t"));
