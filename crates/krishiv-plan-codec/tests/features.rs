@@ -406,3 +406,71 @@ fn a_type_too_deep_for_readers_does_not_encode() {
     });
     assert!(matches!(encode(&plan), Err(CodecError::Unsupported(_))));
 }
+
+/// An Arrow type holding an array, a map or a struct.
+fn arrow_list() -> arrow_schema::DataType {
+    use arrow_schema::{DataType as A, Field};
+    A::List(std::sync::Arc::new(Field::new("item", A::Int32, true)))
+}
+
+#[test]
+fn a_nested_type_only_in_an_arrow_field_needs_the_feature() {
+    use arrow_schema::{DataType as A, Field, Fields};
+    use krishiv_exec::physical::{AggregatePlan, SubqueryPlan};
+    let aggregate = {
+        let mut a = inventory::aggregate_exprs().remove(1);
+        a.arg_type = arrow_list();
+        a
+    };
+    let struct_type = A::Struct(Fields::from(vec![Field::new("a", A::Int32, true)]));
+    let with_schema = |t: A| {
+        let plan = plan_of(PhysNode::OneRow);
+        krishiv_exec::physical::PhysicalPlan::new(
+            plan.root().clone(),
+            std::sync::Arc::new(arrow_schema::Schema::new(vec![Field::new("c", t, true)])),
+            plan.explain().clone(),
+            plan.env().clone(),
+        )
+    };
+    let plans = [
+        // A subquery's value type.
+        plan_of(PhysNode::Filter {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            predicate: inventory::predicate(),
+            subqueries: vec![SubqueryPlan {
+                data_type: arrow_list(),
+                ..inventory::subquery()
+            }],
+        }),
+        // An aggregate's argument type.
+        plan_of(PhysNode::Aggregate {
+            input: Box::new(PhysNode::OneRow),
+            aggregate: AggregatePlan {
+                group_by: Vec::new(),
+                distinct: vec![false],
+                aggregates: vec![aggregate],
+                output: krishiv_exec::aggregate::AggregateOutput::Partial,
+            },
+        }),
+        // The plan's output schema.
+        with_schema(struct_type),
+    ];
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::NestedTypes),
+    );
+    for plan in plans {
+        assert!(plan_features(&plan).contains(&Feature::NestedTypes));
+        let bytes = encode(&plan).unwrap();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["nested_types".to_owned()]
+            }
+        );
+        assert_eq!(decode(&bytes).unwrap(), plan);
+    }
+}

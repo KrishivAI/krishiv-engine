@@ -85,21 +85,13 @@ pub(super) fn unsupported(feature: impl Into<String>, origin: Origin) -> Analysi
 }
 
 /// Whether `a` and `b` name the same thing: Java's `equalsIgnoreCase`
-/// unless `case_sensitive`. Java compares UTF-16 units and Rust `char`s;
-/// they differ only for characters whose case mapping is several
-/// characters (`ß` and the like), which no identifier comparison of Spark's
-/// relies on.
+/// unless `case_sensitive` (the one implementation field names of nested
+/// types use too).
 pub(super) fn same(a: &str, b: &str, case_sensitive: bool) -> bool {
     if case_sensitive {
         return a == b;
     }
-    a.len() == b.len() && a.eq_ignore_ascii_case(b)
-        || a.chars().count() == b.chars().count()
-            && a.chars().zip(b.chars()).all(|(x, y)| {
-                x == y
-                    || x.to_uppercase().eq(y.to_uppercase())
-                    || x.to_lowercase().eq(y.to_lowercase())
-            })
+    krishiv_types::equals_ignore_case(a, b)
 }
 
 pub(super) async fn bind(plan: &Plan, ctx: &AnalysisContext) -> Result<Bindings, AnalysisError> {

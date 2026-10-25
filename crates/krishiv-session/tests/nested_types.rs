@@ -277,3 +277,22 @@ fn struct_field_names_follow_case_sensitivity() {
         ErrorClass::IncompatibleColumnType
     );
 }
+
+/// `=` and `IN` compare struct shapes (`DataType.equalsStructurally`): field
+/// names, in any case, never matter, whatever `spark.sql.caseSensitive` says.
+#[test]
+fn struct_comparison_ignores_field_names_under_both_settings() {
+    let s = session();
+    for case_sensitive in ["false", "true"] {
+        s.conf()
+            .set("spark.sql.caseSensitive", case_sensitive)
+            .unwrap();
+        for sql in [
+            "SELECT s = CAST(s AS STRUCT<A: INT>) FROM n",
+            "SELECT s IN (CAST(s AS STRUCT<A: INT>)) FROM n",
+            "SELECT s = CAST(s AS STRUCT<other: INT>) FROM n",
+        ] {
+            assert_eq!(types(&s, sql).len(), 1, "{case_sensitive}: {sql}");
+        }
+    }
+}

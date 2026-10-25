@@ -27,6 +27,7 @@ use krishiv_types::DataType;
 
 use crate::arrow::{schema_bytes, type_bytes};
 use crate::error::{CodecError, Result};
+use crate::features::arrow_type_is_nested;
 use crate::features::{Feature, legacy_level, plan_features};
 use crate::proto as pb;
 use crate::{EPOCH, FORMAT_VERSION};
@@ -58,6 +59,14 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         e.table.push(message);
     }
     let root = e.node_index(plan.root())?;
+    if plan
+        .schema()
+        .fields()
+        .iter()
+        .any(|f| arrow_type_is_nested(f.data_type()))
+    {
+        e.nested.set(true);
+    }
     if e.nested.get() != features.contains(&Feature::NestedTypes) {
         return Err(CodecError::Unsupported(
             "nested types where the feature header does not list them (an engine bug)".to_owned(),
@@ -165,7 +174,7 @@ impl Encoder {
                 functions: window
                     .functions
                     .iter()
-                    .map(window_function)
+                    .map(|f| window_function(f, &self.nested))
                     .collect::<Result<_>>()?,
             }),
             PhysNode::WindowGroupLimit { input, limit } => {
@@ -291,7 +300,7 @@ impl Encoder {
                         SubqueryValueKind::Scalar => pb::SubqueryValueKind::Scalar,
                         SubqueryValueKind::Exists => pb::SubqueryValueKind::Exists,
                     } as i32,
-                    data_type: type_bytes(&s.data_type),
+                    data_type: arrow_bytes(&s.data_type, &self.nested),
                     plan: self.node_index(&s.plan)?,
                 })
             })
@@ -325,7 +334,7 @@ impl Encoder {
             aggregates: plan
                 .aggregates
                 .iter()
-                .map(aggregate_expr)
+                .map(|a| aggregate_expr(a, &self.nested))
                 .collect::<Result<_>>()?,
             distinct: plan.distinct.clone(),
             output: match plan.output {
@@ -408,7 +417,11 @@ impl Encoder {
             version: version.map(|v| v.0),
             projection: node.projection.iter().map(column_path).collect(),
             filter,
-            runtime_filters: node.runtime_filters.iter().map(scan_filter).collect(),
+            runtime_filters: node
+                .runtime_filters
+                .iter()
+                .map(|f| scan_filter(f, &self.nested))
+                .collect(),
             row_stage: Some(row_stage(&node.row_stage)),
         })
     }
@@ -607,11 +620,11 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
     }
 }
 
-fn scan_filter(f: &ScanRuntimeFilter) -> pb::ScanRuntimeFilter {
+fn scan_filter(f: &ScanRuntimeFilter, nested: &Cell<bool>) -> pb::ScanRuntimeFilter {
     pb::ScanRuntimeFilter {
         id: f.id.0,
         column: Some(column_path(&f.column)),
-        key_type: type_bytes(&f.key_type),
+        key_type: arrow_bytes(&f.key_type, nested),
     }
 }
 
@@ -622,7 +635,7 @@ fn row_stage(s: &RowStageSettings) -> pb::RowStageSettings {
     }
 }
 
-fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
+fn window_function(f: &WindowFunctionPlan, nested: &Cell<bool>) -> Result<pb::WindowFunctionPlan> {
     use pb::window_function_plan::Function;
     let function = match &f.function {
         WindowFunction::RowNumber => Function::RowNumber(pb::Empty {}),
@@ -631,7 +644,7 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
         WindowFunction::PercentRank => Function::PercentRank(pb::Empty {}),
         WindowFunction::CumeDist => Function::CumeDist(pb::Empty {}),
         WindowFunction::Ntile(buckets) => Function::Ntile(*buckets),
-        WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a)?),
+        WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a, nested)?),
         WindowFunction::Offset {
             input,
             offset,
@@ -643,7 +656,7 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
             offset: *offset,
             default: default.map(|c| c as u64),
             ignore_nulls: *ignore_nulls,
-            data_type: type_bytes(data_type),
+            data_type: arrow_bytes(data_type, nested),
         }),
         WindowFunction::NthValue {
             input,
@@ -654,7 +667,7 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
             input: *input as u64,
             n: *n,
             ignore_nulls: *ignore_nulls,
-            data_type: type_bytes(data_type),
+            data_type: arrow_bytes(data_type, nested),
         }),
     };
     let offset = |b: FrameBound| match b {
@@ -692,7 +705,7 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
     }
 }
 
-fn aggregate_expr(a: &AggregateExpr) -> Result<pb::AggregateExpr> {
+fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     let (function, ignore_nulls) = match a.function {
         AggregateFunction::Count => (pb::AggregateFunction::Count, false),
         AggregateFunction::Sum => (pb::AggregateFunction::Sum, false),
@@ -718,7 +731,7 @@ fn aggregate_expr(a: &AggregateExpr) -> Result<pb::AggregateExpr> {
             AggInput::Raw => pb::AggregateInput::Raw,
             AggInput::State => pb::AggregateInput::State,
         } as i32,
-        arg_type: type_bytes(&a.arg_type),
+        arg_type: arrow_bytes(&a.arg_type, nested),
         name: a.name.clone(),
     })
 }
@@ -778,6 +791,15 @@ fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
         }
     };
     Ok(pb::OptionValue { kind: Some(kind) })
+}
+
+/// The IPC bytes of the Arrow type `t`; `nested` is set when it is or holds an
+/// array, map or struct.
+fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
+    if arrow_type_is_nested(t) {
+        nested.set(true);
+    }
+    type_bytes(t)
 }
 
 /// `t`; `nested` is set when it is an array, map or struct.
