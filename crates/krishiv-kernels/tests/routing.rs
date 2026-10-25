@@ -168,7 +168,9 @@ fn several_columns_are_ordered_and_equal_columns_do_not_collapse() {
 /// every key group's count is within a few standard deviations.
 #[test]
 fn key_groups_are_spread_evenly() {
-    let n = 1 << 20;
+    // Miri interprets every hash, so it checks a smaller sample (the same
+    // bound, 16 keys per group on average); natively a million keys.
+    let n = if cfg!(miri) { 1 << 16 } else { 1 << 20 };
     let a = Int64Array::from_iter_values(0..n);
     let b = Int32Array::from_iter_values((0..n).map(|i| i32::try_from(i % 7).unwrap_or(0)));
     for h in [h_of(&[&a]), h_of(&[&a, &b])] {
@@ -317,4 +319,103 @@ fn key_group_ranges_tile() {
     assert_eq!(partition_of(u64::MAX, 0), 0);
     assert_eq!(radix(u64::MAX, 0), 0);
     assert_eq!(key_group(u64::MAX), KEY_GROUPS - 1);
+}
+
+/// Every fixed-width key type hashes the little-endian bytes of its own
+/// width (the normalized-bytes table of the module docs): integers,
+/// unsigned integers, dates, timestamps and durations of every unit,
+/// year-month intervals and fixed-size binary.
+#[test]
+fn every_fixed_width_type_hashes_its_own_bytes() {
+    use arrow_array::{
+        Date64Array, DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+        DurationSecondArray, FixedSizeBinaryArray, Int16Array, IntervalYearMonthArray,
+        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+        TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    };
+    let v: [i64; 4] = [0, 1, -2, i64::MAX - 5];
+    // The low `W` bytes of a value, little-endian.
+    fn low<const W: usize>(x: i64) -> [u8; W] {
+        let mut b = [0; W];
+        b.copy_from_slice(&x.to_le_bytes()[..W]);
+        b
+    }
+    let want = |bytes: &[Vec<u8>]| bytes.iter().map(|b| xxh64(b)).collect::<Vec<_>>();
+    let le = |w: usize| {
+        v.iter()
+            .map(|x| x.to_le_bytes()[..w].to_vec())
+            .collect::<Vec<_>>()
+    };
+    let cases: Vec<(ArrayRef, usize)> = vec![
+        (
+            Arc::new(Int8Array::from_iter_values(
+                v.iter().map(|&x| i8::from_le_bytes(low(x))),
+            )),
+            1,
+        ),
+        (
+            Arc::new(UInt8Array::from_iter_values(
+                v.iter().map(|&x| u8::from_le_bytes(low(x))),
+            )),
+            1,
+        ),
+        (
+            Arc::new(Int16Array::from_iter_values(
+                v.iter().map(|&x| i16::from_le_bytes(low(x))),
+            )),
+            2,
+        ),
+        (
+            Arc::new(UInt16Array::from_iter_values(
+                v.iter().map(|&x| u16::from_le_bytes(low(x))),
+            )),
+            2,
+        ),
+        (
+            Arc::new(Int32Array::from_iter_values(
+                v.iter().map(|&x| i32::from_le_bytes(low(x))),
+            )),
+            4,
+        ),
+        (
+            Arc::new(Date32Array::from_iter_values(
+                v.iter().map(|&x| i32::from_le_bytes(low(x))),
+            )),
+            4,
+        ),
+        (
+            Arc::new(IntervalYearMonthArray::from_iter_values(
+                v.iter().map(|&x| i32::from_le_bytes(low(x))),
+            )),
+            4,
+        ),
+        (
+            Arc::new(UInt32Array::from_iter_values(
+                v.iter().map(|&x| u32::from_le_bytes(low(x))),
+            )),
+            4,
+        ),
+        (Arc::new(Int64Array::from_iter_values(v)), 8),
+        (
+            Arc::new(UInt64Array::from_iter_values(
+                v.iter().map(|&x| x.cast_unsigned()),
+            )),
+            8,
+        ),
+        (Arc::new(Date64Array::from_iter_values(v)), 8),
+        (Arc::new(TimestampSecondArray::from_iter_values(v)), 8),
+        (Arc::new(TimestampMillisecondArray::from_iter_values(v)), 8),
+        (Arc::new(TimestampMicrosecondArray::from_iter_values(v)), 8),
+        (Arc::new(TimestampNanosecondArray::from_iter_values(v)), 8),
+        (Arc::new(DurationSecondArray::from_iter_values(v)), 8),
+        (Arc::new(DurationMillisecondArray::from_iter_values(v)), 8),
+        (Arc::new(DurationMicrosecondArray::from_iter_values(v)), 8),
+        (Arc::new(DurationNanosecondArray::from_iter_values(v)), 8),
+    ];
+    for (a, w) in &cases {
+        assert_eq!(h_of(&[a.as_ref()]), want(&le(*w)), "{}", a.data_type());
+    }
+    let fixed =
+        FixedSizeBinaryArray::try_from_iter(le(8).into_iter()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(h_of(&[&fixed]), want(&le(8)));
 }

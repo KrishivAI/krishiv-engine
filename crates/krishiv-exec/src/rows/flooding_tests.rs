@@ -220,3 +220,23 @@ fn full_collisions_stay_correct_and_bounded() {
         }
     }
 }
+
+/// The probe-run measure is the salted directory's: a flat index (direct
+/// slots, no runs to aim at) has none.
+#[test]
+fn a_flat_index_has_no_probe_runs() {
+    let layout = layout();
+    let keys: Vec<i64> = (0..64).collect();
+    let enc = encode(&layout, &keys, &[], 0);
+    let all: Vec<usize> = (0..keys.len()).collect();
+    let src = Src {
+        rows: enc.gather(&layout, &all).unwrap_or_else(|e| panic!("{e}")),
+        hashes: enc.hashes().to_vec(),
+        stride: layout.stride(),
+    };
+    let mut next = vec![NO_MATCH; keys.len()];
+    let index = JoinIndex::build(&layout, &src, keys.len(), 7, IndexChoice::Flat, &mut next)
+        .unwrap_or_else(|e| panic!("{e}"));
+    assert!(index.is_flat());
+    assert_eq!(index.probe_run(enc.hashes()[0]), None);
+}
