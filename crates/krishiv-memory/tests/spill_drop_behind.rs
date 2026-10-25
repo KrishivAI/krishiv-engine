@@ -6,14 +6,18 @@
 //! read with `mincore` on a mapping of the file (Linux, on a disk file
 //! system: the target directory; tmpfs keeps its pages by design).
 #![cfg(target_os = "linux")]
-#![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stderr,
+    reason = "test helpers sit outside #[test] fns"
+)]
 
 use std::ffi::{c_int, c_void};
 use std::fs::File;
 use std::os::fd::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
@@ -83,11 +87,21 @@ fn on_ram_fs(dir: &Path) -> bool {
         .is_some_and(|(_, fs)| fs == "tmpfs" || fs == "ramfs")
 }
 
-fn dir() -> PathBuf {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed);
-    PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("drop-behind-{}-{n}", std::process::id()))
+/// A private (0700, as the spill manager requires) directory on the disk file
+/// system of the target dir, removed on drop.
+fn dir() -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt;
+    tempfile::Builder::new()
+        .prefix("drop-behind-")
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .unwrap()
+}
+
+/// The system page size.
+fn page_size() -> usize {
+    // SAFETY: plain query of a constant.
+    usize::try_from(unsafe { sysconf(SC_PAGESIZE) }).unwrap()
 }
 
 /// 64 batches of 4096 rows with a 200-byte string: about 52 MiB.
@@ -108,11 +122,25 @@ fn batches() -> Vec<Batch> {
         .collect()
 }
 
+/// What [`write`] returns; the manager and the temp directory outlive the file.
+struct Written {
+    _manager: SpillManager,
+    _root: tempfile::TempDir,
+    file: SpillFile,
+    input: Vec<Batch>,
+}
+
 /// Writes [`batches`] with drop-behind window `window` and returns the file
-/// with its manager (which owns the directory).
-fn write(window: u64) -> (SpillManager, SpillFile, Vec<Batch>) {
+/// with its manager. With `ram` false and a window set, the file being
+/// written is inspected halfway, before `finish` (which drops everything
+/// itself), so the periodic drop-behind during the write is what is tested:
+/// the pages still cached are at most the window of the last drop, the
+/// window of the one writeback in flight and the unflushed buffer, plus
+/// page-boundary slack.
+fn write(window: u64, ram: bool) -> Written {
+    let root_dir = dir();
     let manager = SpillManager::open(&SpillConfig {
-        dir: dir(),
+        dir: root_dir.path().to_owned(),
         drop_behind: window,
         // Uncompressed: the file is as large as the data.
         codec: SpillCodec::None,
@@ -130,11 +158,31 @@ fn write(window: u64) -> (SpillManager, SpillFile, Vec<Batch>) {
     let mut w = scope
         .writer(input[0].schema(), Reservation::new(Arc::clone(&pool), id))
         .unwrap();
-    for b in &input {
+    for (n, b) in input.iter().enumerate() {
         w.write(b).unwrap();
+        if n + 1 == input.len() / 2 && window > 0 && !ram {
+            let live = std::fs::read_dir(scope.dir())
+                .unwrap()
+                .map(|e| e.unwrap().path())
+                .find(|p| p.to_string_lossy().ends_with(".spill.tmp"))
+                .expect("the file being written");
+            let (resident, pages) = resident_pages(&live);
+            let bound = 3 * usize::try_from(window).unwrap().div_ceil(page_size()) + 64;
+            eprintln!("mid-write: {resident} of {pages} pages cached (bound {bound})");
+            assert!(pages > 2 * bound, "{pages}");
+            assert!(
+                resident <= bound,
+                "{resident} of {pages} pages cached mid-write (bound {bound})"
+            );
+        }
     }
     let file = w.finish().unwrap();
-    (manager, file, input)
+    Written {
+        _manager: manager,
+        _root: root_dir,
+        file,
+        input,
+    }
 }
 
 fn read_back(file: &SpillFile) -> Vec<Batch> {
@@ -153,32 +201,32 @@ fn read_back(file: &SpillFile) -> Vec<Batch> {
 #[test]
 fn a_finished_spill_file_is_dropped_from_the_page_cache_and_reads_back() {
     let probe = dir();
-    std::fs::create_dir_all(&probe).unwrap();
-    let ram = on_ram_fs(&probe);
-    std::fs::remove_dir_all(&probe).unwrap();
-
-    // Window 1 MiB: several windows dropped while writing, the rest at finish.
-    let (_m, file, input) = write(1 << 20);
-    let (resident, pages) = resident_pages(file.path());
-    eprintln!("drop-behind on: {resident} of {pages} pages cached");
+    let ram = on_ram_fs(probe.path());
     if ram {
         eprintln!("spill test directory is on a RAM file system: residency not checked");
-    } else {
+    }
+
+    // Window 1 MiB: several windows dropped while writing (checked halfway),
+    // the rest at finish.
+    let on = write(1 << 20, ram);
+    let (resident, pages) = resident_pages(on.file.path());
+    eprintln!("drop-behind on: {resident} of {pages} pages cached");
+    if !ram {
         assert!(pages > 1000, "{pages}");
         assert!(
             resident * 100 <= pages,
             "{resident} of {pages} pages still cached"
         );
     }
-    let output = read_back(&file);
-    assert_eq!(output.len(), input.len());
-    for (a, b) in input.iter().zip(&output) {
+    let output = read_back(&on.file);
+    assert_eq!(output.len(), on.input.len());
+    for (a, b) in on.input.iter().zip(&output) {
         assert_eq!(a.data(), b.data());
     }
 
     // Off: the written pages stay cached (the kernel had no reason to drop them).
-    let (_m, file, _) = write(0);
-    let (resident, pages) = resident_pages(file.path());
+    let off = write(0, ram);
+    let (resident, pages) = resident_pages(off.file.path());
     eprintln!("drop-behind off: {resident} of {pages} pages cached");
     if !ram {
         assert!(
