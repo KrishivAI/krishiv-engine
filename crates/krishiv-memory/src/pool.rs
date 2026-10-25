@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use krishiv_common::config::{
     Config, ConfigValue, MEMORY_ABORT_RELEASE_TIMEOUT, MEMORY_LIMIT, MEMORY_RESERVATION_QUANTUM,
-    MEMORY_SPILL_SCRATCH_RESERVE, MEMORY_SPILL_WAIT_TIMEOUT,
+    MEMORY_RESIDENT_GUARD, MEMORY_SPILL_SCRATCH_RESERVE, MEMORY_SPILL_WAIT_TIMEOUT,
 };
 
 use crate::arbitrate::Escalation;
@@ -73,6 +73,10 @@ pub struct MemoryConfig {
     /// at 1/8 of its limit (`krishiv.memory.spillScratchReserve`; see the
     /// module docs). 0 disables the floor.
     pub spill_scratch_reserve: usize,
+    /// Whether a limited root takes part in the resident-set guard
+    /// (`krishiv.memory.residentGuard`); it acts only once the program has
+    /// installed a probe ([`crate::set_resident_probe`]).
+    pub resident_guard: bool,
 }
 
 impl Default for MemoryConfig {
@@ -105,6 +109,10 @@ impl MemoryConfig {
             ),
             spill_scratch_reserve: size(config.get(&MEMORY_SPILL_SCRATCH_RESERVE))
                 .unwrap_or(DEFAULT_SPILL_SCRATCH_RESERVE),
+            resident_guard: config
+                .get(&MEMORY_RESIDENT_GUARD)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(true),
         }
     }
 }
@@ -736,7 +744,7 @@ impl TreePool {
                 shared,
             }),
         });
-        if pool.node.limit.is_some() {
+        if pool.node.limit.is_some() && config.resident_guard {
             crate::resident::register(&pool.node);
         }
         pool
@@ -867,6 +875,10 @@ impl MemoryPool for TreePool {
 
     fn try_reserve_scratch(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
         self.try_reserve_class(id, bytes, Class::Scratch)
+    }
+
+    fn try_reserve_unguarded(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.try_reserve_class(id, bytes, Class::Unguarded)
     }
 
     fn reserve<'a>(

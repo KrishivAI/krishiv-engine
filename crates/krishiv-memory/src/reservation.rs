@@ -22,6 +22,9 @@ pub struct Reservation {
     /// Growth may take the pools' spill-scratch floors
     /// ([`Reservation::for_spill_scratch`]).
     scratch: bool,
+    /// Growth ignores the resident-set guard's cut
+    /// ([`Reservation::unguarded`]).
+    unguarded: bool,
 }
 
 impl Reservation {
@@ -34,6 +37,7 @@ impl Reservation {
             handle: None,
             to_credit: false,
             scratch: false,
+            unguarded: false,
         }
     }
 
@@ -45,6 +49,7 @@ impl Reservation {
             handle: Some(handle),
             to_credit: false,
             scratch: false,
+            unguarded: false,
         }
     }
 
@@ -72,6 +77,16 @@ impl Reservation {
     #[must_use]
     pub fn for_spill_scratch(mut self) -> Self {
         self.scratch = true;
+        self
+    }
+
+    /// Makes `try_grow` take what credit does not cover with
+    /// [`MemoryPool::try_reserve_unguarded`], outside the resident-set
+    /// guard's cut. For growth whose refusal fails the query rather than
+    /// making it spill: reading spilled data back, a merge's current keys.
+    #[must_use]
+    pub fn unguarded(mut self) -> Self {
+        self.unguarded = true;
         self
     }
 
@@ -106,10 +121,11 @@ impl Reservation {
     /// [`MemoryError`] if the pool cannot grant the bytes now.
     pub fn try_grow(&mut self, bytes: usize) -> Result<(), MemoryError> {
         let (rest, credit) = self.draw_credit(bytes);
-        let reserved = match (rest, self.scratch) {
-            (0, _) => Ok(()),
-            (_, true) => self.pool.try_reserve_scratch(self.id, rest),
-            (_, false) => self.pool.try_reserve(self.id, rest),
+        let reserved = match (rest, self.scratch, self.unguarded) {
+            (0, ..) => Ok(()),
+            (_, true, _) => self.pool.try_reserve_scratch(self.id, rest),
+            (_, false, true) => self.pool.try_reserve_unguarded(self.id, rest),
+            (_, false, false) => self.pool.try_reserve(self.id, rest),
         };
         if let Err(e) = reserved {
             self.refund(credit);
@@ -206,6 +222,7 @@ impl Reservation {
             handle: self.handle.clone(),
             to_credit: self.to_credit,
             scratch: self.scratch,
+            unguarded: self.unguarded,
         }
     }
 

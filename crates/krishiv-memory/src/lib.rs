@@ -29,8 +29,9 @@
 //!   ([`set_resident_probe`], by the program that owns the allocator), a
 //!   limited root samples the process's resident set and cuts what it holds
 //!   above the reservations plus an [`allowance`] from what ordinary grants
-//!   may take, so consumers spill allocator overhead too. The cut never
-//!   fails or aborts a query (see the `resident` module).
+//!   may take, so consumers spill allocator overhead too. Spill I/O,
+//!   [`Reservation::unguarded`] growth and arbitration rounds whose spills
+//!   are exhausted are exempt from the cut (see the `resident` module).
 //!
 //! # Driver protocol
 //! Each pipeline driver has a [`SpillOwner`] and registers every consumer
@@ -139,6 +140,15 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// # Errors
     /// As [`try_reserve`](Self::try_reserve).
     fn try_reserve_scratch(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.try_reserve(id, bytes)
+    }
+    /// [`try_reserve`](Self::try_reserve) outside the resident-set guard's
+    /// cut (see [`set_resident_probe`]): for growth whose refusal would fail
+    /// the query rather than make it spill ([`Reservation::unguarded`]).
+    ///
+    /// # Errors
+    /// As [`try_reserve`](Self::try_reserve).
+    fn try_reserve_unguarded(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
         self.try_reserve(id, bytes)
     }
     /// Slow path: may run arbitration. Called only by drivers between

@@ -19,11 +19,19 @@ const LIMIT: usize = 64 * MIB;
 static ROOT: OnceLock<Arc<TreePool>> = OnceLock::new();
 /// What the fake process holds beyond the root's reservations.
 static OVERHEAD: AtomicUsize = AtomicUsize::new(0);
+/// When not 0: the resident set, whatever the reservations ([`UNREADABLE`]:
+/// the probe fails).
+static FIXED: AtomicUsize = AtomicUsize::new(0);
+const UNREADABLE: usize = usize::MAX;
 
 /// A resident set that follows the root's reservations plus [`OVERHEAD`],
-/// as a process's does.
+/// as a process's does, or [`FIXED`].
 fn probe() -> Option<usize> {
-    Some(ROOT.get()?.reserved() + OVERHEAD.load(Ordering::SeqCst))
+    match FIXED.load(Ordering::SeqCst) {
+        0 => Some(ROOT.get()?.reserved() + OVERHEAD.load(Ordering::SeqCst)),
+        UNREADABLE => None,
+        fixed => Some(fixed),
+    }
 }
 
 /// Lets the next grant that needs the pools take a new sample.
@@ -42,6 +50,7 @@ async fn the_guard_spills_what_the_process_holds_beyond_the_allowance() {
             spill_wait_timeout: Duration::from_secs(5),
             abort_release_timeout: Duration::from_secs(5),
             spill_scratch_reserve: 0,
+            resident_guard: true,
         })
     });
 
@@ -92,4 +101,49 @@ async fn the_guard_spills_what_the_process_holds_beyond_the_allowance() {
     q2.try_reserve(other, LIMIT - root.reserved()).unwrap();
     assert_eq!(root.reserved(), LIMIT);
     assert!(q1.check_aborted().is_ok() && q2.check_aborted().is_ok());
+    q2.release(other, LIMIT);
+
+    // A probe that cannot read the resident set clears the cut.
+    OVERHEAD.store(allowance(LIMIT) + 16 * MIB, Ordering::SeqCst);
+    next_sample();
+    q2.try_reserve(other, MIB).unwrap();
+    assert!(q2.try_reserve(other, LIMIT - root.reserved()).is_err());
+    FIXED.store(UNREADABLE, Ordering::SeqCst);
+    next_sample();
+    q2.try_reserve(other, LIMIT - root.reserved()).unwrap();
+    q2.release(other, LIMIT);
+
+    // Spilling during an excess does not raise it: the process stays at 8 MiB
+    // over the allowance of 40 MiB reserved while the reservations drop to
+    // 21 MiB (the allocator keeps the freed pages). Measured from 21 MiB the
+    // excess would be 27 MiB, cut to 16; from the high-water it stays 8.
+    assert_eq!(root.reserved(), held.size());
+    held.shrink(held.size().saturating_sub(40 * MIB));
+    held.try_grow(40 * MIB - held.size()).unwrap();
+    FIXED.store(40 * MIB + allowance(LIMIT) + 8 * MIB, Ordering::SeqCst);
+    next_sample();
+    q2.try_reserve(other, MIB).unwrap(); // samples: excess 8 MiB from 40
+    held.shrink(20 * MIB);
+    next_sample();
+    q2.try_reserve(other, MIB).unwrap(); // samples at 21 MiB reserved
+    assert_eq!(root.reserved(), 22 * MIB);
+    // The ceiling is 64 - 8 MiB (it would be 48 with a cut of 16).
+    assert!(q2.try_reserve(other, 35 * MIB).is_err(), "the cut applies");
+    q2.try_reserve(other, 34 * MIB).unwrap();
+
+    // `krishiv.memory.residentGuard=false`: a root that is never cut.
+    let off = TreePool::new(&MemoryConfig {
+        limit: Some(8 * MIB),
+        quantum: MIB,
+        spill_scratch_reserve: 0,
+        resident_guard: false,
+        ..MemoryConfig::default()
+    });
+    let q = off.child("q", None);
+    let id = q.register("op", None);
+    FIXED.store(usize::MAX / 2, Ordering::SeqCst);
+    next_sample();
+    // Sampling: the guarded root is cut by a quarter, below what it holds.
+    assert!(q2.try_reserve(other, MIB).is_err());
+    q.try_reserve(id, 8 * MIB).unwrap();
 }

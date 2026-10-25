@@ -47,6 +47,7 @@ fn pool(limit: usize, quantum: usize) -> Arc<TreePool> {
             spill_wait_timeout: Duration::from_secs(1),
             abort_release_timeout: Duration::from_secs(1),
             spill_scratch_reserve: 0,
+            resident_guard: true,
         },
         Arc::new(NeverClock),
     )
@@ -450,6 +451,7 @@ fn ordinary_grants_never_take_the_scratch_floor() {
                 spill_wait_timeout: Duration::from_secs(1),
                 abort_release_timeout: Duration::from_secs(1),
                 spill_scratch_reserve: 2,
+                resident_guard: true,
             },
             Arc::new(NeverClock),
         );
@@ -489,6 +491,7 @@ fn an_expired_deadline_still_awaits_a_begun_spill() {
                 spill_wait_timeout: Duration::from_secs(1),
                 abort_release_timeout: Duration::from_secs(1),
                 spill_scratch_reserve: 0,
+                resident_guard: true,
             },
             Arc::new(ExpiredClock::default()),
         );

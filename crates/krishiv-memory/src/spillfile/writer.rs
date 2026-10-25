@@ -95,7 +95,9 @@ impl SpillWriter {
             file: Some(file),
             schema,
             weighted_schema,
-            reservation,
+            // A spill frees memory: the resident-set guard never refuses
+            // its working memory.
+            reservation: reservation.unguarded(),
             charged: 0,
             batches: 0,
             rows: 0,

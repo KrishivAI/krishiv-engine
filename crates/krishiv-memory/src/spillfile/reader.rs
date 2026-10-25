@@ -135,7 +135,9 @@ impl SpillFile {
             pos: FILE_HEADER_LEN as u64,
             batches: 0,
             rows: 0,
-            reservation,
+            // Reading spilled data back has no spill to fall back on: the
+            // resident-set guard never refuses its working memory.
+            reservation: reservation.unguarded(),
             held: 0,
             done: false,
         })

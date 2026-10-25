@@ -159,7 +159,7 @@ struct Round {
     bytes: usize,
     escalation: Escalation,
     /// Set once spilling is exhausted: the round then asks without the
-    /// resident-set guard's cut, so the guard never fails or aborts a query.
+    /// resident-set guard's cut, so the cut never fails or aborts an arbitrated request.
     unguarded: AtomicBool,
 }
 

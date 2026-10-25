@@ -141,6 +141,7 @@ async fn run_with(
             spill_wait_timeout: Duration::from_secs(5),
             abort_release_timeout: Duration::from_secs(30),
             spill_scratch_reserve: krishiv_memory::DEFAULT_SPILL_SCRATCH_RESERVE,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     );

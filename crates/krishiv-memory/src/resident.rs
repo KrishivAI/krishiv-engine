@@ -14,21 +14,40 @@
 //! query or wasted on the others.
 //!
 //! So a limited root measures it. With a probe installed
-//! ([`set_resident_probe`]), the process's resident set is sampled at most
-//! once per [`SAMPLE_INTERVAL`], on a grant that needs more bytes from the
-//! pools. What it holds above the reservations of every limited root plus
-//! their allowances ([`allowance`]: an eighth of the limit plus
-//! [`ALLOWANCE_BASE`]) is the *excess*. Each root's share of it, in
-//! proportion to its limit and at most a quarter of the limit, is cut from
-//! what ordinary reservations may take there, so consumers spill until the
-//! process is back within the reservations plus the allowance, and threads
-//! return their allocator caches (a pressure epoch, see
-//! [`set_release_hook`](crate::set_release_hook)). Spill scratch keeps the
-//! whole limit, and a request that only the cut refuses is granted before
-//! arbitration would abort a query or report it out of memory: the guard
-//! makes queries spill, never fail. The cut does not change a pool's
+//! ([`set_resident_probe`]) and `krishiv.memory.residentGuard` on, the
+//! process's resident set is sampled at most once per [`SAMPLE_INTERVAL`],
+//! on a grant that needs more bytes from the pools. What it holds above the
+//! reservations of every guarded root plus their allowances ([`allowance`]:
+//! an eighth of the limit plus [`ALLOWANCE_BASE`]) is the *excess*. While
+//! an excess lasts, the reservations count at their high-water since it
+//! began: spilling lowers them, but the allocator may keep the freed pages,
+//! and the excess must not grow because of the spill it caused. Each root's
+//! share of the excess, in proportion to its limit and at most a quarter of
+//! the limit, is cut from what ordinary reservations may take there, so
+//! consumers spill, and threads return their allocator caches (a pressure
+//! epoch, see [`set_release_hook`](crate::set_release_hook)). A probe that
+//! cannot read the resident set clears the cuts.
+//!
+//! **What is cut, and what is not.** The cut applies to growth that has a
+//! fallback: an operator whose `try_grow` is refused spills or returns
+//! `NeedMemory`, and the driver's arbitration round spills the shortfall.
+//! It never applies to spill scratch, to spill readers and writers, or to
+//! reservations marked [`Reservation::unguarded`](crate::Reservation::unguarded)
+//! (growth whose refusal would fail the query), and an arbitration round
+//! whose spills are exhausted asks without it. So the cut on its own does
+//! not abort a query or fail an arbitrated request; a sync `try_grow` that
+//! is neither marked unguarded nor followed by a fallback can still be
+//! refused by it, as by any full pool. The cut does not change a pool's
 //! [`limit`](crate::MemoryPool::limit), so plans and budgets sized from the
 //! limit stay the same.
+//!
+//! **Scope.** The resident set covers the whole process, not one query:
+//! allocator overhead, but also memory used without a reservation (I/O and
+//! exchange buffers, decode working sets over their gate), the binary and
+//! the runtime. The cut is root-wide, so one query's overhead can make
+//! another query spill. That is the intent: a cgroup that kills the process
+//! kills every query in it. A process with several guarded roots splits the
+//! excess between them by limit.
 //!
 //! The probe belongs to the program that owns the allocator, like the
 //! release hook: the resident set only tracks the pools' reservations when
@@ -62,8 +81,27 @@ static PROBE: OnceLock<fn() -> Option<usize>> = OnceLock::new();
 /// Milliseconds since [`start`] at the last sample (0: none yet).
 static LAST: AtomicU64 = AtomicU64::new(0);
 
-/// Every limited root pool of the process (pruned when sampled).
-static ROOTS: std::sync::Mutex<Vec<Weak<Node>>> = std::sync::Mutex::new(Vec::new());
+/// The guard's process-wide state.
+struct Guard {
+    /// Every limited root pool that takes part (pruned when sampled).
+    roots: Vec<Weak<Node>>,
+    /// While an excess lasts: the most the roots reserved since it began.
+    /// The excess is measured against it, so memory that spilling frees
+    /// from the reservations, but that stays resident as allocator
+    /// overhead, does not raise the cut further.
+    high_water: Option<usize>,
+}
+
+static GUARD: std::sync::Mutex<Guard> = std::sync::Mutex::new(Guard {
+    roots: Vec::new(),
+    high_water: None,
+});
+
+fn guard() -> std::sync::MutexGuard<'static, Guard> {
+    GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 fn start() -> Instant {
     static START: OnceLock<Instant> = OnceLock::new();
@@ -127,15 +165,14 @@ fn vm_rss(status: &[u8]) -> Option<usize> {
 
 /// Adds a limited root to the roots the guard samples.
 pub(crate) fn register(root: &Arc<Node>) {
-    let mut roots = ROOTS
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    roots.retain(|r| r.strong_count() > 0);
-    roots.push(Arc::downgrade(root));
+    let mut g = guard();
+    g.roots.retain(|r| r.strong_count() > 0);
+    g.roots.push(Arc::downgrade(root));
 }
 
 /// Samples the resident set and updates every root's cut, unless no probe
-/// is installed or a sample was taken within [`SAMPLE_INTERVAL`].
+/// is installed or a sample was taken within [`SAMPLE_INTERVAL`]. A probe
+/// that cannot read the resident set clears the cuts.
 pub(crate) fn sample() {
     let Some(probe) = PROBE.get() else {
         return;
@@ -154,22 +191,34 @@ pub(crate) fn sample() {
     {
         return;
     }
-    let Some(resident) = probe() else {
-        return;
-    };
-    let roots: Vec<Arc<Node>> = {
-        let mut roots = ROOTS
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        roots.retain(|r| r.strong_count() > 0);
-        roots.iter().filter_map(Weak::upgrade).collect()
-    };
-    let limited: Vec<(&Arc<Node>, usize)> = roots
+    let resident = probe();
+    let mut g = guard();
+    g.roots.retain(|r| r.strong_count() > 0);
+    let limited: Vec<(Arc<Node>, usize)> = g
+        .roots
         .iter()
+        .filter_map(Weak::upgrade)
         .filter_map(|r| r.limit().map(|l| (r, l)))
         .collect();
-    let excess = excess(resident, limited.iter().map(|(r, l)| (r.reserved(), *l)));
-    let total_limit: usize = limited
+    let Some(resident) = resident else {
+        // Unknown: no cut rather than a stale one.
+        g.high_water = None;
+        for (root, _) in &limited {
+            root.shared.cut.store(0, Ordering::Release);
+        }
+        return;
+    };
+    let reserved = limited
+        .iter()
+        .map(|(r, _)| r.reserved())
+        .fold(0, usize::saturating_add);
+    let allowances = limited
+        .iter()
+        .map(|(_, l)| allowance(*l))
+        .fold(0, usize::saturating_add);
+    let (excess, high_water) = excess(resident, reserved, allowances, g.high_water);
+    g.high_water = high_water;
+    let total_limit = limited
         .iter()
         .map(|(_, l)| *l)
         .fold(0, usize::saturating_add);
@@ -178,19 +227,27 @@ pub(crate) fn sample() {
             .cut
             .store(cut(excess, *limit, total_limit), Ordering::Release);
     }
+    drop(g);
     if excess > 0 {
         crate::release::note_pressure();
     }
 }
 
-/// What `resident` holds above the roots' reservations plus allowances
-/// (`roots`: each root's reserved bytes and limit).
-fn excess(resident: usize, roots: impl Iterator<Item = (usize, usize)>) -> usize {
-    let covered = roots.fold(0usize, |acc, (reserved, limit)| {
-        acc.saturating_add(reserved)
-            .saturating_add(allowance(limit))
-    });
-    resident.saturating_sub(covered)
+/// The excess of `resident` over the roots' reservations plus their
+/// `allowances`, and the reservation high-water to keep for the next
+/// sample. During an excess (`high_water` set) the reservations count at
+/// their high-water since it began, so spilling, which lowers the
+/// reservations while the allocator may keep the freed pages, cannot raise
+/// the excess; once there is none, the high-water is dropped.
+fn excess(
+    resident: usize,
+    reserved: usize,
+    allowances: usize,
+    high_water: Option<usize>,
+) -> (usize, Option<usize>) {
+    let base = high_water.map_or(reserved, |h| h.max(reserved));
+    let excess = resident.saturating_sub(base.saturating_add(allowances));
+    (excess, (excess > 0).then_some(base))
 }
 
 /// A root's cut: its share of `excess` in proportion to its `limit` out of
@@ -235,18 +292,35 @@ mod tests {
 
     #[test]
     fn the_excess_is_what_reservations_and_allowances_do_not_cover() {
-        let limit = 2 << 30;
-        let covered = (1 << 30) + allowance(limit);
-        assert_eq!(excess(covered + 5, [(1 << 30, limit)].into_iter()), 5);
-        assert_eq!(excess(covered, [(1 << 30, limit)].into_iter()), 0);
-        assert_eq!(excess(10, [(1 << 30, limit)].into_iter()), 0);
-        // Two roots: both reservations and both allowances count.
-        let two = (1 << 30) + (1 << 20) + allowance(limit) + allowance(1 << 30);
-        assert_eq!(
-            excess(two + 7, [(1 << 30, limit), (1 << 20, 1 << 30)].into_iter()),
-            7
-        );
-        assert_eq!(excess(usize::MAX, [(usize::MAX, limit)].into_iter()), 0);
+        let (gib, al) = (1usize << 30, allowance(2 << 30));
+        assert_eq!(excess(gib + al + 5, gib, al, None), (5, Some(gib)));
+        assert_eq!(excess(gib + al, gib, al, None), (0, None));
+        assert_eq!(excess(10, gib, al, None), (0, None));
+        assert_eq!(excess(usize::MAX, usize::MAX, al, None), (0, None));
+    }
+
+    #[test]
+    fn spilling_during_an_excess_does_not_raise_it() {
+        let (gib, mib, al) = (1usize << 30, 1usize << 20, allowance(2 << 30));
+        // 100 MiB over: the episode starts at 1 GiB reserved.
+        let (e, hw) = excess(gib + al + 100 * mib, gib, al, None);
+        assert_eq!((e, hw), (100 * mib, Some(gib)));
+        // Spilling frees 300 MiB of reservations, the pages stay resident:
+        // the excess stays at 100 MiB instead of growing to 400.
+        let (e, hw) = excess(gib + al + 100 * mib, gib - 300 * mib, al, hw);
+        assert_eq!((e, hw), (100 * mib, Some(gib)));
+        // The allocator returns 60 MiB: the excess shrinks.
+        let (e, hw) = excess(gib + al + 40 * mib, gib - 300 * mib, al, hw);
+        assert_eq!((e, hw), (40 * mib, Some(gib)));
+        // Reservations above the high-water raise it.
+        let (e, hw) = excess(gib + al + 140 * mib, gib + 100 * mib, al, hw);
+        assert_eq!((e, hw), (40 * mib, Some(gib + 100 * mib)));
+        // Back within the allowance: the episode ends.
+        let (e, hw) = excess(gib, gib - 300 * mib, al, hw);
+        assert_eq!((e, hw), (0, None));
+        // A new episode measures from the current reservations.
+        let (e, _) = excess(gib + al, gib - 300 * mib, al, hw);
+        assert_eq!(e, 300 * mib);
     }
 
     #[test]

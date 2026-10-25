@@ -38,6 +38,7 @@ fn root(limit: Option<usize>, quantum: usize) -> Arc<TreePool> {
             spill_wait_timeout: Duration::from_secs(2),
             abort_release_timeout: Duration::from_secs(30),
             spill_scratch_reserve: 0,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     )
@@ -72,6 +73,9 @@ fn config_entries_feed_memory_config() {
     assert_eq!(d.spill_scratch_reserve, DEFAULT_SPILL_SCRATCH_RESERVE);
     let (c, _) = Config::from_pairs([("krishiv.memory.spillScratchReserve", "0")]).unwrap();
     assert_eq!(MemoryConfig::from_config(&c).spill_scratch_reserve, 0);
+    assert!(d.resident_guard, "the guard is on by default");
+    let (c, _) = Config::from_pairs([("krishiv.memory.residentGuard", "false")]).unwrap();
+    assert!(!MemoryConfig::from_config(&c).resident_guard);
 }
 
 fn floored(limit: usize, reserve: usize) -> Arc<TreePool> {
@@ -82,6 +86,7 @@ fn floored(limit: usize, reserve: usize) -> Arc<TreePool> {
             spill_wait_timeout: Duration::from_secs(2),
             abort_release_timeout: Duration::from_secs(30),
             spill_scratch_reserve: reserve,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     )
@@ -896,6 +901,7 @@ fn an_unavailable_timer_fails_the_request_without_hurting_anyone() {
             spill_wait_timeout: Duration::from_millis(20),
             abort_release_timeout: Duration::from_millis(20),
             spill_scratch_reserve: 0,
+            resident_guard: true,
         },
         Arc::new(clock),
     );
