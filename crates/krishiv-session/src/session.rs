@@ -802,7 +802,7 @@ impl Session {
             }
             .into());
         };
-        let (options, _) = format.options().parse(&options, &env.config)?;
+        let (parsed, _) = format.options().parse(&options, &env.config)?;
         let Some(text) = path.as_plain() else {
             return Err(KrishivUnsupportedFeature {
                 feature: "write paths with credentials".to_owned(),
@@ -816,7 +816,7 @@ impl Session {
             Arc::clone(&self.state.io),
             stores,
         )
-        .locate(text)?;
+        .locate_with_options(text, &options)?;
         let io = self.state.io.context();
         let Some(write) = DirectoryWrite::begin(&io, at.store, at.path, mode, job_uuid()).await?
         else {
@@ -828,7 +828,7 @@ impl Session {
             Arc::clone(&format),
             io.clone(),
             Arc::clone(&schema),
-            options.clone(),
+            parsed.clone(),
             write.write_options(0),
         )?);
         let plan = physical.into_write(&sink)?;
@@ -839,7 +839,7 @@ impl Session {
         }
         drop(rows);
         write
-            .commit(&io, format.as_ref(), schema, &options, sink.files())
+            .commit(&io, format.as_ref(), schema, &parsed, sink.files())
             .await?;
         Ok(())
     }

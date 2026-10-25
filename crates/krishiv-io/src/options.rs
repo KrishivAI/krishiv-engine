@@ -12,7 +12,9 @@
 //! the closest known option ("did you mean"); the ignored keys are kept for
 //! `EXPLAIN`. With `krishiv.io.strictOptions=true` they are an error.
 //! Options handled by the file-source framework itself
-//! ([`FILE_SOURCE_OPTIONS`]) are never reported.
+//! ([`FILE_SOURCE_OPTIONS`]) and object-store configuration (`fs.*`,
+//! resolved by the store layer from the same option map) are never
+//! reported.
 //!
 //! **Secrets** stay [`SecretValue`]s: `Debug` prints them redacted, and the
 //! plaintext is reached only through [`FormatOptions::resolve_secret`]
@@ -204,6 +206,7 @@ impl OptionSchema {
             } else if !FILE_SOURCE_OPTIONS
                 .iter()
                 .any(|o| o.eq_ignore_ascii_case(key))
+                && !is_store_option(key)
             {
                 let suggestion = self.closest(key);
                 if strict {
@@ -317,6 +320,13 @@ impl OptionSchema {
             .min_by_key(|(d, _)| *d)
             .map(|(_, n)| n)
     }
+}
+
+/// Whether `key` is object-store configuration (`fs.*`, resolved by the
+/// store layer from the same option map): never a format option, never
+/// reported, even in strict mode.
+fn is_store_option(key: &str) -> bool {
+    key.len() > 3 && key[..3].eq_ignore_ascii_case("fs.")
 }
 
 /// The session value of `key`: a registered key (or Spark alias) through the
