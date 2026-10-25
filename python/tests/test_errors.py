@@ -71,6 +71,15 @@ def test_native_errors_map_by_class_and_sqlstate(error_class: str, sql_state: st
     assert e.getQueryContext() == []
 
 
+def test_rendered_text_is_only_the_str() -> None:
+    rendered = "[X] m\n== SQL (line 1, position 1) ==\nx\n^"
+    e = errors._from_native("X", "42703", "[X] m", {}, None, rendered)
+    assert str(e) == rendered
+    assert e.getMessage() == "[X] m"
+    assert e.args == ("[X] m",)
+    assert str(errors._from_native("X", "42703", "[X] m", {})) == "[X] m"
+
+
 def test_client_errors_render_templates() -> None:
     e = errors.not_expected_type("col", "Column", 1)
     assert str(e) == "[NOT_EXPECTED_TYPE] Argument `col` should be Column, got int."

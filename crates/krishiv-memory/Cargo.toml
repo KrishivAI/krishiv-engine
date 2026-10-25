@@ -19,6 +19,10 @@ arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
 krishiv-types = { path = "../krishiv-types" }
 thiserror.workspace = true
+tracing = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

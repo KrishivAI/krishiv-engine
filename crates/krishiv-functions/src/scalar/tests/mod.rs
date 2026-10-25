@@ -213,6 +213,32 @@ fn replace_with_and_without_replacement() {
 }
 
 #[test]
+fn mask_replaces_each_class() {
+    assert!(scalar_names().contains(&"mask"));
+    let s = strs(&[Some("Ab1-"), None]);
+    let q = strs(&[Some("Q"), Some("Q")]);
+    let qq = strs(&[Some("q"), Some("q")]);
+    let d = strs(&[Some("d"), Some("d")]);
+    let o = strs(&[Some("o"), Some("o")]);
+    let nulls = strs(&[None, None]);
+    assert_eq!(
+        text(&run("mask", &[&s, &q, &qq, &d, &o])),
+        owned(&[Some("Qqdo"), None])
+    );
+    assert_eq!(
+        text(&run("mask", &[&s, &q, &qq, &d, &nulls])),
+        owned(&[Some("Qqd-"), None])
+    );
+    // A NULL input is NULL whatever the replacements.
+    assert_eq!(
+        text(&run("mask", &[&nulls, &q, &qq, &d, &o])),
+        owned(&[None, None])
+    );
+    // Any other arity is rejected at bind time.
+    assert!(bind_scalar("mask", &[DataType::Utf8.into()], &BindOptions::new(),).is_err());
+}
+
+#[test]
 fn pads_on_strings_and_bytes() {
     let s = strs(&[Some("hi"), None]);
     let n = ints(&[Some(5), Some(5)]);
@@ -566,6 +592,7 @@ mod calendar;
 mod families;
 mod number;
 mod predicate;
+mod text;
 
 #[test]
 fn session_user_and_local_clock() {

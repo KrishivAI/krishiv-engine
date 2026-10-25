@@ -217,6 +217,8 @@ impl Lowerer {
         self.ex(
             ExprNode::Function(FunctionCall {
                 name: name.to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args,
                 distinct: false,
                 filter: None,
@@ -648,8 +650,10 @@ impl Lowerer {
             let inner = arc(self.expr(q)?);
             let predicate = arc(self.ex(
                 ExprNode::Function(FunctionCall {
+                    qualifier: Vec::new(),
                     name: "qualify".to_owned(),
                     args: vec![inner],
+                    arg_names: Vec::new(),
                     distinct: false,
                     filter: None,
                 }),
@@ -1432,8 +1436,12 @@ impl Lowerer {
                 if let Some(dynamic) = &f.dynamic_name {
                     return Err(unsupported("IDENTIFIER() function names", dynamic.span));
                 }
-                let [name] = &f.name.parts[..] else {
-                    return Err(unsupported("qualified function names", f.name.span));
+                let (qualifier, name) = match &f.name.parts[..] {
+                    [name] => (Vec::new(), name),
+                    [qualifier @ .., name] => {
+                        (qualifier.iter().map(|p| p.value.clone()).collect(), name)
+                    }
+                    [] => return Err(unsupported("a function name", f.name.span)),
                 };
                 for (present, what) in [
                     (!f.within_group.is_empty(), "WITHIN GROUP"),
@@ -1447,11 +1455,19 @@ impl Lowerer {
                     }
                 }
                 let mut args = Vec::new();
+                let mut arg_names = Vec::new();
+                let mut any_named = false;
                 for a in &f.args {
-                    if a.name.is_some() {
-                        return Err(unsupported("named function arguments", a.span));
+                    if let Some(n) = &a.name {
+                        any_named = true;
+                        arg_names.push(Some(n.value.clone()));
+                    } else {
+                        arg_names.push(None);
                     }
                     args.push(self.arg(&a.expr)?);
+                }
+                if !any_named {
+                    arg_names.clear();
                 }
                 // Spark's builder of `lag` and `lead`: `input` NULL, `offset`
                 // 1 and `default` NULL when not given.
@@ -1464,6 +1480,9 @@ impl Lowerer {
                     ];
                     for v in fill.into_iter().skip(args.len()) {
                         args.push(arc(self.ex(ExprNode::Literal(v), sp)));
+                        if !arg_names.is_empty() {
+                            arg_names.push(None);
+                        }
                     }
                 }
                 // `first(x) IGNORE NULLS` is `first(x, true)` and `RESPECT
@@ -1487,6 +1506,9 @@ impl Lowerer {
                             // arity error.
                             if args.len() == flag_at {
                                 args.push(flag);
+                                if !arg_names.is_empty() {
+                                    arg_names.push(None);
+                                }
                             } else if args.len() > flag_at {
                                 args[flag_at] = flag;
                             }
@@ -1498,6 +1520,8 @@ impl Lowerer {
                 let call = self.ex(
                     ExprNode::Function(FunctionCall {
                         name: name.value.clone(),
+                        qualifier,
+                        arg_names,
                         args,
                         distinct: f.quantifier == Some(SetQuantifier::Distinct),
                         filter,
@@ -1521,6 +1545,30 @@ impl Lowerer {
                     }
                 }
             }
+            ExprKind::LikeQuantified {
+                expr,
+                quantifier,
+                patterns,
+                negated,
+                case_insensitive,
+            } => {
+                use crate::ast::LikeQuantifier::{All, Any, Some};
+                let b = match (quantifier, negated, case_insensitive) {
+                    (Any | Some, false, false) => Builtin::LikeAny,
+                    (All, false, false) => Builtin::LikeAll,
+                    (Any | Some, true, false) => Builtin::NotLikeAny,
+                    (All, true, false) => Builtin::NotLikeAll,
+                    (Any | Some, false, true) => Builtin::ILikeAny,
+                    (All, false, true) => Builtin::ILikeAll,
+                    (Any | Some, true, true) => Builtin::NotILikeAny,
+                    (All, true, true) => Builtin::NotILikeAll,
+                };
+                let mut args = vec![self.arg(expr)?];
+                for p in patterns {
+                    args.push(self.arg(p)?);
+                }
+                self.call(b.name(), args, sp)
+            }
             ExprKind::Nested(inner) => self.expr(inner)?,
             ExprKind::Parameter(_) => return Err(unsupported("parameter markers", sp)),
             ExprKind::Subscript(..) => return Err(unsupported("subscripts", sp)),
@@ -1531,7 +1579,10 @@ impl Lowerer {
             ExprKind::Row(_) | ExprKind::Struct(_) => {
                 return Err(unsupported("row and struct constructors", sp));
             }
-            _ => return Err(unsupported("LIKE ANY, SOME and ALL", sp)),
+            // Every variant is lowered above; the wildcard stays because
+            // `ExprKind` is non-exhaustive.
+            #[expect(unreachable_patterns, reason = "every ExprKind variant is lowered")]
+            _ => return Err(unsupported("this expression form", sp)),
         })
     }
 
@@ -1585,6 +1636,14 @@ fn is_predicate(e: &IrExpr) -> bool {
                     | Builtin::Between
                     | Builtin::Like
                     | Builtin::ILike
+                    | Builtin::LikeAny
+                    | Builtin::LikeAll
+                    | Builtin::NotLikeAny
+                    | Builtin::NotLikeAll
+                    | Builtin::ILikeAny
+                    | Builtin::ILikeAll
+                    | Builtin::NotILikeAny
+                    | Builtin::NotILikeAll
                     | Builtin::RLike
                     | Builtin::IsNull
                     | Builtin::IsNotNull

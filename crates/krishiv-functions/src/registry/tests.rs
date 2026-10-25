@@ -1518,3 +1518,5 @@ fn regex_signatures() {
     let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
     assert_eq!(r, ArgType::new(DataType::Integer, true));
 }
+
+mod text;

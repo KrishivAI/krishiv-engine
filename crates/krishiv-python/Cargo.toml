@@ -40,6 +40,7 @@ arrow-data = { workspace = true, features = ["ffi"] }
 arrow-schema = { workspace = true, features = ["ffi"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-session = { path = "../krishiv-session" }
+krishiv-sql = { path = "../krishiv-sql" }
 krishiv-types = { path = "../krishiv-types" }
 futures = { workspace = true, features = ["executor"] }
 # `extension-module` is deprecated: maturin sets PYO3_BUILD_EXTENSION_MODULE.

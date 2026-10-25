@@ -227,6 +227,7 @@ class PySparkException(Exception):
         messageParameters: dict[str, Any] | None = None,
         contexts: list[QueryContext] | list[tuple] | None = None,
         sqlState: str | None = None,
+        rendered: str | None = None,
     ) -> None:
         if message is None:
             if errorClass is None:
@@ -238,6 +239,7 @@ class PySparkException(Exception):
         self._message_parameters = messageParameters
         self._contexts = [c if isinstance(c, QueryContext) else _context_from_native(c) for c in contexts or []]
         self._sql_state = sqlState
+        self._rendered = rendered
 
     def getCondition(self) -> str | None:
         """The error class (condition), e.g. ``TABLE_OR_VIEW_NOT_FOUND``."""
@@ -261,7 +263,9 @@ class PySparkException(Exception):
         return list(self._contexts)
 
     def __str__(self) -> str:
-        return self._message
+        # As PySpark's classic exceptions: the message and, below it, the SQL span
+        # that raised the error. ``getMessage()`` is the message alone.
+        return self._message if self._rendered is None else self._rendered
 
 
 #: The base class under Krishiv's own name.
@@ -412,10 +416,17 @@ def _from_native(
     message: str,
     parameters: dict[str, str],
     contexts: list[tuple] | None = None,
+    rendered: str | None = None,
 ) -> PySparkException:
-    """The exception for an engine error (called by ``krishiv._native``)."""
+    """The exception for an engine error (called by ``krishiv._native``); ``rendered`` is
+    the message followed by the SQL span that raised the error, when the query text is known."""
     return _class_for(error_class, sql_state)(
-        message, errorClass=error_class, messageParameters=parameters, contexts=contexts, sqlState=sql_state
+        message,
+        errorClass=error_class,
+        messageParameters=parameters,
+        contexts=contexts,
+        sqlState=sql_state,
+        rendered=rendered,
     )
 
 

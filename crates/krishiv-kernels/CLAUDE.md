@@ -31,11 +31,20 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   the code points of `string/case_table.rs`, generated from the Spark 4.2 fixture by `tests/scripts/gen_case_table.py`, so a
   toolchain with newer Unicode data does not change the output),
   `char_length`/`byte_length`, `trim` (spaces only by default), `match_str`/`match_binary` (`startswith`/`endswith`/
-  `contains`), `replace`, `pad`/`pad_binary`, `substring`/`substring_binary`, `concat`, `like` (`string/like.rs`:
+  `contains`), `replace`, `mask` (classes `Lu`/`Ll`/`Nd` from the generated `string/mask_table.rs`, `tests/scripts/gen_mask_table.py`; a supplementary scalar is two other units, as in Spark), `pad`/`pad_binary`, `substring`/`substring_binary`, `concat`, `like` (`string/like.rs`:
   literal-shaped patterns take string comparisons, the rest a linear backtracking matcher; errors only on non-NULL rows)
   and `split_literal` (`string/split.rs`: delimiters without regex metacharacters; a regex delimiter is
   `KRISHIV_UNSUPPORTED_FEATURE` until the regex engine). Operands are columns or literals (`StrOperand`, `BinOperand`,
   `Operand<Int32Type>`); NULL rows are skipped, so these kernels have no has-nulls axis. Output offsets are checked.
+  `string/chars.rs` adds the character-level functions (`ascii`, `chr`, `right`, `repeat`, `space`, `reverse`, `initcap`, `translate`,
+  `locate`, `substring_index`, `split_part`, `find_in_set`, `overlay`, `levenshtein`, `soundex`, `luhn_check`, `mask`, `quote`, `elt`,
+  `concat_ws`, `bit_length`) and `string/codec.rs` the encodings (`base64`/`unbase64` as Java's MIME codec, `to_binary`, `encode`/`decode`
+  for Spark's seven default charsets, the UTF-8 validators of `binary`, `url_encode`/`url_decode`); a kernel needs a column operand, the
+  binding repeats an all-literal call over one row.
+  Known approximations (Spark's defaults apply; the switches are not read): `initcap`/`mask` use the toolchain's Unicode data
+  (pinned by `toolchain_unicode_is_pinned`), `encode`/`decode` ignore the legacy charset/coding switches, `base64` always chunks,
+  `split_part`/`substring_index` with `Int.MIN` return the algorithm's value where the JVM raises, and `unbase64` of rejected text is
+  `KRISHIV_INVALID_BASE64_INPUT`.
 - `hash` (P2-T027): `hash` (Murmur3 x86_32, seed 42; the tail bytes are mixed one sign-extended byte at a time, as Spark does), `xxhash64`
   (XXH64, seed 42; `hashInt`/`hashLong` written out), `md5`/`sha1`/`sha2`/`crc32` (`hash/digest.rs`; CRC table in-house, digests from
   RustCrypto). `hash`/`xxhash64` take any number of columns of any type and chain per row (NULL leaves the hash unchanged; arrays hash

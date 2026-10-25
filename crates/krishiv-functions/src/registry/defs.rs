@@ -105,7 +105,7 @@ pub(super) fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Integer, c)
 }
 
-fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Boolean, c)
 }
 
@@ -163,7 +163,7 @@ fn date_sub(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// The type of the first (cast) argument: `binary` or `string` overloads.
-fn first_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn first_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = c.data_type(0).cloned().unwrap_or(DataType::String);
     typed(t, c)
 }
@@ -204,7 +204,7 @@ fn user(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 // ---- strings ----
 
-fn is_binary(c: &CallTypes<'_>, i: usize) -> bool {
+pub(super) fn is_binary(c: &CallTypes<'_>, i: usize) -> bool {
     c.data_type(i) == Some(&DataType::Binary)
 }
 
@@ -236,7 +236,7 @@ fn strings() -> Vec<Spec> {
     let text_or_bytes = InputType::OneOf(vec![DataType::String, DataType::Binary]);
     let mut out = scalar(&["upper", "ucase", "lower", "lcase"], &text, string);
     out.extend(scalar(
-        &["length", "char_length", "character_length"],
+        &["length", "len", "char_length", "character_length"],
         &Inputs::Expects(vec![text_or_bytes.clone()]),
         int,
     ));
@@ -306,6 +306,17 @@ fn strings() -> Vec<Spec> {
             exact(DataType::Integer),
         ]),
         first_type,
+    ));
+    out.extend(scalar(
+        &["mask"],
+        &Inputs::Expects(vec![
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+        ]),
+        string,
     ));
     out
 }
@@ -818,5 +829,6 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::bitwise::specs());
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
+    out.extend(super::text::specs());
     out
 }

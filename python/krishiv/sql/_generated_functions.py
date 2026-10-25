@@ -29,6 +29,7 @@ __all__ = [
     "acos",
     "acosh",
     "add_months",
+    "ascii",
     "asin",
     "asinh",
     "assert_true",
@@ -36,9 +37,11 @@ __all__ = [
     "atan2",
     "atanh",
     "avg",
+    "base64",
     "bin",
     "bit_count",
     "bit_get",
+    "bit_length",
     "bitwiseNOT",
     "bitwise_not",
     "bround",
@@ -46,9 +49,11 @@ __all__ = [
     "cbrt",
     "ceil",
     "ceiling",
+    "char",
     "char_length",
     "character_length",
     "coalesce",
+    "concat_ws",
     "contains",
     "conv",
     "cos",
@@ -73,14 +78,18 @@ __all__ = [
     "dayofmonth",
     "dayofweek",
     "dayofyear",
+    "decode",
     "degrees",
     "dense_rank",
     "e",
+    "elt",
+    "encode",
     "endswith",
     "equal_null",
     "exp",
     "expm1",
     "extract",
+    "find_in_set",
     "first",
     "first_value",
     "floor",
@@ -93,6 +102,9 @@ __all__ = [
     "hour",
     "hypot",
     "ifnull",
+    "initcap",
+    "instr",
+    "is_valid_utf8",
     "isnan",
     "isnotnull",
     "isnull",
@@ -103,9 +115,12 @@ __all__ = [
     "lcase",
     "lead",
     "least",
+    "left",
     "length",
+    "levenshtein",
     "ln",
     "localtimestamp",
+    "locate",
     "log1p",
     "log2",
     "log10",
@@ -113,6 +128,8 @@ __all__ = [
     "lpad",
     "ltrim",
     "make_date",
+    "make_valid_utf8",
+    "mask",
     "max",
     "md5",
     "mean",
@@ -131,12 +148,16 @@ __all__ = [
     "nullifzero",
     "nvl",
     "nvl2",
+    "octet_length",
+    "overlay",
     "percent_rank",
     "pi",
     "pmod",
+    "position",
     "positive",
     "pow",
     "quarter",
+    "quote",
     "radians",
     "raise_error",
     "rank",
@@ -147,7 +168,10 @@ __all__ = [
     "regexp_like",
     "regexp_replace",
     "regexp_substr",
+    "repeat",
     "replace",
+    "reverse",
+    "right",
     "rint",
     "round",
     "row_number",
@@ -169,19 +193,24 @@ __all__ = [
     "signum",
     "sin",
     "sinh",
+    "soundex",
+    "split_part",
     "sqrt",
     "startswith",
     "substr",
     "substring",
+    "substring_index",
     "sum",
     "tan",
     "tanh",
     "toDegrees",
     "toRadians",
+    "to_binary",
     "to_char",
     "to_number",
     "to_utc_timestamp",
     "to_varchar",
+    "translate",
     "trim",
     "trunc",
     "try_add",
@@ -189,12 +218,19 @@ __all__ = [
     "try_mod",
     "try_multiply",
     "try_subtract",
+    "try_to_binary",
     "try_to_number",
+    "try_url_decode",
+    "try_validate_utf8",
     "ucase",
+    "unbase64",
     "unhex",
     "unix_date",
     "upper",
+    "url_decode",
+    "url_encode",
     "user",
+    "validate_utf8",
     "weekday",
     "weekofyear",
     "xxhash64",
@@ -221,6 +257,11 @@ def acosh(col: ColumnOrName) -> Column:
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
     """Calls the registry function ``add_months``."""
     return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
+
+
+def ascii(col: ColumnOrName) -> Column:
+    """Calls the registry function ``ascii``."""
+    return _call("ascii", _named(col, "col"))
 
 
 def asin(col: ColumnOrName) -> Column:
@@ -258,6 +299,11 @@ def avg(col: ColumnOrName) -> Column:
     return _call("avg", _named(col, "col"))
 
 
+def base64(col: ColumnOrName) -> Column:
+    """Calls the registry function ``base64``."""
+    return _call("base64", _named(col, "col"))
+
+
 def bin(col: ColumnOrName) -> Column:
     """Calls the registry function ``bin``."""
     return _call("bin", _named(col, "col"))
@@ -271,6 +317,11 @@ def bit_count(col: ColumnOrName) -> Column:
 def bit_get(col: ColumnOrName, pos: ColumnOrName) -> Column:
     """Calls the registry function ``bit_get``."""
     return _call("bit_get", _named(col, "col"), _named(pos, "pos"))
+
+
+def bit_length(col: ColumnOrName) -> Column:
+    """Calls the registry function ``bit_length``."""
+    return _call("bit_length", _named(col, "col"))
 
 
 def bitwiseNOT(col: ColumnOrName) -> Column:
@@ -309,6 +360,11 @@ def ceiling(col: ColumnOrName, scale: Column | int | None = None) -> Column:
     return _call("ceiling", _named(col, "col"), *_opt(_lit, scale, "scale"))
 
 
+def char(col: ColumnOrName) -> Column:
+    """Calls the registry function ``char``."""
+    return _call("char", _named(col, "col"))
+
+
 def char_length(str: ColumnOrName) -> Column:
     """Calls the registry function ``char_length``."""
     return _call("char_length", _named(str, "str"))
@@ -322,6 +378,11 @@ def character_length(str: ColumnOrName) -> Column:
 def coalesce(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``coalesce``."""
     return _call("coalesce", *_cols(cols))
+
+
+def concat_ws(sep: str, *cols: ColumnOrName) -> Column:
+    """Calls the registry function ``concat_ws``."""
+    return _call("concat_ws", _lit(sep, "sep"), *_cols(cols))
 
 
 def contains(left: ColumnOrName, right: ColumnOrName) -> Column:
@@ -444,6 +505,11 @@ def dayofyear(col: ColumnOrName) -> Column:
     return _call("dayofyear", _named(col, "col"))
 
 
+def decode(col: ColumnOrName, charset: str) -> Column:
+    """Calls the registry function ``decode``."""
+    return _call("decode", _named(col, "col"), _lit(charset, "charset"))
+
+
 def degrees(col: ColumnOrName) -> Column:
     """Calls the registry function ``degrees``."""
     return _call("degrees", _named(col, "col"))
@@ -457,6 +523,16 @@ def dense_rank() -> Column:
 def e() -> Column:
     """Calls the registry function ``e``."""
     return _call("e")
+
+
+def elt(*inputs: ColumnOrName) -> Column:
+    """Calls the registry function ``elt``."""
+    return _call("elt", *_cols(inputs))
+
+
+def encode(col: ColumnOrName, charset: str) -> Column:
+    """Calls the registry function ``encode``."""
+    return _call("encode", _named(col, "col"), _lit(charset, "charset"))
 
 
 def endswith(str: ColumnOrName, suffix: ColumnOrName) -> Column:
@@ -482,6 +558,11 @@ def expm1(col: ColumnOrName) -> Column:
 def extract(field: Column, source: ColumnOrName) -> Column:
     """Calls the registry function ``extract``."""
     return _call("extract", _named(field, "field"), _named(source, "source"))
+
+
+def find_in_set(str: ColumnOrName, str_array: ColumnOrName) -> Column:
+    """Calls the registry function ``find_in_set``."""
+    return _call("find_in_set", _named(str, "str"), _named(str_array, "str_array"))
 
 
 def first(col: ColumnOrName, ignorenulls: bool = False) -> Column:
@@ -545,6 +626,21 @@ def ifnull(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     return _call("ifnull", _named(col1, "col1"), _named(col2, "col2"))
 
 
+def initcap(col: ColumnOrName) -> Column:
+    """Calls the registry function ``initcap``."""
+    return _call("initcap", _named(col, "col"))
+
+
+def instr(str: ColumnOrName, substr: str | Column) -> Column:
+    """Calls the registry function ``instr``."""
+    return _call("instr", _named(str, "str"), _lit(substr, "substr"))
+
+
+def is_valid_utf8(str: ColumnOrName) -> Column:
+    """Calls the registry function ``is_valid_utf8``."""
+    return _call("is_valid_utf8", _named(str, "str"))
+
+
 def isnan(col: ColumnOrName) -> Column:
     """Calls the registry function ``isnan``."""
     return _call("isnan", _named(col, "col"))
@@ -596,9 +692,19 @@ def least(*cols: ColumnOrName) -> Column:
     return _call("least", *_cols(cols))
 
 
+def left(str: ColumnOrName, len: ColumnOrName) -> Column:
+    """Calls the registry function ``left``."""
+    return _call("left", _named(str, "str"), _named(len, "len"))
+
+
 def length(col: ColumnOrName) -> Column:
     """Calls the registry function ``length``."""
     return _call("length", _named(col, "col"))
+
+
+def levenshtein(left: ColumnOrName, right: ColumnOrName, threshold: int | Column | None = None) -> Column:
+    """Calls the registry function ``levenshtein``."""
+    return _call("levenshtein", _named(left, "left"), _named(right, "right"), *_opt(_lit, threshold, "threshold"))
 
 
 def ln(col: ColumnOrName) -> Column:
@@ -609,6 +715,11 @@ def ln(col: ColumnOrName) -> Column:
 def localtimestamp() -> Column:
     """Calls the registry function ``localtimestamp``."""
     return _call("localtimestamp")
+
+
+def locate(substr: str, str: ColumnOrName, pos: int = 1) -> Column:
+    """Calls the registry function ``locate``."""
+    return _call("locate", _lit(substr, "substr"), _named(str, "str"), _lit(pos, "pos"))
 
 
 def log1p(col: ColumnOrName) -> Column:
@@ -644,6 +755,29 @@ def ltrim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
 def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Column:
     """Calls the registry function ``make_date``."""
     return _call("make_date", _named(year, "year"), _named(month, "month"), _named(day, "day"))
+
+
+def make_valid_utf8(str: ColumnOrName) -> Column:
+    """Calls the registry function ``make_valid_utf8``."""
+    return _call("make_valid_utf8", _named(str, "str"))
+
+
+def mask(
+    col: ColumnOrName,
+    upperChar: ColumnOrName | None = None,
+    lowerChar: ColumnOrName | None = None,
+    digitChar: ColumnOrName | None = None,
+    otherChar: ColumnOrName | None = None,
+) -> Column:
+    """Calls the registry function ``mask``."""
+    return _call(
+        "mask",
+        _named(col, "col"),
+        *_opt(_named, upperChar, "upperChar"),
+        *_opt(_named, lowerChar, "lowerChar"),
+        *_opt(_named, digitChar, "digitChar"),
+        *_opt(_named, otherChar, "otherChar"),
+    )
 
 
 def max(col: ColumnOrName) -> Column:
@@ -736,6 +870,18 @@ def nvl2(col1: ColumnOrName, col2: ColumnOrName, col3: ColumnOrName) -> Column:
     return _call("nvl2", _named(col1, "col1"), _named(col2, "col2"), _named(col3, "col3"))
 
 
+def octet_length(col: ColumnOrName) -> Column:
+    """Calls the registry function ``octet_length``."""
+    return _call("octet_length", _named(col, "col"))
+
+
+def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int = -1) -> Column:
+    """Calls the registry function ``overlay``."""
+    return _call(
+        "overlay", _named(src, "src"), _named(replace, "replace"), _int_or_col(pos, "pos"), _int_or_col(len, "len")
+    )
+
+
 def percent_rank() -> Column:
     """Calls the registry function ``percent_rank``."""
     return _call("percent_rank")
@@ -751,6 +897,11 @@ def pmod(dividend: ColumnOrName | float, divisor: ColumnOrName | float) -> Colum
     return _call("pmod", _num_or_col(dividend, "dividend"), _num_or_col(divisor, "divisor"))
 
 
+def position(substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``position``."""
+    return _call("position", _named(substr, "substr"), _named(str, "str"), *_opt(_named, start, "start"))
+
+
 def positive(col: ColumnOrName) -> Column:
     """Calls the registry function ``positive``."""
     return _call("positive", _named(col, "col"))
@@ -764,6 +915,11 @@ def pow(col1: ColumnOrName | float, col2: ColumnOrName | float) -> Column:
 def quarter(col: ColumnOrName) -> Column:
     """Calls the registry function ``quarter``."""
     return _call("quarter", _named(col, "col"))
+
+
+def quote(col: ColumnOrName) -> Column:
+    """Calls the registry function ``quote``."""
+    return _call("quote", _named(col, "col"))
 
 
 def radians(col: ColumnOrName) -> Column:
@@ -816,9 +972,24 @@ def regexp_substr(str: ColumnOrName, regexp: ColumnOrName) -> Column:
     return _call("regexp_substr", _named(str, "str"), _named(regexp, "regexp"))
 
 
+def repeat(col: ColumnOrName, n: ColumnOrName | int) -> Column:
+    """Calls the registry function ``repeat``."""
+    return _call("repeat", _named(col, "col"), _int_or_col(n, "n"))
+
+
 def replace(src: ColumnOrName, search: ColumnOrName, replace: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``replace``."""
     return _call("replace", _named(src, "src"), _named(search, "search"), *_opt(_named, replace, "replace"))
+
+
+def reverse(col: ColumnOrName) -> Column:
+    """Calls the registry function ``reverse``."""
+    return _call("reverse", _named(col, "col"))
+
+
+def right(str: ColumnOrName, len: ColumnOrName) -> Column:
+    """Calls the registry function ``right``."""
+    return _call("right", _named(str, "str"), _named(len, "len"))
 
 
 def rint(col: ColumnOrName) -> Column:
@@ -930,6 +1101,16 @@ def sinh(col: ColumnOrName) -> Column:
     return _call("sinh", _named(col, "col"))
 
 
+def soundex(col: ColumnOrName) -> Column:
+    """Calls the registry function ``soundex``."""
+    return _call("soundex", _named(col, "col"))
+
+
+def split_part(src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName) -> Column:
+    """Calls the registry function ``split_part``."""
+    return _call("split_part", _named(src, "src"), _named(delimiter, "delimiter"), _named(partNum, "partNum"))
+
+
 def sqrt(col: ColumnOrName) -> Column:
     """Calls the registry function ``sqrt``."""
     return _call("sqrt", _named(col, "col"))
@@ -948,6 +1129,11 @@ def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None = None
 def substring(str: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int) -> Column:
     """Calls the registry function ``substring``."""
     return _call("substring", _named(str, "str"), _int_or_col(pos, "pos"), _int_or_col(len, "len"))
+
+
+def substring_index(str: ColumnOrName, delim: str, count: int) -> Column:
+    """Calls the registry function ``substring_index``."""
+    return _call("substring_index", _named(str, "str"), _lit(delim, "delim"), _lit(count, "count"))
 
 
 def sum(col: ColumnOrName) -> Column:
@@ -977,6 +1163,11 @@ def toRadians(col: ColumnOrName) -> Column:
     return _call("radians", _named(col, "col"))
 
 
+def to_binary(col: ColumnOrName, format: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``to_binary``."""
+    return _call("to_binary", _named(col, "col"), *_opt(_named, format, "format"))
+
+
 def to_char(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``to_char``."""
     return _call("to_char", _named(col, "col"), _named(format, "format"))
@@ -995,6 +1186,11 @@ def to_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
 def to_varchar(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``to_varchar``."""
     return _call("to_varchar", _named(col, "col"), _named(format, "format"))
+
+
+def translate(srcCol: ColumnOrName, matching: str, replace: str) -> Column:
+    """Calls the registry function ``translate``."""
+    return _call("translate", _named(srcCol, "srcCol"), _lit(matching, "matching"), _lit(replace, "replace"))
 
 
 def trim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
@@ -1032,14 +1228,34 @@ def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column:
     return _call("try_subtract", _named(left, "left"), _named(right, "right"))
 
 
+def try_to_binary(col: ColumnOrName, format: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``try_to_binary``."""
+    return _call("try_to_binary", _named(col, "col"), *_opt(_named, format, "format"))
+
+
 def try_to_number(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``try_to_number``."""
     return _call("try_to_number", _named(col, "col"), _named(format, "format"))
 
 
+def try_url_decode(str: ColumnOrName) -> Column:
+    """Calls the registry function ``try_url_decode``."""
+    return _call("try_url_decode", _named(str, "str"))
+
+
+def try_validate_utf8(str: ColumnOrName) -> Column:
+    """Calls the registry function ``try_validate_utf8``."""
+    return _call("try_validate_utf8", _named(str, "str"))
+
+
 def ucase(str: ColumnOrName) -> Column:
     """Calls the registry function ``ucase``."""
     return _call("ucase", _named(str, "str"))
+
+
+def unbase64(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unbase64``."""
+    return _call("unbase64", _named(col, "col"))
 
 
 def unhex(col: ColumnOrName) -> Column:
@@ -1057,9 +1273,24 @@ def upper(col: ColumnOrName) -> Column:
     return _call("upper", _named(col, "col"))
 
 
+def url_decode(str: ColumnOrName) -> Column:
+    """Calls the registry function ``url_decode``."""
+    return _call("url_decode", _named(str, "str"))
+
+
+def url_encode(str: ColumnOrName) -> Column:
+    """Calls the registry function ``url_encode``."""
+    return _call("url_encode", _named(str, "str"))
+
+
 def user() -> Column:
     """Calls the registry function ``user``."""
     return _call("user")
+
+
+def validate_utf8(str: ColumnOrName) -> Column:
+    """Calls the registry function ``validate_utf8``."""
+    return _call("validate_utf8", _named(str, "str"))
 
 
 def weekday(col: ColumnOrName) -> Column:
