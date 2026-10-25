@@ -78,6 +78,7 @@ fn plan_with(
         build_keys: vec![0],
         null_safe: vec![false],
         filter: None,
+        single_match: false,
         spill,
     };
     let scan =
