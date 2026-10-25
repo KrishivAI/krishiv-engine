@@ -16,8 +16,9 @@ use krishiv_exec::planner::{
     DefaultPlanner, ExplainNode, MemoryTable, PhysicalPlanner as _, PlanningContext, TableProvider,
     TableProviderResolver,
 };
+use krishiv_exec::values::{LocalValues, ValueId, ValueService};
 use krishiv_exec::{FilterPushdown, JoinType, PushedFilter, ScanPushdown, ScanPushdowns, Source};
-use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
+use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions};
 
 use super::{Runnable, env, run, table};
 
@@ -336,4 +337,97 @@ fn submit_instantiates_inside_its_future() {
     });
     assert_eq!(rows, 10);
     assert_eq!(counting.1.load(Ordering::SeqCst), 1);
+}
+
+/// The runtime filters the scans of `plan` read.
+fn filter_ids(plan: &PhysicalPlan) -> Vec<FilterId> {
+    nodes(plan.root())
+        .into_iter()
+        .filter_map(|n| match n {
+            PhysNode::Scan(s) => Some(s.runtime_filters.iter().map(|f| f.id)),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// A join whose build, behind a broadcast exchange, has fewer keys than its
+/// probe and publishes a runtime filter to the probe's scan.
+const FILTERED: &str = "SELECT x.a, x.b FROM t AS x JOIN (SELECT a FROM t WHERE b < 30) AS y \
+                        ON x.a = y.a";
+
+#[test]
+fn instantiations_never_share_values() {
+    let env = env();
+    let plan = env.plan(FILTERED).unwrap();
+    let ids = filter_ids(&plan);
+    assert!(!ids.is_empty(), "{plan}");
+    // Each instantiation of one context gets values of its own.
+    let worker = WorkerContext::new(Arc::clone(&env.tables) as _);
+    instantiate(&plan, &worker).unwrap();
+    instantiate(&plan, &worker).unwrap();
+    // A service set on the context serves one instantiation: it holds that
+    // instantiation's cells, and a second one cannot declare them again.
+    let (a, b) = (Arc::new(LocalValues::new()), Arc::new(LocalValues::new()));
+    let on = |v: &Arc<LocalValues>| worker.clone().with_values(Arc::clone(v) as _);
+    instantiate(&plan, &on(&a)).unwrap();
+    instantiate(&plan, &on(&b)).unwrap();
+    for id in &ids {
+        assert!(!Arc::ptr_eq(
+            &a.filter(*id).unwrap(),
+            &b.filter(*id).unwrap()
+        ));
+    }
+    let e = instantiate(&plan, &on(&a)).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+    assert!(e.to_string().contains("declared twice"), "{e}");
+}
+
+#[test]
+fn a_filter_of_an_incomplete_value_applies_nothing() {
+    let env = env();
+    let plan = env.plan(FILTERED).unwrap();
+    let ids = filter_ids(&plan);
+    assert!(!ids.is_empty(), "{plan}");
+    let expected = sorted(&env.plan(FILTERED).unwrap());
+    assert_eq!(expected.len(), 3, "{expected:?}");
+    let run_with = |values: &Arc<LocalValues>| {
+        let runnable = env
+            .plan(FILTERED)
+            .unwrap()
+            .with_worker(|w| w.with_values(Arc::clone(values) as _));
+        sorted(&runnable)
+    };
+    // One producer partition: the join's filter is published to the scan.
+    let one = Arc::new(LocalValues::new());
+    assert_eq!(run_with(&one), expected);
+    for id in &ids {
+        let snapshot = one.filter(*id).unwrap().published().snapshot.clone();
+        assert!(matches!(snapshot, FilterSnapshot::Final(_)), "{snapshot:?}");
+        assert!(
+            one.subscribe(ValueId::Filter(*id))
+                .unwrap()
+                .current()
+                .is_some()
+        );
+    }
+    // Two: this run publishes one partition's filter only, which would
+    // drop the other partition's keys. The scan's filter stays pending, it
+    // keeps every row, and the result is the same.
+    let two = Arc::new(
+        LocalValues::with_producers(ids.iter().map(|id| (ValueId::Filter(*id), 2)).collect())
+            .unwrap(),
+    );
+    assert_eq!(run_with(&two), expected);
+    for id in &ids {
+        let cell = two.filter(*id).unwrap();
+        assert!(matches!(cell.published().snapshot, FilterSnapshot::Pending));
+        assert_eq!(cell.stats().counts().rows_dropped, 0);
+        assert!(
+            two.subscribe(ValueId::Filter(*id))
+                .unwrap()
+                .current()
+                .is_none()
+        );
+    }
 }

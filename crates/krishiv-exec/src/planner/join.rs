@@ -38,6 +38,7 @@ use crate::join::JoinType;
 use crate::physical::{
     HashJoinPlan, JoinDistribution, NestedLoopPlan, PhysNode, Residual, hash_join, nested_loop_join,
 };
+use crate::values::Producer;
 
 impl Planner<'_> {
     pub(crate) fn join(
@@ -242,7 +243,8 @@ impl Planner<'_> {
             &plan,
             &self.env,
             None,
-            &mut |id| self.filter_cell(id),
+            &self.placeholder_values(plan.runtime_filters.iter().map(|f| f.id))?,
+            Producer::default(),
         )?
         .schema();
         Ok(Planned {
