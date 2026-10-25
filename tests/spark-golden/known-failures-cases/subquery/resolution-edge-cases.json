@@ -1,0 +1,23 @@
+{
+  "cases": {
+    "depends-on-command": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "sql-commands": [
+      0,
+      1,
+      2,
+      10,
+      11,
+      12
+    ]
+  },
+  "file": "subquery/resolution-edge-cases",
+  "format_version": 1
+}

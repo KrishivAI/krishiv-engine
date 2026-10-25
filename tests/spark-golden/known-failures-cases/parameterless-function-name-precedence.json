@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "depends-on-command": [
+      13
+    ],
+    "fn-misc": [
+      9,
+      10
+    ],
+    "sql-commands": [
+      6,
+      8
+    ]
+  },
+  "file": "parameterless-function-name-precedence",
+  "format_version": 1
+}

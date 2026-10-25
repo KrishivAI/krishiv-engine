@@ -1,0 +1,18 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      2,
+      3,
+      4,
+      7,
+      10
+    ],
+    "sql-commands": [
+      0,
+      17
+    ]
+  },
+  "file": "conditional-functions",
+  "format_version": 1
+}
