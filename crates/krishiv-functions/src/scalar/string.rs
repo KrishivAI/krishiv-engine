@@ -32,6 +32,7 @@ pub(super) const NAMES: &[&str] = &[
     "endswith",
     "contains",
     "replace",
+    "mask",
     "lpad",
     "rpad",
     "substring",
@@ -148,6 +149,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 )?))
             })
         }
+        ("mask", "SSSSS") => Binding::new(text, |x: &Inputs<'_>| {
+            let (s, u, l, d, o) = (x.str(0)?, x.str(1)?, x.str(2)?, x.str(3)?, x.str(4)?);
+            Ok(utf8(string::mask(
+                s.operand(),
+                u.operand(),
+                l.operand(),
+                d.operand(),
+                o.operand(),
+            )?))
+        }),
         ("lpad" | "rpad", "SI" | "SIS" | "BI" | "BIB") => {
             let side = if listed == "lpad" {
                 PadSide::Left

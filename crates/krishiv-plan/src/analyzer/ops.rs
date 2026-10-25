@@ -1912,6 +1912,8 @@ impl Resolver<'_> {
         let call = Arc::new(
             Expr::new(ExprNode::Function(FunctionCall {
                 name: name.to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args,
                 distinct: false,
                 filter: None,

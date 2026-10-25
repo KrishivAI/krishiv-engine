@@ -3,7 +3,7 @@
 //! character functions (`ascii`, `chr`, `left`, `right`, `repeat`, `space`,
 //! `reverse`, `initcap`, `translate`, `locate` and its aliases,
 //! `substring_index`, `split_part`, `find_in_set`, `overlay`, `levenshtein`,
-//! `soundex`, `luhn_check`, `mask`, `quote`, `elt`, `concat_ws`, the
+//! `soundex`, `luhn_check`, `quote`, `elt`, `concat_ws`, the
 //! lengths) and the encodings (`base64`, `encode`, `decode`, `to_binary`,
 //! the UTF-8 validators, the URL codecs).
 //!
@@ -14,8 +14,8 @@
 //! strings only here; the analyzer has no array type yet.
 
 use krishiv_common::error::{
-    DatatypeMismatchInputSizeNotOne, DatatypeMismatchInvalidArgValue,
-    DatatypeMismatchNonFoldableInput, KrishivError, KrishivUnsupportedFeature,
+    DatatypeMismatchInvalidArgValue, DatatypeMismatchNonFoldableInput, KrishivError,
+    KrishivUnsupportedFeature,
 };
 use krishiv_types::DataType;
 
@@ -115,40 +115,6 @@ fn call_sql(c: &CallTypes<'_>, name: &str) -> String {
         .map(|i| c.sql(i).unwrap_or_default())
         .collect();
     format!("\"{name}({})\"", parts.join(", "))
-}
-
-/// `mask(str[, upper[, lower[, digit[, other]]]])`: every replacement is
-/// foldable and one character (or NULL), whatever the rows hold.
-fn mask_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    let names = ["upperChar", "lowerChar", "digitChar", "otherChar"];
-    for (k, name) in names.iter().enumerate() {
-        let i = k + 1;
-        if i >= c.args().len() {
-            break;
-        }
-        let sql_expr = || call_sql(c, "mask");
-        match c.constant(i) {
-            Some(Constant::Null) => {}
-            Some(Constant::String(s)) if s.chars().count() == 1 => {}
-            Some(Constant::String(_)) => {
-                return Err(DatatypeMismatchInputSizeNotOne {
-                    sql_expr: sql_expr(),
-                    expr_name: (*name).to_owned(),
-                }
-                .into());
-            }
-            _ => {
-                return Err(DatatypeMismatchNonFoldableInput {
-                    sql_expr: sql_expr(),
-                    input_name: format!("`{name}`"),
-                    input_type: "\"STRING\"".to_owned(),
-                    input_expr: format!("\"{}\"", c.sql(i).unwrap_or_default()),
-                }
-                .into());
-            }
-        }
-    }
-    nullable_string(c)
 }
 
 /// The formats `to_binary` knows, as Spark lists them.
@@ -283,11 +249,6 @@ pub(super) fn specs() -> Vec<Spec> {
         int,
     ));
     out.extend(scalar(&["luhn_check"], &one_text, nullable_boolean));
-    out.extend(scalar(
-        &["mask"],
-        &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
-        mask_result,
-    ));
     out.extend(scalar(
         &["elt"],
         &Inputs::Built(InputBuilder(elt_inputs)),

@@ -259,6 +259,10 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("format_number", "col: ColumnOrName, d: int"),
         Row::new("greatest", "*cols: ColumnOrName").at_least(2),
         Row::new("least", "*cols: ColumnOrName").at_least(2),
+        Row::new(
+            "mask",
+            "col: ColumnOrName, upperChar: ColumnOrName = None, lowerChar: ColumnOrName = None, digitChar: ColumnOrName = None, otherChar: ColumnOrName = None",
+        ),
         Row::new("ntile", "n: int"),
         Row::new(
             "nth_value",
@@ -311,10 +315,6 @@ pub(super) fn rows() -> Vec<Row> {
             "left: ColumnOrName, right: ColumnOrName, threshold: int | Column = None",
         ),
         Row::new("locate", "substr: str, str: ColumnOrName, pos: int = 1"),
-        Row::new(
-            "mask",
-            "col: ColumnOrName, upperChar: ColumnOrName = None, lowerChar: ColumnOrName = None, digitChar: ColumnOrName = None, otherChar: ColumnOrName = None",
-        ),
         Row::new(
             "overlay",
             "src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int = -1",

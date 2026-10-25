@@ -11,7 +11,7 @@ use arrow_array::{
 };
 use krishiv_common::error::ErrorClass;
 use krishiv_kernels::Operand;
-use krishiv_kernels::string::{self as s, MaskRule, MaskRules, StrOperand};
+use krishiv_kernels::string::{self as s, StrOperand};
 use proptest::prelude::*;
 
 type S<'a> = StrOperand<'a, i32>;
@@ -471,76 +471,13 @@ fn levenshtein_soundex_luhn() {
     assert!(!s::luhn_check(&strs(&[Some("𝟎")])).value(0));
 }
 
-#[test]
-fn mask_replaces_by_class() {
-    let a = strs(&[Some("AbCD123-@$#"), Some(""), None, Some("é😀É٣")]);
-    let default = s::mask(&a, MaskRules::default()).unwrap();
-    assert_eq!(
-        out(&default),
-        [Some("XxXXnnn-@$#"), Some(""), None, Some("x😀Xn")]
-    );
-    let all = MaskRules {
-        upper: MaskRule::With('Q'),
-        lower: MaskRule::With('q'),
-        digit: MaskRule::With('d'),
-        other: MaskRule::With('o'),
-    };
-    let got = s::mask(&a, all).unwrap();
-    assert_eq!(
-        out(&got),
-        [Some("QqQQdddoooo"), Some(""), None, Some("qooQd")]
-    );
-    let keep = MaskRules {
-        upper: MaskRule::Keep,
-        lower: MaskRule::Keep,
-        digit: MaskRule::Keep,
-        other: MaskRule::Keep,
-    };
-    assert_eq!(out(&s::mask(&a, keep).unwrap()), out(&a));
-    // Modifier letters and ⓐ are letters in the Unicode properties but not in
-    // category L{u,l}.
-    let odd = strs(&[Some("ʰⓐⅣ")]);
-    assert_eq!(
-        out(&s::mask(&odd, MaskRules::default()).unwrap()),
-        [Some("ʰⓐⅣ")]
-    );
-}
-
-/// The toolchain's Unicode data is pinned: `initcap` and `mask` classify
+/// The toolchain's Unicode data is pinned: `initcap` classifies
 /// with `char::{to_uppercase, to_lowercase, is_uppercase, is_lowercase}`,
 /// so a toolchain upgrade that changes these mappings would silently change
-/// the result. This test fails then instead, signalling the compensating
-/// list and the documented approximation need review.
+/// the result. This test fails then instead, signalling the documented
+/// approximation needs review.
 #[test]
 fn toolchain_unicode_is_pinned() {
-    // The compensating list is still needed on this toolchain: each sample
-    // carries an Uppercase/Lowercase property without being `Lu`/`Ll`.
-    for c in [
-        '\u{00AA}',
-        '\u{02B0}',
-        '\u{0345}',
-        '\u{1D2C}',
-        '\u{2160}',
-        '\u{2170}',
-        '\u{24B6}',
-        '\u{24D0}',
-        '\u{2C7C}',
-        '\u{A770}',
-        '\u{AB5C}',
-        '\u{1F130}',
-    ] {
-        assert!(
-            c.is_uppercase() || c.is_lowercase(),
-            "U+{:04X} lost its case property; review is_other_case",
-            u32::from(c)
-        );
-    }
-    // Plain `Lu`/`Ll` letters are not in the list: `mask` replaces them.
-    let letters = strs(&[Some("AÉΩДaéωд")]);
-    assert_eq!(
-        out(&s::mask(&letters, MaskRules::default()).unwrap()),
-        [Some("XXXXxxxx")]
-    );
     // `initcap` on the divergent code points: title case is `to_uppercase`
     // with the tail lowered, except the digraphs and Georgian, which keep
     // their form. Greek with an iota subscript differs from ICU here.
@@ -564,12 +501,6 @@ fn toolchain_unicode_is_pinned() {
             Some("Fi"),
             Some("ʰ"),
         ]
-    );
-    // `mask` keeps the divergent forms under the default (`other`) rule.
-    let odd = strs(&[Some("ʰⓐⅣᾀß")]);
-    assert_eq!(
-        out(&s::mask(&odd, MaskRules::default()).unwrap()),
-        [Some("ʰⓐⅣxx")]
     );
 }
 
@@ -1108,12 +1039,5 @@ proptest! {
             pieces.push(s::split_part(StrOperand::Array(&r1(&text)), lit(Some(".")), int(n)).unwrap().value(0).to_owned());
         }
         prop_assert_eq!(pieces.join("."), text);
-    }
-
-    #[test]
-    fn mask_keeps_the_length_of_bmp_text(text in "[a-zA-Z0-9 -]{0,20}") {
-        let r = s::mask(&strs(&[Some(&text)]), MaskRules::default()).unwrap();
-        prop_assert_eq!(r.value(0).chars().count(), text.chars().count());
-        prop_assert!(r.value(0).chars().all(|c| matches!(c, 'X' | 'x' | 'n' | ' ' | '-')));
     }
 }

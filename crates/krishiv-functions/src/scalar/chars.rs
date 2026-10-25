@@ -2,7 +2,7 @@
 //! The character-level string functions (`ascii`, `chr`, `left`, `right`,
 //! `repeat`, `space`, `reverse`, `initcap`, `translate`, `locate` and its
 //! aliases, `substring_index`, `split_part`, `find_in_set`, `overlay`,
-//! `levenshtein`, `soundex`, `luhn_check`, `mask`, `quote`, `elt`,
+//! `levenshtein`, `soundex`, `luhn_check`, `quote`, `elt`,
 //! `concat_ws` and the lengths in bits and bytes) on the kernels of
 //! `krishiv_kernels::string`.
 
@@ -13,9 +13,9 @@ use arrow_array::{Array, ArrayRef, Int32Array, StringArray};
 use arrow_schema::DataType;
 use krishiv_kernels::KernelError;
 use krishiv_kernels::Operand;
-use krishiv_kernels::string::{self, MaskRule, MaskRules};
+use krishiv_kernels::string;
 
-use super::args::{Bin, Prim, Str, to_utf8};
+use super::args::{Bin, Prim, Str};
 use super::string::{shape, utf8};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
@@ -44,42 +44,9 @@ pub(super) const NAMES: &[&str] = &[
     "overlay",
     "levenshtein",
     "luhn_check",
-    "mask",
     "elt",
     "concat_ws",
 ];
-
-/// The rule a literal replacement argument of `mask` stands for: NULL keeps
-/// the character, a string gives its first UTF-16 unit (a character outside
-/// the Basic Multilingual Plane has only a lone surrogate there, which the
-/// result's UTF-8 encoding writes as `?`).
-fn mask_rule(arg: &BindArg) -> Option<MaskRule> {
-    let BindArg::Literal(a) = arg else {
-        return None;
-    };
-    let s = to_utf8(a.as_ref()).ok()?;
-    if s.is_null(0) {
-        return Some(MaskRule::Keep);
-    }
-    let c = s.value(0).chars().next()?;
-    Some(MaskRule::With(if u32::from(c) > 0xFFFF { '?' } else { c }))
-}
-
-/// The rules of `mask(str, upper, lower, digit, other)` from its literal
-/// arguments; `None` when one is not a literal.
-fn mask_rules(args: &[BindArg]) -> Option<MaskRules> {
-    let mut rules = MaskRules::default();
-    let slots = [
-        &mut rules.upper,
-        &mut rules.lower,
-        &mut rules.digit,
-        &mut rules.other,
-    ];
-    for (slot, arg) in slots.into_iter().zip(args.iter().skip(1)) {
-        *slot = mask_rule(arg)?;
-    }
-    Some(rules)
-}
 
 /// Binds the character function `name`.
 pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
@@ -226,14 +193,6 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         ("luhn_check", "S") => Binding::new(DataType::Boolean, |x| {
             Ok(Arc::new(string::luhn_check(&x.strings(0)?)) as ArrayRef)
         }),
-        ("mask", s) if !s.is_empty() && s.chars().all(|c| c == 'S') => {
-            let Some(rules) = mask_rules(args) else {
-                return Some((listed, Err(bad_types(listed, args))));
-            };
-            Binding::new(DataType::Utf8, move |x| {
-                Ok(utf8(string::mask(&x.strings(0)?, rules)?))
-            })
-        }
         ("elt", s) if s.len() > 1 && s.starts_with('I') && s[1..].chars().all(|c| c == 'S') => {
             let count = shape.len();
             Binding::new(DataType::Utf8, move |x| {

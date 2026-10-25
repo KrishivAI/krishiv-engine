@@ -307,6 +307,17 @@ fn strings() -> Vec<Spec> {
         ]),
         first_type,
     ));
+    out.extend(scalar(
+        &["mask"],
+        &Inputs::Expects(vec![
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+        ]),
+        string,
+    ));
     out
 }
 

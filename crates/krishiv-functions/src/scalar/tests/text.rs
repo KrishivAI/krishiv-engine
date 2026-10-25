@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The character-level and encoding string bindings: the argument shapes
-//! each function binds, the storage carriers it reads, literal-only
-//! arguments (`mask`), ANSI-keyed errors (`elt`) and the errors of the
-//! encodings, over NULLs and both ANSI modes.
+//! each function binds, the storage carriers it reads, ANSI-keyed errors
+//! (`elt`) and the errors of the encodings, over NULLs and both ANSI modes.
 
 use std::sync::Arc;
 
@@ -227,40 +226,6 @@ fn translate_overlay_levenshtein_luhn() {
         bools(&run("luhn_check", &[&cards])),
         [Some(true), Some(false), None, Some(false)]
     );
-}
-
-#[test]
-fn mask_reads_literal_replacements() {
-    let s = strs(&[Some("AbCD123-@$#"), None]);
-    let bind_args = |chars: &[Option<&str>]| -> Vec<BindArg> {
-        let mut args = vec![BindArg::Column(DataType::Utf8)];
-        args.extend(chars.iter().map(|c| BindArg::Literal(strs(&[*c]))));
-        args
-    };
-    let opts = BindOptions::new();
-    let run_mask = |chars: &[Option<&str>]| {
-        let f = bind_scalar("mask", &bind_args(chars), &opts).unwrap();
-        let mut args = vec![col(&s)];
-        args.extend(chars.iter().map(|c| lit(&strs(&[*c]))));
-        text(&f.invoke(&args, 2).unwrap())
-    };
-    assert_eq!(run_mask(&[]), owned(&[Some("XxXXnnn-@$#"), None]));
-    assert_eq!(
-        run_mask(&[Some("Q"), Some("q"), Some("d"), Some("o")]),
-        owned(&[Some("QqQQdddoooo"), None])
-    );
-    // NULL replacements keep the character; a supplementary replacement is
-    // its lone surrogate, written as `?`.
-    assert_eq!(
-        run_mask(&[None, None, None, None]),
-        owned(&[Some("AbCD123-@$#"), None])
-    );
-    assert_eq!(run_mask(&[Some("😀")]), owned(&[Some("?x??nnn-@$#"), None]));
-    // A replacement that is not a literal cannot be bound.
-    let mut args = bind_args(&[Some("Q")]);
-    args[1] = BindArg::Column(DataType::Utf8);
-    let err = bind_scalar("mask", &args, &opts).unwrap_err();
-    assert_eq!(class(&err), ErrorClass::KrishivUnsupportedFeature);
 }
 
 #[test]

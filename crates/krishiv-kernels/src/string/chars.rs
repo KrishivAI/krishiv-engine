@@ -2,7 +2,7 @@
 //! The character-level string functions: `ascii`, `chr`, `right`, `repeat`,
 //! `space`, `reverse`, `initcap`, `translate`, `locate`, `substring_index`,
 //! `split_part`, `find_in_set`, `overlay`, `levenshtein`, `soundex`,
-//! `luhn_check`, `mask`, `quote`, `elt` and `concat_ws`.
+//! `luhn_check`, `quote`, `elt` and `concat_ws`.
 //!
 //! A "character" is a Unicode scalar value, as in the rest of the module.
 //! Work happens in one scratch buffer per kernel call; only rows whose
@@ -955,106 +955,7 @@ pub fn luhn_check<O: OffsetSizeTrait>(a: &GenericStringArray<O>) -> BooleanArray
     })
 }
 
-// ---- mask, quote ----
-
-/// What `mask` does with one class of characters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MaskRule {
-    /// Keep the character.
-    Keep,
-    /// Replace it by this one.
-    With(char),
-}
-
-/// The replacements of `mask`: one rule per character class.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MaskRules {
-    /// Upper-case letters.
-    pub upper: MaskRule,
-    /// Lower-case letters.
-    pub lower: MaskRule,
-    /// Decimal digits.
-    pub digit: MaskRule,
-    /// Every other character.
-    pub other: MaskRule,
-}
-
-impl Default for MaskRules {
-    /// Spark's defaults: `X`, `x`, `n`, and other characters kept.
-    fn default() -> Self {
-        Self {
-            upper: MaskRule::With('X'),
-            lower: MaskRule::With('x'),
-            digit: MaskRule::With('n'),
-            other: MaskRule::Keep,
-        }
-    }
-}
-
-/// Characters with the Unicode `Lowercase` or `Uppercase` property that are
-/// not letters of category `Ll`/`Lu` (modifier letters, circled and Roman
-/// numeral forms), which Java's `Character.getType` does not call letters.
-///
-/// This list is pinned to the toolchain's Unicode data by
-/// `toolchain_unicode_is_pinned`: if a toolchain upgrade changes the
-/// properties of these code points, that test fails instead of silently
-/// changing `mask`.
-fn is_other_case(c: char) -> bool {
-    matches!(u32::from(c),
-        0x00AA | 0x00BA | 0x02B0..=0x02B8 | 0x02C0..=0x02C1 | 0x02E0..=0x02E4 | 0x0345
-        | 0x037A | 0x1D2C..=0x1D6A | 0x1D78 | 0x1D9B..=0x1DBF | 0x2071 | 0x207F
-        | 0x2090..=0x209C | 0x2160..=0x217F | 0x24B6..=0x24E9 | 0x2C7C..=0x2C7D
-        | 0xA69C..=0xA69D | 0xA770 | 0xA7F8..=0xA7F9 | 0xAB5C..=0xAB5F
-        | 0x1F130..=0x1F149 | 0x1F150..=0x1F169 | 0x1F170..=0x1F189)
-}
-
-/// `mask(str, upper, lower, digit, other)`: each character replaced by its
-/// class's rule. Java classifies and replaces UTF-16 code units, so a
-/// character outside the Basic Multilingual Plane is two units of category
-/// "surrogate", which the `other` rule replaces one by one.
-///
-/// Letter classes are the Unicode `Uppercase`/`Lowercase` properties less the
-/// modifier letters and the circled and Roman-numeral forms that carry them
-/// without being `Lu`/`Ll`; digits are exactly `Nd`.
-///
-/// This is a known approximation: classification uses the toolchain's Unicode
-/// data, not a version-keyed table (see `super::case_table` for `upper`/
-/// `lower`). The compensating list in `is_other_case` and the outputs for
-/// the divergent code points are pinned by `toolchain_unicode_is_pinned`.
-///
-/// # Errors
-/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit memory or the
-/// offset type.
-pub fn mask<O: OffsetSizeTrait>(
-    a: &GenericStringArray<O>,
-    rules: MaskRules,
-) -> Result<GenericStringArray<O>, KernelError> {
-    let input = StrOperand::Array(a);
-    str_rows(&[&input], |i, out| {
-        let s = a.value(i);
-        // One replacement per character (4 bytes worst case), two for a
-        // character outside the Basic Multilingual Plane.
-        reserve_str(out, s.len().saturating_mul(4))?;
-        for c in s.chars() {
-            let (rule, units) = if u32::from(c) > 0xFFFF {
-                (rules.other, 2)
-            } else if java_digit(c).is_some() {
-                (rules.digit, 1)
-            } else if c.is_uppercase() && !is_other_case(c) {
-                (rules.upper, 1)
-            } else if c.is_lowercase() && !is_other_case(c) {
-                (rules.lower, 1)
-            } else {
-                (rules.other, 1)
-            };
-            match rule {
-                MaskRule::Keep => out.push(c),
-                MaskRule::With(r) => out.extend(std::iter::repeat_n(r, units)),
-            }
-        }
-        Ok(())
-    })
-}
+// ---- quote ----
 
 /// `quote(str)`: the string in single quotes, each embedded quote preceded
 /// by a backslash.

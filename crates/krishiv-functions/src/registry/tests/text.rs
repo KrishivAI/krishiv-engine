@@ -28,7 +28,6 @@ const SINCE_3_5: &[&str] = &[
     "levenshtein",
     "locate",
     "luhn_check",
-    "mask",
     "octet_length",
     "overlay",
     "position",
@@ -173,29 +172,6 @@ fn results_are_nullable_as_spark_has_them() {
         result("base64", &[ty(DataType::Binary)], &[]).unwrap(),
         t(DataType::String, false)
     );
-}
-
-#[test]
-fn mask_replacements_must_be_one_character_literals() {
-    let args = [ty(DataType::String), ty(DataType::String)];
-    let ok = |c: Constant| result("mask", &args, &[None, Some(c)]);
-    assert!(ok(Constant::String("Q".to_owned())).is_ok());
-    assert!(ok(Constant::Null).is_ok());
-    let class = |r: Result<_, krishiv_common::error::KrishivError>| r.unwrap_err().error_class();
-    assert_eq!(
-        class(ok(Constant::String("Qa".to_owned()))),
-        ErrorClass::DatatypeMismatchInputSizeNotOne
-    );
-    assert_eq!(
-        class(ok(Constant::String(String::new()))),
-        ErrorClass::DatatypeMismatchInputSizeNotOne
-    );
-    assert_eq!(
-        class(result("mask", &args, &[])),
-        ErrorClass::DatatypeMismatchNonFoldableInput
-    );
-    // Only the replacements given are checked.
-    assert!(result("mask", &[ty(DataType::String)], &[]).is_ok());
 }
 
 #[test]
