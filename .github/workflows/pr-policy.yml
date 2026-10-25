@@ -12,8 +12,6 @@ on:
     types: [opened, synchronize, reopened, labeled, unlabeled]
   merge_group:
     types: [checks_requested]
-  push:
-    branches: [main]
 
 concurrency:
   group: pr-policy-${{ github.event.pull_request.number || github.ref }}
