@@ -142,16 +142,9 @@ fn coercion_matrix_analyzes_as_spark_does() {
     let root = krishiv_testkit::tests_dir();
     let rows = rows(&root);
     let mut failures: BTreeMap<String, String> = BTreeMap::new();
-    let mut by_form: BTreeMap<String, (usize, usize)> = BTreeMap::new();
     for row in &rows {
-        let form = row.id.split('/').next().unwrap_or_default().to_owned();
-        let tally = by_form.entry(form).or_default();
-        tally.0 += 1;
-        match verdict(row) {
-            None => tally.1 += 1,
-            Some(why) => {
-                failures.insert(row.id.clone(), format!("{} | {why}", row.sql));
-            }
+        if let Some(why) = verdict(row) {
+            failures.insert(row.id.clone(), format!("{} | {why}", row.sql));
         }
     }
     let (total, passed) = (rows.len(), rows.len() - failures.len());

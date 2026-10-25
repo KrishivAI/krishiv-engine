@@ -42,7 +42,7 @@ from pathlib import Path
 FORMAT_VERSION = 1
 GENERATOR = "tests/scripts/gen_coercion_matrix.py"
 ANSI = "spark.sql.ansi.enabled"
-LOCAL_PATH = re.compile(r"/home/|/Users/|[A-Za-z]:\\\\")
+LOCAL_PATH = re.compile(r"/home/|/Users/|[A-Za-z]:[\\/]")
 
 # Every operand type of the matrix (Spark DDL) with the `typeof` it must
 # analyze to (the self-check that pins the server and the spellings).
