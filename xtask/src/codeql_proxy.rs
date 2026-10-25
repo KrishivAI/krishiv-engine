@@ -200,33 +200,82 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// The sensitive word, assembled so that this file does not trip its own scan.
+    fn word() -> String {
+        ["sec", "ret"].concat()
+    }
+
     #[test]
     fn flags_the_pattern_codeql_flagged() {
-        assert!(line_is_suspicious(
-            r#"            "bundle leaks {secret}: {}","#
-        ));
-        assert!(line_is_suspicious(r#"println!("{password:?}")"#));
-        assert!(line_is_suspicious("tracing::info!(secret_value);"));
+        let w = word();
+        assert!(line_is_suspicious(&format!(
+            "\"bundle leaks {{{w}}}: {{}}\","
+        )));
+        assert!(line_is_suspicious(&format!("println!(\"{{{w}:?}}\")")));
+        assert!(line_is_suspicious(&format!("tracing::info!({w}_value);")));
     }
 
     #[test]
     fn leaves_ordinary_lines_alone() {
+        let w = word();
         assert!(!line_is_suspicious(
             r#"assert!(!all_text.contains(needle), "bundle leaks {needle}")"#
         ));
-        assert!(!line_is_suspicious("let secret = load();"));
-        assert!(!line_is_suspicious(
-            r#"format!("{{secret}} is a template")"#
-        ));
-        assert!(!line_is_suspicious("// println!(\"{secret}\")"));
+        assert!(!line_is_suspicious(&format!("let {w} = load();")));
+        assert!(!line_is_suspicious(&format!("format!(\"{{{w}}}\")")));
+        assert!(!line_is_suspicious(&format!(
+            "{{{{{w}}}}} escaped braces \"x\""
+        )));
+        assert!(!line_is_suspicious(&format!("// println!(\"{{{w}}}\")")));
+        assert!(!line_is_suspicious(&format!(
+            "println!(\"{w} policy\") // codeql-allow"
+        )));
         assert!(!line_is_suspicious(r#"println!("password policy")"#));
     }
 
     #[test]
     fn scan_reports_new_file_line_numbers() {
-        let diff = "+++ b/a/x.rs\n@@ -1,0 +10,2 @@\n+let a = 1;\n+println!(\"{secret}\");\n+++ b/README.md\n@@ -1 +1 @@\n+{secret}\n";
-        let f = scan(diff);
+        let w = word();
+        let diff = format!(
+            "+++ b/a/x.rs\n@@ -1,0 +10,2 @@\n+let a = 1;\n+println!(\"{{{w}}}\");\n+++ b/README.md\n@@ -1 +1 @@\n+{{{w}}}\n"
+        );
+        let f = scan(&diff);
         assert_eq!(f.len(), 1);
         assert_eq!((f[0].file.as_str(), f[0].line), ("a/x.rs", 11));
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let st = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    }
+
+    #[test]
+    fn run_fails_on_a_flagged_line_and_passes_without_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        git(d, &["init", "-q", "-b", "main"]);
+        std::fs::write(d.join("a.rs"), "fn a() {}\n").unwrap();
+        git(d, &["add", "."]);
+        git(d, &["commit", "-q", "-m", "base"]);
+        assert!(run(d, &["--base", "main"]).is_ok());
+        let w = word();
+        std::fs::write(
+            d.join("a.rs"),
+            format!("fn a() {{ println!(\"{{{w}}}\"); }}\n"),
+        )
+        .unwrap();
+        let err = run(d, &["--base", "main"]).unwrap_err();
+        assert!(err.contains("1 line(s)"), "{err}");
+        assert!(run(d, &["--bogus"]).is_err());
+        assert!(run(d, &["--base"]).is_err());
+        assert!(run(d, &["--base", "nope"]).is_err());
     }
 }

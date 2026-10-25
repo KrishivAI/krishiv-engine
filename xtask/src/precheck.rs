@@ -1247,20 +1247,32 @@ pub fn verdict(outcomes: &[Outcome]) -> Result<(), String> {
     }
 }
 
-/// `cargo xtask precheck [--base REF] [--fast] [--full] [--memory-cap SIZE]`.
+/// The dedicated coverage target directory: a sibling of `CARGO_TARGET_DIR` when it is set
+/// (so a per-unit build directory keeps its own), else under the workspace `target/`.
+#[must_use]
+pub fn cov_dir_for(root: &Path, cargo_target_dir: Option<&str>) -> String {
+    match cargo_target_dir {
+        Some(t) => format!("{}-precheck-cov", t.trim_end_matches('/')),
+        None => root
+            .join("target/precheck-cov")
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+/// `cargo xtask precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE]`.
 ///
 /// # Errors
 /// Returns the usage or environment error, or the failed-check summary.
 pub fn run_precheck(root: &Path, flags: &[&str]) -> Result<(), String> {
     let mut o = Opts::parse(flags)?;
     // An absolute path: the coverage commands run from the workspace root, but so may others.
-    o.cov_dir = match std::env::var_os("CARGO_TARGET_DIR") {
-        Some(t) => format!("{}-precheck-cov", t.to_string_lossy().trim_end_matches('/')),
-        None => root
-            .join("target/precheck-cov")
-            .to_string_lossy()
-            .into_owned(),
-    };
+    o.cov_dir = cov_dir_for(
+        root,
+        std::env::var_os("CARGO_TARGET_DIR")
+            .as_deref()
+            .and_then(std::ffi::OsStr::to_str),
+    );
     if o.memory_cap.is_some() && !on_path("systemd-run") {
         return Err(memory_cap_error());
     }

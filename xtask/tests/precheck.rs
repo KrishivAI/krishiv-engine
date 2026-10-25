@@ -1169,3 +1169,29 @@ fn python_wheel_tests_follow_python_and_the_bindings_crate() {
     let fast = make_plan(&detect(&["python/krishiv/a.py"]), &opts(&["--fast"]), true);
     assert_eq!(skip_reason(&fast, "python-wheel-tests"), Some("--fast"));
 }
+
+#[test]
+fn coverage_dir_is_a_sibling_of_the_target_dir() {
+    let root = Path::new("/w");
+    assert_eq!(
+        xtask::precheck::cov_dir_for(root, Some("/t/unit/")),
+        "/t/unit-precheck-cov"
+    );
+    assert_eq!(
+        xtask::precheck::cov_dir_for(root, None),
+        "/w/target/precheck-cov"
+    );
+}
+
+#[test]
+fn coverage_can_include_dependents() {
+    let steps = make_plan(
+        &detect(&["crates/common/src/lib.rs"]),
+        &opts(&["--coverage-dependents"]),
+        true,
+    );
+    let Action::Run(cmds) = &step(&steps, "diff-coverage").action else {
+        panic!("diff-coverage should run");
+    };
+    assert!(cmds[0].args.len() > 4, "{:?}", cmds[0].args);
+}
