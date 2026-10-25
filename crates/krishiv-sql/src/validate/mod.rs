@@ -27,7 +27,8 @@
 //! | `()` in `ROLLUP` / `CUBE` | `_LEGACY_ERROR_TEMP_0051` |
 //! | a `CREATE TABLE` column descriptor or clause written twice | `CREATE_TABLE_COLUMN_DESCRIPTOR_DUPLICATE`, `DUPLICATE_CLAUSES` |
 //! | a repeated or zero identity option | `IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION`, `IDENTITY_COLUMNS_ILLEGAL_STEP` |
-//! | `SKEWED BY`; a CTAS with a schema or typed partition columns | `INVALID_STATEMENT_OR_CLAUSE`, `_LEGACY_ERROR_TEMP_0035` |
+//! | `SKEWED BY`; `USING` with `STORED AS` / `ROW FORMAT`; a CTAS with a schema or typed partition columns | `INVALID_STATEMENT_OR_CLAUSE`, `_LEGACY_ERROR_TEMP_0035` |
+//! | a bucket count of 0 or above `bucketing.maxBuckets` | `INVALID_BUCKET_COUNT` |
 //!
 //! Not checked here: an inline table whose expressions fail when Spark
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
@@ -46,24 +47,24 @@ use std::collections::HashSet;
 use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DuplicateClauses, DuplicatedCteNames,
     IdentityColumnsDuplicatedSequenceGeneratorOption, IdentityColumnsIllegalStep,
-    IncompatibleJoinTypes, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
-    InvalidSetSyntax, InvalidSqlSyntaxEmptyInPredicate, InvalidSqlSyntaxInvalidWindowReference,
-    InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxUnresolvedWindowReference,
-    InvalidSqlSyntaxVariableTypeOrDefaultRequired, InvalidStatementOrClause, KrishivError,
-    LegacyErrorTemp0035, LegacyErrorTemp0051, LegacyErrorTemp0064,
-    UnsupportedFeatureLateralJoinUsing,
+    IncompatibleJoinTypes, InvalidBucketCount, InvalidInlineTableNumColumnsMismatch,
+    InvalidParameterValueDatetimeUnit, InvalidSetSyntax, InvalidSqlSyntaxEmptyInPredicate,
+    InvalidSqlSyntaxInvalidWindowReference, InvalidSqlSyntaxRepetitiveWindowDefinition,
+    InvalidSqlSyntaxUnresolvedWindowReference, InvalidSqlSyntaxVariableTypeOrDefaultRequired,
+    InvalidStatementOrClause, KrishivError, LegacyErrorTemp0035, LegacyErrorTemp0051,
+    LegacyErrorTemp0064, UnsupportedFeatureLateralJoinUsing,
 };
 
 pub(crate) use self::types::data_type;
 use crate::ParserOptions;
 use crate::ast::{
-    ColumnConstraintKind, ColumnDef, ColumnName, CreateTable, DdlName, Expr, ExprKind,
-    FrameBoundKind, FromClause, Function, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
-    GroupWith, GroupingSet, Join, JoinConstraint, Literal, NamedWindow, NumKind,
-    PartitionFieldKind, Query, Relation, RelationExt, Select, SelectItem, SetExpr, SetExprKind,
-    SetVariableKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
-    TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause, WindowRef, WindowSpec,
-    With,
+    ColumnConstraintKind, ColumnDef, ColumnName, CreateTable, CreateTableLike, DdlName, Expr,
+    ExprKind, FileFormat, FileFormatKind, FrameBoundKind, FromClause, Function, GeneratedKind,
+    GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Join, JoinConstraint, Literal,
+    NamedWindow, NumKind, ObjectName, PartitionFieldKind, Query, Relation, RelationExt, RowFormat,
+    RowFormatKind, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind, SortItem, Span,
+    Statement, StructField, TableAlias, TableConstraintKind, TableElement, TableFactor,
+    TableFactorKind, TableOption, TemporalClause, WindowRef, WindowSpec, With,
 };
 use crate::error::ParseError;
 use crate::lexer::tokenize;
@@ -86,7 +87,8 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
         // `USE` name one object (a view, table, namespace or variable):
         // nothing Spark's builder checks. A created view's query, and a
         // CTAS query, are checked as statements of their own; `TABLE ...
-        // LIKE` names two tables.
+        // LIKE` names two tables, and its `USING`/serde clauses are checked
+        // below.
         Statement::Set(_)
         | Statement::Reset(_)
         | Statement::DropView(_)
@@ -94,8 +96,8 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
         | Statement::CreateNamespace(_)
         | Statement::DropNamespace(_)
         | Statement::Use(_)
-        | Statement::DropVariable(_)
-        | Statement::CreateTableLike(_) => Ok(()),
+        | Statement::DropVariable(_) => Ok(()),
+        Statement::CreateTableLike(t) => Checker { sql, opts }.create_table_like(t),
         Statement::CreateView(v) => query(&v.query, sql, opts),
         Statement::CreateTable(t) => Checker { sql, opts }.create_table(t),
         Statement::DeclareVariable(v) => {
@@ -171,8 +173,9 @@ struct Checker<'a> {
 impl Checker<'_> {
     /// `CREATE TABLE`, in the order Spark's builder visits it: the name,
     /// the column definitions and table constraints, the clauses (their
-    /// duplicates first, then `SKEWED BY`, then their contents), the CTAS
-    /// query, and last the CTAS restrictions.
+    /// duplicates first, then `SKEWED BY`, then their contents, the bucket
+    /// count among them), `USING` beside a serde clause, the CTAS query,
+    /// and last the CTAS restrictions.
     fn create_table(&self, t: &CreateTable) -> R {
         self.ddl_name(&t.name)?;
         for element in &t.elements {
@@ -213,11 +216,28 @@ impl Checker<'_> {
                 }
             }
         }
+        if let Some(b) = &t.bucket
+            && (b.buckets == 0 || b.buckets > self.opts.max_buckets)
+        {
+            return Err(at(
+                InvalidBucketCount {
+                    bucketing_max_buckets: self.opts.max_buckets.to_string(),
+                    num_buckets: b.buckets.to_string(),
+                },
+                b.span,
+            ));
+        }
         t.options
             .iter()
             .chain(&t.tblproperties)
             .filter_map(|o| o.value.as_ref())
             .try_for_each(|e| self.expr(e))?;
+        self.using_with_serde(
+            "CREATE TABLE ... USING ...",
+            t.using.as_ref(),
+            (t.row_format.as_ref(), t.file_format.as_ref()),
+            t.span,
+        )?;
         let Some(q) = &t.as_query else {
             return Ok(());
         };
@@ -244,6 +264,67 @@ impl Checker<'_> {
             );
         }
         Ok(())
+    }
+
+    /// `CREATE TABLE ... LIKE`: a clause written twice, then `USING` beside
+    /// a serde clause.
+    fn create_table_like(&self, t: &CreateTableLike) -> R {
+        if let Some(clause) = t.duplicate_clause {
+            return Err(at(
+                DuplicateClauses {
+                    clause_name: clause.to_owned(),
+                },
+                t.span,
+            ));
+        }
+        self.using_with_serde(
+            "CREATE TABLE LIKE ... USING ...",
+            t.using.as_ref(),
+            (t.row_format.as_ref(), t.file_format.as_ref()),
+            t.span,
+        )
+    }
+
+    /// `USING provider` together with `STORED AS` or `ROW FORMAT` (Spark's
+    /// `invalidStatement`, named `what` plus the clauses as Spark's
+    /// `SerdeInfo.describe` writes them). With `STORED BY`, Spark's error is
+    /// about that clause alone; it is only raised here beside `USING`.
+    fn using_with_serde(
+        &self,
+        what: &str,
+        using: Option<&ObjectName>,
+        (row_format, file_format): (Option<&RowFormat>, Option<&FileFormat>),
+        statement: Span,
+    ) -> R {
+        if using.is_none() || (row_format.is_none() && file_format.is_none()) {
+            return Ok(());
+        }
+        let operation = match file_format.map(|f| &f.kind) {
+            Some(FileFormatKind::StoredBy(_)) => "STORED BY".to_owned(),
+            stored => {
+                let serde = match row_format.map(|r| &r.kind) {
+                    Some(RowFormatKind::Serde(s)) => format!("ROW FORMAT SERDE {}", s.class),
+                    Some(RowFormatKind::Delimited(d))
+                        if d.fields_terminated_by.is_some()
+                            || d.escaped_by.is_some()
+                            || d.collection_items_terminated_by.is_some()
+                            || d.map_keys_terminated_by.is_some()
+                            || d.lines_terminated_by.is_some() =>
+                    {
+                        "ROW FORMAT DELIMITED".to_owned()
+                    }
+                    _ => String::new(),
+                };
+                match stored {
+                    Some(FileFormatKind::StoredAs(name)) => {
+                        let name = self.sql.get(name.span.range()).unwrap_or_default();
+                        format!("{what} STORED AS {name} {serde}")
+                    }
+                    _ => format!("{what} {serde}"),
+                }
+            }
+        };
+        Err(at(InvalidStatementOrClause { operation }, statement))
     }
 
     /// One `CREATE TABLE` column (`statement` is the statement's span, where

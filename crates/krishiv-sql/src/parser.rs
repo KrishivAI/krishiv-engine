@@ -68,6 +68,16 @@ const CREATE_TABLE_CLAUSES: [&str; 10] = [
     "LOCATION",
 ];
 
+/// The `CREATE TABLE ... LIKE` clauses Spark rejects when written twice,
+/// in the order it checks them (it calls `USING` `PROVIDER` here).
+const CREATE_TABLE_LIKE_CLAUSES: [&str; 5] = [
+    "PROVIDER",
+    "STORED AS/BY",
+    "ROW FORMAT",
+    "LOCATION",
+    "TBLPROPERTIES",
+];
+
 struct Checkpoint {
     pos: usize,
     far: usize,
@@ -2149,23 +2159,39 @@ impl<'s> Parser<'s> {
                     file_format: None,
                     location: None,
                     tblproperties: Vec::new(),
+                    duplicate_clause: None,
                     span: Span::new(start, start),
                 };
+                // Occurrences per clause, in Spark's duplicate-check order.
+                let mut seen = [0_usize; CREATE_TABLE_LIKE_CLAUSES.len()];
                 loop {
-                    if p.eat_kw("USING") {
+                    let clause = if p.eat_kw("USING") {
                         like.using = Some(p.table_name()?);
+                        "PROVIDER"
                     } else if p.kw_at(0, "ROW") && p.kw_at(1, "FORMAT") {
                         like.row_format = Some(p.row_format()?);
+                        "ROW FORMAT"
                     } else if p.kw_at(0, "STORED") {
                         like.file_format = Some(p.file_format()?);
+                        "STORED AS/BY"
                     } else if p.eat_kw("LOCATION") {
                         like.location = Some(p.string_after()?);
+                        "LOCATION"
                     } else if p.eat_kw("TBLPROPERTIES") {
                         like.tblproperties.extend(p.property_list(false)?);
+                        "TBLPROPERTIES"
                     } else {
                         break;
+                    };
+                    if let Some(i) = CREATE_TABLE_LIKE_CLAUSES.iter().position(|k| *k == clause) {
+                        seen[i] += 1;
                     }
                 }
+                like.duplicate_clause = CREATE_TABLE_LIKE_CLAUSES
+                    .iter()
+                    .zip(seen)
+                    .find(|(_, n)| *n > 1)
+                    .map(|(c, _)| *c);
                 like.span = p.span_from(start);
                 p.command_end()?;
                 return Ok(Statement::CreateTableLike(Box::new(like)));

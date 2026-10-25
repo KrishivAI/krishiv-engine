@@ -37,6 +37,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &FILES_OPEN_COST_IN_BYTES,
     &FILES_MIN_PARTITION_NUM,
     &FILES_MAX_PARTITION_NUM,
+    &BUCKETING_MAX_BUCKETS,
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
@@ -175,8 +176,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
     (
+        "spark.sql.sources.bucketing.maxBuckets",
+        &BUCKETING_MAX_BUCKETS,
+    ),
+    (
         "krishiv.runtimeFilter.exactSet.maxValues",
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
+    ),
+    (
+        "krishiv.sql.sources.bucketing.maxBuckets",
+        &BUCKETING_MAX_BUCKETS,
     ),
     (
         "krishiv.experimental.unalignedCheckpoints",
@@ -547,6 +556,18 @@ pub static FILES_MAX_PARTITION_NUM: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.files.maxPartitionNum"),
+};
+
+/// `spark.sql.sources.bucketing.maxBuckets` (Spark's default: 100,000).
+pub static BUCKETING_MAX_BUCKETS: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.sources.bucketing.maxBuckets",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(100_000)),
+    doc: "Maximum `CLUSTERED BY ... INTO n BUCKETS` bucket count: a count above it fails \
+          with `INVALID_BUCKET_COUNT`.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.sources.bucketing.maxBuckets"),
 };
 
 /// `krishiv.sql.leafNodeDefaultParallelism`.

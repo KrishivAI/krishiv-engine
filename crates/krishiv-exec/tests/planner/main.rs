@@ -23,6 +23,7 @@ mod scan_row_drop;
 mod semantics;
 mod sum_rewrite;
 mod tpch;
+mod union;
 mod union_order;
 mod window;
 mod write;

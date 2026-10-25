@@ -946,7 +946,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 8] = [
+const PARSER_KEYS: [&str; 9] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -954,6 +954,7 @@ const PARSER_KEYS: [&str; 8] = [
     "spark.sql.parser.escapedStringLiterals",
     "spark.sql.legacy.bangEqualsNot",
     "spark.sql.legacy.identifierClause",
+    "spark.sql.sources.bucketing.maxBuckets",
     "spark.sql.parser.singleCharacterPipeOperator.enabled",
 ];
 
