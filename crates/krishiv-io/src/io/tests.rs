@@ -142,13 +142,34 @@ fn gappy_coalesced_ranges_are_copied_out() {
 }
 
 #[test]
-fn waste_threshold_is_one_sixteenth() {
-    assert!(!wasteful(1_600, 1_600));
-    assert!(!wasteful(1_600, 1_500));
-    assert!(wasteful(1_600, 1_499));
-    assert!(!wasteful(0, 0));
-    // Overlapping ranges can want more than the span.
-    assert!(!wasteful(100, 200));
+fn coalescing_waste_depends_on_the_store() {
+    assert!(!StoreId::new("file").is_remote());
+    assert!(!StoreId::new("file:///tmp").is_remote());
+    for remote in [
+        "s3://bucket",
+        "S3A://b",
+        "gs://b",
+        "az://c",
+        "abfss://c@a",
+        "https://h",
+    ] {
+        assert!(StoreId::new(remote).is_remote(), "{remote}");
+    }
+    let c = IoConfig::default();
+    assert_eq!(c.waste(&StoreId::new("file")), Waste::LOCAL);
+    assert_eq!(c.waste(&StoreId::new("s3://bucket")), Waste::REMOTE);
+    let (set, _) = Config::from_pairs([
+        ("krishiv.io.coalesceWasteBytes", "0"),
+        ("krishiv.io.coalesceWasteDivisor", "4"),
+    ])
+    .unwrap();
+    let c = IoConfig::from_config(&set);
+    let w = Waste {
+        floor: 0,
+        divisor: 4,
+    };
+    assert_eq!(c.waste(&StoreId::new("file")), w);
+    assert_eq!(c.waste(&StoreId::new("s3://bucket")), w);
 }
 
 #[test]
@@ -707,5 +728,34 @@ fn a_dropped_upload_aborts_only_after_its_parts_settle() {
             st.parts_after_abort, 0,
             "a part landed after its upload was aborted"
         );
+    });
+}
+
+/// A coalesced read's gap bytes are reserved while it is in flight, and
+/// only the ranges' bytes stay reserved (and held) afterwards.
+#[test]
+fn reservations_cover_the_whole_coalesced_read() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    rt().block_on(async {
+        let s = setup(IoConfig::default());
+        let f = put(&s, "a", 200_000).await;
+        let root = TreePool::new(&MemoryConfig {
+            limit: None,
+            quantum: 1,
+            ..MemoryConfig::default()
+        });
+        let pool: Arc<dyn MemoryPool> = root.child("q", None);
+        let io = s.io.clone().with_memory(Arc::clone(&pool));
+        // A 30 KB gap (within the local 64 KiB floor): one request.
+        let ranges = [0..10_000, 40_000..50_000];
+        assert_eq!(io.request_bytes(&f, &ranges), 50_000);
+        let held = io.get_ranges_held(&f, &ranges).await.unwrap();
+        assert_eq!(s.fault.stats().gets, 1);
+        assert!(pool.peak_reserved() >= 50_000, "{}", pool.peak_reserved());
+        assert_eq!(pool.reserved(), 20_000);
+        // The ranges were copied out of the request: nothing keeps the gap.
+        assert_eq!(held[0].len() + held[1].len(), 20_000);
+        drop(held);
+        assert_eq!(pool.reserved(), 0);
     });
 }

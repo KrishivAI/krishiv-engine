@@ -3,32 +3,83 @@
 
 use std::ops::Range;
 
-/// Gap bytes a coalesced request may always read, whatever its size: below
-/// this, saving a request is worth more than the bytes read for nothing.
-pub(super) const SMALL_WASTE: u64 = 64 << 10;
+/// How many bytes outside its ranges a coalesced request may read: at most
+/// `max(span / divisor, floor)`. The callers reserve each request's whole
+/// span while it is read (see `IoContext::request_bytes`), so the bound is
+/// a cost bound (bytes read and briefly held for nothing), not an
+/// accounting gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Waste {
+    /// Gap bytes any request may read (`krishiv.io.coalesceWasteBytes`).
+    pub floor: u64,
+    /// A request may read up to `span / divisor` gap bytes
+    /// (`krishiv.io.coalesceWasteDivisor`; at least 1).
+    pub divisor: u64,
+}
 
-/// Requests covering `ranges`: ranges closer than `gap` bytes (or
-/// overlapping) are merged while the merged request stays within
-/// `max_request` bytes (a single larger range is still one request) and
-/// reads at most `max(span / 16, SMALL_WASTE)` bytes outside the ranges.
-/// Returns the requests in file order and, per input range, the request
-/// index that holds it.
-///
-/// The waste bound is a memory bound: the owners of the ranges reserve
-/// their ranges' bytes, not the gaps, and a request's buffer holds the gaps
-/// until its ranges are copied out or released (see `IoContext::get_ranges`).
-/// Merging column chunks across unread columns of 1 MiB each made TPC-H
-/// Q21's scans hold over half a GiB that no reservation covered.
+impl Waste {
+    /// Local files: merging saves little (the kernel reads ahead), so
+    /// requests read at most 1/16 or 64 KiB in gaps.
+    pub const LOCAL: Self = Self {
+        floor: 64 << 10,
+        divisor: 16,
+    };
+    /// Object stores and HTTP: a request costs latency (and money), so
+    /// ranges up to 1 MiB apart are merged whatever the request's size,
+    /// as `object_store`'s own range coalescing does.
+    pub const REMOTE: Self = Self {
+        floor: 1 << 20,
+        divisor: 16,
+    };
+
+    /// Whether a request of `span` bytes with `inside` bytes in its ranges
+    /// reads few enough gap bytes.
+    #[must_use]
+    pub fn allows(self, span: u64, inside: u64) -> bool {
+        span.saturating_sub(inside) <= (span / self.divisor.max(1)).max(self.floor)
+    }
+}
+
+/// Coalesced requests (see [`coalesce_with`]).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Coalesced {
+    /// The requests, in file order.
+    pub requests: Vec<Range<u64>>,
+    /// Per input range, the index of the request that holds it.
+    pub owner: Vec<usize>,
+    /// Per request, the bytes inside its ranges (overlaps counted once).
+    pub covered: Vec<u64>,
+}
+
+impl Coalesced {
+    /// Bytes the requests read: what to reserve while they are in flight.
+    #[must_use]
+    pub fn span_bytes(&self) -> u64 {
+        self.requests.iter().map(|r| r.end - r.start).sum()
+    }
+}
+
+/// [`coalesce_with`] for local files ([`Waste::LOCAL`]), returning the
+/// requests and each range's request.
 #[must_use]
 pub fn coalesce(
     ranges: &[Range<u64>],
     gap: u64,
     max_request: u64,
 ) -> (Vec<Range<u64>>, Vec<usize>) {
+    let c = coalesce_with(ranges, gap, max_request, Waste::LOCAL);
+    (c.requests, c.owner)
+}
+
+/// Requests covering `ranges`: ranges closer than `gap` bytes (or
+/// overlapping) are merged while the merged request stays within
+/// `max_request` bytes (a single larger range is still one request) and
+/// `waste` allows its gap bytes.
+#[must_use]
+pub fn coalesce_with(ranges: &[Range<u64>], gap: u64, max_request: u64, waste: Waste) -> Coalesced {
     let mut order: Vec<usize> = (0..ranges.len()).collect();
     order.sort_by_key(|&i| (ranges[i].start, ranges[i].end));
     let mut merged: Vec<Range<u64>> = Vec::new();
-    // Per merged request: the bytes inside its ranges.
     let mut covered: Vec<u64> = Vec::new();
     let mut owner = vec![0; ranges.len()];
     for i in order {
@@ -39,15 +90,13 @@ pub fn coalesce(
                 owner[i] = merged.len() - 1;
                 continue;
             }
-            let end = r.end;
-            let span = end - last.start;
-            let added = end - r.start.max(last.end);
-            let wanted = *inside + added;
+            let span = r.end - last.start;
+            let wanted = *inside + (r.end - r.start.max(last.end));
             if r.start <= last.end.saturating_add(gap)
                 && span <= max_request.max(r.end - r.start)
-                && span - wanted <= (span / 16).max(SMALL_WASTE)
+                && waste.allows(span, wanted)
             {
-                last.end = end;
+                last.end = r.end;
                 *inside = wanted;
                 owner[i] = merged.len() - 1;
                 continue;
@@ -57,7 +106,11 @@ pub fn coalesce(
         covered.push(r.end - r.start);
         owner[i] = merged.len() - 1;
     }
-    (merged, owner)
+    Coalesced {
+        requests: merged,
+        owner,
+        covered,
+    }
 }
 
 #[cfg(test)]
@@ -135,7 +188,7 @@ mod tests {
                     end = end.max(r.end);
                 }
                 let span = req.end - req.start;
-                prop_assert!(span - inside <= (span / 16).max(super::SMALL_WASTE));
+                prop_assert!(super::Waste::LOCAL.allows(span, inside));
             }
         }
     }
