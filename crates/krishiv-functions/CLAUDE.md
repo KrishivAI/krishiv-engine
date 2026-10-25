@@ -27,6 +27,12 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
   version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`) and `decimalOperations.allowPrecisionLoss`. `round`/`ceil`/`floor` bind
   their scale from a `BindArg::Literal`. Operators, `CAST` and aggregates are not bound here.
 
+- `python_wrappers`: generates `python/krishiv/sql/_generated_functions.py` and `.pyi` (PySpark names and parameters) from the
+  registry. Test-only code (not in the library): `the_checked_in_wrappers_match_the_registry` fails when they are stale and
+  `KRISHIV_REGENERATE_PYTHON=1 cargo test -p krishiv-functions python_wrappers` rewrites them. `python_wrappers/table.rs` is the PySpark
+  signature table (data). Every registered function must have a row, or be listed as not exported / hand-written there, or
+  generation fails (and with it the crate's tests). Never edit the generated files by hand.
+
 ## Key files
 Paths are relative to this crate.
 - `src/signature.rs` call-site types the analyzer uses (`FunctionKind`, `ArgType`, `InputType`, `ResultType`, `Arity`)
@@ -40,6 +46,7 @@ Paths are relative to this crate.
 
 ## Extension points
 - New scalar function: a signature in `src/registry/`, a catalog row (regenerate with `tests/scripts/gen_function_registry.py`), a binding in its family module under `src/scalar/`, tests in `src/scalar/tests/`.
+- A new registry function also needs a row in `src/python_wrappers/table.rs` (PySpark's parameters, from `pyspark/sql/functions/builtin.py`), then regenerate the Python wrappers (`F.__all__` follows by itself; add the name to `python/tests/_pyspark_signatures.py`); a function PySpark lacks goes in `NOT_EXPORTED`.
 - New function family: a `src/scalar/<family>.rs` with `NAMES` and `bind`, wired into `bind_scalar` in `src/scalar/mod.rs`.
 
 - `scalar/regex` (`regexp`, `regexp_like`, `regexp_extract`, `regexp_count`,
