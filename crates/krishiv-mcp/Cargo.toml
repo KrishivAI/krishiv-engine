@@ -10,3 +10,11 @@ publish = false
 
 [lints]
 workspace = true
+
+[dependencies]
+rmcp = { workspace = true, features = ["server", "transport-io"] }
+serde_json = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "io-util", "process", "time"] }
