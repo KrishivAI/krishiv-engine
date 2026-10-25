@@ -13,6 +13,7 @@ mod encode;
 mod files;
 mod inventory;
 mod nodes;
+mod pivot;
 mod props;
 mod rewrite;
 mod secrets;
