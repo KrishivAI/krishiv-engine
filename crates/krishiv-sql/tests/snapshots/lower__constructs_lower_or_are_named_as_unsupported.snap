@@ -65,7 +65,7 @@ SELECT x[0] FROM t
 SELECT (a).b.c FROM t
   => Project [a.b.c] | +- Read t | 
 SELECT f(a).b FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature field access on an expression is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..13
+  => Project [f(a).b] | +- Read t | 
 SELECT transform(a, x -> x) FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature lambda functions is not supported by Krishiv yet. SQLSTATE: 0A000 @ 20..26
 SELECT (a, b) FROM t

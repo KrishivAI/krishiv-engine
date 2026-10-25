@@ -34,11 +34,11 @@
     },
     {
       "id": "ifnull#24f22a74561c/ansi_on",
-      "reason": "SELECT ifnull(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT ifnull(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "ifnull#24f22a74561c/ansi_off",
-      "reason": "SELECT ifnull(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT ifnull(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "ifnull#3fead29b1417/ansi_on",
@@ -47,14 +47,6 @@
     {
       "id": "ifnull#3fead29b1417/ansi_off",
       "reason": "SELECT ifnull(INTERVAL '1 02:03:04' DAY TO SECOND, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "ifnull#504352bedb38/ansi_on",
-      "reason": "SELECT ifnull(NULL, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "ifnull#504352bedb38/ansi_off",
-      "reason": "SELECT ifnull(NULL, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
       "id": "ifnull#5c3f20483580/ansi_on",

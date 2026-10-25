@@ -9,14 +9,6 @@
       "reason": "SELECT to_varchar(array(1, 2), '999') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "to_varchar#2197c57b4b5a/ansi_on",
-      "reason": "SELECT to_varchar(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_varchar#2197c57b4b5a/ansi_off",
-      "reason": "SELECT to_varchar(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "to_varchar#36f98b6cd322/ansi_on",
       "reason": "SELECT to_varchar(454, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
     },
@@ -47,14 +39,6 @@
     {
       "id": "to_varchar#563016f396de/ansi_off",
       "reason": "SELECT to_varchar(INTERVAL '1 02:03:04' DAY TO SECOND, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_varchar#5fdf1741eefa/ansi_on",
-      "reason": "SELECT to_varchar(454, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_varchar#5fdf1741eefa/ansi_off",
-      "reason": "SELECT to_varchar(454, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "to_varchar#7c5666d685bb/ansi_on",

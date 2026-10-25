@@ -57,36 +57,12 @@
       "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "regexp_replace#69a3284260d7/ansi_on",
-      "reason": "SELECT regexp_replace(named_struct('a', 1, 'b', 'x'), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#69a3284260d7/ansi_off",
-      "reason": "SELECT regexp_replace(named_struct('a', 1, 'b', 'x'), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#77d4f4ba5844/ansi_on",
-      "reason": "SELECT regexp_replace('100-200', named_struct('a', 1, 'b', 'x'), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#77d4f4ba5844/ansi_off",
-      "reason": "SELECT regexp_replace('100-200', named_struct('a', 1, 'b', 'x'), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp_replace#790472f65a6c/ansi_on",
       "reason": "SELECT regexp_replace('100-200', array(1, 2), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp_replace#790472f65a6c/ansi_off",
       "reason": "SELECT regexp_replace('100-200', array(1, 2), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#7e9104eeb35d/ansi_on",
-      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#7e9104eeb35d/ansi_off",
-      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp_replace#d6194fc8a763/ansi_on",

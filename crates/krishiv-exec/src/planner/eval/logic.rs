@@ -209,12 +209,23 @@ pub(super) fn compare(
         _ => None,
     };
     let (lt, rt) = (l.data_type(), r.data_type());
+    if matches!((lt, rt), (ArrowType::Struct(_), ArrowType::Struct(_))) {
+        if !struct_compatible(lt, rt) {
+            return Err(internal(&format!("comparison of {lt} with {rt}")));
+        }
+        if !krishiv_kernels::r#struct::comparable(lt) {
+            return Err(crate::planner::build::unsupported(&format!(
+                "comparison of {lt} values"
+            )));
+        }
+    }
     let comparable = lt == rt
         || matches!((lt, rt), (ArrowType::Null, _) | (_, ArrowType::Null))
         || matches!(
             (lt, rt),
             (ArrowType::Timestamp(lu, _), ArrowType::Timestamp(ru, _)) if lu == ru
-        );
+        )
+        || matches!((lt, rt), (ArrowType::Struct(_), ArrowType::Struct(_)));
     if !comparable {
         return Err(internal(&format!("comparison of {lt} with {rt}")));
     }
@@ -232,7 +243,7 @@ impl PhysExpr for Compare {
     }
 
     fn nullable(&self) -> bool {
-        self.kind.is_some() && (self.l.nullable() || self.r.nullable())
+        self.kind.is_some() && (maybe_null(&self.l) || maybe_null(&self.r))
     }
 
     fn eval(&self, batch: &RecordBatch) -> Result<Value> {
@@ -296,6 +307,11 @@ pub(super) fn prim<T: arrow_array::ArrowPrimitiveType>(v: &Value) -> Operand<'_,
     }
 }
 
+/// Whether the value of `e` may be null.
+fn maybe_null(e: &Arc<dyn PhysExpr>) -> bool {
+    e.nullable()
+}
+
 /// `l kind r` (NULL where either is NULL).
 pub(super) fn cmp(
     kind: CompareKind,
@@ -355,12 +371,143 @@ pub(super) fn cmp(
         ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary => {
             bytes(kind, l, r, rows, bin_value)?
         }
+        ArrowType::Struct(fields) => struct_cmp(kind, l, r, rows, fields.len(), ctx)?,
         other => {
             return Err(crate::planner::build::unsupported(&format!(
                 "comparison of {other} values"
             )));
         }
     })
+}
+
+/// Whether struct Arrow types compare field-wise: the same fields of
+/// recursively compatible types (names and nullability do not matter, as
+/// the analyzer's shape check already allowed them).
+fn struct_compatible(l: &ArrowType, r: &ArrowType) -> bool {
+    match (l, r) {
+        (ArrowType::Struct(l), ArrowType::Struct(r)) => {
+            l.len() == r.len()
+                && l.iter()
+                    .zip(r.iter())
+                    .all(|(a, b)| struct_compatible(a.data_type(), b.data_type()))
+        }
+        (a, b) => a == b,
+    }
+}
+
+/// `l kind r` for structs of `fields` fields: every field through the
+/// existing comparator, combined without boxing rows. Spark orders nulls as
+/// the smallest value and never returns NULL for a null field: two null
+/// fields are equal, a null against a value is unequal (and smaller for
+/// ordering). The result is NULL only where a whole struct operand is NULL
+/// (the `<=>` caller turns those into `true`/`false` through `null_safe`).
+fn struct_cmp(
+    kind: CompareKind,
+    l: &Value,
+    r: &Value,
+    rows: usize,
+    fields: usize,
+    ctx: &KernelCtx,
+) -> Result<BooleanArray> {
+    let array = |v: &Value| v.clone().into_array(rows);
+    let (l, r) = (array(l)?, array(r)?);
+    let (ls, rs) = (l.as_struct(), r.as_struct());
+    if ls.len() != rows
+        || rs.len() != rows
+        || ls.num_columns() != fields
+        || rs.num_columns() != fields
+    {
+        return Err(internal("struct comparison operands differ in shape"));
+    }
+    let field = |s: &arrow_array::StructArray, i: usize| {
+        krishiv_kernels::r#struct::get_field(s, i).map_err(|e| internal(&e.to_string()))
+    };
+    let valid_of = |a: &arrow_array::ArrayRef| match a.nulls() {
+        Some(n) => n.inner().clone(),
+        None => BooleanBuffer::new_set(a.len()),
+    };
+    let ls_valid = valid_of(&l);
+    let rs_valid = valid_of(&r);
+    let struct_null: BooleanBuffer = &!&ls_valid | &!&rs_valid;
+    let both_structs: BooleanBuffer = &ls_valid & &rs_valid;
+    if kind == CompareKind::Equal || kind == CompareKind::NotEqual {
+        let mut any_unequal = BooleanBuffer::new_unset(rows);
+        for i in 0..fields {
+            let (fl, fr) = (field(ls, i)?, field(rs, i)?);
+            let (fl_valid, fr_valid) = (valid_of(&fl), valid_of(&fr));
+            let eq = cmp(
+                CompareKind::Equal,
+                &Value::Array(Arc::clone(&fl)),
+                &Value::Array(Arc::clone(&fr)),
+                ctx,
+            )?;
+            let eq_values = eq.values().clone();
+            let both_null: BooleanBuffer = &!&fl_valid & &!&fr_valid;
+            let both_equal: BooleanBuffer = &(&fl_valid & &fr_valid) & &eq_values;
+            let field_equal: BooleanBuffer = &both_null | &both_equal;
+            let unequal: BooleanBuffer = &!&field_equal & &both_structs;
+            any_unequal |= &unequal;
+        }
+        let values = if kind == CompareKind::Equal {
+            !&any_unequal
+        } else {
+            any_unequal.clone()
+        };
+        return Ok(BooleanArray::new(values, {
+            (struct_null.count_set_bits() > 0).then(|| NullBuffer::new(!&struct_null))
+        }));
+    }
+    let mut decided = BooleanBuffer::new_unset(rows);
+    let mut values = BooleanBuffer::new_unset(rows);
+    let less_kind = matches!(kind, CompareKind::Less | CompareKind::LessEq);
+    for i in 0..fields {
+        let (fl, fr) = (field(ls, i)?, field(rs, i)?);
+        let (fl_valid, fr_valid) = (valid_of(&fl), valid_of(&fr));
+        let lt = cmp(
+            CompareKind::Less,
+            &Value::Array(Arc::clone(&fl)),
+            &Value::Array(Arc::clone(&fr)),
+            ctx,
+        )?;
+        let eq = cmp(
+            CompareKind::Equal,
+            &Value::Array(Arc::clone(&fl)),
+            &Value::Array(Arc::clone(&fr)),
+            ctx,
+        )?;
+        let (lt_values, lt_valid) = parts(&lt);
+        let (eq_values, _) = parts(&eq);
+        let not_decided: BooleanBuffer = &!&decided & &both_structs;
+        // Nulls order smallest: null < value, null == null continues.
+        let l_null_only: BooleanBuffer = &(&!&fl_valid & &fr_valid) & &not_decided;
+        let r_null_only: BooleanBuffer = &(&fl_valid & &!&fr_valid) & &not_decided;
+        let both_valid: BooleanBuffer = &(&fl_valid & &fr_valid) & &not_decided;
+        let less_both: BooleanBuffer = &(&lt_values & &lt_valid) & &both_valid;
+        let equal_both: BooleanBuffer = &(&eq_values & &both_valid) & &both_valid;
+        let greater_both: BooleanBuffer = &(&both_valid & &!&less_both) & &!&equal_both;
+        let less: BooleanBuffer = &l_null_only | &less_both;
+        let greater: BooleanBuffer = &r_null_only | &greater_both;
+        let (hit, miss) = if less_kind {
+            (less, greater)
+        } else {
+            (greater, less)
+        };
+        values |= &hit;
+        decided |= &hit;
+        decided |= &miss;
+        if decided.count_set_bits() == rows {
+            break;
+        }
+    }
+    // Equal structs (every field both null or equal) hold `<=`/`>=`.
+    if matches!(kind, CompareKind::LessEq | CompareKind::GreaterEq) {
+        let undecided: BooleanBuffer = &both_structs & &!&decided;
+        values |= &undecided;
+        decided |= &undecided;
+    }
+    Ok(BooleanArray::new(values, {
+        (struct_null.count_set_bits() > 0).then(|| NullBuffer::new(!&struct_null))
+    }))
 }
 
 /// The string at row `i` of a `Utf8`/`LargeUtf8`/`Utf8View` array.
@@ -408,7 +555,9 @@ fn bytes(
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Int32Array, NullArray};
+    use arrow_array::{ArrayRef, BooleanArray, Int32Array, NullArray, StructArray};
+    use arrow_buffer::NullBuffer;
+    use arrow_schema::{DataType as ArrowType, Field, Fields};
 
     use super::*;
 
@@ -424,5 +573,162 @@ mod tests {
         assert!(is_null_scalar(&Value::Scalar(typed)));
         let one: ArrayRef = Arc::new(Int32Array::from(vec![1]));
         assert!(!is_null_scalar(&Value::Scalar(one)));
+    }
+
+    fn struct_fields() -> Fields {
+        vec![
+            Field::new("a", ArrowType::Int32, true),
+            Field::new("b", ArrowType::Int32, true),
+        ]
+        .into()
+    }
+
+    fn struct_array(a: Vec<Option<i32>>, b: Vec<Option<i32>>, valid: Vec<bool>) -> ArrayRef {
+        let fields = struct_fields();
+        let cols: Vec<ArrayRef> =
+            vec![Arc::new(Int32Array::from(a)), Arc::new(Int32Array::from(b))];
+        let nulls = if valid.iter().all(|v| *v) {
+            None
+        } else {
+            Some(NullBuffer::from(valid))
+        };
+        Arc::new(StructArray::new(fields, cols, nulls))
+    }
+
+    #[test]
+    fn struct_comparison_treats_null_fields_as_smallest_without_null() {
+        let ctx = KernelCtx::new();
+        // (1,null)|(1,2), (null,1)|(1,1), (1,2)|(1,null), (1,null)|(1,null),
+        // (1,null)|(1,2), (1,null)|(2,null), null|(1,1), null|null.
+        let l = struct_array(
+            vec![
+                Some(1),
+                None,
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+            ],
+            vec![None, Some(1), Some(2), None, None, None, Some(1), Some(1)],
+            vec![true, true, true, true, true, true, false, false],
+        );
+        let r = struct_array(
+            vec![
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(2),
+                Some(1),
+                Some(1),
+            ],
+            vec![
+                Some(2),
+                Some(1),
+                None,
+                None,
+                Some(2),
+                None,
+                Some(1),
+                Some(1),
+            ],
+            vec![true, true, true, true, true, true, true, false],
+        );
+        let lv = Value::Array(l);
+        let rv = Value::Array(r);
+        let eq = cmp(CompareKind::Equal, &lv, &rv, &ctx).expect("struct eq");
+        assert_eq!(
+            eq,
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                None,
+            ])
+        );
+        let ne = cmp(CompareKind::NotEqual, &lv, &rv, &ctx).expect("struct ne");
+        assert_eq!(
+            ne,
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(true),
+                None,
+                None,
+            ])
+        );
+        let lt = cmp(CompareKind::Less, &lv, &rv, &ctx).expect("struct lt");
+        assert_eq!(
+            lt,
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                None,
+                None,
+            ])
+        );
+        let gt = cmp(CompareKind::Greater, &lv, &rv, &ctx).expect("struct gt");
+        assert_eq!(
+            gt,
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(false),
+                Some(false),
+                Some(false),
+                None,
+                None,
+            ])
+        );
+        let le = cmp(CompareKind::LessEq, &lv, &rv, &ctx).expect("struct le");
+        assert_eq!(
+            le,
+            BooleanArray::from(vec![
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(true),
+                Some(true),
+                Some(true),
+                None,
+                None,
+            ])
+        );
+        let ge = cmp(CompareKind::GreaterEq, &lv, &rv, &ctx).expect("struct ge");
+        assert_eq!(
+            ge,
+            BooleanArray::from(vec![
+                Some(false),
+                Some(false),
+                Some(true),
+                Some(true),
+                Some(false),
+                Some(false),
+                None,
+                None,
+            ])
+        );
+        // `<=>` from the equality above: never NULL, true only where both
+        // structs are NULL or equal as values.
+        let safe = compare::null_safe(&eq, validity(&lv), validity(&rv)).expect("null safe");
+        assert_eq!(
+            safe,
+            BooleanArray::from(vec![false, false, false, true, false, false, false, true])
+        );
     }
 }

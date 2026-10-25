@@ -18,11 +18,11 @@
     },
     {
       "id": "date_part#186144d07620/ansi_on",
-      "reason": "SELECT date_part(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has NON_FOLDABLE_ARGUMENT"
+      "reason": "SELECT date_part(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
     },
     {
       "id": "date_part#186144d07620/ansi_off",
-      "reason": "SELECT date_part(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has NON_FOLDABLE_ARGUMENT"
+      "reason": "SELECT date_part(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
     },
     {
       "id": "date_part#2d8e71c6a7e2/ansi_on",
@@ -119,14 +119,6 @@
     {
       "id": "date_part#c6e0e94f093c/ansi_off",
       "reason": "SELECT date_part('days', CAST(NULL AS interval day to minute)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
-    },
-    {
-      "id": "date_part#d62df87d0a31/ansi_on",
-      "reason": "SELECT date_part('YEAR', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_part#d62df87d0a31/ansi_off",
-      "reason": "SELECT date_part('YEAR', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#eb381059e762/ansi_on",

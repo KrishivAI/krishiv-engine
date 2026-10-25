@@ -669,6 +669,25 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 Name(std::slice::from_ref(name))
             )));
         }
+        ExprNode::Field { base, name } => {
+            out.push(Piece::Expr(base));
+            out.push(Piece::Owned(format!(
+                ".{}",
+                Name(std::slice::from_ref(name))
+            )));
+        }
+        ExprNode::Resolved(ResolvedExpr::Field {
+            base,
+            name,
+            ordinal,
+            ..
+        }) => {
+            out.push(Piece::Expr(base));
+            out.push(Piece::Owned(format!(
+                ".{}#{ordinal}",
+                Name(std::slice::from_ref(name))
+            )));
+        }
         ExprNode::Subquery { kind, .. } => match kind {
             SubqueryKind::Scalar => out.push(Piece::Str("scalar-subquery")),
             SubqueryKind::Exists => out.push(Piece::Str("exists")),

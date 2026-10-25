@@ -25,14 +25,6 @@
       "reason": "SELECT first(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
     },
     {
-      "id": "first#64070551472e/ansi_on",
-      "reason": "SELECT first(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
-      "id": "first#64070551472e/ansi_off",
-      "reason": "SELECT first(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
       "id": "first#7142e82e71a1/ansi_on",
       "reason": "SELECT first(col, array(1, 2)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has _LEGACY_ERROR_TEMP_1210"
     },

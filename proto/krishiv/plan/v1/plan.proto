@@ -564,12 +564,24 @@ message Expr {
     Function function = 5;
     Cast cast = 6;
     AliasExpr alias = 7;
+    // feature: struct_field
+    FieldExpr field = 8;
   }
 }
 
 message AliasExpr {
   uint32 expr = 1;
   BoundColumn output = 2;
+}
+
+// A struct field: the field `name` at `ordinal` of the struct `base`.
+// feature: struct_field
+message FieldExpr {
+  uint32 base = 1;
+  uint32 ordinal = 2;
+  string name = 3;
+  DataType data_type = 4;
+  bool nullable = 5;
 }
 
 enum CastMode {

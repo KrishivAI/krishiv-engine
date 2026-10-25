@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "substr#0423abe35937/ansi_on",
-      "reason": "SELECT substr(named_struct('a', 1, 'b', 'x'), 5, 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substr#0423abe35937/ansi_off",
-      "reason": "SELECT substr(named_struct('a', 1, 'b', 'x'), 5, 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "substr#0d7df6c77a5b/ansi_on",
       "reason": "SELECT substr(INTERVAL '1 02:03:04' DAY TO SECOND, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -97,14 +89,6 @@
       "reason": "SELECT substr('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "substr#895a5f810045/ansi_on",
-      "reason": "SELECT substr(named_struct('a', 1, 'b', 'x'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substr#895a5f810045/ansi_off",
-      "reason": "SELECT substr(named_struct('a', 1, 'b', 'x'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "substr#8f7fbe2600f3/ansi_on",
       "reason": "SELECT substr(INTERVAL '1 02:03:04' DAY TO SECOND, 5, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -145,36 +129,12 @@
       "reason": "SELECT substr(array(1, 2), 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "substr#bd1ebd93204b/ansi_on",
-      "reason": "SELECT substr('Spark SQL', 5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substr#bd1ebd93204b/ansi_off",
-      "reason": "SELECT substr('Spark SQL', 5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substr#c4c789f9b7fb/ansi_on",
-      "reason": "SELECT substr('Spark SQL', named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substr#c4c789f9b7fb/ansi_off",
-      "reason": "SELECT substr('Spark SQL', named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "substr#db430fd33e45/ansi_on",
       "reason": "SELECT substr('Spark SQL', map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "substr#db430fd33e45/ansi_off",
       "reason": "SELECT substr('Spark SQL', map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substr#eb55cdf8fbe1/ansi_on",
-      "reason": "SELECT substr('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substr#eb55cdf8fbe1/ansi_off",
-      "reason": "SELECT substr('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "substr#f38c9880f41b/ansi_on",
