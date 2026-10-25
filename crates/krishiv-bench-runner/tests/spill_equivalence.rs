@@ -101,6 +101,7 @@ fn session(limit: &str, data: &[(&str, RecordBatch)]) -> Session {
         compute_threads: 2,
         io_threads: 1,
         blocking_threads: 2,
+        io_blocking_threads: 2,
     })
     .unwrap();
     let s = Session::builder()
