@@ -162,6 +162,23 @@ mod tests {
         assert_eq!(m, vec![0..3 * MIB]);
     }
 
+    /// Gap bytes of every request, from the ranges it holds.
+    fn inside_bytes(ranges: &[std::ops::Range<u64>], owner: &[usize], k: usize, start: u64) -> u64 {
+        let mut mine: Vec<_> = ranges
+            .iter()
+            .zip(owner)
+            .filter(|(_, o)| **o == k)
+            .map(|(r, _)| r.clone())
+            .collect();
+        mine.sort_by_key(|r| r.start);
+        let (mut inside, mut end) = (0, start);
+        for r in mine {
+            inside += r.end.saturating_sub(r.start.max(end));
+            end = end.max(r.end);
+        }
+        inside
+    }
+
     proptest! {
         #[test]
         fn every_range_is_inside_its_request(
@@ -180,15 +197,31 @@ mod tests {
             prop_assert!(merged.len() <= ranges.len());
             // The gap bytes of every request stay within the waste bound.
             for (k, req) in merged.iter().enumerate() {
-                let mut mine: Vec<_> = ranges.iter().zip(&owner).filter(|(_, o)| **o == k).map(|(r, _)| r.clone()).collect();
-                mine.sort_by_key(|r| r.start);
-                let (mut inside, mut end) = (0, req.start);
-                for r in mine {
-                    inside += r.end.saturating_sub(r.start.max(end));
-                    end = end.max(r.end);
-                }
+                let inside = inside_bytes(&ranges, &owner, k, req.start);
+                prop_assert!(super::Waste::LOCAL.allows(req.end - req.start, inside));
+            }
+        }
+
+        /// Ranges of up to 2 MiB with gaps of up to 4 MiB and a request cap
+        /// of up to 64 MiB: the gaps cross the 64 KiB floor and the spans
+        /// the 1 MiB where `span / 16` takes over, so a merge the waste
+        /// bound must refuse is generated, and merging stays reachable.
+        #[test]
+        fn large_gaps_never_exceed_the_waste_bound(
+            ranges in prop::collection::vec((0u64..(64 << 20), 1u64..(2 << 20)), 1..30),
+            gap in 0u64..(4 << 20),
+            cap in (1u64 << 20)..(64 << 20),
+        ) {
+            let ranges: Vec<_> = ranges.into_iter().map(|(s, l)| s..s + l).collect();
+            let (merged, owner) = coalesce(&ranges, gap, cap);
+            for (k, req) in merged.iter().enumerate() {
+                let inside = inside_bytes(&ranges, &owner, k, req.start);
                 let span = req.end - req.start;
-                prop_assert!(super::Waste::LOCAL.allows(span, inside));
+                // A request that is one range wide holds no gap by itself.
+                prop_assert!(
+                    super::Waste::LOCAL.allows(span, inside),
+                    "span {span}, inside {inside}"
+                );
             }
         }
     }
