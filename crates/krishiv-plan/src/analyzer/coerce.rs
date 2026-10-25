@@ -22,9 +22,8 @@
 //!   An element, value or field becomes nullable when either side's is or
 //!   when its cast may yield NULL (`Cast.forceNullable`); map keys must not
 //!   need such a cast; struct fields meet by position, with names equal
-//!   ignoring case, keep the first side's name and lose their metadata.
-//!   (Field names are always compared case-insensitively here, as under
-//!   Spark's default `spark.sql.caseSensitive = false`.)
+//!   ignoring case (exactly, with `spark.sql.caseSensitive`), keep the first
+//!   side's name and lose their metadata.
 //!
 //! With `spark.sql.ansi.enabled` off Spark promotes strings differently
 //! (string to `double` in arithmetic, to the other side's type in
