@@ -208,6 +208,10 @@ pub(super) fn compare(
         Builtin::GtEq => Some(CompareKind::GreaterEq),
         _ => None,
     };
+    // Operands of one Spark `STRING`/`BINARY` in different Arrow encodings
+    // (a `Utf8` column beside a `Utf8View` literal) meet in the canonical
+    // carrier; every other mismatch still fails below.
+    let (l, r) = super::cast::unify(l, r, env)?;
     let (lt, rt) = (l.data_type(), r.data_type());
     let comparable = lt == rt
         || matches!((lt, rt), (ArrowType::Null, _) | (_, ArrowType::Null))
@@ -408,9 +412,114 @@ fn bytes(
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::{Int32Array, NullArray};
+    use std::sync::Arc;
+
+    use arrow_array::cast::AsArray;
+    use arrow_array::{
+        Array, ArrayRef, Int32Array, NullArray, RecordBatch, StringArray, StringViewArray,
+    };
+    use arrow_schema::{DataType as ArrowType, Field, Schema};
+    use krishiv_common::config::Config;
 
     use super::*;
+
+    /// An input column.
+    #[derive(Debug)]
+    struct Col {
+        index: usize,
+        data_type: ArrowType,
+    }
+
+    impl PhysExpr for Col {
+        fn data_type(&self) -> &ArrowType {
+            &self.data_type
+        }
+
+        fn nullable(&self) -> bool {
+            true
+        }
+
+        fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+            Ok(Value::Array(Arc::clone(batch.column(self.index))))
+        }
+    }
+
+    fn env() -> EvalEnv {
+        EvalEnv::new(&Config::new(), Arc::from("test"))
+    }
+
+    /// Operands of one Spark `STRING` in different Arrow encodings compare
+    /// by value; operands of different Spark types still fail.
+    #[test]
+    fn comparisons_unify_string_encodings() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("v", ArrowType::Utf8View, true),
+            Field::new("i", ArrowType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("b"), None])) as ArrayRef,
+                Arc::new(StringViewArray::from(vec![Some("b"), Some("c")])),
+                Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+            ],
+        )
+        .unwrap();
+        let env = env();
+        let utf8: Arc<dyn PhysExpr> = Arc::new(Col {
+            index: 0,
+            data_type: ArrowType::Utf8,
+        });
+        let view: Arc<dyn PhysExpr> = Arc::new(Col {
+            index: 1,
+            data_type: ArrowType::Utf8View,
+        });
+        for (op, want) in [
+            (Builtin::Eq, true),
+            (Builtin::EqNullSafe, true),
+            (Builtin::Lt, false),
+            (Builtin::LtEq, true),
+            (Builtin::Gt, false),
+            (Builtin::GtEq, true),
+        ] {
+            let e = compare(op, Arc::clone(&utf8), Arc::clone(&view), &env).unwrap();
+            let got = e.eval(&batch).unwrap().into_array(2).unwrap();
+            let got = got.as_boolean();
+            assert_eq!(got.len(), 2, "{op:?}");
+            assert_eq!(got.value(0), want, "{op:?}");
+        }
+        // `NULL = 'c'` is NULL, `NULL <=> 'c'` is false.
+        let e = compare(Builtin::Eq, Arc::clone(&utf8), Arc::clone(&view), &env).unwrap();
+        assert!(
+            e.eval(&batch)
+                .unwrap()
+                .into_array(2)
+                .unwrap()
+                .as_boolean()
+                .is_null(1)
+        );
+        // A `Utf8` literal (always a view) meets a `Utf8` column.
+        let lit: Arc<dyn PhysExpr> = Arc::new(
+            super::super::Lit::new(&krishiv_plan::Literal::String("b".to_owned())).unwrap(),
+        );
+        let e = compare(Builtin::Eq, Arc::clone(&utf8), lit, &env).unwrap();
+        let got = e.eval(&batch).unwrap().into_array(2).unwrap();
+        assert_eq!(
+            got.as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        // Different Spark types still fail as before.
+        let int: Arc<dyn PhysExpr> = Arc::new(Col {
+            index: 2,
+            data_type: ArrowType::Int32,
+        });
+        let err = compare(Builtin::Eq, Arc::clone(&int), Arc::clone(&utf8), &env).unwrap_err();
+        assert!(
+            err.to_string().contains("comparison of Int32 with Utf8"),
+            "{err}"
+        );
+    }
 
     fn is_null_scalar(v: &Value) -> bool {
         matches!(validity(v), Validity::Scalar { null: true })

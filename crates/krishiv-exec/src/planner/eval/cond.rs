@@ -20,7 +20,7 @@ use krishiv_kernels::KernelCtx;
 use krishiv_kernels::compare::CompareKind;
 use krishiv_plan::{Builtin, CastMode, ResolvedFunction};
 
-use super::cast::{CastParts, apply, parts};
+use super::cast::{CastParts, apply, canonical_carrier, parts};
 use super::logic::{and_or, cmp, compare, is_null};
 use super::{EvalEnv, Input, PhysExpr, Value};
 use crate::error::Result;
@@ -54,8 +54,12 @@ struct When {
     out: ArrowType,
 }
 
-pub(super) fn when(mut args: Vec<Arc<dyn PhysExpr>>, out: ArrowType) -> Result<Arc<dyn PhysExpr>> {
-    let otherwise = if args.len() % 2 == 1 {
+pub(super) fn when(
+    mut args: Vec<Arc<dyn PhysExpr>>,
+    out: ArrowType,
+    env: &EvalEnv,
+) -> Result<Arc<dyn PhysExpr>> {
+    let mut otherwise = if args.len() % 2 == 1 {
         args.pop()
     } else {
         None
@@ -68,19 +72,32 @@ pub(super) fn when(mut args: Vec<Arc<dyn PhysExpr>>, out: ArrowType) -> Result<A
         }
         branches.push((c, v));
     }
-    for v in branches.iter().map(|(_, v)| v).chain(&otherwise) {
-        if v.data_type() != &out && v.data_type() != &ArrowType::Null {
-            return Err(internal(&format!(
-                "a CASE value of type {} in a CASE of type {out}",
-                v.data_type()
-            )));
-        }
+    for v in branches.iter_mut().map(|(_, v)| v).chain(&mut otherwise) {
+        coerce_branch(v, &out, env)?;
     }
     Ok(Arc::new(When {
         branches,
         otherwise,
         out,
     }))
+}
+
+/// `v` as a value of the `CASE` result type `out`: branches of one Spark
+/// `STRING`/`BINARY` in different Arrow encodings meet in the canonical
+/// carrier; an untyped `NULL` stays one. Anything else is an engine bug:
+/// the analyzer has cast every branch to the common type.
+fn coerce_branch(v: &mut Arc<dyn PhysExpr>, out: &ArrowType, env: &EvalEnv) -> Result<()> {
+    let t = v.data_type().clone();
+    if &t == out || t == ArrowType::Null {
+        return Ok(());
+    }
+    if canonical_carrier(&t) == Some(out.clone()) {
+        *v = super::cast::coerce_to(Arc::clone(v), out, env)?;
+        return Ok(());
+    }
+    Err(internal(&format!(
+        "a CASE value of type {t} in a CASE of type {out}"
+    )))
 }
 
 impl PhysExpr for When {
@@ -184,6 +201,7 @@ fn cast_null(a: ArrayRef, out: &ArrowType) -> ArrayRef {
 pub(super) fn coalesce(
     f: &ResolvedFunction,
     args: Vec<Arc<dyn PhysExpr>>,
+    env: &EvalEnv,
 ) -> Result<Arc<dyn PhysExpr>> {
     let out = f.data_type.to_arrow();
     // The first non-null argument: each condition sees only the rows no
@@ -194,7 +212,7 @@ pub(super) fn coalesce(
             None => a,
             Some(taken) => {
                 let cond = is_null(false, Arc::clone(&a));
-                when(vec![cond, a, taken], out.clone())?
+                when(vec![cond, a, taken], out.clone(), env)?
             }
         });
     }
@@ -203,15 +221,23 @@ pub(super) fn coalesce(
 
 /// `nullif(a, b)` / `nullifzero(x)`: NULL where `a = b`, else `a`, with `a`
 /// evaluated once. The analyzer has cast `b` to the type `=` compares at
-/// (`other`'s type); `a` is cast to it here, for the comparison only, and
-/// the result keeps `a`'s own values and type.
+/// (`other`'s type); operands of one Spark `STRING`/`BINARY` in different
+/// encodings meet in the canonical carrier instead. The casts are for the
+/// comparison only; the result keeps `a`'s values at the result's carrier.
 #[derive(Debug)]
 pub(super) struct NullIf {
     value: Arc<dyn PhysExpr>,
     other: Arc<dyn PhysExpr>,
-    /// `value` to `other`'s type, for the comparison only; `None` when the
-    /// types already match (no copy).
-    cast: Option<CastParts>,
+    /// Each side to the comparison type, for the comparison only; `None`
+    /// when already there (no copy).
+    value_cast: Option<CastParts>,
+    other_cast: Option<CastParts>,
+    /// `value` to the result type: the analyzer types the result at the
+    /// value's Spark type, whose canonical carrier may differ from the
+    /// value's own (a `Utf8` column in a `Utf8View` result). `None` when
+    /// already there; a different Spark type is left for `zip` to reject
+    /// as before.
+    result_cast: Option<CastParts>,
     kernels: KernelCtx,
     out: ArrowType,
 }
@@ -232,24 +258,45 @@ pub(super) fn null_if(
     } else {
         CastMode::Legacy
     };
-    // Same-typed comparisons need no cast: `apply` would copy the column
-    // (twice for `Utf8View`).
-    let cast = if value.data_type() == other.data_type() {
+    // Same-typed comparisons need no cast: `apply` would copy the column.
+    let (value_ty, other_ty) = (value.data_type().clone(), other.data_type().clone());
+    let out = f.data_type.to_arrow();
+    let (value_cast, other_cast) =
+        match (canonical_carrier(&value_ty), canonical_carrier(&other_ty)) {
+            // One Spark `STRING`/`BINARY` in different encodings: compare in
+            // the canonical carrier, keeping the side already there.
+            (Some(a), Some(b)) if a == b && value_ty != other_ty => {
+                let at = |t: &ArrowType| {
+                    if t == &a {
+                        Ok(None)
+                    } else {
+                        parts(t, a.clone(), mode, input.env).map(Some)
+                    }
+                };
+                (at(&value_ty)?, at(&other_ty)?)
+            }
+            _ if value_ty == other_ty => (None, None),
+            _ => (
+                Some(parts(&value_ty, other_ty.clone(), mode, input.env)?),
+                None,
+            ),
+        };
+    // The result keeps the value's Spark type at the result's carrier.
+    let result_cast = if value_ty == out {
         None
+    } else if canonical_carrier(&value_ty) == Some(out.clone()) {
+        Some(parts(&value_ty, out.clone(), mode, input.env)?)
     } else {
-        Some(parts(
-            value.data_type(),
-            other.data_type().clone(),
-            mode,
-            input.env,
-        )?)
+        None
     };
     Ok(Arc::new(NullIf {
         value,
         other,
-        cast,
+        value_cast,
+        other_cast,
+        result_cast,
         kernels: input.env.kernels,
-        out: f.data_type.to_arrow(),
+        out,
     }))
 }
 
@@ -273,15 +320,22 @@ impl PhysExpr for NullIf {
         let a_full = a.into_array(n)?;
         let b_full = b.into_array(n)?;
         // An untyped NULL never equals (the kernels cannot cast a `Null`
-        // array either); otherwise `value` meets `other` for the comparison.
+        // array either); otherwise each side meets the comparison type.
         let null_side =
             a_full.data_type() == &ArrowType::Null || b_full.data_type() == &ArrowType::Null;
         let ab = if null_side {
             Arc::clone(&a_full)
-        } else if let Some(cast) = &self.cast {
+        } else if let Some(cast) = &self.value_cast {
             apply(cast, &a_full)?
         } else {
             Arc::clone(&a_full)
+        };
+        let bb = if null_side {
+            Arc::clone(&b_full)
+        } else if let Some(cast) = &self.other_cast {
+            apply(cast, &b_full)?
+        } else {
+            Arc::clone(&b_full)
         };
         let eq = if null_side {
             BooleanArray::new_null(n)
@@ -289,7 +343,7 @@ impl PhysExpr for NullIf {
             cmp(
                 CompareKind::Equal,
                 &Value::Array(ab),
-                &Value::Array(b_full),
+                &Value::Array(bb),
                 &self.kernels,
             )?
         };
@@ -299,7 +353,11 @@ impl PhysExpr for NullIf {
             .map(|ns| ns.inner().clone())
             .unwrap_or_else(|| BooleanBuffer::new_set(n));
         let mask = BooleanArray::new(eq.values() & &valid, None);
-        let out = zip(&mask, &new_null_array(&self.out, n), &a_full)
+        let kept = match &self.result_cast {
+            Some(cast) => apply(cast, &a_full)?,
+            None => Arc::clone(&a_full),
+        };
+        let out = zip(&mask, &new_null_array(&self.out, n), &kept)
             .map_err(|e| internal(&e.to_string()))?;
         Ok(if scalar {
             Value::Scalar(out)
@@ -491,12 +549,14 @@ mod tests {
         )
         .unwrap();
         let f = resolved("coalesce", DataType::Integer);
+        let env = env(true);
         let e = coalesce(
             &f,
             vec![
                 column(0, ArrowType::Int32, true),
                 column(1, ArrowType::Int32, true),
             ],
+            &env,
         )
         .unwrap();
         assert_eq!(
@@ -504,13 +564,13 @@ mod tests {
             &Int32Array::from(vec![Some(1), Some(3), None, None]),
         );
         // A single argument is itself.
-        let one = coalesce(&f, vec![column(0, ArrowType::Int32, true)]).unwrap();
+        let one = coalesce(&f, vec![column(0, ArrowType::Int32, true)], &env).unwrap();
         assert_eq!(
             values(&one, &batch).as_primitive::<Int32Type>(),
             &Int32Array::from(vec![Some(1), None, None, None]),
         );
         // No arguments is an engine bug: the analyzer always has some.
-        assert!(coalesce(&f, Vec::new()).is_err());
+        assert!(coalesce(&f, Vec::new(), &env).is_err());
     }
 
     /// `coalesce(1, 1 / 0)` answers without raising; `coalesce(1 / 0, 1)`
@@ -521,13 +581,23 @@ mod tests {
             let env = env(ansi);
             let batch = rows_batch(2);
             let f = resolved("coalesce", DataType::Double);
-            let e = coalesce(&f, vec![lit(&Literal::Double(1.0)), one_over_zero(&env)]).unwrap();
+            let e = coalesce(
+                &f,
+                vec![lit(&Literal::Double(1.0)), one_over_zero(&env)],
+                &env,
+            )
+            .unwrap();
             assert_eq!(
                 values(&e, &batch).as_primitive::<Float64Type>(),
                 &Float64Array::from(vec![Some(1.0), Some(1.0)]),
                 "ansi = {ansi}"
             );
-            let e = coalesce(&f, vec![one_over_zero(&env), lit(&Literal::Double(1.0))]).unwrap();
+            let e = coalesce(
+                &f,
+                vec![one_over_zero(&env), lit(&Literal::Double(1.0))],
+                &env,
+            )
+            .unwrap();
             if ansi {
                 let err = e.eval(&batch).unwrap_err();
                 assert_eq!(err.error_class(), ErrorClass::DivideByZero);
@@ -874,5 +944,166 @@ mod tests {
                 assert!(values(&e, &batch).as_primitive::<Float64Type>().is_null(0));
             }
         }
+    }
+
+    /// `coalesce` of one Spark `STRING` in `Utf8` and `Utf8View` carriers:
+    /// every branch meets the `CASE` type, keeping its values.
+    #[test]
+    fn coalesce_unifies_string_encodings() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("v", ArrowType::Utf8View, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::StringArray::from(vec![None, Some("b")])) as ArrayRef,
+                Arc::new(StringViewArray::from(vec![Some("v"), Some("w")])),
+            ],
+        )
+        .unwrap();
+        let f = resolved("coalesce", DataType::String);
+        for (args, want) in [
+            (
+                vec![
+                    column(0, ArrowType::Utf8, true),
+                    column(1, ArrowType::Utf8View, true),
+                ],
+                [Some("v"), Some("b")],
+            ),
+            (
+                vec![
+                    column(1, ArrowType::Utf8View, true),
+                    column(0, ArrowType::Utf8, true),
+                ],
+                [Some("v"), Some("w")],
+            ),
+        ] {
+            let e = coalesce(&f, args, &env).unwrap();
+            assert_eq!(e.data_type(), &ArrowType::Utf8View);
+            assert_eq!(
+                values(&e, &batch)
+                    .as_string_view()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                want
+            );
+        }
+    }
+
+    /// `CASE WHEN` with `Utf8` branches in a `STRING` (`Utf8View`) case:
+    /// the branches are cast; an `INT` branch still fails.
+    #[test]
+    fn when_unifies_string_encodings() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("i", ArrowType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::StringArray::from(vec![Some("a"), None])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+            ],
+        )
+        .unwrap();
+        let e = when(
+            vec![
+                lit(&Literal::Boolean(true)),
+                column(0, ArrowType::Utf8, true),
+                lit(&Literal::String("d".to_owned())),
+            ],
+            ArrowType::Utf8View,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Utf8View);
+        assert_eq!(
+            values(&e, &batch)
+                .as_string_view()
+                .iter()
+                .collect::<Vec<_>>(),
+            [Some("a"), None]
+        );
+        // A branch of another Spark type still fails as before.
+        let err = when(
+            vec![
+                lit(&Literal::Boolean(true)),
+                column(1, ArrowType::Int32, true),
+            ],
+            ArrowType::Utf8View,
+            &env,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a CASE value of type Int32 in a CASE of type Utf8View"),
+            "{err}"
+        );
+    }
+
+    /// `nullif` of `Utf8` and `Utf8View` operands compares in the view and
+    /// returns the `STRING` carrier with the value's contents.
+    #[test]
+    fn nullif_unifies_string_encodings() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("v", ArrowType::Utf8View, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::StringArray::from(vec![
+                    Some("x"),
+                    Some("y"),
+                    None,
+                ])) as ArrayRef,
+                Arc::new(StringViewArray::from(vec![Some("x"), Some("z"), Some("q")])),
+            ],
+        )
+        .unwrap();
+        let layout = [AttrId(0), AttrId(1)];
+        let input = input(&env, &layout, &schema);
+        // A `Utf8` value against a `Utf8View` literal: the result is the
+        // `STRING` carrier with the value's contents.
+        let f = resolved("nullif", DataType::String);
+        let e = null_if(
+            &f,
+            vec![
+                column(0, ArrowType::Utf8, true),
+                lit(&Literal::String("x".to_owned())),
+            ],
+            input,
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Utf8View);
+        assert_eq!(
+            values(&e, &batch)
+                .as_string_view()
+                .iter()
+                .collect::<Vec<_>>(),
+            [None, Some("y"), None]
+        );
+        // A `Utf8View` value against a `Utf8` other: the comparison stays in
+        // the view, the result keeps the view.
+        let e = null_if(
+            &f,
+            vec![
+                column(1, ArrowType::Utf8View, true),
+                column(0, ArrowType::Utf8, true),
+            ],
+            input,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch)
+                .as_string_view()
+                .iter()
+                .collect::<Vec<_>>(),
+            [None, Some("z"), Some("q")]
+        );
     }
 }

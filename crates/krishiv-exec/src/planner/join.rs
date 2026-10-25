@@ -24,12 +24,14 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use arrow_schema::DataType as ArrowType;
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, JoinCondition, JoinKind, JoinStrategy,
-    LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
+    AttrId, BoundColumn, Builtin, CastMode, Expr, ExprNode, FunctionId, JoinCondition, JoinKind,
+    JoinStrategy, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
 };
 
-use super::build::{Planned, Planner, unsupported};
+use super::build::{Planned, Planner, internal, unsupported};
+use super::eval::canonical_carrier;
 use super::explain::ExplainNode;
 use super::orient::{InputStats, StatsSource, orient};
 use super::properties::Distribution;
@@ -132,6 +134,13 @@ impl Planner<'_> {
         let build_exprs: Vec<Arc<Expr>> = keys.iter().map(|k| Arc::clone(&k.1)).collect();
         let (probe, probe_keys) = self.with_columns(probe, &probe_exprs)?;
         let (build, build_keys) = self.with_columns(build, &build_exprs)?;
+        // Keys of one Spark `STRING`/`BINARY` in different Arrow encodings
+        // (a `Utf8` column joined to a `Utf8View` one) meet in the canonical
+        // carrier: the executor rejects mixed key types, and its row
+        // encoder needs one type per key. Keys of different Spark types are
+        // left for the join builder to reject as before.
+        let (probe, probe_keys, build, build_keys) =
+            self.unify_join_keys(probe, probe_keys, build, build_keys)?;
         let (probe_plan, build_plan) = if build_left {
             (&logical.1, &logical.0)
         } else {
@@ -326,6 +335,98 @@ impl Planner<'_> {
             placement,
             sites,
         })
+    }
+
+    /// Each key pair's two columns in the canonical carrier of their Spark
+    /// type where the sides store one Spark `STRING`/`BINARY` in different
+    /// Arrow encodings: the side already there is kept, the other is
+    /// projected through an ANSI cast. Pairs of equal or of different Spark
+    /// types are untouched (the join builder rejects the latter as before).
+    fn unify_join_keys(
+        &mut self,
+        mut probe: Planned,
+        mut probe_keys: Vec<usize>,
+        mut build: Planned,
+        mut build_keys: Vec<usize>,
+    ) -> Result<(Planned, Vec<usize>, Planned, Vec<usize>)> {
+        for i in 0..probe_keys.len() {
+            let pt = probe
+                .schema
+                .fields()
+                .get(probe_keys[i])
+                .map(|f| f.data_type().clone())
+                .ok_or_else(|| internal("join key out of range"))?;
+            let bt = build
+                .schema
+                .fields()
+                .get(build_keys[i])
+                .map(|f| f.data_type().clone())
+                .ok_or_else(|| internal("join key out of range"))?;
+            if pt == bt {
+                continue;
+            }
+            let (Some(a), Some(b)) = (canonical_carrier(&pt), canonical_carrier(&bt)) else {
+                continue;
+            };
+            if a != b {
+                continue;
+            }
+            if pt != a {
+                let (p, k) = self.recast_key(probe, probe_keys[i], &a)?;
+                probe = p;
+                probe_keys[i] = k;
+            }
+            if bt != a {
+                let (b, k) = self.recast_key(build, build_keys[i], &a)?;
+                build = b;
+                build_keys[i] = k;
+            }
+        }
+        Ok((probe, probe_keys, build, build_keys))
+    }
+
+    /// `input` with key column `key` projected through an ANSI cast to the
+    /// canonical carrier `to` of its Spark type, and the new column. The
+    /// cast is over the key column itself, so runtime-filter sites still
+    /// resolve through it to the scan's column.
+    fn recast_key(
+        &mut self,
+        input: Planned,
+        key: usize,
+        to: &ArrowType,
+    ) -> Result<(Planned, usize)> {
+        let field = input
+            .schema
+            .fields()
+            .get(key)
+            .ok_or_else(|| internal("join key out of range"))?;
+        let stored = field.data_type().clone();
+        let spark = krishiv_types::DataType::from_arrow(&stored)
+            .map_err(|e| internal(&format!("a join key of unexpected type: {e}")))?;
+        let target = krishiv_types::DataType::from_arrow(to)
+            .map_err(|e| internal(&format!("a join key of unexpected type: {e}")))?;
+        let attr = input
+            .layout
+            .get(key)
+            .copied()
+            .ok_or_else(|| internal("join key out of range"))?;
+        let column = Expr::new(ExprNode::Resolved(ResolvedExpr::Column(BoundColumn {
+            id: attr,
+            name: field.name().clone(),
+            data_type: spark,
+            nullable: field.is_nullable(),
+        })));
+        let cast = Arc::new(Expr::new(ExprNode::Cast {
+            expr: Arc::new(column),
+            to: target,
+            mode: CastMode::Ansi,
+        }));
+        let (planned, columns) = self.with_columns(input, &[cast])?;
+        let key = columns
+            .first()
+            .copied()
+            .ok_or_else(|| internal("key arity"))?;
+        Ok((planned, key))
     }
 }
 
