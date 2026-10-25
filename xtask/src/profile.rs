@@ -68,6 +68,14 @@ pub struct ProfileArgs {
 /// the sampler sees resolves symbols.
 pub const LINE_TABLES_ENV: (&str, &str) = ("CARGO_PROFILE_RELEASE_DEBUG", "line-tables-only");
 
+/// Format and version of the query-profile document [`summarize_profile`]
+/// reads: the same `krishiv.query-profile` v1 the engine writes (see
+/// `crates/krishiv-exec/src/profile`; kept as literals so `xtask` stays free
+/// of an engine dependency).
+pub const PROFILE_FORMAT: &str = "krishiv.query-profile";
+/// See [`PROFILE_FORMAT`].
+pub const PROFILE_VERSION: u64 = 1;
+
 /// Name of the query-profile document the CLI writes.
 pub const PROFILE_JSON: &str = "profile.json";
 /// `perf record` output in the out directory.
@@ -151,13 +159,31 @@ pub fn parse_args(flags: &[&str]) -> Result<ProfileArgs, String> {
     Ok(args)
 }
 
-/// Whether `bin` exists in `dir`. The suffix is a parameter so tests can
-/// cover the platform-suffix lookup on any host.
+/// Whether `bin` exists in `dir` and is runnable. The suffix is a parameter
+/// so tests can cover the platform-suffix lookup on any host. On Unix this
+/// checks the executable bit, so a non-executable `perf` file is not treated
+/// as an installed sampler (it would only fail at spawn); elsewhere any
+/// plain file counts, as on Windows.
 fn has_bin_with_suffix(dir: &Path, bin: &str, suffix: &str) -> bool {
-    if dir.join(bin).is_file() {
-        return true;
+    is_runnable(&dir.join(bin))
+        || !suffix.is_empty() && is_runnable(&dir.join(format!("{bin}{suffix}")))
+}
+
+/// Whether `path` names a runnable file.
+fn is_runnable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.is_file()
+            && path
+                .metadata()
+                .map(|m| m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false)
     }
-    !suffix.is_empty() && dir.join(format!("{bin}{suffix}")).is_file()
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
 }
 
 /// Whether `bin` exists in `dir` (with or without the platform suffix, so
@@ -227,20 +253,26 @@ pub fn perf_permission_note() -> String {
         .to_owned()
 }
 
-/// Whether `perf record`'s stderr reports a permission failure (the kernel
-/// refusing the run, not a bad flag or a missing binary).
+/// Whether `perf record`'s stderr reports a kernel permission failure (the
+/// kernel refusing the run, not a bad flag or a missing binary). This is a
+/// heuristic over the refusal wording (`No permission to enable ...`,
+/// `Operation not permitted`, `Access denied`, `perf_event_paranoid`): other
+/// permission failures, such as being unable to write the output file, do
+/// not match and get no `perf_event_paranoid` note.
 #[must_use]
 pub fn is_perf_permission_error(stderr: &str) -> bool {
     let lower = stderr.to_lowercase();
     lower.contains("perf_event_paranoid")
-        || lower.contains("permission")
+        || lower.contains("no permission to enable")
+        || lower.contains("no permissions to enable")
         || lower.contains("operation not permitted")
         || lower.contains("access denied")
 }
 
 /// Picks the sampler: explicit `--tool` values need their binaries;
-/// `auto` prefers `perf` with both inferno binaries and falls back to
-/// `samply` (so `perf` without inferno still profiles via `samply`).
+/// `auto` prefers `perf` with both inferno binaries, else uses `samply`
+/// when it is installed, else fails with the install hints (a `perf`
+/// without inferno and without `samply` is an error, not a silent skip).
 ///
 /// # Errors
 /// Returns the install hints when the requested binaries are missing.
@@ -289,6 +321,18 @@ pub fn cargo_build_argv() -> Vec<OsString> {
         .iter()
         .map(OsString::from)
         .collect()
+}
+
+/// Where `cargo build` puts the release CLI: `CARGO_TARGET_DIR` when set,
+/// else `target` under the workspace root. `cargo build` itself honors
+/// `CARGO_TARGET_DIR` (contributors give each worktree its own), so the
+/// lookup must too; otherwise the build succeeds and the binary is reported
+/// missing.
+#[must_use]
+pub fn cli_bin_path(root: &Path, cargo_target_dir: Option<&OsStr>) -> PathBuf {
+    let base = cargo_target_dir.map_or_else(|| root.join("target"), PathBuf::from);
+    base.join("release")
+        .join(format!("krishiv{}", std::env::consts::EXE_SUFFIX))
 }
 
 /// `krishiv sql --explain-analyze --json ...`: the query plus its tables and
@@ -384,23 +428,26 @@ pub fn samply_record_argv(out: &Path, cli_bin: &Path, cli_args: &[OsString]) -> 
     argv
 }
 
-/// The default out directory: `target/xtask-profile/<UTC timestamp>` under
-/// the workspace root. `now_secs` is seconds since the Unix epoch (UTC); it
-/// is a parameter so the path is deterministic in tests.
+/// The default out directory: `target/xtask-profile/<UTC milliseconds>` under
+/// the workspace root. `now_millis` is milliseconds since the Unix epoch
+/// (UTC); it is a parameter so the path is deterministic in tests.
+/// Millisecond granularity keeps two runs in the same wall-clock second
+/// from colliding; an existing directory is still refused (see
+/// [`create_out_dir`]).
 #[must_use]
-pub fn default_out_dir(root: &Path, now_secs: u64) -> PathBuf {
+pub fn default_out_dir(root: &Path, now_millis: u64) -> PathBuf {
     root.join("target")
         .join("xtask-profile")
-        .join(now_secs.to_string())
+        .join(now_millis.to_string())
 }
 
-/// Current time as seconds since the Unix epoch (UTC), or zero when the clock
-/// is before it.
+/// Current time as milliseconds since the Unix epoch (UTC), or zero when the
+/// clock is before it.
 #[must_use]
-pub fn utc_now_secs() -> u64 {
+pub fn utc_now_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|d| d.as_millis().try_into().unwrap_or(u64::MAX))
         .unwrap_or(0)
 }
 
@@ -451,11 +498,27 @@ struct SlowOp {
 /// Summarizes the profile JSON the CLI wrote: the query wall time and the
 /// three slowest operators by compute time.
 ///
+/// Only a single [`PROFILE_FORMAT`] version [`PROFILE_VERSION`] document is
+/// accepted. The CLI prints one JSON line per statement, so pass a single
+/// statement: multi-statement output (JSON Lines) is rejected as not JSON.
+///
 /// # Errors
 /// Returns a message when the document is not a query profile.
 pub fn summarize_profile(text: &str) -> Result<String, String> {
     let v: serde_json::Value =
         serde_json::from_str(text).map_err(|e| format!("profile is not JSON: {e}"))?;
+    if v.get("format").and_then(serde_json::Value::as_str) != Some(PROFILE_FORMAT) {
+        return Err(format!("profile format is not {PROFILE_FORMAT}"));
+    }
+    match v.get("version").and_then(serde_json::Value::as_u64) {
+        Some(PROFILE_VERSION) => {}
+        Some(other) => {
+            return Err(format!(
+                "profile version {other} is not supported (this xtask reads {PROFILE_VERSION})"
+            ));
+        }
+        None => return Err("profile has no version member".to_owned()),
+    }
     let query = v
         .get("query")
         .ok_or_else(|| "profile has no query member".to_owned())?;
@@ -668,8 +731,10 @@ fn run_samply(
 
 /// `cargo xtask profile <QUERY | -f FILE>` with an explicit environment:
 /// `cargo` is the build binary, `path` the `PATH` string the sampler search
-/// uses. [`run_profile`] reads both from the process environment; tests pass
-/// fakes here instead of mutating it.
+/// uses, and `cargo_target_dir` the `CARGO_TARGET_DIR` value the build sees
+/// (`None` for the default `target` under `root`). [`run_profile`] reads all
+/// three from the process environment; tests pass fakes here instead of
+/// mutating it.
 ///
 /// # Errors
 /// Returns a message when the arguments are bad, the build or the query
@@ -680,13 +745,14 @@ pub fn run_profile_with_env(
     flags: &[&str],
     cargo: &OsStr,
     path: &str,
+    cargo_target_dir: Option<&OsStr>,
 ) -> Result<(), String> {
     let args = parse_args(flags)?;
     let query_text = resolve_query_text(&args.query, &args.file, root)?;
     let out_dir = args
         .out
         .clone()
-        .unwrap_or_else(|| default_out_dir(root, utc_now_secs()));
+        .unwrap_or_else(|| default_out_dir(root, utc_now_millis()));
     create_out_dir(&out_dir)?;
 
     // (1) The release CLI with line tables, so the sampler resolves symbols.
@@ -699,10 +765,7 @@ pub fn run_profile_with_env(
     if !build_status.success() {
         return Err("cargo build -p krishiv-cli --release failed".to_owned());
     }
-    let bin = root
-        .join("target")
-        .join("release")
-        .join(format!("krishiv{}", std::env::consts::EXE_SUFFIX));
+    let bin = cli_bin_path(root, cargo_target_dir);
     if !bin.is_file() {
         return Err(format!("built no binary at {}", bin.display()));
     }
@@ -757,13 +820,22 @@ pub fn run_profile_with_env(
 /// `krishiv sql --explain-analyze --json`, then samples the query again for a
 /// flamegraph unless `--no-flamegraph` was passed.
 ///
+/// The sampled run re-runs the same `krishiv sql --explain-analyze --json`
+/// command, so the flamegraph profiles the instrumented query (with profiling
+/// overhead included), not a plain run; this is intended, keeping one command
+/// line for both artifacts. In `samply` mode the out directory holds both
+/// `<out>/profile.json` (the query profile) and `<out>/profile.json.gz`
+/// (samply's own format). Pass a single statement: the CLI prints one JSON
+/// line per statement and the summary reads one document.
+///
 /// # Errors
 /// As [`run_profile_with_env`]; `CARGO` and `PATH` come from the process
 /// environment.
 pub fn run_profile(root: &Path, flags: &[&str]) -> Result<(), String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let path = std::env::var("PATH").unwrap_or_default();
-    run_profile_with_env(root, flags, &cargo, &path)
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR");
+    run_profile_with_env(root, flags, &cargo, &path, target_dir.as_deref())
 }
 
 #[cfg(test)]
@@ -816,6 +888,17 @@ mod tests {
             .expect("tempdir");
         std::fs::write(dir.path().join("plain"), "x").expect("write");
         std::fs::write(dir.path().join("suffixed.exe"), "x").expect("write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for name in ["plain", "suffixed.exe"] {
+                std::fs::set_permissions(
+                    dir.path().join(name),
+                    std::fs::Permissions::from_mode(0o755),
+                )
+                .expect("chmod");
+            }
+        }
         assert!(has_bin_with_suffix(dir.path(), "plain", ".exe"));
         assert!(has_bin_with_suffix(dir.path(), "plain", ""));
         assert!(has_bin_with_suffix(dir.path(), "suffixed", ".exe"));

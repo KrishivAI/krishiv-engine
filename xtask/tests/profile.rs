@@ -9,12 +9,12 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use xtask::profile::{
-    FLAMEGRAPH_SVG, LINE_TABLES_ENV, PERF_DATA, PROFILE_JSON, ProfileArgs, SAMPLY_OUT,
-    SelectedTool, ToolChoice, cargo_build_argv, cli_sql_argv, collapse_argv, create_out_dir,
-    default_out_dir, discover_on_path, flamegraph_argv, is_perf_permission_error,
-    no_sampler_message, perf_permission_note, perf_record_argv, perf_record_error,
-    perf_script_argv, run_profile, run_profile_with_env, samply_record_argv, select_tool,
-    summarize_profile, utc_now_secs,
+    FLAMEGRAPH_SVG, LINE_TABLES_ENV, PERF_DATA, PROFILE_FORMAT, PROFILE_JSON, PROFILE_VERSION,
+    ProfileArgs, SAMPLY_OUT, SelectedTool, ToolChoice, cargo_build_argv, cli_bin_path,
+    cli_sql_argv, collapse_argv, create_out_dir, default_out_dir, discover_on_path,
+    flamegraph_argv, is_perf_permission_error, no_sampler_message, perf_permission_note,
+    perf_record_argv, perf_record_error, perf_script_argv, run_profile, run_profile_with_env,
+    samply_record_argv, select_tool, summarize_profile, utc_now_millis,
 };
 
 fn tmp(name: &str) -> tempfile::TempDir {
@@ -26,6 +26,13 @@ fn tmp(name: &str) -> tempfile::TempDir {
 
 fn touch(dir: &Path, name: &str) {
     std::fs::write(dir.join(name), "#!/bin/sh\nexit 0\n").unwrap();
+    // Discovery requires the executable bit (Unix): a non-executable file is
+    // not a usable sampler, so the fakes are runnable.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
 }
 
 fn join(parts: &[&Path]) -> String {
@@ -211,6 +218,21 @@ fn discovery_ignores_non_files() {
     assert!(!discover_on_path(&join(&[dir.path()])).perf);
 }
 
+#[test]
+#[cfg(unix)]
+fn discovery_ignores_non_executable_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("discover-noexec");
+    // A non-executable file named like a tool would only fail at spawn:
+    // discovery skips it.
+    let p = dir.path().join("perf");
+    std::fs::write(&p, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!discover_on_path(&join(&[dir.path()])).perf);
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(discover_on_path(&join(&[dir.path()])).perf);
+}
+
 // Tool selection.
 
 #[test]
@@ -364,18 +386,28 @@ fn permission_detection_and_note() {
     assert!(!is_perf_permission_error(
         "failed to open perf.data: no such file"
     ));
+    // A file permission failure is not the kernel refusing profiling: it
+    // must not attract the `perf_event_paranoid` note.
+    assert!(!is_perf_permission_error(
+        "could not open output file: Permission denied"
+    ));
     let note = perf_permission_note();
     assert!(note.contains("perf_event_paranoid"), "{note}");
     assert!(note.contains("sudo"), "{note}");
 }
 
 #[test]
-fn perf_record_error_adds_the_note_only_for_permission_failures() {
-    let e = perf_record_error("could not open perf.data: Permission denied\n");
+fn perf_record_error_adds_the_note_only_for_kernel_refusals() {
+    let e = perf_record_error("Error: No permission to enable cycles event\n");
     assert!(e.contains("`perf record` failed"), "{e}");
     assert!(e.contains("perf_event_paranoid"), "{e}");
     let e = perf_record_error("bad option: --frobnicate\n");
     assert!(e.contains("`perf record` failed: bad option"), "{e}");
+    assert!(!e.contains("perf_event_paranoid"), "{e}");
+    // An unrelated permission failure (writing the output file) is reported
+    // without the kernel note.
+    let e = perf_record_error("could not open output file: Permission denied\n");
+    assert!(e.contains("`perf record` failed"), "{e}");
     assert!(!e.contains("perf_event_paranoid"), "{e}");
 }
 
@@ -517,10 +549,10 @@ fn sampler_argv_match_the_documented_commands() {
 fn default_out_dir_and_clock() {
     let root = Path::new("/w");
     assert_eq!(
-        default_out_dir(root, 1_728_000_000),
-        PathBuf::from("/w/target/xtask-profile/1728000000")
+        default_out_dir(root, 1_728_000_000_000),
+        PathBuf::from("/w/target/xtask-profile/1728000000000")
     );
-    assert!(utc_now_secs() > 0);
+    assert!(utc_now_millis() > 0);
 }
 
 #[test]
@@ -543,7 +575,7 @@ fn create_out_dir_makes_parents_and_refuses_to_overwrite() {
 
 // Profile summary.
 
-const PROFILE: &str = r#"{"query":{"wall_time_ns":3000000},"operators":[
+const PROFILE: &str = r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":3000000},"operators":[
 {"name":"Scan","metrics":{"compute_time_ns":100}},
 {"name":"Filter","metrics":{"compute_time_ns":300}},
 {"name":"HashJoin","metrics":{"compute_time_ns":200}},
@@ -566,47 +598,89 @@ fn summary_shows_wall_time_and_three_slowest() {
 
 #[test]
 fn summary_handles_few_operators() {
-    let one = r#"{"query":{"wall_time_ns":7},"operators":[
+    let one = r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":7},"operators":[
 {"name":"Only","metrics":{"compute_time_ns":7}}]}"#;
     let s = summarize_profile(one).unwrap();
     assert!(s.contains("query wall time: 7 ns"), "{s}");
     assert!(s.contains("Only"), "{s}");
-    let empty = r#"{"query":{"wall_time_ns":7},"operators":[]}"#;
+    let empty = r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":7},"operators":[]}"#;
     let s = summarize_profile(empty).unwrap();
     assert!(s.contains("slowest operators:"), "{s}");
+}
+
+#[test]
+fn summary_checks_the_profile_format_and_version() {
+    assert_eq!(PROFILE_FORMAT, "krishiv.query-profile");
+    assert_eq!(PROFILE_VERSION, 1);
+    let e = summarize_profile(
+        r#"{"format":"other.format","version":1,"query":{"wall_time_ns":1},"operators":[]}"#,
+    )
+    .unwrap_err();
+    assert!(e.contains("krishiv.query-profile"), "{e}");
+    let e = summarize_profile(
+        r#"{"format":"krishiv.query-profile","version":2,"query":{"wall_time_ns":1},"operators":[]}"#,
+    )
+    .unwrap_err();
+    assert!(e.contains("version 2 is not supported"), "{e}");
+    let e = summarize_profile(
+        r#"{"format":"krishiv.query-profile","query":{"wall_time_ns":1},"operators":[]}"#,
+    )
+    .unwrap_err();
+    assert!(e.contains("no version"), "{e}");
+    // A document without the format member is not a query profile either.
+    let e = summarize_profile(r#"{"query":{"wall_time_ns":1},"operators":[]}"#).unwrap_err();
+    assert!(e.contains("krishiv.query-profile"), "{e}");
+}
+
+#[test]
+fn summary_rejects_multi_statement_output() {
+    // The CLI prints one JSON line per statement: two statements are JSON
+    // Lines, not one JSON document.
+    let line = r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":1},"operators":[]}"#;
+    let two = format!("{line}\n{line}\n");
+    let e = summarize_profile(&two).unwrap_err();
+    assert!(e.contains("not JSON"), "{e}");
 }
 
 #[test]
 fn summary_rejects_bad_documents() {
     assert!(summarize_profile("{").unwrap_err().contains("not JSON"));
     assert!(
-        summarize_profile(r#"{"operators":[]}"#)
+        summarize_profile(r#"{"format":"krishiv.query-profile","version":1,"operators":[]}"#)
             .unwrap_err()
             .contains("no query")
     );
     assert!(
-        summarize_profile(r#"{"query":{},"operators":[]}"#)
-            .unwrap_err()
-            .contains("wall_time_ns")
-    );
-    assert!(
-        summarize_profile(r#"{"query":{"wall_time_ns":1}}"#)
-            .unwrap_err()
-            .contains("operators")
-    );
-    assert!(
-        summarize_profile(r#"{"query":{"wall_time_ns":1},"operators":[{}]}"#)
-            .unwrap_err()
-            .contains("without a name")
-    );
-    assert!(
-        summarize_profile(r#"{"query":{"wall_time_ns":1},"operators":[{"name":"X"}]}"#)
-            .unwrap_err()
-            .contains("no metrics")
+        summarize_profile(
+            r#"{"format":"krishiv.query-profile","version":1,"query":{},"operators":[]}"#
+        )
+        .unwrap_err()
+        .contains("wall_time_ns")
     );
     assert!(
         summarize_profile(
-            r#"{"query":{"wall_time_ns":1},"operators":[{"name":"X","metrics":{}}]}"#
+            r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":1}}"#
+        )
+        .unwrap_err()
+        .contains("operators")
+    );
+    assert!(
+        summarize_profile(
+            r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":1},"operators":[{}]}"#
+        )
+        .unwrap_err()
+        .contains("without a name")
+    );
+    assert!(
+        summarize_profile(
+            r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":1},"operators":[{"name":"X"}]}"#
+        )
+        .unwrap_err()
+        .contains("no metrics")
+    );
+    assert!(
+        summarize_profile(
+            r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":1},"operators":[{"name":"X","metrics":{}}]}"#
         )
         .unwrap_err()
         .contains("compute_time_ns")
@@ -680,6 +754,7 @@ fn run_profile_writes_profile_json_without_flamegraph() {
         ],
         cargo.as_os_str(),
         &host_path(),
+        None,
     )
     .unwrap();
     let written = std::fs::read_to_string(out.join("profile.json")).unwrap();
@@ -698,6 +773,7 @@ fn run_profile_reads_the_query_file_and_defaults_the_out_dir() {
         &["-f", "q.sql", "--no-flamegraph"],
         cargo.as_os_str(),
         &host_path(),
+        None,
     )
     .unwrap();
     // The default out directory holds the profile.
@@ -722,6 +798,7 @@ fn run_profile_reports_the_json_before_the_missing_sampler_error() {
         &["SELECT 1", "--out", out.to_str().unwrap()],
         cargo.as_os_str(),
         empty.path().to_str().unwrap(),
+        None,
     )
     .unwrap_err();
     assert!(e.contains("no sampling profiler"), "{e}");
@@ -747,6 +824,7 @@ fn run_profile_fails_on_build_binary_and_cli_errors() {
         ],
         failing.as_os_str(),
         &path,
+        None,
     )
     .unwrap_err();
     assert!(e.contains("cargo build"), "{e}");
@@ -763,6 +841,7 @@ fn run_profile_fails_on_build_binary_and_cli_errors() {
         ],
         passing.as_os_str(),
         &path,
+        None,
     )
     .unwrap_err();
     assert!(e.contains("built no binary"), "{e}");
@@ -781,6 +860,7 @@ fn run_profile_fails_on_build_binary_and_cli_errors() {
         ],
         passing.as_os_str(),
         &path,
+        None,
     )
     .unwrap_err();
     assert!(e.contains("boom"), "{e}");
@@ -805,6 +885,7 @@ fn run_profile_refuses_to_overwrite_and_needs_a_query_file() {
         ],
         cargo.as_os_str(),
         &path,
+        None,
     )
     .unwrap_err();
     assert!(e.contains("refusing to overwrite"), "{e}");
@@ -813,11 +894,18 @@ fn run_profile_refuses_to_overwrite_and_needs_a_query_file() {
         &["-f", "missing.sql", "--no-flamegraph"],
         cargo.as_os_str(),
         &path,
+        None,
     )
     .unwrap_err();
     assert!(e.contains("cannot read"), "{e}");
-    let e = run_profile_with_env(dir.path(), &["--no-flamegraph"], cargo.as_os_str(), &path)
-        .unwrap_err();
+    let e = run_profile_with_env(
+        dir.path(),
+        &["--no-flamegraph"],
+        cargo.as_os_str(),
+        &path,
+        None,
+    )
+    .unwrap_err();
     assert!(e.contains("no query given"), "{e}");
 }
 
@@ -835,9 +923,62 @@ fn run_profile_names_an_unrunnable_cargo() {
         ],
         OsStr::new("/nonexistent/xtask-profile-cargo"),
         &host_path(),
+        None,
     )
     .unwrap_err();
     assert!(e.contains("cannot run cargo build"), "{e}");
+}
+
+#[test]
+fn cli_bin_path_defaults_to_the_workspace_target_dir() {
+    let root = Path::new("/w");
+    assert_eq!(
+        cli_bin_path(root, None),
+        PathBuf::from(format!(
+            "/w/target/release/krishiv{}",
+            std::env::consts::EXE_SUFFIX
+        ))
+    );
+    assert_eq!(
+        cli_bin_path(root, Some(OsStr::new("/t"))),
+        PathBuf::from(format!(
+            "/t/release/krishiv{}",
+            std::env::consts::EXE_SUFFIX
+        ))
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn run_profile_finds_the_binary_under_cargo_target_dir() {
+    let dir = tmp("run-targetdir");
+    // The build drops the binary in `CARGO_TARGET_DIR`, not `target/`: the
+    // fake cargo pretends to, and the lookup must follow.
+    let custom = dir.path().join("custom-target");
+    let bin_dir = custom.join("release");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    write_exe(
+        &bin_dir,
+        "krishiv",
+        &format!("#!/bin/sh\ncat <<'PROFILE_EOF'\n{PROFILE}\nPROFILE_EOF\nexit 0\n"),
+    );
+    let cargo = fake_cargo(dir.path(), 0);
+    let out = dir.path().join("out");
+    run_profile_with_env(
+        dir.path(),
+        &[
+            "SELECT 1",
+            "--out",
+            out.to_str().unwrap(),
+            "--no-flamegraph",
+        ],
+        cargo.as_os_str(),
+        &host_path(),
+        Some(custom.as_os_str()),
+    )
+    .unwrap();
+    let written = std::fs::read_to_string(out.join("profile.json")).unwrap();
+    assert!(written.contains("wall_time_ns"), "{written}");
 }
 
 #[test]

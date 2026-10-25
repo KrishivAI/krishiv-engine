@@ -117,20 +117,26 @@ cargo xtask profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE].
 ```
 
 `<QUERY>` is SQL text, or a file with `-f`. `--table` registers a Parquet file or directory as a temp view
-(repeatable); `--conf` sets a session entry (repeatable). The out directory defaults to
-`target/xtask-profile/<UTC timestamp>` and is never overwritten; pass `--out DIR` to choose it.
+(repeatable); `--conf` sets a session entry (repeatable). Pass a single statement: the CLI prints one JSON
+line per statement and the summary reads one document. The out directory defaults to
+`target/xtask-profile/<UTC milliseconds>` and is never overwritten; pass `--out DIR` to choose it.
 
 The sampler is chosen by `--tool` (`auto` by default): `perf` runs
 `perf record -F 999 -g --call-graph dwarf` and pipes `perf script` through `inferno-collapse-perf` and
 `inferno-flamegraph`; `samply` runs `samply record --save-only`. `auto` prefers `perf` when `perf` and both
-inferno binaries are on `PATH`, and falls back to `samply` otherwise. Install what is missing with the
+inferno binaries are on `PATH`, and otherwise uses `samply` when it is installed (when neither combination
+is available the command reports the profile JSON as done and then fails with the install hints). Install
+what is missing with the
 distribution's `linux-tools` package (for `perf`), `cargo install inferno` (for the two inferno binaries) or
 `cargo install samply`. When no sampler is installed the command reports the profile JSON as done and then
 fails with the install hints.
 
 Output files are `<out>/profile.json` (the query profile, one JSON line, as printed by
-`krishiv sql --explain-analyze --json`; `samply` instead writes its own format to `<out>/profile.json.gz`)
-and, for `perf`, `<out>/perf.data` with `<out>/flamegraph.svg`. `--no-flamegraph` skips the sampling run.
+`krishiv sql --explain-analyze --json`) and, with `samply`, `<out>/profile.json.gz` in samply's own format
+alongside it; with `perf`, `<out>/perf.data` with `<out>/flamegraph.svg`. `--no-flamegraph` skips the
+sampling run. The sampling run re-runs the same `krishiv sql --explain-analyze --json` command, so the
+flamegraph profiles the instrumented query (profiling overhead included), not a plain run; that is
+intended, keeping one command line for both artifacts.
 The command ends with a summary: the output paths, the query wall time and the three slowest operators by
 compute time.
 
