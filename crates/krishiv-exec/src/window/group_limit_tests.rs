@@ -34,6 +34,18 @@ async fn run_limited(
     limit: &GroupLimitPlan,
     limited: bool,
 ) -> crate::Result<(Vec<Batch>, SortMetrics)> {
+    run_limited_on(rows, split, limit, limited, false).await
+}
+
+/// [`run_limited`], with the sort bucketed by the partitioning keys and
+/// read by four drivers when `bucketed`.
+async fn run_limited_on(
+    rows: &[Row],
+    split: usize,
+    limit: &GroupLimitPlan,
+    limited: bool,
+    bucketed: bool,
+) -> crate::Result<(Vec<Batch>, SortMetrics)> {
     let s = schema();
     let batches: Vec<Batch> = rows.chunks(split.max(1)).map(batch).collect();
     let window = plan(
@@ -49,12 +61,15 @@ async fn run_limited(
     if limited {
         sort = sort.with_group_limit(&keys, limit)?;
     }
+    if bucketed {
+        sort = sort.with_hash_buckets(&limit.partition_by)?;
+    }
     let sort = Arc::new(sort);
     let mut input: Arc<dyn ExecNode> = Arc::new(BreakerNode {
         input: Arc::new(SourceNode(Batches::new(Arc::clone(&s), batches))),
         sink: Arc::clone(&sort) as Arc<dyn crate::Sink>,
         source: Arc::clone(&sort) as Arc<dyn crate::Source>,
-        ordered: true,
+        ordered: !bucketed,
     });
     if limited {
         input = Arc::new(OperatorNode {
@@ -66,7 +81,7 @@ async fn run_limited(
         input,
         op: Arc::new(Window::new(Arc::clone(&s), window, true, None)?),
     });
-    let runner = QueryRunner::new(TokioExecutor::deterministic(2)?);
+    let runner = QueryRunner::new(TokioExecutor::deterministic(if bucketed { 4 } else { 2 })?);
     let root = pool(1 << 30);
     let config = ExecConfig {
         batch_size: 4,
@@ -139,6 +154,46 @@ proptest! {
         prop_assert_eq!(total, want.len());
         prop_assert_eq!(kept(&limited, limit.function, k), want);
     }
+
+    /// The same over a sort bucketed by the partitioning keys (partitions
+    /// split among four drivers): each sorted batch is pruned bucket by
+    /// bucket.
+    #[test]
+    fn a_bucketed_limit_keeps_exactly_the_filtered_rows(
+        rows in rows_strategy(),
+        split in 1_usize..9,
+        f in 0_usize..3,
+        k in 1_u64..4,
+    ) {
+        let limit = group_limit(FUNCTIONS[f], k, true);
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let (full, _) = rt.block_on(run_limited(&rows, split, &limit, false)).unwrap();
+        let (limited, m) = rt
+            .block_on(run_limited_on(&rows, split, &limit, true, true))
+            .unwrap();
+        prop_assert_eq!(m.buckets, 16);
+        let want = kept(&full, limit.function, k);
+        let total: usize = limited.iter().map(Batch::num_rows).sum();
+        prop_assert_eq!(total, want.len());
+        prop_assert_eq!(kept(&limited, limit.function, k), want);
+    }
+}
+
+/// A bucketed sort prunes each bucket of a sorted batch on its own: rows of
+/// several partitions in one batch keep their top `k` each.
+#[tokio::test]
+async fn a_bucketed_sort_prunes_each_bucket() {
+    // 8 partitions, 20 rows each, interleaved so every batch of 16 rows
+    // holds 2 rows of each partition.
+    let rows: Vec<Row> = (0..160)
+        .map(|i| (Some(i % 8), Some(i / 8), i, None))
+        .collect();
+    let limit = group_limit(RankLike::RowNumber, 1, true);
+    let (out, m) = run_limited_on(&rows, 16, &limit, true, true).await.unwrap();
+    assert_eq!(out.iter().map(Batch::num_rows).sum::<usize>(), 8);
+    assert_eq!(m.buckets, 16, "{m:?}");
+    // Each batch keeps one row per partition: 8 of its 16.
+    assert_eq!(m.rows_pruned, 80, "{m:?}");
 }
 
 /// Ties: `rank` keeps every row of a tied group within the limit and skips

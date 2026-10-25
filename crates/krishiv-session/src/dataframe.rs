@@ -881,6 +881,7 @@ impl DataFrame {
             && !a.env.catalog.loaded_file_views()
             && a.env.conf_version == env.conf_version
             && a.env.catalog_epoch == env.catalog_epoch
+            && a.env.variables_version == env.variables_version
         {
             return Ok(a);
         }

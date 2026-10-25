@@ -91,21 +91,16 @@ pub struct ParserOptions {
     /// `spark.sql.sources.bucketing.maxBuckets`: a bucket count above it
     /// fails with `INVALID_BUCKET_COUNT`.
     pub max_buckets: u64,
+    /// `spark.sql.parser.singleCharacterPipeOperator.enabled` (on by
+    /// default): `|` followed by a pipe operator keyword is the pipe
+    /// operator `|>`, never a bitwise or.
+    pub single_character_pipe_operator: bool,
 }
 
 impl Default for ParserOptions {
+    /// Spark 4.2's defaults.
     fn default() -> Self {
-        Self {
-            enforce_reserved_keywords: false,
-            double_quoted_identifiers: false,
-            legacy_setops_precedence: false,
-            escaped_string_literals: false,
-            legacy_bang_equals_not: false,
-            legacy_identifier_clause: false,
-            legacy_interval: false,
-            timestamp_ntz: false,
-            max_buckets: DEFAULT_MAX_BUCKETS,
-        }
+        Self::from_conf(|_| None)
     }
 }
 
@@ -129,7 +124,12 @@ impl ParserOptions {
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
             max_buckets: conf("spark.sql.sources.bucketing.maxBuckets")
                 .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|v| (1..=i32::MAX as u64).contains(v))
                 .unwrap_or(DEFAULT_MAX_BUCKETS),
+            single_character_pipe_operator: on(
+                "spark.sql.parser.singleCharacterPipeOperator.enabled",
+                true,
+            ),
         }
     }
 }

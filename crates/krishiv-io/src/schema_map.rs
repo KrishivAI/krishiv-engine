@@ -51,7 +51,7 @@ use krishiv_common::error::{
 
 use crate::error::{FormatError, Result, internal};
 use crate::request::{
-    ColumnPath, FieldMapping, PushdownExpr, ROW_INDEX_COLUMN, ScalarValue, ScanRequest,
+    ColumnPath, FieldMapping, PushdownExpr, ROW_INDEX_COLUMN, RowLevel, ScalarValue, ScanRequest,
     project_schema,
 };
 
@@ -204,6 +204,14 @@ impl SchemaMapper {
                 .collect(),
             selection: req.selection.clone(),
             row_filter: req.row_filter,
+            // A prefix is never NULL, so a superset of its TRUE rows (all
+            // `map_predicate` promises) drops only rows it is FALSE on.
+            row_level: match &req.row_level {
+                RowLevel::Prefix(p) => {
+                    RowLevel::Prefix(p.as_ref().and_then(|p| self.map_predicate(p)))
+                }
+                RowLevel::Full => RowLevel::Full,
+            },
             limit: req.limit,
             metadata_cols: req.metadata_cols,
             mapping: FieldMapping::ByName {

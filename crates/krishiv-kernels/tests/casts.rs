@@ -123,7 +123,14 @@ fn string_to_numbers_match_spark() {
         one(s("it's"), int.clone(), Ansi),
         invalid("'it\\'s'", "INT")
     );
-    assert_eq!(one(s("abc"), int, Try), "NULL");
+    assert_eq!(one(s("abc"), int.clone(), Try), "NULL");
+    // `try_cast` parses as ANSI does: a fraction is malformed, not dropped
+    // (Spark 4.2 `try_cast.sql`: `TRY_CAST('1.23' AS int)` is NULL).
+    for to in [DataType::Int8, int.clone(), DataType::Int64] {
+        assert_eq!(one(s("1.23"), to.clone(), Try), "NULL");
+        assert_eq!(one(s("-4.56"), to, Try), "NULL");
+    }
+    assert_eq!(one(s(" 7 "), int, Try), "7");
     assert_eq!(
         one(s("128"), DataType::Int8, Ansi),
         invalid("'128'", "TINYINT")

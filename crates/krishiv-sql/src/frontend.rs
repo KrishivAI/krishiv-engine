@@ -43,6 +43,7 @@ impl SqlFrontend for Frontend {
             o.legacy_interval,
             o.timestamp_ntz,
             o.legacy_identifier_clause,
+            o.single_character_pipe_operator,
         ]
         .iter()
         .fold(0, |acc, b| acc << 1 | u64::from(*b));

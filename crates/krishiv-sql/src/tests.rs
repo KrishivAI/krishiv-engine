@@ -12,6 +12,7 @@ use super::lexer::{TokenKind, tokenize, unescape_string};
 use super::*;
 
 mod probe;
+mod tail;
 
 /// The tree of `sql`, without Spark's post-parse checks (tree shapes).
 fn ok(sql: &str) -> ast::Query {
@@ -2886,4 +2887,223 @@ fn deferred_error_survives_a_speculative_parse() {
         let bang = sql.find('!').unwrap();
         assert_eq!(e.span.range(), bang..bang + 1, "{sql}");
     }
+}
+
+/// `DECLARE`, `SET VARIABLE` and `DROP TEMPORARY VARIABLE`: every form,
+/// with spans.
+#[test]
+fn variable_statements() {
+    use ast::{DeclareVariable, DropVariable, SetVariableKind, Statement};
+    let d = ParserOptions::default();
+    let declare = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::DeclareVariable(v) => v,
+        other => panic!("{sql} is {other:?}"),
+    };
+    // `DECLARE name type`, with and without `VARIABLE`.
+    for sql in ["DECLARE var1 INT;", "DECLARE VARIABLE var1 INT"] {
+        let v: DeclareVariable = declare(sql);
+        assert!(!v.or_replace, "{sql}");
+        assert_eq!(v.names.len(), 1, "{sql}");
+        assert_eq!(v.names[0].parts[0].value, "var1", "{sql}");
+        assert_eq!(
+            v.data_type,
+            Some(parse_data_type("INT", &d).unwrap()),
+            "{sql}"
+        );
+        assert!(v.default.is_none(), "{sql}");
+    }
+    let v = declare("DECLARE var1 INT");
+    assert_eq!(v.span.text("DECLARE var1 INT"), "DECLARE var1 INT");
+    // `OR REPLACE`, `VAR`, qualifiers and a keyword as a name.
+    let v = declare("DECLARE OR REPLACE VAR session.var1 DOUBLE");
+    assert!(v.or_replace);
+    assert_eq!(
+        v.names[0]
+            .parts
+            .iter()
+            .map(|p| p.value.as_str())
+            .collect::<Vec<_>>(),
+        ["session", "var1"]
+    );
+    let v = declare("DECLARE OR REPLACE VARIABLE INT DEFAULT 5.0");
+    assert!(v.or_replace);
+    assert_eq!(v.names[0].parts[0].value, "INT");
+    assert!(v.data_type.is_none());
+    assert_eq!(
+        v.default
+            .as_ref()
+            .unwrap()
+            .span
+            .text("DECLARE OR REPLACE VARIABLE INT DEFAULT 5.0"),
+        "5.0"
+    );
+    // `DEFAULT` and `=` defaults, and several names sharing both.
+    let v = declare("DECLARE VARIABLE var1, var2, var3 INT DEFAULT 1 + 2");
+    assert_eq!(v.names.len(), 3);
+    assert_eq!(
+        v.default
+            .as_ref()
+            .unwrap()
+            .span
+            .text("DECLARE VARIABLE var1, var2, var3 INT DEFAULT 1 + 2"),
+        "1 + 2"
+    );
+    let v = declare("DECLARE var1 = 'Hello'");
+    assert!(v.data_type.is_none());
+    assert_eq!(
+        v.default
+            .as_ref()
+            .unwrap()
+            .span
+            .text("DECLARE var1 = 'Hello'"),
+        "'Hello'"
+    );
+    // `parse_query` takes queries only.
+    assert_eq!(
+        err("DECLARE var1 INT", &d).error.error_class(),
+        ErrorClass::ParseSyntaxError
+    );
+    // `IF NOT EXISTS` is not supported: the error is at `EXISTS`.
+    let e = parse_statement("DECLARE VARIABLE IF NOT EXISTS var1 INT", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 24..30);
+    // Neither a type nor a default fails after parsing.
+    let e = parse_statement("DECLARE var1", &d).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::InvalidSqlSyntaxVariableTypeOrDefaultRequired
+    );
+    assert_eq!(e.span.range(), 0..12);
+    // `SET VARIABLE` assignments.
+    let set = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::SetVariable(v) => v,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let v = set("SET VARIABLE var1 = 6;");
+    let SetVariableKind::Single { assignments } = &v.kind else {
+        panic!("{:?}", v.kind)
+    };
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].name.parts[0].value, "var1");
+    assert_eq!(
+        assignments[0].value.span.text("SET VARIABLE var1 = 6;"),
+        "6"
+    );
+    assert_eq!(
+        v.span.text("SET VARIABLE var1 = 6;"),
+        "SET VARIABLE var1 = 6"
+    );
+    let v = set("SET VAR var1 = 7, var2 = 'world', system.session.var3 = pi()");
+    let SetVariableKind::Single { assignments } = &v.kind else {
+        panic!("{:?}", v.kind)
+    };
+    assert_eq!(assignments.len(), 3);
+    assert_eq!(
+        assignments
+            .iter()
+            .map(|a| a.name.parts.last().unwrap().value.as_str())
+            .collect::<Vec<_>>(),
+        ["var1", "var2", "var3"]
+    );
+    // `SET VARIABLE (v, ...) = (query)`.
+    let v = set("SET VARIABLE (var1, var2) = (SELECT c1, c2 FROM t)");
+    let SetVariableKind::Row { targets, query } = &v.kind else {
+        panic!("{:?}", v.kind)
+    };
+    assert_eq!(targets.len(), 2);
+    assert_eq!(**query, ok("SELECT c1, c2 FROM t"));
+    assert_eq!(
+        v.span
+            .text("SET VARIABLE (var1, var2) = (SELECT c1, c2 FROM t)"),
+        "SET VARIABLE (var1, var2) = (SELECT c1, c2 FROM t)"
+    );
+    // An empty target list parses and fails after parsing.
+    let e = parse_statement("SET VARIABLE () = (SELECT 1)", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::InvalidSetSyntax);
+    assert_eq!(e.span.range(), 0..28);
+    // The target list and the query are required.
+    for sql in [
+        "SET VARIABLE (var1) = SELECT 1",
+        "SET VARIABLE (var1) = (SELECT 1",
+        "SET VARIABLE (var1 = (SELECT 1)",
+        "SET VARIABLE var1",
+        "SET VARIABLE var1 = ",
+    ] {
+        assert_eq!(
+            parse_statement(sql, &d).unwrap_err().error.error_class(),
+            ErrorClass::ParseSyntaxError,
+            "{sql}"
+        );
+    }
+    // Bare `VAR`/`VARIABLE` keys still read as configuration, not as
+    // session variables.
+    for (sql, key, value) in [
+        ("SET VAR", "VAR", None),
+        ("SET VARIABLE", "VARIABLE", None),
+        ("SET VAR = 1", "VAR", Some("1")),
+        ("SET var.foo = 1", "var.foo", Some("1")),
+    ] {
+        match parse_statement(sql, &d).unwrap() {
+            Statement::Set(s) => match (&s.kind, value) {
+                (ast::SetKind::Show { key: k, .. }, None) => assert_eq!(k, key, "{sql}"),
+                (
+                    ast::SetKind::Assign {
+                        key: k, value: v, ..
+                    },
+                    Some(want),
+                ) => assert_eq!((k.as_str(), v.as_str()), (key, want), "{sql}"),
+                kind => panic!("{sql} is {kind:?}"),
+            },
+            other => panic!("{sql} is {other:?}"),
+        }
+    }
+    // `DROP TEMPORARY VARIABLE`.
+    let drop = |sql: &str| match parse_statement(sql, &d).unwrap() {
+        Statement::DropVariable(v) => v,
+        other => panic!("{sql} is {other:?}"),
+    };
+    let v: DropVariable = drop("DROP TEMPORARY VARIABLE var1;");
+    assert!(!v.if_exists);
+    assert_eq!(v.name.parts[0].value, "var1");
+    assert_eq!(
+        v.span.text("DROP TEMPORARY VARIABLE var1;"),
+        "DROP TEMPORARY VARIABLE var1"
+    );
+    let v = drop("DROP TEMPORARY VAR IF EXISTS system.session.var1");
+    assert!(v.if_exists);
+    assert_eq!(v.name.parts.len(), 3);
+    // Without `TEMPORARY`, the error is at `VARIABLE`.
+    let e = parse_statement("DROP VARIABLE var1", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 5..13);
+    // `TEMPORARY` needs `VAR` or `VARIABLE` after it.
+    let e = parse_statement("DROP TEMPORARY VIEW v", &d).unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.range(), 15..19);
+    // A quoted type name parses and fails when the type is built.
+    let e = parse_statement("DECLARE v `int`", &d).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::UnsupportedDatatype,
+        "{e:?}"
+    );
+    // Only one keyword is the form: the next word is the name.
+    let v = declare("DECLARE VAR variable INT");
+    assert_eq!(v.names[0].parts[0].value, "variable");
+    let v = declare("DECLARE VARIABLE var INT");
+    assert_eq!(v.names[0].parts[0].value, "var");
+    let ast::Statement::SetVariable(v) = parse_statement("SET VAR variable = 1", &d).unwrap()
+    else {
+        panic!("not a SET VARIABLE")
+    };
+    let SetVariableKind::Single { assignments } = &v.kind else {
+        panic!("not a single assignment")
+    };
+    assert_eq!(assignments[0].name.parts[0].value, "variable");
+    // Under `EXPLAIN`, a variable command is the explained statement.
+    let ast::Statement::Explain(e) = parse_statement("EXPLAIN DECLARE var1 INT", &d).unwrap()
+    else {
+        panic!("not an EXPLAIN")
+    };
+    assert!(matches!(*e.statement, ast::Statement::DeclareVariable(_)));
 }

@@ -16,6 +16,10 @@
 //! | a string unit in `TIMESTAMPADD` and friends | `INVALID_PARAMETER_VALUE.DATETIME_UNIT` |
 //! | `IN ()` | `INVALID_SQL_SYNTAX.EMPTY_IN_PREDICATE` |
 //! | `LIKE ANY ()`, a frame bound that is not a literal | `_LEGACY_ERROR_TEMP_0064` |
+//! | `TRANSFORM`: a quantifier, a SerDe, a line terminator other than `\n` | see [`transform`] |
+//! | pipe operators and result clause combinations | see [`pipe`] |
+//! | `NEAREST BY` joins, `TABLE(...)` arguments | see [`relation`] |
+//! | `TABLESAMPLE` with no method, an out-of-range percentage, `SYSTEM` misuse, byte and column forms | see [`sample`] |
 //! | duplicate CTE names, duplicate window names | `DUPLICATED_CTE_NAMES`, `INVALID_SQL_SYNTAX.REPETITIVE_WINDOW_DEFINITION` |
 //! | `MAX RECURSION LEVEL` without `RECURSIVE`, a table option without a value | `_LEGACY_ERROR_TEMP_0035` |
 //! | `NATURAL JOIN LATERAL`, `JOIN LATERAL ... USING` | `INCOMPATIBLE_JOIN_TYPES`, `UNSUPPORTED_FEATURE.LATERAL_JOIN_USING` |
@@ -32,6 +36,10 @@
 
 mod interval;
 pub(crate) mod literal;
+mod pipe;
+mod relation;
+mod sample;
+mod transform;
 mod types;
 
 use std::collections::HashSet;
@@ -40,11 +48,11 @@ use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DuplicateClauses, DuplicatedCteNames,
     IdentityColumnsDuplicatedSequenceGeneratorOption, IdentityColumnsIllegalStep,
     IncompatibleJoinTypes, InvalidBucketCount, InvalidInlineTableNumColumnsMismatch,
-    InvalidParameterValueDatetimeUnit, InvalidSqlSyntaxEmptyInPredicate,
+    InvalidParameterValueDatetimeUnit, InvalidSetSyntax, InvalidSqlSyntaxEmptyInPredicate,
     InvalidSqlSyntaxInvalidWindowReference, InvalidSqlSyntaxRepetitiveWindowDefinition,
-    InvalidSqlSyntaxUnresolvedWindowReference, InvalidStatementOrClause, KrishivError,
-    LegacyErrorTemp0035, LegacyErrorTemp0051, LegacyErrorTemp0064,
-    UnsupportedFeatureLateralJoinUsing,
+    InvalidSqlSyntaxUnresolvedWindowReference, InvalidSqlSyntaxVariableTypeOrDefaultRequired,
+    InvalidStatementOrClause, KrishivError, LegacyErrorTemp0035, LegacyErrorTemp0051,
+    LegacyErrorTemp0064, UnsupportedFeatureLateralJoinUsing,
 };
 
 pub(crate) use self::types::data_type;
@@ -54,9 +62,9 @@ use crate::ast::{
     ExprKind, FileFormat, FileFormatKind, FrameBoundKind, FromClause, Function, GeneratedKind,
     GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Join, JoinConstraint, Literal,
     NamedWindow, NumKind, ObjectName, PartitionFieldKind, Query, Relation, RelationExt, RowFormat,
-    RowFormatKind, Select, SelectItem, SetExpr, SetExprKind, SortItem, Span, Statement,
-    StructField, TableAlias, TableConstraintKind, TableElement, TableFactor, TableFactorKind,
-    WindowRef, WindowSpec, With,
+    RowFormatKind, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind, SortItem, Span,
+    Statement, StructField, TableAlias, TableConstraintKind, TableElement, TableFactor,
+    TableFactorKind, TableOption, TemporalClause, WindowRef, WindowSpec, With,
 };
 use crate::error::ParseError;
 use crate::lexer::tokenize;
@@ -76,19 +84,56 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
         Statement::Query(q) => query(q, sql, opts),
         Statement::Explain(e) => statement(&e.statement, sql, opts),
         // Assignments and resets carry raw strings; drops, namespaces and
-        // `USE` name one object: nothing Spark's builder checks. A created
-        // view's query, and a CTAS query, are checked as statements of
-        // their own.
+        // `USE` name one object (a view, table, namespace or variable):
+        // nothing Spark's builder checks. A created view's query, and a
+        // CTAS query, are checked as statements of their own; `TABLE ...
+        // LIKE` names two tables, and its `USING`/serde clauses are checked
+        // below.
         Statement::Set(_)
         | Statement::Reset(_)
         | Statement::DropView(_)
         | Statement::DropTable(_)
         | Statement::CreateNamespace(_)
         | Statement::DropNamespace(_)
-        | Statement::Use(_) => Ok(()),
+        | Statement::Use(_)
+        | Statement::DropVariable(_) => Ok(()),
         Statement::CreateTableLike(t) => Checker { sql, opts }.create_table_like(t),
         Statement::CreateView(v) => query(&v.query, sql, opts),
         Statement::CreateTable(t) => Checker { sql, opts }.create_table(t),
+        Statement::DeclareVariable(v) => {
+            // Neither a type nor a default: Spark rejects the declaration
+            // after parsing, with `INVALID_SQL_SYNTAX` at the statement.
+            if v.data_type.is_none() && v.default.is_none() {
+                return Err(at(InvalidSqlSyntaxVariableTypeOrDefaultRequired {}, v.span));
+            }
+            if let Some(t) = &v.data_type {
+                data_type(t)?;
+            }
+            if let Some(e) = &v.default {
+                Checker { sql, opts }.expr(e)?;
+            }
+            Ok(())
+        }
+        Statement::SetVariable(v) => match &v.kind {
+            SetVariableKind::Single { assignments } => {
+                let checker = Checker { sql, opts };
+                assignments
+                    .iter()
+                    .try_for_each(|a| checker.expr(&a.value))?;
+                Ok(())
+            }
+            SetVariableKind::Row {
+                targets,
+                query: row,
+            } => {
+                // No targets: Spark rejects the assignment after parsing,
+                // with `INVALID_SET_SYNTAX` at the statement.
+                if targets.is_empty() {
+                    return Err(at(InvalidSetSyntax {}, v.span));
+                }
+                query(row, sql, opts)
+            }
+        },
     }
 }
 
@@ -357,6 +402,7 @@ impl Checker<'_> {
 
     fn query(&self, q: &Query) -> R {
         self.set_expr(&q.body)?;
+        self.query_result_clauses(q)?;
         self.sort_items(&q.order_by)?;
         q.cluster_by.iter().try_for_each(|e| self.expr(e))?;
         q.distribute_by.iter().try_for_each(|e| self.expr(e))?;
@@ -438,6 +484,9 @@ impl Checker<'_> {
             }
             SetExprKind::Query(q) => self.query(q),
             SetExprKind::Values(v) => self.inline_table(&v.rows, v.alias.as_ref(), v.span),
+            SetExprKind::Pipe(p) => self.pipe(p),
+            SetExprKind::DynamicTable(d) => self.expr(&d.expr),
+            SetExprKind::Transform(t) => self.transform(t),
             _ => Ok(()),
         }
     }
@@ -505,6 +554,9 @@ impl Checker<'_> {
     }
 
     fn join(&self, j: &Join) -> R {
+        if let JoinConstraint::NearestBy(n) = &j.constraint {
+            self.nearest_by(j, n)?;
+        }
         if j.lateral {
             if j.natural {
                 return Err(at(
@@ -527,51 +579,77 @@ impl Checker<'_> {
     }
 
     fn factor(&self, f: &TableFactor) -> R {
+        self.factor_kind(f)?;
+        f.sample.as_ref().map_or(Ok(()), |s| self.sample(s))
+    }
+
+    /// The time travel and options of a table reference named at `name`.
+    fn table_reference(
+        &self,
+        name: Span,
+        temporal: Option<&TemporalClause>,
+        options: &[TableOption],
+    ) -> R {
+        if let Some(t) = temporal {
+            self.expr(&t.value)?;
+        }
+        let missing: Vec<String> = options
+            .iter()
+            .filter(|o| o.value.is_none())
+            .map(|o| {
+                o.key
+                    .parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join(".")
+            })
+            .collect();
+        if !missing.is_empty() {
+            let error: KrishivError = LegacyErrorTemp0035 {
+                message: format!(
+                    "Values must be specified for key(s): [{}]",
+                    missing.join(",")
+                ),
+            }
+            .into();
+            // A key written as a string literal is never echoed (it
+            // may hold a secret, like `'password' 'x'` read as one
+            // key).
+            let string_key = options.iter().any(|o| o.value.is_none() && o.key.is_string);
+            let error = if string_key { error.redacted() } else { error };
+            return Err(at(error, name));
+        }
+        options
+            .iter()
+            .filter_map(|o| o.value.as_ref())
+            .try_for_each(|e| self.expr(e))
+    }
+
+    fn factor_kind(&self, f: &TableFactor) -> R {
         match &f.kind {
             TableFactorKind::Table {
                 name,
                 temporal,
                 options,
+            } => self.table_reference(name.span, temporal.as_ref(), options),
+            TableFactorKind::DynamicTable {
+                name,
+                temporal,
+                options,
             } => {
-                if let Some(t) = temporal {
-                    self.expr(&t.value)?;
-                }
-                let missing: Vec<String> = options
-                    .iter()
-                    .filter(|o| o.value.is_none())
-                    .map(|o| {
-                        o.key
-                            .parts
-                            .iter()
-                            .map(|p| p.value.as_str())
-                            .collect::<Vec<_>>()
-                            .join(".")
-                    })
-                    .collect();
-                if !missing.is_empty() {
-                    let error: KrishivError = LegacyErrorTemp0035 {
-                        message: format!(
-                            "Values must be specified for key(s): [{}]",
-                            missing.join(",")
-                        ),
-                    }
-                    .into();
-                    // A key written as a string literal is never echoed (it
-                    // may hold a secret, like `'password' 'x'` read as one
-                    // key).
-                    let string_key = options.iter().any(|o| o.value.is_none() && o.key.is_string);
-                    let error = if string_key { error.redacted() } else { error };
-                    return Err(at(error, name.span));
-                }
-                options
-                    .iter()
-                    .filter_map(|o| o.value.as_ref())
-                    .try_for_each(|e| self.expr(e))
+                self.expr(&name.expr)?;
+                self.table_reference(name.span, temporal.as_ref(), options)
             }
             TableFactorKind::Subquery(q) => self.query(q),
             TableFactorKind::Nested(r) => self.relation(r),
             TableFactorKind::Values(rows) => self.inline_table(rows, f.alias.as_ref(), f.span),
-            TableFactorKind::TableFunction { args, .. } => {
+            TableFactorKind::TableFunction {
+                dynamic_name, args, ..
+            } => {
+                if let Some(d) = dynamic_name {
+                    self.expr(&d.expr)?;
+                }
                 args.iter().try_for_each(|a| self.expr(&a.expr))
             }
         }
@@ -629,6 +707,7 @@ impl Checker<'_> {
         };
         match &item.kind {
             GroupItemKind::Expr(e) => self.expr(e),
+            GroupItemKind::Named(i) => self.expr(&i.expr),
             GroupItemKind::Rollup(s) => sets(s, "ROLLUP"),
             GroupItemKind::Cube(s) => sets(s, "CUBE"),
             GroupItemKind::GroupingSets(items) => {
@@ -706,6 +785,9 @@ impl Checker<'_> {
     }
 
     fn function(&self, f: &Function) -> R {
+        if let Some(d) = &f.dynamic_name {
+            self.expr(&d.expr)?;
+        }
         self.datetime_unit(f)?;
         f.args.iter().try_for_each(|a| self.expr(&a.expr))?;
         self.sort_items(&f.within_group)?;
@@ -786,10 +868,12 @@ impl Checker<'_> {
     fn expr_node(&self, e: &Expr) -> R {
         match &e.kind {
             ExprKind::Literal(l) => self.literal(l, e.span),
-            ExprKind::Field(inner, _) | ExprKind::Unary(_, inner) | ExprKind::Not(inner) => {
-                self.expr(inner)
-            }
-            ExprKind::Nested(inner)
+            ExprKind::Field(inner, _)
+            | ExprKind::Collate(inner, _)
+            | ExprKind::VariantGet(inner, _)
+            | ExprKind::Unary(_, inner)
+            | ExprKind::Not(inner)
+            | ExprKind::Nested(inner)
             | ExprKind::IsNull { expr: inner, .. }
             | ExprKind::IsTruth { expr: inner, .. } => self.expr(inner),
             ExprKind::Subscript(a, b) | ExprKind::Binary(a, _, b) => {
@@ -857,6 +941,7 @@ impl Checker<'_> {
                 else_result.as_ref().map_or(Ok(()), |e| self.expr(e))
             }
             ExprKind::Function(f) => self.function(f),
+            ExprKind::TableArgument(t) => self.table_argument(t),
             ExprKind::Lambda { body, .. } => self.expr(body),
             ExprKind::Row(items) | ExprKind::Struct(items) => self.select_items(items),
             _ => Ok(()),
