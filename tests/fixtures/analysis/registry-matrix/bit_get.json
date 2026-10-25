@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "bit_get#09f72caf9f6d/ansi_on",
-      "reason": "SELECT bit_get(11, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_get#09f72caf9f6d/ansi_off",
-      "reason": "SELECT bit_get(11, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "bit_get#1cfd4b0fa7e1/ansi_on",
       "reason": "SELECT bit_get(INTERVAL '1-2' YEAR TO MONTH, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -55,14 +47,6 @@
     {
       "id": "bit_get#9e9ba98e7b02/ansi_off",
       "reason": "SELECT bit_get(map('a', 1), 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_get#a304d611b3ac/ansi_on",
-      "reason": "SELECT bit_get(array(1, 2), 0) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_get#a304d611b3ac/ansi_off",
-      "reason": "SELECT bit_get(array(1, 2), 0) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "bit_get#ce44b5105527/ansi_on",

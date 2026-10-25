@@ -31,14 +31,6 @@
     {
       "id": "quarter#7e5e4bb0baa2/ansi_off",
       "reason": "SELECT quarter(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "quarter#9e53c8e4594f/ansi_on",
-      "reason": "SELECT quarter(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "quarter#9e53c8e4594f/ansi_off",
-      "reason": "SELECT quarter(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

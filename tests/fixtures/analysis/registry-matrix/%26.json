@@ -33,14 +33,6 @@
       "reason": "SELECT (INTERVAL '1-2' YEAR TO MONTH) & 5 | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "&#6123fc249fec/ansi_on",
-      "reason": "SELECT 3 & (array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "&#6123fc249fec/ansi_off",
-      "reason": "SELECT 3 & (array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "&#8ff00391103b/ansi_on",
       "reason": "SELECT (INTERVAL '1 02:03:04' DAY TO SECOND) & 5 | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -55,14 +47,6 @@
     {
       "id": "&#9061d84a5e85/ansi_off",
       "reason": "SELECT 3 & (map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "&#c2f3c9f79da5/ansi_on",
-      "reason": "SELECT (array(1, 2)) & 5 | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "&#c2f3c9f79da5/ansi_off",
-      "reason": "SELECT (array(1, 2)) & 5 | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "&#c5402653e378/ansi_on",

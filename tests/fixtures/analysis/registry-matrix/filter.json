@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "filter#5cb73ec32bff/ansi_on",
+      "reason": "SELECT filter(INTERVAL '1 02:03:04' DAY TO SECOND, x -> x % 2 == 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "filter#5cb73ec32bff/ansi_off",
+      "reason": "SELECT filter(INTERVAL '1 02:03:04' DAY TO SECOND, x -> x % 2 == 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "filter#81fb6a4362e6/ansi_on",
+      "reason": "SELECT filter(named_struct('a', 1, 'b', 'x'), x -> x % 2 == 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "filter#81fb6a4362e6/ansi_off",
+      "reason": "SELECT filter(named_struct('a', 1, 'b', 'x'), x -> x % 2 == 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "filter#87053e478033/ansi_on",
+      "reason": "SELECT filter(INTERVAL '1-2' YEAR TO MONTH, x -> x % 2 == 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "filter#87053e478033/ansi_off",
+      "reason": "SELECT filter(INTERVAL '1-2' YEAR TO MONTH, x -> x % 2 == 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "filter#b772a52335ae/ansi_on",
+      "reason": "SELECT filter(map('a', 1), x -> x % 2 == 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "filter#b772a52335ae/ansi_off",
+      "reason": "SELECT filter(map('a', 1), x -> x % 2 == 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "filter#cc869a817020/ansi_on",
+      "reason": "SELECT filter(array(0, 2, 3), (x, i) -> x > i) | INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH"
+    },
+    {
+      "id": "filter#cc869a817020/ansi_off",
+      "reason": "SELECT filter(array(0, 2, 3), (x, i) -> x > i) | INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH"
+    }
+  ],
+  "format_version": 1,
+  "function": "filter"
+}

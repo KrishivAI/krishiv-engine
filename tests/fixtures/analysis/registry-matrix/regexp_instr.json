@@ -57,28 +57,12 @@
       "reason": "SELECT regexp_instr(map('a', 1), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "regexp_instr#d1b7ae971b09/ansi_on",
-      "reason": "SELECT regexp_instr(r\"\\abc\", array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_instr#d1b7ae971b09/ansi_off",
-      "reason": "SELECT regexp_instr(r\"\\abc\", array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp_instr#e495063cde68/ansi_on",
       "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "regexp_instr#e495063cde68/ansi_off",
       "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "regexp_instr#eb546ff0ffa5/ansi_on",
-      "reason": "SELECT regexp_instr(array(1, 2), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_instr#eb546ff0ffa5/ansi_off",
-      "reason": "SELECT regexp_instr(array(1, 2), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

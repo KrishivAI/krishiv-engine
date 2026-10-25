@@ -1054,6 +1054,15 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.bound(output);
                 self.expr(expr);
             }
+            ExprNode::Lambda { params, body } => {
+                self.u8(13);
+                self.strs(params);
+                self.expr(body);
+            }
+            ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
+                self.u8(14);
+                self.bound(c);
+            }
             ExprNode::Window(crate::WindowExpr { function, window }) => {
                 self.u8(12);
                 self.expr(function);

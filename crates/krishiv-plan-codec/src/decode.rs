@@ -335,8 +335,10 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
     let (one, many): (Option<u32>, &[u32]) = match &m.kind {
         Some(Kind::Cast(c)) => (Some(c.expr), &[]),
         Some(Kind::Alias(a)) => (Some(a.expr), &[]),
+        Some(Kind::Lambda(l)) => (Some(l.body), &[]),
         Some(Kind::Function(f)) => (f.filter, &f.args),
-        Some(Kind::Literal(_) | Kind::Column(_) | Kind::OuterColumn(_)) | None => (None, &[]),
+        Some(Kind::Literal(_) | Kind::Column(_) | Kind::OuterColumn(_) | Kind::LambdaVar(_))
+        | None => (None, &[]),
     };
     one.into_iter().chain(many.iter().copied())
 }
@@ -631,6 +633,11 @@ impl Decoder {
             Kind::Literal(l) => ExprNode::Literal(literal(l)?),
             Kind::Column(c) => ExprNode::Resolved(ResolvedExpr::Column(bound_column(c)?)),
             Kind::OuterColumn(c) => ExprNode::Resolved(ResolvedExpr::OuterColumn(bound_column(c)?)),
+            Kind::LambdaVar(c) => ExprNode::Resolved(ResolvedExpr::LambdaVar(bound_column(c)?)),
+            Kind::Lambda(l) => ExprNode::Lambda {
+                params: l.params.clone(),
+                body: self.expr_ref(l.body)?,
+            },
             Kind::Cast(c) => ExprNode::Cast {
                 expr: self.expr_ref(c.expr)?,
                 to: spark_type(required(&c.to, "a cast type")?)?,

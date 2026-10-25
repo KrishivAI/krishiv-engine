@@ -18,6 +18,7 @@ mod catalog;
 mod conditional;
 mod defs;
 mod hashing;
+mod hof;
 mod math;
 mod number;
 mod predicate;
@@ -46,6 +47,11 @@ pub enum Execution {
     /// By the executor's window operator, over a window (`row_number`,
     /// `rank`, ...); never called without `OVER`.
     Window,
+    /// By the executor's higher-order compiler, which evaluates the lambda
+    /// bodies: `transform`, `filter`, `exists`, `forall`
+    /// (`krishiv_exec::planner::eval::hof`, over `krishiv_kernels::list`).
+    /// A lambda is no Arrow value, so these never bind a kernel here.
+    HigherOrder,
 }
 
 /// The aggregates the executor implements.

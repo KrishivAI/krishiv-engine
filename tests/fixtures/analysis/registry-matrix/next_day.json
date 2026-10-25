@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "next_day#11deac4e1b58/ansi_on",
-      "reason": "SELECT next_day(array(1, 2), 'TU') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "next_day#11deac4e1b58/ansi_off",
-      "reason": "SELECT next_day(array(1, 2), 'TU') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "next_day#180b8bb25bd8/ansi_on",
       "reason": "SELECT next_day(INTERVAL '1 02:03:04' DAY TO SECOND, 'TU') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -63,14 +55,6 @@
     {
       "id": "next_day#a62742e67e42/ansi_off",
       "reason": "SELECT next_day(INTERVAL '1-2' YEAR TO MONTH, 'TU') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "next_day#ba75aedd3a5c/ansi_on",
-      "reason": "SELECT next_day('2015-01-14', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "next_day#ba75aedd3a5c/ansi_off",
-      "reason": "SELECT next_day('2015-01-14', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "next_day#fc48ff666ecf/ansi_on",

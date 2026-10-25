@@ -28,7 +28,10 @@ pub(super) fn compile(
         .zip(&args)
         .map(|(ir, compiled)| match &ir.node {
             ExprNode::Literal(l) => literal_array(l).map(BindArg::Literal),
-            _ => Ok(BindArg::Column(compiled.data_type().clone())),
+            _ => Ok(BindArg::Column {
+                data_type: compiled.data_type().clone(),
+                nullable: compiled.nullable(),
+            }),
         })
         .collect::<Result<Vec<_>>>()?;
     let out = f.data_type.to_arrow();

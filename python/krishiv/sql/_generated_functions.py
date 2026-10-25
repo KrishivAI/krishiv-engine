@@ -29,6 +29,7 @@ __all__ = [
     "acos",
     "acosh",
     "add_months",
+    "array",
     "asin",
     "asinh",
     "assert_true",
@@ -221,6 +222,11 @@ def acosh(col: ColumnOrName) -> Column:
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
     """Calls the registry function ``add_months``."""
     return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
+
+
+def array(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``array``."""
+    return _call("array", *_cols(cols))
 
 
 def asin(col: ColumnOrName) -> Column:

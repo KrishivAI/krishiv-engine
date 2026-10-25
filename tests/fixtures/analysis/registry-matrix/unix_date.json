@@ -39,14 +39,6 @@
     {
       "id": "unix_date#da1a0a925766/ansi_off",
       "reason": "SELECT unix_date(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "unix_date#e49b5743d3da/ansi_on",
-      "reason": "SELECT unix_date(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "unix_date#e49b5743d3da/ansi_off",
-      "reason": "SELECT unix_date(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

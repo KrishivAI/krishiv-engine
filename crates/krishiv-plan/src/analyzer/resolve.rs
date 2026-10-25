@@ -130,6 +130,9 @@ pub(super) struct Resolver<'a> {
     /// input shares subtrees, so equal input keys give equal plans.
     canon: HashMap<usize, Arc<LogicalPlan>>,
     pub(super) columns: Vec<BTreeSet<String>>,
+    /// The lambda scopes pushed by the higher-order calls whose bodies
+    /// bind now, innermost last (see `hof`).
+    pub(super) lambdas: Vec<super::hof::LambdaFrame>,
     depth: usize,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
@@ -162,6 +165,7 @@ pub(super) fn resolve(
         op_outer: None,
         root_env: None,
         folds: std::cell::RefCell::default(),
+        lambdas: Vec::new(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).

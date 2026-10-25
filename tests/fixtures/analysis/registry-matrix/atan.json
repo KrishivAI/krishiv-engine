@@ -31,14 +31,6 @@
     {
       "id": "atan#b9bb1209d291/ansi_off",
       "reason": "SELECT atan(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan#f34317d2890d/ansi_on",
-      "reason": "SELECT atan(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan#f34317d2890d/ansi_off",
-      "reason": "SELECT atan(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

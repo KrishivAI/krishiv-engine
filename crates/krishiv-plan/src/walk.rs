@@ -179,7 +179,12 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                     &w.window,
                     crate::WindowSpecRef::Spec(crate::WindowSpec { frame: Some(_), .. })
                 ),
-                ExprNode::Literal(_) | ExprNode::Subquery { .. } | ExprNode::Resolved(_) => true,
+                // A lambda is resolved once its body is (visited on its
+                // own); its parameters are plain names.
+                ExprNode::Lambda { .. }
+                | ExprNode::Literal(_)
+                | ExprNode::Subquery { .. }
+                | ExprNode::Resolved(_) => true,
             },
         };
         if resolved {
@@ -371,7 +376,9 @@ impl Teardown {
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
-            | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
+            ) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })
             | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
@@ -381,6 +388,7 @@ impl Teardown {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => self.exprs.push(expr),
             ExprNode::Subquery { kind, plan } => {
                 self.plans.push(plan);

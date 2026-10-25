@@ -34,6 +34,11 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert_eq!(m.epoch, EPOCH);
     assert_eq!(message("limit_offset").features, ["limit_offset"]);
     assert!(message("limit").features.is_empty());
+    // A lambda over arrays needs both features.
+    assert_eq!(
+        message("lambda_functions").features,
+        ["lambda_functions", "nested_types"]
+    );
     assert_eq!(
         message("window_frames").features,
         ["window", "window_frame_offsets"]
@@ -90,6 +95,11 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         feature_of(Construct::Node(window.root())),
         Some(Feature::Window)
     );
+    assert_eq!(
+        feature_of(Construct::Lambda),
+        Some(Feature::LambdaFunctions)
+    );
+    assert_eq!(Feature::LambdaFunctions.kind(), FeatureKind::Semantic);
     assert_eq!(feature_of(Construct::Node(&PhysNode::OneRow)), None);
     let null_of = krishiv_exec::physical::ProjectItemPlan::NullOf {
         index: 0,
@@ -202,6 +212,24 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         }
     );
     assert_eq!(ReaderFeatures::default(), ReaderFeatures::all());
+    // A reader without `lambda_functions` refuses the lambda plan naming
+    // the feature, even though it knows `nested_types`.
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "lambda_functions")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::NestedTypes]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["lambda_functions".to_owned()]
+        }
+    );
 }
 
 #[test]
