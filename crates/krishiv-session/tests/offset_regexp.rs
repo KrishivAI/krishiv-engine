@@ -457,7 +457,7 @@ fn regexp_functions_in_sql() {
         Some("1a")
     );
     // The `RLIKE` operator runs the same Java translation as `regexp_like`
-    // (`Builtin::RLike` routes to the `regexp_like` kernel): `\Q..\E` is
+    // (`Builtin::RLike` routes to the `rlike` binding over that kernel): `\Q..\E` is
     // meaningless to the engine directly (`oracle_pattern_escapes` pins
     // `\Qa\E`), `(?i)` folds ASCII only (the Kelvin sign is no `k`,
     // as `oracle_ascii_case_folding` pins), and a possessive quantifier
@@ -477,7 +477,7 @@ fn regexp_functions_in_sql() {
         );
     }
     // An invalid `RLIKE` pattern raises the same `PATTERN` error as
-    // `regexp_like` with the `regexp_like` function name in the message.
+    // `regexp_like` with Spark's `rlike` function name in the message.
     for (sql, class) in [
         (
             "SELECT regexp_extract('1a 2b 14m', '\\\\d+')",
@@ -503,6 +503,6 @@ fn regexp_functions_in_sql() {
     );
     assert_eq!(
         e.message(),
-        "The value of parameter(s) `regexp` in `regexp_like` is invalid: '(?U)a'.",
+        "The value of parameter(s) `regexp` in `rlike` is invalid: '(?U)a'.",
     );
 }
