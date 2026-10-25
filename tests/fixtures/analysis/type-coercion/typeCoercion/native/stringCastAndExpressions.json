@@ -2,7 +2,7 @@
   "entries": [
     {
       "query": "select from_json(a, 'a INT') from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_json"
+      "reason": "resolves to struct<from_json(a, a INT):struct<a:int>>"
     },
     {
       "query": "select from_unixtime('2018-01-01', a) from t",
@@ -11,10 +11,6 @@
     {
       "query": "select from_unixtime(a) from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_unixtime"
-    },
-    {
-      "query": "select get_json_object(a, a) from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function get_json_object"
     },
     {
       "query": "select json_tuple(a, a) from t",

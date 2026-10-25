@@ -101,6 +101,8 @@ pub(super) fn rows() -> Vec<Row> {
         "isnan",
         "isnotnull",
         "isnull",
+        "json_array_length",
+        "json_object_keys",
         "length",
         "ln",
         "log10",
@@ -232,6 +234,11 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("conv", "col: ColumnOrName, fromBase: int, toBase: int"),
         Row::new("endswith", "str: ColumnOrName, suffix: ColumnOrName"),
         Row::new("format_number", "col: ColumnOrName, d: int"),
+        Row::new(
+            "from_json",
+            "col: ColumnOrName, schema: Column | str, options: Any = None",
+        ),
+        Row::new("get_json_object", "col: ColumnOrName, path: str"),
         Row::new("greatest", "*cols: ColumnOrName").at_least(2),
         Row::new("least", "*cols: ColumnOrName").at_least(2),
         Row::new("ntile", "n: int"),
@@ -271,6 +278,7 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("sha2", "col: ColumnOrName, numBits: int")
             .one_of("numBits", &[0, 224, 256, 384, 512]),
         Row::new("startswith", "str: ColumnOrName, prefix: ColumnOrName"),
+        Row::new("schema_of_json", "json: ColumnOrName, options: Any = None"),
         Row::new(
             "substr",
             "str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName = None",
@@ -299,6 +307,7 @@ pub(super) fn rows() -> Vec<Row> {
             "from_utc_timestamp",
             "timestamp: ColumnOrName, tz: Column | str",
         ),
+        Row::new("to_json", "col: ColumnOrName, options: Any = None"),
         Row::new(
             "to_utc_timestamp",
             "timestamp: ColumnOrName, tz: Column | str",

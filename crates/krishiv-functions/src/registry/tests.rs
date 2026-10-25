@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use krishiv_common::error::{ErrorClass, KrishivError};
+use krishiv_common::error::{ErrorClass, InvalidOptionsNonMapFunction, KrishivError};
 use krishiv_types::{DataType, DecimalType};
 
 use super::{Aggregate, Execution, FunctionDef, Lookup, builtins};
@@ -1517,4 +1517,181 @@ fn regex_signatures() {
     assert_eq!(r, ArgType::new(DataType::Boolean, true));
     let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
     assert_eq!(r, ArgType::new(DataType::Integer, true));
+}
+
+#[test]
+fn json_signatures() {
+    use krishiv_types::{ArrayType, MapType, StructField, StructType};
+
+    let s = ty(DataType::String);
+    let map_ss = || DataType::Map(MapType::new(DataType::String, DataType::String, true).into());
+    let string_lit = |text: &str| Some(Constant::String(text.to_owned()));
+    // `json_array_length` and `get_json_object` take strings exactly.
+    assert_eq!(
+        def("json_array_length").inputs,
+        Inputs::Expects(vec![InputType::Exact(DataType::String)])
+    );
+    assert_eq!(
+        result("json_array_length", std::slice::from_ref(&s), &[]).unwrap(),
+        ArgType::new(DataType::Integer, true)
+    );
+    assert_eq!(
+        result("get_json_object", &[s.clone(), s.clone()], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    // `json_object_keys` reads an array of non-null strings, always nullable.
+    assert_eq!(
+        result("json_object_keys", std::slice::from_ref(&s), &[]).unwrap(),
+        ArgType::new(
+            DataType::Array(ArrayType::new(DataType::String, false).into()),
+            true,
+        )
+    );
+    // `schema_of_json` needs a foldable string: a null literal and a column fail.
+    assert_eq!(
+        result("schema_of_json", &[null_ty()], &[Some(Constant::Null)])
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedNull
+    );
+    assert_eq!(
+        result("schema_of_json", std::slice::from_ref(&s), &[])
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    assert_eq!(
+        result(
+            "schema_of_json",
+            std::slice::from_ref(&s),
+            &[string_lit("{\"a\":1}")]
+        )
+        .unwrap(),
+        ArgType::new(DataType::String, false)
+    );
+    // `from_json` reads its schema: a bare field list wraps in a struct.
+    let struct_ab = || {
+        DataType::Struct(StructType::new(vec![
+            StructField::new("a", DataType::Integer, true),
+            StructField::new("b", DataType::Double, true),
+        ]))
+    };
+    let from = |schema: Option<Constant>| {
+        result(
+            "from_json",
+            &[s.clone(), s.clone()],
+            &[string_lit("x"), schema],
+        )
+    };
+    assert_eq!(
+        from(string_lit("a INT, b DOUBLE")).unwrap(),
+        ArgType::new(struct_ab(), true)
+    );
+    assert_eq!(
+        from(string_lit("STRUCT<a: INT, b: DOUBLE>")).unwrap(),
+        ArgType::new(struct_ab(), true)
+    );
+    assert_eq!(
+        from(string_lit("map<string, int>")).unwrap(),
+        ArgType::new(
+            DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into()),
+            true,
+        )
+    );
+    for bad in [
+        Some(Constant::Null),
+        Some(Constant::Integral(1)),
+        Some(Constant::Boolean(true)),
+        None,
+    ] {
+        assert_eq!(
+            from(bad).unwrap_err().error_class(),
+            ErrorClass::InvalidSchemaNonStringLiteral
+        );
+    }
+    assert_eq!(
+        from(string_lit("a InvalidType")).unwrap_err().error_class(),
+        ErrorClass::ParseSyntaxError
+    );
+    // A non-string document fails with the single-argument call text.
+    assert_eq!(
+        result(
+            "from_json",
+            &[ty(DataType::Integer), s.clone()],
+            &[None, string_lit("a INT")]
+        )
+        .unwrap_err()
+        .error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // The options must be a non-null string map.
+    let with_options = |options: ArgType, constant: Option<Constant>| {
+        result(
+            "from_json",
+            &[s.clone(), s.clone(), options],
+            &[string_lit("x"), string_lit("a INT"), constant],
+        )
+    };
+    assert_eq!(
+        with_options(
+            ArgType::new(map_ss(), true),
+            Some(Constant::String("x".to_owned()))
+        )
+        .unwrap(),
+        ArgType::new(
+            DataType::Struct(StructType::new(vec![StructField::new(
+                "a",
+                DataType::Integer,
+                true
+            )])),
+            true,
+        )
+    );
+    assert_eq!(
+        with_options(ArgType::new(map_ss(), true), Some(Constant::Null))
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    assert_eq!(
+        with_options(ty(DataType::String), string_lit("x"))
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    assert_eq!(
+        with_options(
+            ArgType::new(
+                DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into()),
+                true,
+            ),
+            string_lit("x")
+        )
+        .unwrap_err()
+        .error_class(),
+        ErrorClass::InvalidOptionsNonStringType
+    );
+    // `to_json` only takes structs, maps and arrays.
+    assert_eq!(
+        result("to_json", &[ArgType::new(struct_ab(), true)], &[]).unwrap(),
+        ArgType::new(DataType::String, true)
+    );
+    assert_eq!(
+        result("to_json", &[ty(DataType::Integer)], &[])
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::DatatypeMismatchInvalidJsonSchema
+    );
+    // A folded error propagates.
+    let err: KrishivError = InvalidOptionsNonMapFunction {}.into();
+    assert_eq!(
+        result(
+            "schema_of_json",
+            std::slice::from_ref(&s),
+            &[Some(Constant::Error(err))]
+        )
+        .unwrap_err()
+        .error_class(),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
 }

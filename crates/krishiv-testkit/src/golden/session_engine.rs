@@ -364,8 +364,96 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
         }
+        (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
+            Cell::Array(list_cells(col, row, element.element_type())?)
+        }
+        (DataType::Map(map), ArrowType::Map(..)) => {
+            Cell::Map(map_cells(col, row, map.key_type(), map.value_type())?)
+        }
+        (DataType::Struct(fields), ArrowType::Struct(_)) => {
+            Cell::Struct(struct_cells(col, row, fields)?)
+        }
         _ => return Err(unexpected()),
     })
+}
+
+/// The elements of list row `row` as cells.
+fn list_cells(col: &ArrayRef, row: usize, element: &DataType) -> Result<Vec<Cell>, EngineError> {
+    let bad = || {
+        harness_error(format!(
+            "Arrow type {} for {}",
+            col.data_type(),
+            element.catalog_string()
+        ))
+    };
+    let (start, end, values) = match col.data_type() {
+        ArrowType::List(_) => {
+            let list = col.as_list::<i32>();
+            let offsets = list.value_offsets();
+            (
+                usize::try_from(offsets.get(row).copied().unwrap_or(0)).map_err(|_| bad())?,
+                usize::try_from(offsets.get(row.saturating_add(1)).copied().unwrap_or(0))
+                    .map_err(|_| bad())?,
+                Arc::clone(list.values()),
+            )
+        }
+        ArrowType::LargeList(_) => {
+            let list = col.as_list::<i64>();
+            let offsets = list.value_offsets();
+            (
+                usize::try_from(offsets.get(row).copied().unwrap_or(0)).map_err(|_| bad())?,
+                usize::try_from(offsets.get(row.saturating_add(1)).copied().unwrap_or(0))
+                    .map_err(|_| bad())?,
+                Arc::clone(list.values()),
+            )
+        }
+        _ => return Err(bad()),
+    };
+    (start..end)
+        .map(|i| arrow_cell(&values, i, element))
+        .collect()
+}
+
+/// The entries of map row `row` as cells.
+fn map_cells(
+    col: &ArrayRef,
+    row: usize,
+    keys: &DataType,
+    values: &DataType,
+) -> Result<Vec<(Cell, Cell)>, EngineError> {
+    let bad = || harness_error(format!("Arrow type {} for map entries", col.data_type(),));
+    let map = col.as_map();
+    let offsets = map.value_offsets();
+    let (start, end) = (
+        usize::try_from(offsets.get(row).copied().unwrap_or(0)).map_err(|_| bad())?,
+        usize::try_from(offsets.get(row.saturating_add(1)).copied().unwrap_or(0))
+            .map_err(|_| bad())?,
+    );
+    let entries = map.entries();
+    let (key_col, value_col) = (entries.column(0), entries.column(1));
+    (start..end)
+        .map(|i| {
+            Ok((
+                arrow_cell(key_col, i, keys)?,
+                arrow_cell(value_col, i, values)?,
+            ))
+        })
+        .collect()
+}
+
+/// The fields of struct row `row` as cells.
+fn struct_cells(
+    col: &ArrayRef,
+    row: usize,
+    fields: &krishiv_types::StructType,
+) -> Result<Vec<(String, Cell)>, EngineError> {
+    let st = col.as_struct();
+    fields
+        .fields()
+        .iter()
+        .zip(st.columns().iter())
+        .map(|(f, c)| Ok((f.name().to_owned(), arrow_cell(c, row, f.data_type())?)))
+        .collect()
 }
 
 fn binary_value(col: &ArrayRef, row: usize) -> Option<Vec<u8>> {
