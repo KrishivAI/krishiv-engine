@@ -366,9 +366,12 @@ fn explain_format_renders_graphs_json_and_usage_errors() {
     );
     assert!(o.status.success(), "{}", err(&o));
     let t = out(&o);
-    assert!(t.starts_with("flowchart TD\n"), "{t}");
-    assert!(t.contains("-->"), "{t}");
-    assert!(t.contains("OneRowRelation"), "{t}");
+    // Exact text, written out by hand: comparing against the renderer's own
+    // output would hide a renderer defect on both sides.
+    assert_eq!(
+        t,
+        "flowchart TD\n    n0[\"Project [1 AS a#0]\"]\n    n1[\"OneRowRelation\"]\n    n0 --> n1\n"
+    );
     let o = krishiv(
         &[
             "sql",
@@ -382,8 +385,10 @@ fn explain_format_renders_graphs_json_and_usage_errors() {
     );
     assert!(o.status.success(), "{}", err(&o));
     let t = out(&o);
-    assert!(t.starts_with("digraph {\n"), "{t}");
-    assert!(t.contains("->"), "{t}");
+    assert_eq!(
+        t,
+        "digraph {\n    n0 [label=\"Project [1 AS a#0]\"];\n    n1 [label=\"OneRowRelation\"];\n    n0 -> n1;\n}\n"
+    );
     // The profile as JSON and as a graph.
     let o = krishiv(
         &[

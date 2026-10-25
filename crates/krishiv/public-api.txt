@@ -17,10 +17,8 @@ pub use krishiv::RuntimeConf
 pub use krishiv::Session
 pub use krishiv::SessionBuilder
 pub use krishiv::TextOptions
-pub use krishiv::dot_of_plan
 pub use krishiv::dot_of_profile
 pub use krishiv::functions
-pub use krishiv::mermaid_of_plan
 pub use krishiv::mermaid_of_profile
 pub mod krishiv::arrow
 pub use krishiv::arrow::array
