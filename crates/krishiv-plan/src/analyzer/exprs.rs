@@ -194,6 +194,29 @@ fn assert_message(cond: &Bound, origin: Origin, zone: Option<i32>) -> Bound {
     }
 }
 
+/// The replacement characters `mask` takes when a call omits them, which
+/// Spark's constructors write into the call (so the schema names them):
+/// `mask(s)` is `mask(s, 'X', 'x', 'n', NULL)`.
+const MASK_DEFAULTS: [Option<&str>; 4] = [Some("X"), Some("x"), Some("n"), None];
+
+/// A literal argument written by a constructor, at `origin`.
+fn default_argument(
+    literal: Literal,
+    data_type: DataType,
+    nullable: bool,
+    origin: Origin,
+) -> Bound {
+    Bound {
+        expr: Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(origin)),
+        ty: arg_type(data_type, nullable),
+        agg: None,
+        win: None,
+        outer: None,
+        lateral: Vec::new(),
+        shown: None,
+    }
+}
+
 /// A conditional function rewritten during analysis (Spark's
 /// `RuntimeReplaceable`).
 #[derive(Clone, Copy)]
@@ -1068,6 +1091,39 @@ impl Resolver<'_> {
                         assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
                     );
                     (&owned[..], 2)
+                } else if entry.id.name() == "mask" && (1..5).contains(&n) {
+                    owned = kids[..n].to_vec();
+                    owned.extend(MASK_DEFAULTS.iter().skip(n - 1).map(|d| match d {
+                        Some(text) => default_argument(
+                            Literal::String((*text).to_owned()),
+                            DataType::String,
+                            false,
+                            e.origin,
+                        ),
+                        None => default_argument(
+                            Literal::Null(Some(DataType::String)),
+                            DataType::String,
+                            true,
+                            e.origin,
+                        ),
+                    }));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 5)
+                } else if matches!(entry.id.name(), "locate" | "position") && n == 2 {
+                    // `locate(sub, str)` is `locate(sub, str, 1)`.
+                    owned = kids[..n].to_vec();
+                    owned.push(default_argument(
+                        Literal::Integer(1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 3)
                 } else {
                     (&kids[..], n)
                 };
@@ -2298,7 +2354,17 @@ impl Resolver<'_> {
         origin: Origin,
     ) -> AnalysisError {
         let zone = self.ctx.conf.session_zone;
-        let sql_expr = format!("\"{}\"", pretty(call, zone));
+        // `mask` materializes its omitted arguments before typing (Spark's
+        // constructor writes them into the call), so an input-type error
+        // quotes the expanded call, as Spark does
+        // (`mask(c1, replaceArg, x, n, NULL)`).
+        let sql_expr = match function {
+            "mask" if kids.len() == 5 => {
+                let args: Vec<String> = kids.iter().map(|k| pretty(&k.shown(), zone)).collect();
+                format!("\"{function}({})\"", args.join(", "))
+            }
+            _ => format!("\"{}\"", pretty(call, zone)),
+        };
         let error: KrishivError = match m {
             Mismatch::DiffTypes(left, right) => DatatypeMismatchBinaryOpDiffTypes {
                 sql_expr,

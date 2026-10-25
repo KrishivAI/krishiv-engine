@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "try_validate_utf8#2e85e9b22499/ansi_on",
+      "reason": "SELECT try_validate_utf8(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_validate_utf8#2e85e9b22499/ansi_off",
+      "reason": "SELECT try_validate_utf8(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_validate_utf8#729b9ff94286/ansi_on",
+      "reason": "SELECT try_validate_utf8(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_validate_utf8#729b9ff94286/ansi_off",
+      "reason": "SELECT try_validate_utf8(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_validate_utf8#b4189dbe9026/ansi_on",
+      "reason": "SELECT try_validate_utf8(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_validate_utf8#b4189dbe9026/ansi_off",
+      "reason": "SELECT try_validate_utf8(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_validate_utf8#eeb67f464482/ansi_on",
+      "reason": "SELECT try_validate_utf8(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_validate_utf8#eeb67f464482/ansi_off",
+      "reason": "SELECT try_validate_utf8(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_validate_utf8#f7aa6c5cf167/ansi_on",
+      "reason": "SELECT try_validate_utf8(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "try_validate_utf8#f7aa6c5cf167/ansi_off",
+      "reason": "SELECT try_validate_utf8(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "try_validate_utf8"
+}

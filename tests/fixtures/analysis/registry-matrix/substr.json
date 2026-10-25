@@ -81,14 +81,6 @@
       "reason": "SELECT substr('Spark SQL', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "substr#733907a378ec/ansi_on",
-      "reason": "SELECT substr(encode('Spark SQL', 'utf-8'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "substr#733907a378ec/ansi_off",
-      "reason": "SELECT substr(encode('Spark SQL', 'utf-8'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
       "id": "substr#738183a8ca56/ansi_on",
       "reason": "SELECT substr(map('a', 1), 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
