@@ -1615,9 +1615,11 @@ dependencies = [
  "krishiv-types",
  "loom",
  "proptest",
+ "rustix",
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
