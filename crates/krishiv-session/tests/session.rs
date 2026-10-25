@@ -1260,3 +1260,73 @@ fn expression_strings_select_filter_and_resolve() {
     );
     assert_eq!(class(expr("id +").map(drop)), ErrorClass::ParseSyntaxError);
 }
+
+/// The four legacy flags flow from `SET` into parsing and analysis, as
+/// Spark's golden `literals`, `count`, `cte-legacy` and `cte-nonlegacy`
+/// files require.
+#[test]
+fn legacy_config_flags_flow_from_set() {
+    use arrow_array::types::Int64Type;
+    let s = session();
+    let set = |sql: &str| {
+        block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    };
+    let long = |sql: &str| -> i64 {
+        use arrow_array::types::Int32Type;
+        let batches = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            1,
+            "{sql}"
+        );
+        let col = batches[0].column(0);
+        match col.data_type() {
+            ArrowType::Int64 => col.as_primitive::<Int64Type>().value(0),
+            ArrowType::Int32 => i64::from(col.as_primitive::<Int32Type>().value(0)),
+            other => panic!("{sql}: not an integer column: {other}"),
+        }
+    };
+    // `spark.sql.legacy.consecutiveStringLiterals.enabled`.
+    assert_eq!(row(&s, r#"SELECT "S""par""k""#), [r#"S"par"k"#]);
+    set("SET spark.sql.legacy.consecutiveStringLiterals.enabled=true");
+    assert_eq!(row(&s, r#"SELECT "S""par""k""#), ["Spark"]);
+    set("RESET spark.sql.legacy.consecutiveStringLiterals.enabled");
+    assert_eq!(row(&s, r#"SELECT "S""par""k""#), [r#"S"par"k"#]);
+    // `spark.sql.legacy.allowParameterlessCount`.
+    assert_eq!(
+        class(block_on(s.sql("SELECT count()"))),
+        ErrorClass::WrongNumArgsWithSuggestion
+    );
+    set("SET spark.sql.legacy.allowParameterlessCount=true");
+    assert_eq!(long("SELECT count()"), 0);
+    set("RESET spark.sql.legacy.allowParameterlessCount");
+    assert_eq!(
+        class(block_on(s.sql("SELECT count()"))),
+        ErrorClass::WrongNumArgsWithSuggestion
+    );
+    // `spark.sql.legacy.allowStarWithSingleTableIdentifierInCount`.
+    assert_eq!(
+        class(block_on(s.sql("SELECT count(people.*) FROM people"))),
+        ErrorClass::InvalidUsageOfStarWithTableIdentifierInCount
+    );
+    set("SET spark.sql.legacy.allowStarWithSingleTableIdentifierInCount=true");
+    assert_eq!(long("SELECT count(people.*) FROM people"), 2);
+    set("RESET spark.sql.legacy.allowStarWithSingleTableIdentifierInCount");
+    assert_eq!(
+        class(block_on(s.sql("SELECT count(people.*) FROM people"))),
+        ErrorClass::InvalidUsageOfStarWithTableIdentifierInCount
+    );
+    // `spark.sql.legacy.ctePrecedencePolicy`.
+    let shadow = "WITH t AS (SELECT 1 AS x), t2 AS (WITH t AS (SELECT 2 AS x) \
+        SELECT x FROM t) SELECT x FROM t2";
+    assert_eq!(long(shadow), 2);
+    set("SET spark.sql.legacy.ctePrecedencePolicy=EXCEPTION");
+    assert_eq!(
+        class(block_on(s.sql(shadow))),
+        ErrorClass::AmbiguousAliasInNestedCte
+    );
+    set("SET spark.sql.legacy.ctePrecedencePolicy=LEGACY");
+    assert_eq!(long(shadow), 1);
+    set("RESET spark.sql.legacy.ctePrecedencePolicy");
+    assert_eq!(long(shadow), 2);
+}

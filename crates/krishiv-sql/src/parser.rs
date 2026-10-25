@@ -1481,8 +1481,11 @@ impl<'s> Parser<'s> {
                 let Some(t) = self.tok(0) else {
                     return self.fail();
                 };
-                let zone =
-                    unescape_string(t.span.text(self.src), !self.opts.escaped_string_literals);
+                let zone = unescape_string(
+                    t.span.text(self.src),
+                    !self.opts.escaped_string_literals,
+                    self.opts.consecutive_string_literals,
+                );
                 self.bump();
                 (TimeZone::Named(zone), t.span)
             }
@@ -1491,8 +1494,11 @@ impl<'s> Parser<'s> {
                 let Some(t) = self.tok(0) else {
                     return self.fail();
                 };
-                let zone =
-                    unescape_string(t.span.text(self.src), !self.opts.escaped_string_literals);
+                let zone = unescape_string(
+                    t.span.text(self.src),
+                    !self.opts.escaped_string_literals,
+                    self.opts.consecutive_string_literals,
+                );
                 self.bump();
                 (TimeZone::Named(zone), t.span)
             }

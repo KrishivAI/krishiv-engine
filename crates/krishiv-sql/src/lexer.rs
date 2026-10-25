@@ -494,8 +494,10 @@ impl Lexer<'_> {
 
 /// Decodes a [`TokenKind::String`] or [`TokenKind::DoubleQuoted`] token the
 /// way Spark's `unescapeSQLString` does (`escapes` false keeps backslashes,
-/// as with `spark.sql.parser.escapedStringLiterals`).
-pub(crate) fn unescape_string(raw: &str, escapes: bool) -> String {
+/// as with `spark.sql.parser.escapedStringLiterals`; `consecutive` drops
+/// doubled quotes, as with
+/// `spark.sql.legacy.consecutiveStringLiterals.enabled`).
+pub(crate) fn unescape_string(raw: &str, escapes: bool, consecutive: bool) -> String {
     if let Some(body) = raw
         .strip_prefix(['r', 'R'])
         .and_then(|r| r.get(1..r.len().saturating_sub(1)))
@@ -526,7 +528,9 @@ pub(crate) fn unescape_string(raw: &str, escapes: bool) -> String {
     while let Some(&c) = body.get(i) {
         let next = body.get(i + 1).copied();
         if c == quote && next == Some(quote) {
-            push(&mut out, c, &mut buf);
+            if !consecutive {
+                push(&mut out, c, &mut buf);
+            }
             i += 2;
         } else if c != '\\' || next.is_none() {
             push(&mut out, c, &mut buf);

@@ -733,7 +733,11 @@ impl Parser<'_> {
             if k == TokenKind::DoubleQuoted && self.opts.double_quoted_identifiers {
                 break;
             }
-            let s = unescape_string(self.text(0), !self.opts.escaped_string_literals);
+            let s = unescape_string(
+                self.text(0),
+                !self.opts.escaped_string_literals,
+                self.opts.consecutive_string_literals,
+            );
             out.get_or_insert_with(String::new).push_str(&s);
             self.bump();
         }
@@ -896,7 +900,11 @@ impl Parser<'_> {
 
     /// `type_name` (consumed) followed by one string literal.
     fn typed_literal(&mut self, type_name: Ident, start: usize) -> Expr {
-        let value = unescape_string(self.text(0), !self.opts.escaped_string_literals);
+        let value = unescape_string(
+            self.text(0),
+            !self.opts.escaped_string_literals,
+            self.opts.consecutive_string_literals,
+        );
         self.bump();
         self.mk(
             ExprKind::Literal(Literal::Typed { type_name, value }),
@@ -1490,7 +1498,11 @@ impl Parser<'_> {
         let keyword = self.keyword_ident();
         let single = self.interval_value_len(0) == Some(1) && self.single_string_at(0);
         if single && !self.any_kw_at(1, INTERVAL_UNITS) {
-            let value = unescape_string(self.text(0), !self.opts.escaped_string_literals);
+            let value = unescape_string(
+                self.text(0),
+                !self.opts.escaped_string_literals,
+                self.opts.consecutive_string_literals,
+            );
             self.bump();
             return Ok(Literal::Typed {
                 type_name: keyword,

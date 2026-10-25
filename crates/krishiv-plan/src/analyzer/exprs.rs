@@ -14,9 +14,9 @@ use krishiv_common::error::{
     DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchUnexpectedInputType,
     InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
-    InvalidUsageOfStarOrRegex, KrishivError, NestedAggregateFunction,
-    UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
-    WrongNumArgsWithoutSuggestion,
+    InvalidUsageOfStarOrRegex, InvalidUsageOfStarWithTableIdentifierInCount, KrishivError,
+    NestedAggregateFunction, UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion,
+    UnresolvedRoutine, WrongNumArgsWithSuggestion, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::DataType;
 use twox_hash::XxHash3_128;
@@ -665,11 +665,31 @@ impl Resolver<'_> {
     }
 
     /// A call with `*` arguments, rewritten: `count(*)` is `count(1)`, any
-    /// other call takes the input columns.
+    /// other call takes the input columns. `count(tbl.*)` with a single
+    /// qualified star is `INVALID_USAGE_OF_STAR_WITH_TABLE_IDENTIFIER_IN_COUNT`
+    /// unless `spark.sql.legacy.allowStarWithSingleTableIdentifierInCount`.
     fn star_args(&mut self, e: &Expr, cx: &Cx<'_>) -> Result<Option<Arc<Expr>>, AnalysisError> {
         let ExprNode::Function(f) = &e.node else {
             return Ok(None);
         };
+        if f.name.eq_ignore_ascii_case("count")
+            && let [a] = &f.args[..]
+            && let ExprNode::Star(s) = &a.node
+            && !s.qualifier.is_empty()
+            && s.plan_id.is_none()
+            && !self
+                .ctx
+                .conf
+                .allow_star_with_single_table_identifier_in_count
+            && self.qualifier_matches_scope(&s.qualifier, cx)
+        {
+            return Err(AnalysisError::new(
+                InvalidUsageOfStarWithTableIdentifierInCount {
+                    table_name: quoted(&s.qualifier),
+                },
+                a.origin,
+            ));
+        }
         if !f.args.iter().any(|a| matches!(a.node, ExprNode::Star(_))) {
             return Ok(None);
         }
@@ -696,6 +716,20 @@ impl Resolver<'_> {
         Ok(Some(Arc::new(
             Expr::new(ExprNode::Function(call)).with_origin(e.origin),
         )))
+    }
+
+    /// Whether `qualifier` names the qualifier of an input attribute
+    /// (a table or alias the scope knows).
+    fn qualifier_matches_scope(&self, qualifier: &[String], cx: &Cx<'_>) -> bool {
+        let cs = self.ctx.conf.case_sensitive;
+        cx.scope.iter().any(|a| {
+            let q = qualifier.len();
+            a.qual.len() >= q
+                && a.qual[a.qual.len() - q..]
+                    .iter()
+                    .zip(qualifier)
+                    .all(|(x, y)| same(x, y, cs))
+        })
     }
 
     /// The attributes `*`, `t.*` or `df["*"]` stands for.
@@ -854,6 +888,9 @@ impl Resolver<'_> {
                 };
                 if !window_fn {
                     call_checks(&entry, e, kids, n)?;
+                }
+                if entry.id.name() == "count" && n == 0 {
+                    return self.parameterless_count(e, &entry, kids, agg, window_fn);
                 }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
                 // Spark's constructor materializes the default message, so
@@ -1072,6 +1109,79 @@ impl Resolver<'_> {
             AnalysisError::new(err, origin)
         })?;
         Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// `count()` with no arguments: `WRONG_NUM_ARGS.WITH_SUGGESTION`,
+    /// or `count(NULL)` — which counts no rows — when
+    /// `spark.sql.legacy.allowParameterlessCount`. The output still shows
+    /// as `count()`, as Spark names it.
+    fn parameterless_count(
+        &self,
+        e: &Arc<Expr>,
+        entry: &FunctionEntry,
+        kids: &[Bound],
+        agg: Option<Origin>,
+        window_fn: bool,
+    ) -> Result<Bound, AnalysisError> {
+        if !self.ctx.conf.allow_parameterless_count {
+            return Err(AnalysisError::new(
+                WrongNumArgsWithSuggestion {
+                    function_name: format!("`{}`", entry.id.name()),
+                    expected_num: entry.arity.expected().to_owned(),
+                    actual_num: "0".to_owned(),
+                    legacy_num: "0".to_owned(),
+                    legacy_conf_key: "\"spark.sql.legacy.allowParameterlessCount\"".to_owned(),
+                    legacy_conf_value: "\"true\"".to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        let null = Bound {
+            expr: Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(e.origin)),
+            ty: ArgType {
+                data_type: Some(DataType::Null),
+                nullable: true,
+            },
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        };
+        let (mut call_kids, ty) = self.typed_call(entry, e, std::slice::from_ref(&null))?;
+        let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
+        // `kids[0]` is the `FILTER`, if any (`n == 0`).
+        call_kids.extend(kids.first().cloned());
+        let call = ResolvedFunction {
+            id: entry.id.clone(),
+            kind: entry.kind,
+            args: call_kids[..1].iter().map(|k| Arc::clone(&k.expr)).collect(),
+            distinct: match &e.node {
+                ExprNode::Function(f) => f.distinct,
+                _ => false,
+            },
+            filter: call_kids.get(1).map(|k| Arc::clone(&k.expr)),
+            data_type,
+            nullable: ty.nullable,
+            deterministic: entry.deterministic,
+        };
+        let expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(call))).with_origin(e.origin),
+        );
+        Ok(Bound {
+            expr,
+            ty,
+            agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
+                Some(e.origin)
+            } else {
+                agg
+            },
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            // Shown as written (`count()`), not as bound (`count(NULL)`).
+            shown: Some(Arc::clone(e)),
+        })
     }
 
     /// `ntile`'s bucket count as the literal it folds to (`ntile(1 + 1)`):

@@ -205,8 +205,8 @@ fn key_text(sql: &str, t: &Token) -> String {
         TokenKind::QuotedIdent => unquote_ident(raw),
         TokenKind::Sym(Sym::Dot) => ".".to_owned(),
         k if k.is_string_like() => {
-            let decoded = unescape_string(raw, true);
-            let plain = unescape_string(raw, false);
+            let decoded = unescape_string(raw, true, false);
+            let plain = unescape_string(raw, false, false);
             if decoded == plain {
                 decoded
             } else {
@@ -278,7 +278,10 @@ fn url_marks(sql: &str, t: &Token, marks: &mut Vec<Mark>) {
         let raw = t.span.text(sql);
         let readings = match t.kind {
             TokenKind::QuotedIdent => vec![unquote_ident(raw)],
-            _ => vec![unescape_string(raw, true), unescape_string(raw, false)],
+            _ => vec![
+                unescape_string(raw, true, false),
+                unescape_string(raw, false, false),
+            ],
         };
         if SecretUrl::parse(value).is_some()
             || readings.iter().any(|d| SecretUrl::parse(d).is_some())

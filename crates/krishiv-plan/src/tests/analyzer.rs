@@ -2846,6 +2846,271 @@ fn inline_table_of_dataframe_reference_fails() {
     );
 }
 
+/// `spark.sql.legacy.ctePrecedencePolicy` and the two `count` flags flow
+/// from the session configs, with Spark 4.2's defaults.
+#[test]
+fn legacy_flag_confs_follow_session_confs() {
+    use crate::analyzer::CtePrecedencePolicy;
+    let conf = |pairs: &[(&str, &str)]| {
+        ResolutionConf::from_conf(|k| pairs.iter().find(|(key, _)| *key == k).map(|(_, v)| *v))
+    };
+    let d = ResolutionConf::default();
+    assert_eq!(d.cte_precedence, CtePrecedencePolicy::Corrected);
+    assert!(!d.allow_parameterless_count);
+    assert!(!d.allow_star_with_single_table_identifier_in_count);
+    assert_eq!(conf(&[]), d);
+    let all = conf(&[
+        ("spark.sql.legacy.ctePrecedencePolicy", " LEGACY "),
+        ("spark.sql.legacy.allowParameterlessCount", "true"),
+        (
+            "spark.sql.legacy.allowStarWithSingleTableIdentifierInCount",
+            "TRUE",
+        ),
+    ]);
+    assert_eq!(all.cte_precedence, CtePrecedencePolicy::Legacy);
+    assert!(all.allow_parameterless_count);
+    assert!(all.allow_star_with_single_table_identifier_in_count);
+    let exc = conf(&[("spark.sql.legacy.ctePrecedencePolicy", "exception")]);
+    assert_eq!(exc.cte_precedence, CtePrecedencePolicy::Exception);
+    // Unknown policies stay corrected, Spark 4.2's default.
+    let odd = conf(&[("spark.sql.legacy.ctePrecedencePolicy", "sometimes")]);
+    assert_eq!(odd.cte_precedence, CtePrecedencePolicy::Corrected);
+    assert_eq!(
+        CtePrecedencePolicy::from_value("corrected"),
+        CtePrecedencePolicy::Corrected
+    );
+    assert_eq!(ResolutionConf::KEYS.len(), 13);
+}
+
+/// `count()` with no arguments: `WRONG_NUM_ARGS.WITH_SUGGESTION`, or 0 with
+/// the legacy flag (Spark's golden `count` statements 14 and 16).
+#[test]
+fn parameterless_count_honours_the_legacy_flag() {
+    let plan = || LogicalPlan::table(["t"]).project(vec![f("count", vec![])]);
+    let err = run(plan(), &ctx()).unwrap_err();
+    assert_eq!(
+        summary(&Err(err)),
+        serde_json::json!([
+            "WRONG_NUM_ARGS.WITH_SUGGESTION",
+            {
+                "actualNum": "0",
+                "expectedNum": " >= 1",
+                "functionName": "`count`",
+                "legacyConfKey": "\"spark.sql.legacy.allowParameterlessCount\"",
+                "legacyConfValue": "\"true\"",
+                "legacyNum": "0",
+            }
+        ])
+    );
+    let mut legacy = ctx();
+    legacy.conf.allow_parameterless_count = true;
+    let a = run(plan(), &legacy).unwrap();
+    assert_eq!(a.output[0].name, "count()");
+    assert_eq!(a.output[0].data_type, DataType::Long);
+    assert!(!a.output[0].nullable);
+}
+
+/// `count(tbl.*)`: `INVALID_USAGE_OF_STAR_WITH_TABLE_IDENTIFIER_IN_COUNT`,
+/// or the table's columns with the legacy flag (Spark's golden `count`
+/// statements 18 and 20).
+#[test]
+fn star_with_table_in_count_honours_the_legacy_flag() {
+    let star_t = || {
+        Expr::new(ExprNode::Star(Star {
+            qualifier: vec!["t".to_owned()],
+            plan_id: None,
+        }))
+    };
+    let plan = || LogicalPlan::table(["t"]).project(vec![f("count", vec![star_t()])]);
+    let err = run(plan(), &ctx()).unwrap_err();
+    assert_eq!(
+        summary(&Err(err)),
+        serde_json::json!([
+            "INVALID_USAGE_OF_STAR_WITH_TABLE_IDENTIFIER_IN_COUNT",
+            {"tableName": "`t`"}
+        ])
+    );
+    let mut legacy = ctx();
+    legacy.conf.allow_star_with_single_table_identifier_in_count = true;
+    let a = run(plan(), &legacy).unwrap();
+    assert_eq!(a.output[0].name, "count(a, b, c)");
+    // Two qualified stars still expand without the flag (golden `count` 3).
+    let multi = LogicalPlan::table(["t"]).project(vec![f("count", vec![star_t(), star_t()])]);
+    assert_eq!(
+        run(multi, &ctx()).unwrap().output[0].name,
+        "count(a, b, c, a, b, c)"
+    );
+    // An unknown qualifier keeps the star error, with or without the flag.
+    let missing = || {
+        Expr::new(ExprNode::Star(Star {
+            qualifier: vec!["missing".to_owned()],
+            plan_id: None,
+        }))
+    };
+    let plan = || LogicalPlan::table(["t"]).project(vec![f("count", vec![missing()])]);
+    assert_eq!(class(&run(plan(), &ctx())), "CANNOT_RESOLVE_STAR_EXPAND");
+    assert_eq!(class(&run(plan(), &legacy)), "CANNOT_RESOLVE_STAR_EXPAND");
+}
+
+/// A legacy `WITH`: nested definition bodies only see their own level's
+/// previous siblings, while nested main queries see the enclosing levels
+/// first (Spark's golden `cte-legacy` 6, 8 and 19 through inlining).
+#[test]
+fn legacy_cte_inlining_prefers_outer_definitions() {
+    use crate::analyzer::CtePrecedencePolicy;
+    use crate::analyzer::legacy::{CtePolicy, eliminate};
+    let policy = || CtePolicy {
+        precedence: CtePrecedencePolicy::Legacy,
+        case_sensitive: false,
+    };
+    let with = |name: &str, plan: LogicalPlan, input: LogicalPlan| {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(input),
+            ctes: vec![Cte {
+                name: name.to_owned(),
+                plan: Arc::new(plan),
+            }],
+        })
+    };
+    // WITH t AS (SELECT * FROM u), t2 AS (WITH t AS (SELECT * FROM v)
+    // SELECT * FROM t) SELECT * FROM t2: the nested query reads the outer t.
+    let nested = with(
+        "t",
+        LogicalPlan::table(["v"]),
+        LogicalPlan::table(["t"]).project(vec![star()]),
+    );
+    let outer = with(
+        "t2",
+        nested,
+        LogicalPlan::table(["t2"]).project(vec![star()]),
+    );
+    let outer = with("t", LogicalPlan::table(["u"]), outer);
+    let gone = eliminate(&Arc::new(outer), policy());
+    assert_eq!(single_reads(&gone), ["u"]);
+    // WITH t1 AS (SELECT * FROM u), t2 AS (WITH t3 AS (SELECT * FROM t1)
+    // SELECT * FROM t3) SELECT * FROM t2: the nested body cannot see t1.
+    let nested = with(
+        "t3",
+        LogicalPlan::table(["t1"]),
+        LogicalPlan::table(["t3"]).project(vec![star()]),
+    );
+    let outer = with(
+        "t2",
+        nested,
+        LogicalPlan::table(["t2"]).project(vec![star()]),
+    );
+    let outer = with("t1", LogicalPlan::table(["u"]), outer);
+    let gone = eliminate(&Arc::new(outer), policy());
+    assert_eq!(single_reads(&gone), ["t1"]);
+}
+
+/// Every single-part table read of an unresolved plan, in order, and whether
+/// any `WITH` survived elimination.
+fn single_reads(plan: &Arc<LogicalPlan>) -> Vec<String> {
+    use crate::walk::{Node, visit_distinct};
+    let mut reads = Vec::new();
+    let mut with = false;
+    let _ = visit_distinct(Node::Plan(plan), &mut |n| {
+        let p = match n {
+            Node::Plan(p) => p,
+            Node::Expr(_) => return ControlFlow::Continue(()),
+        };
+        match &p.node {
+            PlanNode::Read(ReadSource::Table { name, .. }) if name.len() == 1 => {
+                reads.push(name[0].clone());
+            }
+            PlanNode::WithCte { .. } => with = true,
+            _ => {}
+        }
+        ControlFlow::Continue(())
+    });
+    assert!(!with, "a WITH survived elimination");
+    reads
+}
+
+/// `EXCEPTION`: a nested definition shadowing an outer one fails, with
+/// Spark's class and parameters (Spark's golden `cte-nonlegacy` 6); the
+/// same shadowing in a `FROM` subquery does not (statement 9).
+#[test]
+fn exception_cte_conflicts_follow_spark() {
+    use crate::analyzer::CtePrecedencePolicy;
+    let mut exc = ctx();
+    exc.conf.cte_precedence = CtePrecedencePolicy::Exception;
+    let with = |name: &str, plan: LogicalPlan, input: LogicalPlan| {
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(input),
+            ctes: vec![Cte {
+                name: name.to_owned(),
+                plan: Arc::new(plan),
+            }],
+        })
+    };
+    // WITH t AS (...), t2 AS (WITH t AS (...) SELECT * FROM t) ...
+    let nested = with(
+        "t",
+        LogicalPlan::table(["u"]),
+        LogicalPlan::table(["t"]).project(vec![star()]),
+    );
+    let outer = with(
+        "t2",
+        nested,
+        LogicalPlan::table(["t2"]).project(vec![star()]),
+    );
+    let outer = with("t", LogicalPlan::table(["u"]), outer);
+    let err = run(outer, &exc).unwrap_err();
+    assert_eq!(
+        summary(&Err(err)),
+        serde_json::json!([
+            "AMBIGUOUS_ALIAS_IN_NESTED_CTE",
+            {
+                "config": "\"spark.sql.legacy.ctePrecedencePolicy\"",
+                "docroot": "https://spark.apache.org/docs/latest",
+                "name": "`t`",
+            }
+        ])
+    );
+    // A corrected session resolves the same shape to the inner definition.
+    let nested = with(
+        "t",
+        LogicalPlan::table(["u"]),
+        LogicalPlan::table(["t"]).project(vec![star()]),
+    );
+    let outer = with(
+        "t2",
+        nested,
+        LogicalPlan::table(["t2"]).project(vec![star()]),
+    );
+    let outer = with("t", LogicalPlan::table(["u"]), outer);
+    assert_eq!(class(&run(outer, &ctx())), "OK");
+    // WITH t AS (...) SELECT ... FROM (WITH t AS (...) ...): shadowing in a
+    // FROM subquery is not a conflict.
+    let inner = with(
+        "t",
+        LogicalPlan::table(["u"]),
+        LogicalPlan::table(["t"]).project(vec![star()]),
+    );
+    let outer = with("t", LogicalPlan::table(["t"]), inner);
+    assert_eq!(class(&run(outer, &exc)), "OK");
+    // Case-insensitive conflicts report the inner spelling: the shadowing
+    // WITH sits in a definition body, as in golden `cte-nonlegacy` 17.
+    let inner = with(
+        "aBc",
+        LogicalPlan::table(["u"]),
+        LogicalPlan::table(["aBC"]).project(vec![star()]),
+    );
+    let mid = with("t", inner, LogicalPlan::table(["t"]).project(vec![star()]));
+    let outer = with("abc", LogicalPlan::table(["t"]), mid);
+    let err = run(outer, &exc).unwrap_err();
+    assert_eq!(
+        err.error
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "name")
+            .map(|(_, v)| v.as_str()),
+        Some("`aBc`")
+    );
+}
+
 /// Without ANSI a string never meets another type in an inline table; with
 /// ANSI it does (`INT` and `STRING` meet at `BIGINT`).
 #[test]
