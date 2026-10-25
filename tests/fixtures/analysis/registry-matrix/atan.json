@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "atan#6d1fdf0db38c/ansi_on",
-      "reason": "SELECT atan(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan#6d1fdf0db38c/ansi_off",
-      "reason": "SELECT atan(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "atan#75cdf2d56233/ansi_on",
       "reason": "SELECT atan(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

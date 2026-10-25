@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "first_value#09990f542e34/ansi_on",
-      "reason": "SELECT first_value(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
-      "id": "first_value#09990f542e34/ansi_off",
-      "reason": "SELECT first_value(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
       "id": "first_value#0e35783b59e8/ansi_on",
       "reason": "SELECT first_value(col, array(1, 2)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has _LEGACY_ERROR_TEMP_1210"
     },

@@ -98,11 +98,11 @@
     },
     {
       "id": "hash#272caba7a158/ansi_on",
-      "reason": "SELECT hash(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT hash(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#272caba7a158/ansi_off",
-      "reason": "SELECT hash(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT hash(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#31388d31f097/ansi_on",
@@ -431,14 +431,6 @@
     {
       "id": "hash#dca435a0527c/ansi_off",
       "reason": "SELECT hash(true, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#dd8381fee2e5/ansi_on",
-      "reason": "SELECT hash('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "hash#dd8381fee2e5/ansi_off",
-      "reason": "SELECT hash('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
       "id": "hash#e450fde5e857/ansi_on",

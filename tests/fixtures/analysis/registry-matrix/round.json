@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "round#1420a7a45230/ansi_on",
-      "reason": "SELECT round(2.5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "round#1420a7a45230/ansi_off",
-      "reason": "SELECT round(2.5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "round#1e8de844e85f/ansi_on",
       "reason": "SELECT round(2.5, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -31,14 +23,6 @@
     {
       "id": "round#2ad8eea25e86/ansi_off",
       "reason": "SELECT round(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "round#559e91ed81c9/ansi_on",
-      "reason": "SELECT round(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "round#559e91ed81c9/ansi_off",
-      "reason": "SELECT round(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "round#a2f79b63a119/ansi_on",

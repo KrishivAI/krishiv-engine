@@ -1,22 +1,6 @@
 {
   "entries": [
     {
-      "id": "replace#1aa9e8eccba9/ansi_on",
-      "reason": "SELECT replace(named_struct('a', 1, 'b', 'x'), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#1aa9e8eccba9/ansi_off",
-      "reason": "SELECT replace(named_struct('a', 1, 'b', 'x'), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#1ead83cf0d2e/ansi_on",
-      "reason": "SELECT replace('ABCabc', 'abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#1ead83cf0d2e/ansi_off",
-      "reason": "SELECT replace('ABCabc', 'abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "replace#45892c6e41c2/ansi_on",
       "reason": "SELECT replace('ABCabc', array(1, 2), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -95,14 +79,6 @@
     {
       "id": "replace#d9f91490acc7/ansi_off",
       "reason": "SELECT replace('ABCabc', map('a', 1), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#df1872ed019e/ansi_on",
-      "reason": "SELECT replace('ABCabc', named_struct('a', 1, 'b', 'x'), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#df1872ed019e/ansi_off",
-      "reason": "SELECT replace('ABCabc', named_struct('a', 1, 'b', 'x'), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "replace#e9035df3e654/ansi_on",

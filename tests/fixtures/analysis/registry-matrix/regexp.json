@@ -17,14 +17,6 @@
       "reason": "SELECT regexp(INTERVAL '1-2' YEAR TO MONTH, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "regexp#3569bac9fe9d/ansi_on",
-      "reason": "SELECT regexp(named_struct('a', 1, 'b', 'x'), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#3569bac9fe9d/ansi_off",
-      "reason": "SELECT regexp(named_struct('a', 1, 'b', 'x'), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp#6659866add7c/ansi_on",
       "reason": "SELECT regexp('%SystemDrive%\\Users\\John', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -55,14 +47,6 @@
     {
       "id": "regexp#7e85a4423a0c/ansi_off",
       "reason": "SELECT regexp(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#8f7b1c130176/ansi_on",
-      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#8f7b1c130176/ansi_off",
-      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp#b5e72f23ba3a/ansi_on",

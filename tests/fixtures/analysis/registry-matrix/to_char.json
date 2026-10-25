@@ -65,22 +65,6 @@
       "reason": "SELECT to_char(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "to_char#c53227035eb3/ansi_on",
-      "reason": "SELECT to_char(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#c53227035eb3/ansi_off",
-      "reason": "SELECT to_char(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#c9343242b773/ansi_on",
-      "reason": "SELECT to_char(454, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#c9343242b773/ansi_off",
-      "reason": "SELECT to_char(454, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "to_char#d598432ef0c7/ansi_on",
       "reason": "SELECT to_char(454, TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
     },

@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "ceiling#0af50c72a6d8/ansi_on",
-      "reason": "SELECT ceiling(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "ceiling#0af50c72a6d8/ansi_off",
-      "reason": "SELECT ceiling(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "ceiling#20bc43388a99/ansi_on",
       "reason": "SELECT ceiling(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -17,28 +9,12 @@
       "reason": "SELECT ceiling(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "ceiling#2874737e9ad9/ansi_on",
-      "reason": "SELECT ceiling(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "ceiling#2874737e9ad9/ansi_off",
-      "reason": "SELECT ceiling(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "ceiling#3d5f6ac925b9/ansi_on",
       "reason": "SELECT ceiling(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "ceiling#3d5f6ac925b9/ansi_off",
       "reason": "SELECT ceiling(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "ceiling#4d0147cd7a92/ansi_on",
-      "reason": "SELECT ceiling(3.1411, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "ceiling#4d0147cd7a92/ansi_off",
-      "reason": "SELECT ceiling(3.1411, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has NON_FOLDABLE_ARGUMENT"
     },
     {
       "id": "ceiling#523bf03f299a/ansi_on",

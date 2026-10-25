@@ -441,6 +441,24 @@ fn any_nullable(args: &[Arg<'_>]) -> bool {
     args.iter().any(|a| a.nullable)
 }
 
+/// Whether a comparison of `args` may be null: an argument may be, or a
+/// struct argument has a field that may be (comparisons read fields, and a
+/// null field decides them).
+fn comparison_nullable(args: &[Arg<'_>]) -> bool {
+    args.iter().any(|a| a.nullable || fields_nullable(a.ty))
+}
+
+/// Whether the struct type `t` has a field that may be null, at any depth.
+fn fields_nullable(t: Option<&DataType>) -> bool {
+    match t {
+        Some(DataType::Struct(st)) => st
+            .fields()
+            .iter()
+            .any(|f| f.nullable() || fields_nullable(Some(f.data_type()))),
+        _ => false,
+    }
+}
+
 /// Strings meet other types differently with ANSI off.
 fn legacy_strings(args: &[Arg<'_>], ansi: bool) -> Result<(), Mismatch> {
     let strings = args
@@ -508,7 +526,10 @@ fn operator_types(
             if let Some(t) = a.ty.filter(|t| !orderable(t)) {
                 return Err(Mismatch::InvalidOrdering(t.clone()));
             }
-            Ok(boolean(casts, op != B::EqNullSafe && any_nullable(args)))
+            Ok(boolean(
+                casts,
+                op != B::EqNullSafe && comparison_nullable(args),
+            ))
         }
         (B::Add | B::Subtract | B::Multiply | B::Divide | B::Remainder, [a, b]) => {
             arithmetic(op, a, b, ansi, loss)
@@ -565,7 +586,7 @@ fn operator_types(
             if let Some(t) = first.ty.filter(|t| !orderable(t)) {
                 return Err(Mismatch::InvalidOrdering(t.clone()));
             }
-            Ok(boolean(casts, any_nullable(args)))
+            Ok(boolean(casts, comparison_nullable(args)))
         }
         (B::Like | B::ILike | B::RLike, _) => {
             // Only atomic types become a string implicitly.

@@ -349,7 +349,7 @@ class Column:
     def getField(self, name: Any) -> Column:
         """The field ``name`` of a struct, as ``pyspark.sql.Column.getField``.
 
-        .. note:: The engine has no nested types yet: this always fails with
+        .. note:: Not supported yet: this always fails with
             the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
 
         Examples
@@ -374,7 +374,7 @@ class Column:
         """The struct with field ``fieldName`` added or replaced, as
         ``pyspark.sql.Column.withField``.
 
-        .. note:: The engine has no nested types yet: this always fails with
+        .. note:: Not supported yet: this always fails with
             the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
         """
         if not isinstance(fieldName, str):
@@ -387,7 +387,7 @@ class Column:
         """The struct without the named fields, as
         ``pyspark.sql.Column.dropFields``.
 
-        .. note:: The engine has no nested types yet: this always fails with
+        .. note:: Not supported yet: this always fails with
             the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
         """
         for name in fieldNames:

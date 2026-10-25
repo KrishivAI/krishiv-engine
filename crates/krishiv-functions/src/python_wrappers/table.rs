@@ -207,7 +207,7 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, ignoreNulls: bool | Column = None",
         ));
     }
-    for name in ["coalesce", "hash", "xxhash64"] {
+    for name in ["coalesce", "hash", "named_struct", "struct", "xxhash64"] {
         rows.push(Row::new(name, "*cols: ColumnOrName"));
     }
     for name in ["lpad", "rpad"] {

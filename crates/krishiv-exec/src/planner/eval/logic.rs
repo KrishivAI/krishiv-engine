@@ -209,12 +209,23 @@ pub(super) fn compare(
         _ => None,
     };
     let (lt, rt) = (l.data_type(), r.data_type());
+    if matches!((lt, rt), (ArrowType::Struct(_), ArrowType::Struct(_))) {
+        if !struct_compatible(lt, rt) {
+            return Err(internal(&format!("comparison of {lt} with {rt}")));
+        }
+        if !krishiv_kernels::r#struct::comparable(lt) {
+            return Err(crate::planner::build::unsupported(&format!(
+                "comparison of {lt} values"
+            )));
+        }
+    }
     let comparable = lt == rt
         || matches!((lt, rt), (ArrowType::Null, _) | (_, ArrowType::Null))
         || matches!(
             (lt, rt),
             (ArrowType::Timestamp(lu, _), ArrowType::Timestamp(ru, _)) if lu == ru
-        );
+        )
+        || matches!((lt, rt), (ArrowType::Struct(_), ArrowType::Struct(_)));
     if !comparable {
         return Err(internal(&format!("comparison of {lt} with {rt}")));
     }
@@ -232,7 +243,7 @@ impl PhysExpr for Compare {
     }
 
     fn nullable(&self) -> bool {
-        self.kind.is_some() && (self.l.nullable() || self.r.nullable())
+        self.kind.is_some() && (maybe_null(&self.l) || maybe_null(&self.r))
     }
 
     fn eval(&self, batch: &RecordBatch) -> Result<Value> {
@@ -296,6 +307,24 @@ pub(super) fn prim<T: arrow_array::ArrowPrimitiveType>(v: &Value) -> Operand<'_,
     }
 }
 
+/// Whether the value of `e` may be null: the expression may be, or a struct
+/// has a field that may be (comparisons read fields, and a null field
+/// decides them).
+fn maybe_null(e: &Arc<dyn PhysExpr>) -> bool {
+    e.nullable() || fields_nullable(e.data_type())
+}
+
+/// Whether the struct Arrow type `t` has a field that may be null, at any
+/// depth.
+fn fields_nullable(t: &ArrowType) -> bool {
+    match t {
+        ArrowType::Struct(fields) => fields
+            .iter()
+            .any(|f| f.is_nullable() || fields_nullable(f.data_type())),
+        _ => false,
+    }
+}
+
 /// `l kind r` (NULL where either is NULL).
 pub(super) fn cmp(
     kind: CompareKind,
@@ -355,12 +384,112 @@ pub(super) fn cmp(
         ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary => {
             bytes(kind, l, r, rows, bin_value)?
         }
+        ArrowType::Struct(fields) => struct_cmp(kind, l, r, rows, fields.len(), ctx)?,
         other => {
             return Err(crate::planner::build::unsupported(&format!(
                 "comparison of {other} values"
             )));
         }
     })
+}
+
+/// Whether struct Arrow types compare field-wise: the same fields of
+/// recursively compatible types (names and nullability do not matter, as
+/// the analyzer's shape check already allowed them).
+fn struct_compatible(l: &ArrowType, r: &ArrowType) -> bool {
+    match (l, r) {
+        (ArrowType::Struct(l), ArrowType::Struct(r)) => {
+            l.len() == r.len()
+                && l.iter()
+                    .zip(r.iter())
+                    .all(|(a, b)| struct_compatible(a.data_type(), b.data_type()))
+        }
+        (a, b) => a == b,
+    }
+}
+
+/// `l kind r` for structs of `fields` fields: every field through the
+/// existing comparator, combined without boxing rows. Equality is the Kleene
+/// conjunction of the field equalities (`false` where any field is unequal,
+/// `null` where none is but some is null); ordering is lexicographic over
+/// the first field that decides (a null field comparison decides nothing,
+/// so those rows stay null).
+fn struct_cmp(
+    kind: CompareKind,
+    l: &Value,
+    r: &Value,
+    rows: usize,
+    fields: usize,
+    ctx: &KernelCtx,
+) -> Result<BooleanArray> {
+    let array = |v: &Value| v.clone().into_array(rows);
+    let (l, r) = (array(l)?, array(r)?);
+    let (ls, rs) = (l.as_struct(), r.as_struct());
+    if ls.len() != rows
+        || rs.len() != rows
+        || ls.num_columns() != fields
+        || rs.num_columns() != fields
+    {
+        return Err(internal("struct comparison operands differ in shape"));
+    }
+    let field = |s: &arrow_array::StructArray, i: usize| {
+        krishiv_kernels::r#struct::get_field(s, i).map_err(|e| internal(&e.to_string()))
+    };
+    if kind == CompareKind::Equal || kind == CompareKind::NotEqual {
+        let mut any_false = BooleanBuffer::new_unset(rows);
+        let mut any_null = BooleanBuffer::new_unset(rows);
+        for i in 0..fields {
+            let eq = cmp(
+                CompareKind::Equal,
+                &Value::Array(field(ls, i)?),
+                &Value::Array(field(rs, i)?),
+                ctx,
+            )?;
+            let (values, valid) = parts(&eq);
+            let diff: BooleanBuffer = &valid & &!&values;
+            any_false |= &diff;
+            let null: BooleanBuffer = !&valid;
+            any_null |= &null;
+        }
+        let mut values: BooleanBuffer = !&any_false;
+        if kind == CompareKind::NotEqual {
+            values = !&values;
+        }
+        let none_false: BooleanBuffer = !&any_false;
+        let is_null: BooleanBuffer = &any_null & &none_false;
+        return Ok(BooleanArray::new(values, {
+            (is_null.count_set_bits() > 0).then(|| NullBuffer::new(!&is_null))
+        }));
+    }
+    let mut decided = BooleanBuffer::new_unset(rows);
+    let mut values = BooleanBuffer::new_unset(rows);
+    let mut nulls = BooleanBuffer::new_unset(rows);
+    for i in 0..fields {
+        let fl = Value::Array(field(ls, i)?);
+        let fr = Value::Array(field(rs, i)?);
+        let c = cmp(kind, &fl, &fr, ctx)?;
+        let eq = cmp(CompareKind::Equal, &fl, &fr, ctx)?;
+        let (c_values, c_valid) = parts(&c);
+        let (eq_values, _) = parts(&eq);
+        // Rows this field decides: a valid ordering hit decides `true`,
+        // a valid inequality decides `false`, a null decides null.
+        let not_decided: BooleanBuffer = !&decided;
+        let hit: BooleanBuffer = &(&c_values & &c_valid) & &not_decided;
+        let neq: BooleanBuffer = &c_valid & &!&eq_values;
+        let miss: BooleanBuffer = &neq & &not_decided;
+        let null: BooleanBuffer = &!&c_valid & &not_decided;
+        values |= &hit;
+        decided |= &hit;
+        decided |= &miss;
+        decided |= &null;
+        nulls |= &null;
+        if decided.count_set_bits() == rows {
+            break;
+        }
+    }
+    Ok(BooleanArray::new(values, {
+        (nulls.count_set_bits() > 0).then(|| NullBuffer::new(!&nulls))
+    }))
 }
 
 /// The string at row `i` of a `Utf8`/`LargeUtf8`/`Utf8View` array.
