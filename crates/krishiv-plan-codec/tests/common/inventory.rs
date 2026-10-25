@@ -36,6 +36,7 @@ pub(crate) fn env() -> ExprEnv {
         zone: Some(-28_800),
         query_start_micros: 1_760_000_000_123_456,
         user: Arc::from("analyst"),
+        map_key_dedup_last_win: false,
     }
 }
 
@@ -898,5 +899,16 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
+    out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));
     out
+}
+
+/// A plan whose environment sets the map-key dedup policy to `LAST_WIN`.
+fn map_key_dedup_policy() -> PhysicalPlan {
+    let env = ExprEnv {
+        map_key_dedup_last_win: true,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
 }

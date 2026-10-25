@@ -9,28 +9,12 @@
       "reason": "SELECT translate('AaBbCc', 'abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "translate#3fe19d6d2609/ansi_on",
-      "reason": "SELECT translate(map('a', 1), 'abc', '123') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#3fe19d6d2609/ansi_off",
-      "reason": "SELECT translate(map('a', 1), 'abc', '123') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "translate#4fc6835d5253/ansi_on",
       "reason": "SELECT translate('AaBbCc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "translate#4fc6835d5253/ansi_off",
       "reason": "SELECT translate('AaBbCc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "translate#6a0577c13182/ansi_on",
-      "reason": "SELECT translate('AaBbCc', 'abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#6a0577c13182/ansi_off",
-      "reason": "SELECT translate('AaBbCc', 'abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "translate#6b471fcf6248/ansi_on",
@@ -47,14 +31,6 @@
     {
       "id": "translate#6f4febf94e54/ansi_off",
       "reason": "SELECT translate('AaBbCc', array(1, 2), '123') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#7ef5ac648b85/ansi_on",
-      "reason": "SELECT translate('AaBbCc', map('a', 1), '123') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#7ef5ac648b85/ansi_off",
-      "reason": "SELECT translate('AaBbCc', map('a', 1), '123') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "translate#8a5e59a300f4/ansi_on",

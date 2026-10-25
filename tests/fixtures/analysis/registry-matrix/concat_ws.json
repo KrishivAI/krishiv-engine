@@ -49,14 +49,6 @@
       "reason": "SELECT concat_ws(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "concat_ws#22d2f586784a/ansi_on",
-      "reason": "SELECT concat_ws(map('a', 1), 'foo', null, 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#22d2f586784a/ansi_off",
-      "reason": "SELECT concat_ws(map('a', 1), 'foo', null, 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "concat_ws#2329ae0c9685/ansi_on",
       "reason": "SELECT concat_ws('/', INTERVAL '1-2' YEAR TO MONTH, null, 'bar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -97,14 +89,6 @@
       "reason": "SELECT concat_ws(' ', 'Spark', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "concat_ws#32981df856c0/ansi_on",
-      "reason": "SELECT concat_ws(' ', 'Spark', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#32981df856c0/ansi_off",
-      "reason": "SELECT concat_ws(' ', 'Spark', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "concat_ws#36558275390c/ansi_on",
       "reason": "SELECT concat_ws(' ', INTERVAL '1 02:03:04' DAY TO SECOND, 'SQL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -127,14 +111,6 @@
     {
       "id": "concat_ws#4a51a9f372e8/ansi_off",
       "reason": "SELECT concat_ws('/', 'foo', INTERVAL '1 02:03:04' DAY TO SECOND, 'bar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "concat_ws#573a38ae815d/ansi_on",
-      "reason": "SELECT concat_ws(' ', map('a', 1), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#573a38ae815d/ansi_off",
-      "reason": "SELECT concat_ws(' ', map('a', 1), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#69a864969151/ansi_on",
@@ -161,44 +137,12 @@
       "reason": "SELECT concat_ws(array(1, 2), 'Spark', 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "concat_ws#7029d64723a3/ansi_on",
-      "reason": "SELECT concat_ws('/', 'foo', map('a', 1), 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#7029d64723a3/ansi_off",
-      "reason": "SELECT concat_ws('/', 'foo', map('a', 1), 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#7addaa8317aa/ansi_on",
-      "reason": "SELECT concat_ws(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#7addaa8317aa/ansi_off",
-      "reason": "SELECT concat_ws(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#92f099d09cb2/ansi_on",
-      "reason": "SELECT concat_ws('/', 'foo', null, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#92f099d09cb2/ansi_off",
-      "reason": "SELECT concat_ws('/', 'foo', null, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "concat_ws#99a4c984f49c/ansi_on",
       "reason": "SELECT concat_ws(named_struct('a', 1, 'b', 'x'), 'Spark', 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#99a4c984f49c/ansi_off",
       "reason": "SELECT concat_ws(named_struct('a', 1, 'b', 'x'), 'Spark', 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#9c2e8119ee7e/ansi_on",
-      "reason": "SELECT concat_ws('/', map('a', 1), null, 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#9c2e8119ee7e/ansi_off",
-      "reason": "SELECT concat_ws('/', map('a', 1), null, 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#a2d9986c591d/ansi_on",
@@ -247,14 +191,6 @@
     {
       "id": "concat_ws#bbb2b8b9fa31/ansi_off",
       "reason": "SELECT concat_ws(' ', 'Spark', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "concat_ws#bf2fe2a2984d/ansi_on",
-      "reason": "SELECT concat_ws(map('a', 1), 'Spark', 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#bf2fe2a2984d/ansi_off",
-      "reason": "SELECT concat_ws(map('a', 1), 'Spark', 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#c5123febbe30/ansi_on",

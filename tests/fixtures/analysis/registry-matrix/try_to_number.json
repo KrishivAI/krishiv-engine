@@ -9,14 +9,6 @@
       "reason": "SELECT try_to_number(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_to_number#214e9d4c0710/ansi_on",
-      "reason": "SELECT try_to_number('454', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_to_number#214e9d4c0710/ansi_off",
-      "reason": "SELECT try_to_number('454', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_to_number#3536c73e6919/ansi_on",
       "reason": "SELECT try_to_number('454', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
     },
@@ -39,14 +31,6 @@
     {
       "id": "try_to_number#432866f79de1/ansi_off",
       "reason": "SELECT try_to_number('454', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_to_number#45bb6eb12996/ansi_on",
-      "reason": "SELECT try_to_number(map('a', 1), '999') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_to_number#45bb6eb12996/ansi_off",
-      "reason": "SELECT try_to_number(map('a', 1), '999') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_to_number#69b8cbb7518e/ansi_on",

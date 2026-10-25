@@ -8,6 +8,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::cast::FixedOffset;
+use krishiv_kernels::map::DedupPolicy;
 use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
 
 use super::strings::to_view;
@@ -28,7 +29,10 @@ pub(super) fn compile(
         .zip(&args)
         .map(|(ir, compiled)| match &ir.node {
             ExprNode::Literal(l) => literal_array(l).map(BindArg::Literal),
-            _ => Ok(BindArg::Column(compiled.data_type().clone())),
+            _ => Ok(BindArg::Column {
+                data_type: compiled.data_type().clone(),
+                nullable: compiled.nullable(),
+            }),
         })
         .collect::<Result<Vec<_>>>()?;
     let out = f.data_type.to_arrow();
@@ -51,6 +55,11 @@ pub(super) fn compile(
         .with_kernel(input.env.kernels)
         .with_time_zone(Arc::new(zone))
         .with_query_start(input.env.query_start_micros)
+        .with_map_key_dedup_policy(if input.env.map_key_dedup_last_win {
+            DedupPolicy::LastWin
+        } else {
+            DedupPolicy::Exception
+        })
         .with_user(Arc::clone(&input.env.user));
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {
         if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {

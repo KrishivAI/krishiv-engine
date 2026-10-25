@@ -36,7 +36,7 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
 use arrow_schema::{DataType as ArrowType, SchemaRef};
-use krishiv_common::config::{ANSI_ENABLED, Config, SESSION_TIME_ZONE};
+use krishiv_common::config::{ANSI_ENABLED, Config, MAP_KEY_DEDUP_POLICY, SESSION_TIME_ZONE};
 use krishiv_kernels::KernelCtx;
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
@@ -164,6 +164,10 @@ pub(crate) struct EvalEnv {
     pub(crate) query_start_micros: i64,
     /// The session user (`current_user()`).
     pub(crate) user: Arc<str>,
+    /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`: duplicate map keys keep
+    /// the value inserted last. It travels in the plan (`ExprEnv`), so a
+    /// worker instantiating a plan without the feature refuses it.
+    pub(crate) map_key_dedup_last_win: bool,
 }
 
 impl EvalEnv {
@@ -176,6 +180,10 @@ impl EvalEnv {
             .get(&SESSION_TIME_ZONE)
             .and_then(|v| v.as_str())
             .and_then(|z| krishiv_kernels::cast::FixedOffset::parse(z).map(|o| o.0));
+        let map_key_dedup_last_win = config
+            .get(&MAP_KEY_DEDUP_POLICY)
+            .and_then(|v| v.as_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("LAST_WIN"));
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -187,6 +195,7 @@ impl EvalEnv {
             kernels: KernelCtx::new(),
             query_start_micros,
             user,
+            map_key_dedup_last_win,
         }
     }
 
@@ -198,6 +207,7 @@ impl EvalEnv {
             kernels: KernelCtx::new(),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
+            map_key_dedup_last_win: env.map_key_dedup_last_win,
         }
     }
 
@@ -208,6 +218,7 @@ impl EvalEnv {
             zone: self.zone,
             query_start_micros: self.query_start_micros,
             user: Arc::clone(&self.user),
+            map_key_dedup_last_win: self.map_key_dedup_last_win,
         }
     }
 }

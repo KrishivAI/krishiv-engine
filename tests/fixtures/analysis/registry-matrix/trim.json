@@ -31,14 +31,6 @@
     {
       "id": "trim#f3c2ecedc771/ansi_off",
       "reason": "SELECT trim(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "trim#ff7e17fd365a/ansi_on",
-      "reason": "SELECT trim(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "trim#ff7e17fd365a/ansi_off",
-      "reason": "SELECT trim(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

@@ -116,6 +116,10 @@ pub(super) fn rows() -> Vec<Row> {
         "log1p",
         "log2",
         "lower",
+        "map_entries",
+        "map_from_entries",
+        "map_keys",
+        "map_values",
         "max",
         "md5",
         "min",
@@ -232,7 +236,7 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, ignoreNulls: bool | Column = None",
         ));
     }
-    for name in ["coalesce", "hash", "xxhash64"] {
+    for name in ["coalesce", "hash", "map_concat", "xxhash64"] {
         rows.push(Row::new(name, "*cols: ColumnOrName"));
     }
     for name in ["lpad", "rpad"] {
@@ -250,6 +254,13 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, errMsg: Column | str = None",
         ),
         Row::new("raise_error", "errMsg: Column | str"),
+        Row::new("create_map", "*cols: ColumnOrName").to("map"),
+        Row::new("map_contains_key", "col: ColumnOrName, value: Any"),
+        Row::new("map_from_arrays", "col1: ColumnOrName, col2: ColumnOrName"),
+        Row::new(
+            "str_to_map",
+            "text: ColumnOrName, pairDelim: ColumnOrName = None, keyValueDelim: ColumnOrName = None",
+        ),
         Row::new("bitwise_not", C).to("~"),
         Row::new("mean", C).to("avg"),
         Row::new("btrim", "str: ColumnOrName, trim: ColumnOrName = None"),

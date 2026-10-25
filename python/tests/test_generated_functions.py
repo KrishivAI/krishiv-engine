@@ -29,6 +29,7 @@ GENERATED = PYTHON_DIR / "krishiv" / "sql"
 REGISTRY_NAME = {
     "bitwise_not": "~",
     "bitwiseNOT": "~",
+    "create_map": "map",
     "mean": "avg",
     "pow": "power",
     "shiftLeft": "shiftleft",

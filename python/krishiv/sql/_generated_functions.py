@@ -60,6 +60,7 @@ __all__ = [
     "cosh",
     "cot",
     "crc32",
+    "create_map",
     "csc",
     "cume_dist",
     "curdate",
@@ -129,6 +130,13 @@ __all__ = [
     "ltrim",
     "make_date",
     "make_valid_utf8",
+    "map_concat",
+    "map_contains_key",
+    "map_entries",
+    "map_from_arrays",
+    "map_from_entries",
+    "map_keys",
+    "map_values",
     "mask",
     "max",
     "md5",
@@ -197,6 +205,7 @@ __all__ = [
     "split_part",
     "sqrt",
     "startswith",
+    "str_to_map",
     "substr",
     "substring",
     "substring_index",
@@ -413,6 +422,11 @@ def cot(col: ColumnOrName) -> Column:
 def crc32(col: ColumnOrName) -> Column:
     """Calls the registry function ``crc32``."""
     return _call("crc32", _named(col, "col"))
+
+
+def create_map(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``map``."""
+    return _call("map", *_cols(cols))
 
 
 def csc(col: ColumnOrName) -> Column:
@@ -760,6 +774,41 @@ def make_date(year: ColumnOrName, month: ColumnOrName, day: ColumnOrName) -> Col
 def make_valid_utf8(str: ColumnOrName) -> Column:
     """Calls the registry function ``make_valid_utf8``."""
     return _call("make_valid_utf8", _named(str, "str"))
+
+
+def map_concat(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``map_concat``."""
+    return _call("map_concat", *_cols(cols))
+
+
+def map_contains_key(col: ColumnOrName, value: Any) -> Column:
+    """Calls the registry function ``map_contains_key``."""
+    return _call("map_contains_key", _named(col, "col"), _lit(value, "value"))
+
+
+def map_entries(col: ColumnOrName) -> Column:
+    """Calls the registry function ``map_entries``."""
+    return _call("map_entries", _named(col, "col"))
+
+
+def map_from_arrays(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``map_from_arrays``."""
+    return _call("map_from_arrays", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def map_from_entries(col: ColumnOrName) -> Column:
+    """Calls the registry function ``map_from_entries``."""
+    return _call("map_from_entries", _named(col, "col"))
+
+
+def map_keys(col: ColumnOrName) -> Column:
+    """Calls the registry function ``map_keys``."""
+    return _call("map_keys", _named(col, "col"))
+
+
+def map_values(col: ColumnOrName) -> Column:
+    """Calls the registry function ``map_values``."""
+    return _call("map_values", _named(col, "col"))
 
 
 def mask(
@@ -1119,6 +1168,18 @@ def sqrt(col: ColumnOrName) -> Column:
 def startswith(str: ColumnOrName, prefix: ColumnOrName) -> Column:
     """Calls the registry function ``startswith``."""
     return _call("startswith", _named(str, "str"), _named(prefix, "prefix"))
+
+
+def str_to_map(
+    text: ColumnOrName, pairDelim: ColumnOrName | None = None, keyValueDelim: ColumnOrName | None = None
+) -> Column:
+    """Calls the registry function ``str_to_map``."""
+    return _call(
+        "str_to_map",
+        _named(text, "text"),
+        *_opt(_named, pairDelim, "pairDelim"),
+        *_opt(_named, keyValueDelim, "keyValueDelim"),
+    )
 
 
 def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None = None) -> Column:

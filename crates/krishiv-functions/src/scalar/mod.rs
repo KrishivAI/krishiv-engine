@@ -30,6 +30,7 @@ mod chars;
 mod codec;
 mod datetime;
 mod hash;
+mod map;
 mod math;
 mod number;
 mod predicate;
@@ -47,6 +48,7 @@ use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::KernelCtx;
 use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
+use krishiv_kernels::map::DedupPolicy;
 
 pub use args::Arg;
 use args::{Inputs, broadcast, internal, unsupported};
@@ -55,8 +57,15 @@ use args::{Inputs, broadcast, internal, unsupported};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum BindArg {
-    /// A value computed per row, of this type.
-    Column(DataType),
+    /// A value computed per row, of this type; `nullable` is whether it
+    /// may be null (the map family reads it for the value nullability of
+    /// the map type it returns).
+    Column {
+        /// The argument's Arrow type.
+        data_type: DataType,
+        /// Whether the argument may be null.
+        nullable: bool,
+    },
     /// A literal, as a one-row array. Some functions need the value to
     /// bind (the field of `extract`); others treat it as a column.
     Literal(ArrayRef),
@@ -67,15 +76,28 @@ impl BindArg {
     #[must_use]
     pub fn data_type(&self) -> DataType {
         match self {
-            Self::Column(t) => t.clone(),
+            Self::Column { data_type, .. } => data_type.clone(),
             Self::Literal(a) => a.data_type().clone(),
+        }
+    }
+
+    /// Whether the argument may be null: the flag for a column, whether
+    /// the value is null for a literal.
+    #[must_use]
+    pub fn nullable(&self) -> bool {
+        match self {
+            Self::Column { nullable, .. } => *nullable,
+            Self::Literal(a) => a.data_type() == &DataType::Null || a.null_count() > 0,
         }
     }
 }
 
 impl From<DataType> for BindArg {
     fn from(t: DataType) -> Self {
-        Self::Column(t)
+        Self::Column {
+            data_type: t,
+            nullable: true,
+        }
     }
 }
 
@@ -99,6 +121,9 @@ pub struct BindOptions {
     /// `spark.sql.decimalOperations.allowPrecisionLoss`: the result types of
     /// decimal arithmetic (`pmod`, `try_add`, ...).
     pub decimal_precision_loss: bool,
+    /// `spark.sql.mapKeyDedupPolicy`: how the map functions resolve
+    /// duplicate keys.
+    pub map_key_dedup_policy: DedupPolicy,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
 }
@@ -114,6 +139,7 @@ impl BindOptions {
             time_zone: Arc::new(FixedOffset(0)),
             query_start_micros: 0,
             decimal_precision_loss: true,
+            map_key_dedup_policy: DedupPolicy::Exception,
             user: Arc::from("unknown"),
         }
     }
@@ -143,6 +169,13 @@ impl BindOptions {
     #[must_use]
     pub fn with_decimal_precision_loss(mut self, loss: bool) -> Self {
         self.decimal_precision_loss = loss;
+        self
+    }
+
+    /// With `spark.sql.mapKeyDedupPolicy = policy`.
+    #[must_use]
+    pub const fn with_map_key_dedup_policy(mut self, policy: DedupPolicy) -> Self {
+        self.map_key_dedup_policy = policy;
         self
     }
 
@@ -285,13 +318,14 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 12] = [
+const FAMILIES: [(&[&str], Binder); 13] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
     (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
+    (map::NAMES, map::bind),
     (session::NAMES, session::bind),
     (bitwise::NAMES, bitwise::bind),
     (predicate::NAMES, predicate::bind),
@@ -314,7 +348,8 @@ pub fn scalar_names() -> Vec<&'static str> {
 
 /// Whether the result of the scalar function `name` depends only on its
 /// arguments and `spark.sql.ansi.enabled`: the string (with its character and
-/// encoding families), math and arithmetic families. The datetime, session and
+/// encoding families), math, arithmetic and map families (the map family also reads
+/// `spark.sql.mapKeyDedupPolicy`). The datetime, session and
 /// hash families read the session time zone, the user or the query start, so a
 /// caller that evaluates a call before execution (constant folding) must not
 /// evaluate those.
@@ -327,6 +362,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         codec::NAMES,
         math::NAMES,
         arith::NAMES,
+        map::NAMES,
     ]
     .iter()
     .any(|names| names.contains(&lower.as_str()))

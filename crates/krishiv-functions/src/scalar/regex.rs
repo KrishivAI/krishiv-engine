@@ -133,6 +133,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
 }
 
 /// A pattern compiled from its Java source.
+#[derive(Clone)]
 struct Compiled {
     /// The pattern as written, for the error message.
     source: String,
@@ -524,6 +525,31 @@ fn split_pieces(
         return Ok(split_empty(s, limit));
     }
     split_pattern(compiled, s, limit)
+}
+
+/// A Java regex delimiter split for `str_to_map`: the pattern compiles
+/// once, then splits every row's text with Spark's limit semantics (as
+/// [`split_pieces`]). An invalid pattern is
+/// `INVALID_PARAMETER_VALUE.PATTERN`, as for `split`.
+#[derive(Clone)]
+pub(super) struct Splitter {
+    pattern: String,
+    compiled: Compiled,
+}
+
+impl Splitter {
+    /// Compiles the Java regex `pattern` for [`Self::split`].
+    pub(super) fn new(pattern: &str) -> Result<Self, KrishivError> {
+        Ok(Self {
+            pattern: pattern.to_owned(),
+            compiled: Compiled::new(pattern, "`str_to_map`")?,
+        })
+    }
+
+    /// Splits `s` with Spark's limit semantics.
+    pub(super) fn split(&self, s: &str, limit: i32) -> Result<Vec<String>, KrishivError> {
+        split_pieces(s, &self.pattern, &self.compiled, limit)
+    }
 }
 
 /// Spark `split(str, pattern[, limit])` over a column: one row per input,

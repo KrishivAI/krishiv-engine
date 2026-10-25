@@ -10,10 +10,12 @@ use krishiv_common::error::{
     CannotResolveDataframeColumn, CannotResolveStarExpand, DatatypeMismatchBinaryOpDiffTypes,
     DatatypeMismatchBinaryOpWrongType, DatatypeMismatchCastWithConfSuggestion,
     DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
+    DatatypeMismatchCreateMapKeyDiffTypes, DatatypeMismatchCreateMapValueDiffTypes,
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
     DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchInputSizeNotOne,
-    DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
-    DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+    DatatypeMismatchInvalidOrderingType, DatatypeMismatchMapConcatDiffTypes,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
+    DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
     InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
@@ -29,7 +31,7 @@ use super::analytics::GroupingFn;
 use super::bind::{addr, qualified_parts, same, unsupported};
 use super::builtins::{NamedDefault, NamedParam, named_signature};
 use super::catalog::quoted;
-use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
+use super::coerce::{self, Arg, BadCast, Mismatch, list_types, ordinal, quoted_type};
 use super::fold;
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::suggest::closest;
@@ -1378,7 +1380,12 @@ impl Resolver<'_> {
     /// session's settings, with `ansi` for the arithmetic: shared with
     /// every other fold of the pass.
     pub(super) fn fold(&self, e: &Arc<Expr>, ansi: bool) -> Option<Constant> {
-        let conf = fold::Conf::new(ansi, self.ctx.conf.decimal_precision_loss, self.ctx.profile);
+        let conf = fold::Conf::new(
+            ansi,
+            self.ctx.conf.decimal_precision_loss,
+            self.ctx.conf.map_key_dedup_last_win,
+            self.ctx.profile,
+        );
         fold::constant(e, conf, &mut self.folds.borrow_mut())
     }
 
@@ -2431,6 +2438,24 @@ impl Resolver<'_> {
                 }
                 .into()
             }
+            Mismatch::CreateMapKeyDiff(types) => DatatypeMismatchCreateMapKeyDiffTypes {
+                sql_expr,
+                function_name: "`map`".to_owned(),
+                data_type: list_types(&types),
+            }
+            .into(),
+            Mismatch::CreateMapValueDiff(types) => DatatypeMismatchCreateMapValueDiffTypes {
+                sql_expr,
+                function_name: "`map`".to_owned(),
+                data_type: list_types(&types),
+            }
+            .into(),
+            Mismatch::MapConcatDiffTypes(types) => DatatypeMismatchMapConcatDiffTypes {
+                sql_expr,
+                function_name: "`map_concat`".to_owned(),
+                data_type: list_types(&types),
+            }
+            .into(),
             Mismatch::InvalidOrdering(t) => DatatypeMismatchInvalidOrderingType {
                 sql_expr,
                 function_name: quoted(&[function.to_owned()]),

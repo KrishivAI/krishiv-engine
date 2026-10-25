@@ -97,52 +97,12 @@
       "reason": "SELECT convert_timezone('Europe/Brussels', array(1, 2), timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "convert_timezone#5a82d191b61f/ansi_on",
-      "reason": "SELECT convert_timezone(map('a', 1), timestamp_ntz'2021-12-05 15:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#5a82d191b61f/ansi_off",
-      "reason": "SELECT convert_timezone(map('a', 1), timestamp_ntz'2021-12-05 15:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "convert_timezone#7fa8f7d4a0f7/ansi_on",
       "reason": "SELECT convert_timezone(INTERVAL '1 02:03:04' DAY TO SECOND, timestamp_ntz'2021-12-05 15:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "convert_timezone#7fa8f7d4a0f7/ansi_off",
       "reason": "SELECT convert_timezone(INTERVAL '1 02:03:04' DAY TO SECOND, timestamp_ntz'2021-12-05 15:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "convert_timezone#80c118abe0f9/ansi_on",
-      "reason": "SELECT convert_timezone('Europe/Brussels', map('a', 1), timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#80c118abe0f9/ansi_off",
-      "reason": "SELECT convert_timezone('Europe/Brussels', map('a', 1), timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#9cd512e9f190/ansi_on",
-      "reason": "SELECT convert_timezone('Europe/Brussels', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#9cd512e9f190/ansi_off",
-      "reason": "SELECT convert_timezone('Europe/Brussels', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#a0fd4b8c0308/ansi_on",
-      "reason": "SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#a0fd4b8c0308/ansi_off",
-      "reason": "SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#a14ce4fcad56/ansi_on",
-      "reason": "SELECT convert_timezone(map('a', 1), 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#a14ce4fcad56/ansi_off",
-      "reason": "SELECT convert_timezone(map('a', 1), 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "convert_timezone#b0dd48f6ba13/ansi_on",

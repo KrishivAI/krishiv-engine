@@ -17,14 +17,6 @@
       "reason": "SELECT startswith('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "startswith#122bb4b0fcf8/ansi_on",
-      "reason": "SELECT startswith(map('a', 1), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "startswith#122bb4b0fcf8/ansi_off",
-      "reason": "SELECT startswith(map('a', 1), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "startswith#19b35e358339/ansi_on",
       "reason": "SELECT startswith(INTERVAL '1-2' YEAR TO MONTH, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -63,14 +55,6 @@
     {
       "id": "startswith#a3323368e4d6/ansi_off",
       "reason": "SELECT startswith(INTERVAL '1 02:03:04' DAY TO SECOND, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "startswith#a56ab8af6405/ansi_on",
-      "reason": "SELECT startswith('Spark SQL', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "startswith#a56ab8af6405/ansi_off",
-      "reason": "SELECT startswith('Spark SQL', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "startswith#bf1ab845092b/ansi_on",

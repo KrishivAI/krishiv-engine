@@ -50,11 +50,11 @@
     },
     {
       "id": "try_to_binary#31d56249332a/ansi_on",
-      "reason": "SELECT try_to_binary('abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT try_to_binary('abc', map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "try_to_binary#31d56249332a/ansi_off",
-      "reason": "SELECT try_to_binary('abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT try_to_binary('abc', map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "try_to_binary#3ecc05846dbe/ansi_on",
@@ -63,14 +63,6 @@
     {
       "id": "try_to_binary#3ecc05846dbe/ansi_off",
       "reason": "SELECT try_to_binary('abc', X'01') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "try_to_binary#658c0bd3fdf2/ansi_on",
-      "reason": "SELECT try_to_binary(map('a', 1), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_to_binary#658c0bd3fdf2/ansi_off",
-      "reason": "SELECT try_to_binary(map('a', 1), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_to_binary#7181d729db72/ansi_on",

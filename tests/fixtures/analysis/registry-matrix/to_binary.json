@@ -18,11 +18,11 @@
     },
     {
       "id": "to_binary#29d90641d1a0/ansi_on",
-      "reason": "SELECT to_binary('abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT to_binary('abc', map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "to_binary#29d90641d1a0/ansi_off",
-      "reason": "SELECT to_binary('abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT to_binary('abc', map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "to_binary#2fed48414981/ansi_on",
@@ -31,14 +31,6 @@
     {
       "id": "to_binary#2fed48414981/ansi_off",
       "reason": "SELECT to_binary(named_struct('a', 1, 'b', 'x'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_binary#324e66491a2a/ansi_on",
-      "reason": "SELECT to_binary(map('a', 1), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_binary#324e66491a2a/ansi_off",
-      "reason": "SELECT to_binary(map('a', 1), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "to_binary#35b4d980b59d/ansi_on",

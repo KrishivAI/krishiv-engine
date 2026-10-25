@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "dayofmonth#0296012a73bf/ansi_on",
-      "reason": "SELECT dayofmonth(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "dayofmonth#0296012a73bf/ansi_off",
-      "reason": "SELECT dayofmonth(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "dayofmonth#039eeb4f3b46/ansi_on",
       "reason": "SELECT dayofmonth(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

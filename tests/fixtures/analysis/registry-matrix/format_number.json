@@ -17,14 +17,6 @@
       "reason": "SELECT format_number(INTERVAL '1-2' YEAR TO MONTH, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "format_number#2b4b8c75c472/ansi_on",
-      "reason": "SELECT format_number(12332.123456, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "format_number#2b4b8c75c472/ansi_off",
-      "reason": "SELECT format_number(12332.123456, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "format_number#76613646826f/ansi_on",
       "reason": "SELECT format_number(12332.123456, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -71,14 +63,6 @@
     {
       "id": "format_number#f2eb3f7a47db/ansi_off",
       "reason": "SELECT format_number(INTERVAL '1 02:03:04' DAY TO SECOND, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "format_number#fe89b51ecaa9/ansi_on",
-      "reason": "SELECT format_number(map('a', 1), 4) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "format_number#fe89b51ecaa9/ansi_off",
-      "reason": "SELECT format_number(map('a', 1), 4) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

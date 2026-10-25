@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "unbase64#132203927003/ansi_on",
-      "reason": "SELECT unbase64(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "unbase64#132203927003/ansi_off",
-      "reason": "SELECT unbase64(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "unbase64#458f1476f09a/ansi_on",
       "reason": "SELECT unbase64(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

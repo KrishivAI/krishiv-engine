@@ -49,28 +49,12 @@
       "reason": "SELECT atan2(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "atan2#99b774404f55/ansi_on",
-      "reason": "SELECT atan2(map('a', 1), 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#99b774404f55/ansi_off",
-      "reason": "SELECT atan2(map('a', 1), 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "atan2#b02563140a11/ansi_on",
       "reason": "SELECT atan2(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "atan2#b02563140a11/ansi_off",
       "reason": "SELECT atan2(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#ba98c7f801fa/ansi_on",
-      "reason": "SELECT atan2(0, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#ba98c7f801fa/ansi_off",
-      "reason": "SELECT atan2(0, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "atan2#ead386e08f1b/ansi_on",

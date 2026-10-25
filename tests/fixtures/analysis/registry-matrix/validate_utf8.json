@@ -31,14 +31,6 @@
     {
       "id": "validate_utf8#c80b7193e8a7/ansi_off",
       "reason": "SELECT validate_utf8(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "validate_utf8#dc513fc327c3/ansi_on",
-      "reason": "SELECT validate_utf8(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "validate_utf8#dc513fc327c3/ansi_off",
-      "reason": "SELECT validate_utf8(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

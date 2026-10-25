@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "position#09c5e86aaead/ansi_on",
-      "reason": "SELECT position('bar', 'foobarbar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#09c5e86aaead/ansi_off",
-      "reason": "SELECT position('bar', 'foobarbar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "position#1fa7eec14e0a/ansi_on",
       "reason": "SELECT position('bar', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -57,14 +49,6 @@
       "reason": "SELECT position('bar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "position#435da456c2db/ansi_on",
-      "reason": "SELECT position(map('a', 1), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#435da456c2db/ansi_off",
-      "reason": "SELECT position(map('a', 1), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "position#45b179968e70/ansi_on",
       "reason": "SELECT position('bar', 'foobarbar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -81,14 +65,6 @@
       "reason": "SELECT position(named_struct('a', 1, 'b', 'x'), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "position#5a191672b74d/ansi_on",
-      "reason": "SELECT position(map('a', 1), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#5a191672b74d/ansi_off",
-      "reason": "SELECT position(map('a', 1), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "position#7d3113d0d8c7/ansi_on",
       "reason": "SELECT position('bar', INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -97,28 +73,12 @@
       "reason": "SELECT position('bar', INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "position#7dd7c5d12ea4/ansi_on",
-      "reason": "SELECT position('bar', map('a', 1), 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#7dd7c5d12ea4/ansi_off",
-      "reason": "SELECT position('bar', map('a', 1), 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "position#8062b7f85e1f/ansi_on",
       "reason": "SELECT position('bar', 'foobarbar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "position#8062b7f85e1f/ansi_off",
       "reason": "SELECT position('bar', 'foobarbar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#a0a0f6b178ad/ansi_on",
-      "reason": "SELECT position('bar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#a0a0f6b178ad/ansi_off",
-      "reason": "SELECT position('bar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "position#a474bf49e08d/ansi_on",

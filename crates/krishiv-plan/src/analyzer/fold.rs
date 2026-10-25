@@ -61,6 +61,8 @@ pub(super) struct Conf {
     pub ansi: bool,
     /// `spark.sql.decimalOperations.allowPrecisionLoss`.
     pub decimal_loss: bool,
+    /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`.
+    pub map_key_dedup_last_win: bool,
     /// The kernels' context: the session's Spark line, whose error classes
     /// and messages the kernels raise.
     pub kernel: KernelCtx,
@@ -68,7 +70,12 @@ pub(super) struct Conf {
 
 impl Conf {
     /// The settings of a session on `profile`.
-    pub(super) fn new(ansi: bool, decimal_loss: bool, profile: SparkProfile) -> Self {
+    pub(super) fn new(
+        ansi: bool,
+        decimal_loss: bool,
+        map_key_dedup_last_win: bool,
+        profile: SparkProfile,
+    ) -> Self {
         // The kernels model 4.0 as their oldest line; 3.5 behaves as it.
         let version = match profile {
             SparkProfile::V3_5 | SparkProfile::V4_0 => SparkVersion::V4_0,
@@ -78,6 +85,7 @@ impl Conf {
         Self {
             ansi,
             decimal_loss,
+            map_key_dedup_last_win,
             kernel: KernelCtx::new().with_spark_version(version),
         }
     }
@@ -89,7 +97,7 @@ type Folded = Option<Result<ArrayRef, KrishivError>>;
 
 /// What a folded node's value depends on besides the node: its address
 /// and the settings it was folded under.
-type Key = (usize, bool, bool, SparkVersion);
+type Key = (usize, bool, bool, bool, SparkVersion);
 
 /// The values of the expressions folded so far in one resolver pass, by
 /// node address. Folding a call folds its arguments, and `Resolver::expr`
@@ -222,6 +230,7 @@ fn fold_on_stack(e: &Arc<Expr>, conf: Conf, memo: &mut Memo) -> Folded {
         Arc::as_ptr(e) as usize,
         conf.ansi,
         conf.decimal_loss,
+        conf.map_key_dedup_last_win,
         conf.kernel.spark_version(),
     );
     if let Some((_, hit)) = memo.map.get(&key) {
@@ -480,10 +489,17 @@ fn registry(
     {
         return None;
     }
+    use krishiv_kernels::map::DedupPolicy;
+    let policy = if conf.map_key_dedup_last_win {
+        DedupPolicy::LastWin
+    } else {
+        DedupPolicy::Exception
+    };
     let opts = BindOptions::new()
         .with_kernel(conf.kernel)
         .with_ansi(conf.ansi)
-        .with_decimal_precision_loss(conf.decimal_loss);
+        .with_decimal_precision_loss(conf.decimal_loss)
+        .with_map_key_dedup_policy(policy);
     let bind: Vec<BindArg> = args.iter().cloned().map(BindArg::Literal).collect();
     let run = bind_scalar(name, &bind, &opts).and_then(|func| {
         let call: Vec<Arg> = args.into_iter().map(Arg::Scalar).collect();
@@ -551,7 +567,7 @@ mod tests {
     fn constant(e: &Expr, ansi: bool) -> Option<Constant> {
         super::constant(
             &Arc::new(e.clone()),
-            Conf::new(ansi, true, SparkProfile::V4_2),
+            Conf::new(ansi, true, false, SparkProfile::V4_2),
             &mut Memo::default(),
         )
     }
@@ -851,7 +867,7 @@ mod tests {
                 },
             ))));
         }
-        let conf = Conf::new(false, true, SparkProfile::V4_2);
+        let conf = Conf::new(false, true, false, SparkProfile::V4_2);
         let mut memo = Memo::default();
         // 2 * 2^200 wraps to 0 in legacy mode: the value is the kernels'.
         let first = super::constant(&e, conf, &mut memo);
@@ -860,7 +876,7 @@ mod tests {
         assert_eq!(super::constant(&e, conf, &mut memo), first);
         assert_eq!(memo.map.len(), depth + 1);
         // Another setting folds under its own entries.
-        let ansi = Conf::new(true, true, SparkProfile::V4_2);
+        let ansi = Conf::new(true, true, false, SparkProfile::V4_2);
         let _ = super::constant(&e, ansi, &mut memo);
         assert_eq!(memo.map.len(), 2 * (depth + 1));
     }
@@ -876,7 +892,7 @@ mod tests {
         ));
         let class = |profile| match super::constant(
             &rem,
-            Conf::new(true, true, profile),
+            Conf::new(true, true, false, profile),
             &mut Memo::default(),
         ) {
             Some(Constant::Error(e)) => e.error_class(),
@@ -1244,7 +1260,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(move || {
-                let conf = Conf::new(false, true, SparkProfile::V4_2);
+                let conf = Conf::new(false, true, false, SparkProfile::V4_2);
                 let mut memo = Memo::default();
                 assert_eq!(
                     super::constant(&e, conf, &mut memo),

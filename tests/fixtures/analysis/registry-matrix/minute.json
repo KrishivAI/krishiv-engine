@@ -33,14 +33,6 @@
       "reason": "SELECT minute(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "minute#cd42aa4498df/ansi_on",
-      "reason": "SELECT minute(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "minute#cd42aa4498df/ansi_off",
-      "reason": "SELECT minute(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "minute#ebcc0b17159f/ansi_on",
       "reason": "SELECT minute(TIME'23:59:59.999999') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
     },

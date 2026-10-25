@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "log1p#10a3a0932d37/ansi_on",
-      "reason": "SELECT log1p(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "log1p#10a3a0932d37/ansi_off",
-      "reason": "SELECT log1p(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "log1p#406cb2466c70/ansi_on",
       "reason": "SELECT log1p(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

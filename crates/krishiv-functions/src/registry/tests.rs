@@ -1519,4 +1519,185 @@ fn regex_signatures() {
     assert_eq!(r, ArgType::new(DataType::Integer, true));
 }
 
+#[test]
+fn map_signatures() {
+    use krishiv_types::{ArrayType, MapType, StructField, StructType};
+    let (i, s) = (ty(DataType::Integer), ty(DataType::String));
+    let map =
+        |k: DataType, v: DataType, vcn: bool| ArgType::new(MapType::new(k, v, vcn).into(), false);
+    assert_eq!(def("map").inputs, Inputs::Map);
+    assert_eq!(def("map_concat").inputs, Inputs::MapConcat);
+    assert_eq!(def("map_contains_key").inputs, Inputs::MapContainsKey);
+    // `map(k, v)`: the key and value types, never null; values may hold
+    // null when any value argument may.
+    assert_eq!(
+        result("map", &[i.clone(), s.clone(), i.clone(), s.clone()], &[]).unwrap(),
+        map(DataType::Integer, DataType::String, false)
+    );
+    assert_eq!(
+        result(
+            "map",
+            &[i.clone(), ArgType::new(DataType::String, true)],
+            &[]
+        )
+        .unwrap(),
+        ArgType::new(
+            MapType::new(DataType::Integer, DataType::String, true).into(),
+            false
+        )
+    );
+    // A key holding a map is `INVALID_MAP_KEY_TYPE`.
+    let nested: DataType = MapType::new(DataType::String, DataType::Integer, true).into();
+    let e = result("map", &[ty(nested.clone()), s.clone()], &[]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchInvalidMapKeyType
+    );
+    for name in ["map_concat", "map_from_arrays"] {
+        let key = if name == "map_concat" {
+            MapType::new(nested.clone(), DataType::String, true).into()
+        } else {
+            ArrayType::new(nested.clone(), false).into()
+        };
+        let value = if name == "map_concat" {
+            nested.clone()
+        } else {
+            ArrayType::new(DataType::String, false).into()
+        };
+        let e = result(name, &[ty(key), ty(value)], &[]).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::DatatypeMismatchInvalidMapKeyType,
+            "{name}"
+        );
+    }
+    // `map_concat(m)`: the merged map, null when any argument may be.
+    assert_eq!(
+        result(
+            "map_concat",
+            &[
+                ArgType::new(
+                    MapType::new(DataType::Integer, DataType::String, false).into(),
+                    true
+                ),
+                ArgType::new(
+                    MapType::new(DataType::Integer, DataType::String, true).into(),
+                    false
+                ),
+            ],
+            &[]
+        )
+        .unwrap(),
+        ArgType::new(
+            MapType::new(DataType::Integer, DataType::String, true).into(),
+            true
+        )
+    );
+    // `map_contains_key(map, key)`: a nullable boolean, `MAP_FUNCTION_DIFF_TYPES`
+    // for a key of another type, `NULL_TYPE` for an untyped null key.
+    assert_eq!(
+        result(
+            "map_contains_key",
+            &[map(DataType::Integer, DataType::String, false), i.clone()],
+            &[]
+        )
+        .unwrap(),
+        ArgType::new(DataType::Boolean, true)
+    );
+    let e = result(
+        "map_contains_key",
+        &[map(DataType::Integer, DataType::String, false), s.clone()],
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchMapFunctionDiffTypes
+    );
+    let e = result(
+        "map_contains_key",
+        &[map(DataType::Integer, DataType::String, false), null_ty()],
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::DatatypeMismatchNullType);
+    // `map_keys`, `map_values`, `map_entries`: the projections.
+    let m = ArgType::new(
+        MapType::new(DataType::Integer, DataType::String, true).into(),
+        true,
+    );
+    assert_eq!(
+        result("map_keys", std::slice::from_ref(&m), &[]).unwrap(),
+        ArgType::new(ArrayType::new(DataType::Integer, true).into(), true)
+    );
+    assert_eq!(
+        result("map_values", std::slice::from_ref(&m), &[]).unwrap(),
+        ArgType::new(ArrayType::new(DataType::String, true).into(), true)
+    );
+    assert_eq!(
+        result("map_entries", std::slice::from_ref(&m), &[]).unwrap(),
+        ArgType::new(
+            ArrayType::new(
+                StructType::new([
+                    StructField::new("key", DataType::Integer, false),
+                    StructField::new("value", DataType::String, true),
+                ])
+                .into(),
+                false
+            )
+            .into(),
+            true
+        )
+    );
+    let e = result("map_keys", std::slice::from_ref(&i), &[]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // `map_from_arrays(keys, values)`: the map of the element types.
+    assert_eq!(
+        result(
+            "map_from_arrays",
+            &[
+                ty(ArrayType::new(DataType::Integer, false).into()),
+                ty(ArrayType::new(DataType::String, false).into()),
+            ],
+            &[]
+        )
+        .unwrap(),
+        map(DataType::Integer, DataType::String, false)
+    );
+    // `map_from_entries`: the map of the struct fields; anything else is
+    // `UNEXPECTED_INPUT_TYPE`.
+    let pair = ArrayType::new(
+        StructType::new([
+            StructField::new("key", DataType::Integer, true),
+            StructField::new("value", DataType::String, true),
+        ])
+        .into(),
+        true,
+    )
+    .into();
+    assert_eq!(
+        result("map_from_entries", &[ty(pair)], &[]).unwrap(),
+        ArgType::new(
+            MapType::new(DataType::Integer, DataType::String, true).into(),
+            true
+        )
+    );
+    let e = result("map_from_entries", std::slice::from_ref(&i), &[]).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // `str_to_map(text)`: `map<string, string>`.
+    assert_eq!(
+        result("str_to_map", std::slice::from_ref(&s), &[]).unwrap(),
+        ArgType::new(
+            MapType::new(DataType::String, DataType::String, true).into(),
+            false
+        )
+    );
+}
+
 mod text;
