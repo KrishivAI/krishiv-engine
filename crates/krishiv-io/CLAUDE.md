@@ -64,6 +64,10 @@ Paths are relative to this crate.
 - The parquet crate's `object_store` feature stays off; Parquet bytes come only from `IoContext`.
 - object_store and parquet versions from the workspace (Arrow 60 family). `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
+- Row-level drops (late materialisation, runtime filters at row level) use only what
+  `ScanRequest::row_level` allows: with `RowLevel::Prefix` (a filter conjunct above may raise) only that
+  never-NULL prefix and no runtime filter, so the filter above sees every row it could raise on. Whole units
+  (row groups, pages) are still pruned with the full predicate.
 - Runtime filters only drop rows their producer would drop: key values are compared after `normalize_key_bytes`
   (lossless casts to the key type only; any other column type is not filtered); consumers never wait for a filter.
 

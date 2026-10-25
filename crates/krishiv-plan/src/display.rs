@@ -329,6 +329,68 @@ impl Display for NodeLine<'_> {
                 }
                 f.write_str("]")
             }
+            PlanNode::Pivot {
+                pivot_columns,
+                values,
+                aggregates,
+                ..
+            } => {
+                f.write_str("Pivot [")?;
+                for (i, e) in pivot_columns.iter().enumerate() {
+                    write!(f, "{}{}", sep(i), Text(e))?;
+                }
+                f.write_str("], [")?;
+                for (i, v) in values.iter().enumerate() {
+                    write!(f, "{}[", sep(i))?;
+                    for (j, e) in v.exprs.iter().enumerate() {
+                        write!(f, "{}{}", sep(j), Text(e))?;
+                    }
+                    if let Some(alias) = &v.alias {
+                        write!(f, " AS {alias}")?;
+                    }
+                    f.write_str("]")?;
+                }
+                f.write_str("], [")?;
+                for (i, e) in aggregates.iter().enumerate() {
+                    write!(f, "{}{}", sep(i), Text(e))?;
+                }
+                f.write_str("]")
+            }
+            PlanNode::Unpivot {
+                value_columns,
+                name_column,
+                column_sets,
+                include_nulls,
+                ..
+            } => {
+                if *include_nulls {
+                    f.write_str("UnpivotIncludeNulls ")?;
+                } else {
+                    f.write_str("Unpivot ")?;
+                }
+                write!(f, "[{} FOR {name_column} IN (", value_columns.join(", "))?;
+                for (i, s) in column_sets.iter().enumerate() {
+                    write!(f, "{}[", sep(i))?;
+                    for (j, e) in s.columns.iter().enumerate() {
+                        write!(f, "{}{}", sep(j), Text(e))?;
+                    }
+                    if let Some(alias) = &s.alias {
+                        write!(f, " AS {alias}")?;
+                    }
+                    f.write_str("]")?;
+                }
+                f.write_str(")]")
+            }
+            // Spark's `LocalRelation [col1, col2]`, which an inline table
+            // becomes; the row count tells single-row tables apart.
+            PlanNode::InlineTable { rows, columns } => {
+                write!(
+                    f,
+                    "InlineTable [{}] ({} rows)",
+                    columns.join(", "),
+                    rows.len()
+                )
+            }
         }
     }
 }

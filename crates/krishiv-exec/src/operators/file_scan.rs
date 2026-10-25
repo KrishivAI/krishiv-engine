@@ -15,7 +15,9 @@
 //!   filters, a limit hint, per-file row selections, field mapping and
 //!   `_metadata` columns. Pruning keeps a superset of the matching rows, so
 //!   pushed filters are never [`FilterPushdown::Exact`]: the `Filter` above
-//!   the scan stays.
+//!   the scan stays. When a conjunct of a pushed filter may raise, rows are
+//!   dropped only by the conjuncts written before it and no runtime filter
+//!   applies ([`RowLevel`]): the `Filter` sees every row it would raise on.
 //! - **Runtime filters** (design P2-T163), attached after planning, join
 //!   the request when the scan starts. A split whose filter drops every row
 //!   (an empty join build) is skipped without opening its file; the format
@@ -47,7 +49,7 @@ use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_io::split::{FilePartition, SplitConfig, SplitFile};
 use krishiv_io::{
     ByteRange, ColumnPath, FileFormat, FileMetadata, FileRef, FormatOptions, IoContext,
-    MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, ScanOptions, ScanRequest, ScanStream,
+    MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowLevel, ScanOptions, ScanRequest, ScanStream,
     ScanUnitMetrics, SchemaMapper,
 };
 use krishiv_memory::ConsumerHandle;
@@ -327,6 +329,7 @@ fn table_request(
         1 => exprs.into_iter().next(),
         _ => Some(PushdownExpr::And(exprs)),
     };
+    request.row_level = row_level(&p.filters);
     request.limit = p.limit.filter(|_| p.filters.is_empty());
     request.metadata_cols = p.metadata;
     request.mapping = p.mapping.clone();
@@ -334,6 +337,27 @@ fn table_request(
         Arc::clone(SchemaMapper::new(&request, Arc::clone(&scan.table), "")?.output_schema());
     let output = with_metadata_column(&mapped, &request.metadata_cols);
     Ok((request, mapped, output))
+}
+
+/// What the scan may drop rows by, over the pushed `filters` (a
+/// conjunction, in written order): every filter's typed form while none
+/// has a conjunct that may raise; at the first that has one, its prefix,
+/// and no later filter.
+fn row_level(filters: &[PushedFilter]) -> RowLevel {
+    let mut parts = Vec::new();
+    for f in filters {
+        match &f.rows {
+            RowLevel::Prefix(p) => {
+                parts.extend(p.iter().cloned());
+                return RowLevel::Prefix(match parts.len() {
+                    0 | 1 => parts.pop(),
+                    _ => Some(PushdownExpr::And(parts)),
+                });
+            }
+            _ => parts.extend(f.expr.iter().cloned()),
+        }
+    }
+    RowLevel::Full
 }
 
 impl FileScanSource {
@@ -716,7 +740,12 @@ impl Source for FileScanSource {
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let mut request = self.request.clone();
-        request.dynamic = self.runtime.scan_filters(&self.request.table_schema);
+        // With a filter conjunct that may raise, no runtime filter: Spark
+        // evaluates its runtime filter as the filter's last conjunct, so it
+        // skips no split, row group or row that conjunct still has to see.
+        if request.row_level.runtime_filters() {
+            request.dynamic = self.runtime.scan_filters(&self.request.table_schema);
+        }
         Ok(Arc::new(FileScanGlobal {
             request,
             cursor: MorselCursor::new(self.partitions.len(), ctx.query().config().seed),

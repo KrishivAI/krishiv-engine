@@ -8,8 +8,9 @@
 
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::Arc;
 
-use krishiv_plan::{Plan, SourceId};
+use krishiv_plan::{Plan, PlanNode, SourceId};
 use krishiv_sql::{ParserOptions, parse_and_lower};
 
 fn lower(sql: &str) -> Result<Plan, krishiv_sql::ParseError> {
@@ -90,7 +91,6 @@ fn constructs_lower_or_are_named_as_unsupported() {
         "SELECT f(x => 1) FROM t",
         "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t",
         "SELECT sum(a) IGNORE NULLS FROM t",
-        "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
         "SELECT * FROM t WITH (k = x)",
         "FROM t SELECT a SELECT b",
         "SELECT * FROM parquet.`s3a://k:Canary-7f3a9c@b/p` WITH ('password' = 'Canary-7f3a9c')",
@@ -106,13 +106,148 @@ fn constructs_lower_or_are_named_as_unsupported() {
         "FROM t SELECT a UNION SELECT b",
         "WITH RECURSIVE c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c",
         "SELECT explode(a) AS (x, y) FROM t",
-        "SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))",
         "SELECT * FROM t JOIN LATERAL (SELECT a) s",
         "SELECT * FROM t WITH (k = true, n = 2) RIGHT JOIN (SELECT a FROM u) USING (a)",
         "SELECT -a, a % 2, a IS NULL, NULL FROM t ORDER BY a DESC NULLS FIRST, b NULLS LAST",
         "SELECT (t.a).b, ((a)).c.d FROM t",
         "SELECT 1BD, 1e3BD FROM t",
     ]));
+}
+
+/// `PIVOT` and `UNPIVOT` lower over the relation they follow (per
+/// relation and at the `FROM`-clause level); the alias becomes a
+/// `SubqueryAlias`. A `FROM` clause with both is rejected, as Spark's
+/// parser rejects it, as is one relation carrying both (Spark's
+/// `NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`).
+#[test]
+fn pivot_and_unpivot_lower_over_the_relation_they_follow() {
+    insta::assert_snapshot!(report(&[
+        "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
+        "SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))",
+        "SELECT * FROM t PIVOT (sum(a) AS s, avg(b) FOR (c, d) IN ((1, 2) AS one, (3, 4) two)) p",
+        "SELECT * FROM t UNPIVOT INCLUDE NULLS (v FOR n IN (a AS x, b)) AS u",
+        "SELECT * FROM t UNPIVOT EXCLUDE NULLS ((v1, v2) FOR n IN ((a, b) AS ab, (c, d)))",
+        "SELECT * FROM t JOIN u ON t.a = u.a PIVOT (count(*) FOR a IN ('x')) p JOIN v ON true",
+        "SELECT * FROM t PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))",
+        "SELECT * FROM t, u PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))",
+    ]));
+}
+
+/// The parser attaches `PIVOT` to the relation, but the `FROM` clause can
+/// carry one too (after `LATERAL VIEW`, which lowering rejects): moving a
+/// parsed pivot there must lower the same plan, and a clause with both a
+/// pivot and an unpivot is rejected, as Spark's parser rejects it.
+#[test]
+fn from_clause_level_pivot_lowers_over_the_comma_join() {
+    use krishiv_plan::SourceId;
+    use krishiv_sql::ast::{Pivot, RelationExt, SetExprKind, Unpivot};
+    use krishiv_sql::{ParserOptions, lower, parse_query};
+    let mut q = parse_query(
+        "SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))",
+        &ParserOptions::default(),
+    )
+    .unwrap();
+    let krishiv_sql::ast::SetExprKind::Select(select) = &mut q.body.kind else {
+        panic!("a SELECT query");
+    };
+    let from = select.from.as_mut().unwrap();
+    assert!(from.pivot.is_none());
+    let relation = &mut from.relations[1];
+    let Some(RelationExt::Pivot(pivot)) = relation.extensions.pop() else {
+        panic!("a pivot extension");
+    };
+    assert!(relation.extensions.is_empty());
+    from.pivot = Some(pivot);
+    let plan = lower(&q, SourceId(0)).unwrap();
+    assert_eq!(
+        plan.root().to_string().replace('\n', " | "),
+        "Project [a] | +- Pivot [b], [[1]], [sum(a)] |    +- Join Inner |       :- Read t |       +- Read u | "
+    );
+    // Both at once is `NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`.
+    let mut q = parse_query("SELECT a FROM t", &ParserOptions::default()).unwrap();
+    let SetExprKind::Select(select) = &mut q.body.kind else {
+        panic!("a SELECT query");
+    };
+    let from = select.from.as_mut().unwrap();
+    let pivot: Pivot = parse_query(
+        "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
+        &ParserOptions::default(),
+    )
+    .map(|mut p| {
+        let SetExprKind::Select(s) = &mut p.body.kind else {
+            panic!("a SELECT query");
+        };
+        let Some(RelationExt::Pivot(pivot)) =
+            s.from.as_mut().unwrap().relations[0].extensions.pop()
+        else {
+            panic!("a pivot extension");
+        };
+        pivot
+    })
+    .unwrap();
+    let unpivot: Unpivot = parse_query(
+        "SELECT a FROM t UNPIVOT (x FOR y IN (z))",
+        &ParserOptions::default(),
+    )
+    .map(|mut p| {
+        let SetExprKind::Select(s) = &mut p.body.kind else {
+            panic!("a SELECT query");
+        };
+        let Some(RelationExt::Unpivot(unpivot)) =
+            s.from.as_mut().unwrap().relations[0].extensions.pop()
+        else {
+            panic!("an unpivot extension");
+        };
+        unpivot
+    })
+    .unwrap();
+    from.pivot = Some(pivot);
+    from.unpivot = Some(unpivot);
+    let e = lower(&q, SourceId(0)).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT"
+    );
+    // A `FROM`-clause unpivot lowers over the comma join too.
+    let mut q = parse_query(
+        "SELECT a FROM t, u UNPIVOT (x FOR y IN (z))",
+        &ParserOptions::default(),
+    )
+    .unwrap();
+    let SetExprKind::Select(select) = &mut q.body.kind else {
+        panic!("a SELECT query");
+    };
+    let from = select.from.as_mut().unwrap();
+    let relation = &mut from.relations[1];
+    let Some(RelationExt::Unpivot(unpivot)) = relation.extensions.pop() else {
+        panic!("an unpivot extension");
+    };
+    assert!(relation.extensions.is_empty());
+    from.unpivot = Some(unpivot);
+    let plan = lower(&q, SourceId(0)).unwrap();
+    assert_eq!(
+        plan.root().to_string().replace('\n', " | "),
+        "Project [a] | +- Unpivot [x FOR y IN ([z])] |    +- Join Inner |       :- Read t |       +- Read u | "
+    );
+    // A pivot value with a column-list alias is rejected, like any other
+    // multi-name alias.
+    let mut q = parse_query(
+        "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
+        &ParserOptions::default(),
+    )
+    .unwrap();
+    let SetExprKind::Select(select) = &mut q.body.kind else {
+        panic!("a SELECT query");
+    };
+    let from = select.from.as_mut().unwrap();
+    let relation = &mut from.relations[0];
+    let Some(RelationExt::Pivot(mut pivot)) = relation.extensions.pop() else {
+        panic!("a pivot extension");
+    };
+    pivot.values[0].alias = Some(krishiv_sql::ast::Alias::List(vec![]));
+    from.pivot = Some(pivot);
+    let e = lower(&q, SourceId(0)).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
 /// `first(x) IGNORE NULLS` is `first(x, true)`; `RESPECT NULLS` is `false`,
@@ -127,6 +262,8 @@ fn null_treatment_sets_the_ignore_nulls_argument() {
         ("first(a, false) IGNORE NULLS", "first(a, true)"),
         ("last(a, true) RESPECT NULLS", "last(a, false)"),
         ("first(a, b) IGNORE NULLS", "first(a, b)"),
+        ("any_value(a) IGNORE NULLS", "any_value(a, true)"),
+        ("any_value(a, true) RESPECT NULLS", "any_value(a, false)"),
     ];
     for (call, shown_call) in cases {
         let plan = shown(&format!("SELECT {call} FROM t"));
@@ -246,5 +383,110 @@ fn nested_grouping_sets_cap_counts_inside_the_loop() {
         e.span.start,
         sql.find("GROUPING SETS").expect("the item"),
         "the cap cites the GROUPING SETS item, not GROUP BY"
+    );
+}
+
+/// The inline table of `sql`: the first `PlanNode::InlineTable` under its
+/// root, with the alias above it unwrapped.
+fn inline_table(sql: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    let plan = lower(sql).unwrap();
+    let mut stack = vec![Arc::clone(plan.root())];
+    while let Some(p) = stack.pop() {
+        if let PlanNode::InlineTable { rows, columns } = &p.node {
+            let rows = rows
+                .iter()
+                .map(|r| r.iter().map(ToString::to_string).collect())
+                .collect();
+            return Some((columns.clone(), rows));
+        }
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    None
+}
+
+#[test]
+fn values_lower_to_inline_tables() {
+    // A query body without an alias: columns are `col1`, ....
+    assert_eq!(
+        inline_table("VALUES (1, 'a'), (2, 'b')").expect("an inline table"),
+        (
+            vec!["col1".to_owned(), "col2".to_owned()],
+            vec![
+                vec!["1".to_owned(), "'a'".to_owned()],
+                vec!["2".to_owned(), "'b'".to_owned()],
+            ]
+        )
+    );
+    // A query body with an alias: the alias column list renames them, and
+    // the alias itself stays a `SubqueryAlias` above.
+    let plan = lower("VALUES (1, 'a'), (2, 'b') AS t(x, y)").unwrap();
+    let PlanNode::SubqueryAlias {
+        input,
+        alias,
+        columns,
+    } = &plan.root().node
+    else {
+        panic!("alias above:\n{}", plan.root());
+    };
+    assert_eq!(alias, "t");
+    assert_eq!(columns, &["x", "y"]);
+    assert!(
+        matches!(&input.node, PlanNode::InlineTable { .. }),
+        "inline table below:\n{}",
+        plan.root()
+    );
+    assert_eq!(
+        inline_table("VALUES (1, 'a'), (2, 'b') AS t(x, y)")
+            .expect("an inline table")
+            .0,
+        ["x", "y"]
+    );
+    // A table factor with an alias column list.
+    assert_eq!(
+        inline_table("SELECT * FROM VALUES ('one', 1) AS data(a, b)")
+            .expect("an inline table")
+            .0,
+        ["a", "b"]
+    );
+    // A table factor without an alias keeps `col1`, ....
+    assert_eq!(
+        inline_table("SELECT * FROM VALUES ('one', 1)")
+            .expect("an inline table")
+            .0,
+        ["col1", "col2"]
+    );
+    // A single-column row written without parentheses is one column, and
+    // one row per expression.
+    assert_eq!(
+        inline_table("SELECT * FROM VALUES 1, 2, 3 AS data(a)").expect("an inline table"),
+        (
+            vec!["a".to_owned()],
+            vec![
+                vec!["1".to_owned()],
+                vec!["2".to_owned()],
+                vec!["3".to_owned()],
+            ]
+        )
+    );
+    // Row aliases are stripped: the schema never comes from them (the
+    // outer alias renames `col1`, ... here).
+    assert_eq!(
+        inline_table(
+            "SELECT * FROM (VALUES (1 AS id, 'a' AS name), (2 AS id, 'b' AS name)) AS t(a, b)"
+        )
+        .expect("an inline table"),
+        (
+            vec!["col1".to_owned(), "col2".to_owned()],
+            vec![
+                vec!["1".to_owned(), "'a'".to_owned()],
+                vec!["2".to_owned(), "'b'".to_owned()],
+            ]
+        )
+    );
+    assert_eq!(
+        inline_table("SELECT * FROM VALUES (1 AS a, 2 AS b)")
+            .expect("an inline table")
+            .0,
+        ["col1", "col2"]
     );
 }
