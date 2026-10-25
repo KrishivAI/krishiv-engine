@@ -110,7 +110,7 @@ The default is the full gate. `--fast` is the quick loop (no coverage, budgets o
   `python-wheel-tests` builds the extension with `maturin develop` into a throwaway venv and runs `python/tests` when
   `python/` changed or `krishiv-python` depends on a touched crate (needs `uv` and network).
 - `codeql-proxy` is a cheap stand-in for the one CodeQL query that has failed PRs (`rust/cleartext-logging`: a
-  variable named `secret`, `password`, ... in a log or assert message). **CodeQL itself stays CI-only.**
+  variable named `secret`, `password`, ... in a log, print, panic or assert message, also across lines and in untracked files). **CodeQL itself stays CI-only.**
 - `--memory-cap SIZE` puts the heavy steps (clippy, doc, tests, coverage, budgets, wheel tests) under a `systemd-run`
   memory cap. Putting the whole command under `systemd-run --user --scope -p MemoryMax=...` works too.
 - Budgets run only when a manifest changed, or with `--full`.

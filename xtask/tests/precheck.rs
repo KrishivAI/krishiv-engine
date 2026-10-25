@@ -1118,12 +1118,25 @@ fn coverage_is_scoped_to_touched_crates_in_a_dedicated_target_dir() {
     };
     assert_eq!(cmds[0].args, ["coverage", "--no-branch", "-p", "common"]);
     assert!(cmds[0].heavy);
+    let target = |c: &xtask::precheck::Cmd| {
+        c.env
+            .iter()
+            .find(|(k, _)| k == "CARGO_TARGET_DIR")
+            .map(|(_, v)| v.clone())
+    };
+    // Both coverage commands (the run and the diff) use the one directory the options name.
+    assert_eq!(cmds.len(), 2);
     for c in cmds {
-        assert!(
-            c.env
-                .iter()
-                .any(|(k, v)| k == "CARGO_TARGET_DIR" && v.contains("precheck-cov"))
-        );
+        assert_eq!(target(c).as_deref(), Some("target/precheck-cov"));
+    }
+    let mut custom = opts(&[]);
+    custom.cov_dir = "/t/unit-precheck-cov".to_owned();
+    let steps = make_plan(&detect(&["crates/common/src/lib.rs"]), &custom, true);
+    let Action::Run(cmds) = &step(&steps, "diff-coverage").action else {
+        panic!("diff-coverage should run");
+    };
+    for c in cmds {
+        assert_eq!(target(c).as_deref(), Some("/t/unit-precheck-cov"));
     }
     let wide = make_plan(&detect(&["Cargo.toml"]), &opts(&[]), true);
     let Action::Run(cmds) = &step(&wide, "diff-coverage").action else {
@@ -1135,10 +1148,52 @@ fn coverage_is_scoped_to_touched_crates_in_a_dedicated_target_dir() {
 #[test]
 fn staleness_and_attribution_are_checked_unless_allowed() {
     let ch = detect(&["crates/common/src/lib.rs"]);
-    assert!(matches!(
-        step(&make_plan(&ch, &opts(&[]), true), "base-fresh").action,
-        Action::Run(_)
-    ));
+    let fresh = make_plan(&ch, &opts(&["--base", "main"]), true);
+    let Action::Run(cmds) = &step(&fresh, "base-fresh").action else {
+        panic!("base-fresh should run");
+    };
+    // Run the planned command in a throwaway repository: a base ahead of HEAD fails.
+    let dir = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let st = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir.path())
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .status()
+            .unwrap();
+        assert!(st.success(), "git {args:?}");
+    };
+    let planned = |expect_ok: bool| {
+        let out = std::process::Command::new(&cmds[0].program)
+            .args(&cmds[0].args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert_eq!(
+            out.status.success(),
+            expect_ok,
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "one"]);
+    git(&["checkout", "-q", "-b", "feature"]);
+    // The base is an ancestor of HEAD: fresh.
+    planned(true);
+    git(&["checkout", "-q", "main"]);
+    git(&["commit", "-q", "--allow-empty", "-m", "two"]);
+    git(&["checkout", "-q", "feature"]);
+    // The base moved on: stale, and the message names the fix.
+    let why = planned(false);
+    assert!(
+        why.contains("1 new commit(s)") && why.contains("git merge main"),
+        "{why}"
+    );
     assert_eq!(
         skip_reason(
             &make_plan(&ch, &opts(&["--allow-stale"]), true),
@@ -1193,5 +1248,20 @@ fn coverage_can_include_dependents() {
     let Action::Run(cmds) = &step(&steps, "diff-coverage").action else {
         panic!("diff-coverage should run");
     };
-    assert!(cmds[0].args.len() > 4, "{:?}", cmds[0].args);
+    // `common` and everything that depends on it, once each.
+    assert_eq!(
+        cmds[0].args,
+        [
+            "coverage",
+            "--no-branch",
+            "-p",
+            "cli",
+            "-p",
+            "common",
+            "-p",
+            "exec",
+            "-p",
+            "xtask"
+        ]
+    );
 }
