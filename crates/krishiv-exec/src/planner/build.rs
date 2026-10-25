@@ -481,8 +481,8 @@ impl<'a> Planner<'a> {
     /// input's attributes, nullable where any input's column is), fanned
     /// into the pipeline above. Where the inputs store a column of one Spark
     /// type in different Arrow types (`Utf8` beside `Utf8View`), every input
-    /// yields the type's canonical Arrow type: the branches that store it
-    /// otherwise cast it.
+    /// yields the union carrier ([`union_carriers`]): the branches that store
+    /// it otherwise cast it.
     fn union(&mut self, p: &Arc<LogicalPlan>, inputs: &[Arc<LogicalPlan>]) -> Result<Planned> {
         let out = p
             .resolved_output()
@@ -507,9 +507,15 @@ impl<'a> Planner<'a> {
         for (cols, planned) in branches {
             let mut cast = HashSet::new();
             let mut items = Vec::with_capacity(cols.len());
-            for ((c, o), carrier) in cols.iter().zip(&out).zip(&carriers) {
+            for ((c, o), (carrier, mixed)) in cols.iter().zip(&out).zip(&carriers) {
                 let index = planned.column(c.id)?;
-                if planned.stored(index)? == carrier {
+                // A binary-safe `string` union (mixed `BinaryView` and
+                // `Utf8View` storage) rides on `BinaryView`: every branch
+                // casts to the carrier itself, so all branches meet byte for
+                // byte. (A cast through the canonical `Utf8View` would
+                // validate the carried bytes and reject them.) Branches that
+                // agree keep their carrier: no cast, no copy.
+                if planned.stored(index)? == carrier && !mixed {
                     items.push(ProjectItemPlan::Column {
                         index,
                         name: Some(o.name.clone()),
@@ -519,7 +525,7 @@ impl<'a> Planner<'a> {
                         expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
                             c.clone(),
                         )))),
-                        to: o.data_type.clone(),
+                        to: carrier_cast_target(&o.data_type, carrier),
                         mode: CastMode::Ansi,
                     };
                     cast.insert(c.id);
@@ -1272,14 +1278,18 @@ fn max_id(root: &LogicalPlan) -> u64 {
     max
 }
 
-/// The Arrow type each column of a union has in every input: the type the
-/// inputs all store it in, or, where they differ, the canonical Arrow type
-/// of its Spark type. An input column of another Spark type than the
-/// union's is an error.
+/// The Arrow type each column of a union has in every input, and whether
+/// every branch converts to it: the type the inputs all store it in (kept
+/// as is), or, where they differ, the canonical Arrow type of its Spark
+/// type — except a `string` column with a binary-safe branch (non-UTF-8
+/// bytes in a binary carrier), which rides on `BinaryView`: the canonical
+/// `Utf8View` would route the branch through the validating `STRING` cast
+/// and raise `INVALID_UTF8_STRING`. An input column of another Spark type
+/// than the union's is an error.
 fn union_carriers(
     out: &[BoundColumn],
     branches: &[(Vec<BoundColumn>, Planned)],
-) -> Result<Vec<arrow_schema::DataType>> {
+) -> Result<Vec<(arrow_schema::DataType, bool)>> {
     let mut carriers = Vec::with_capacity(out.len());
     for (i, o) in out.iter().enumerate() {
         let mut stored = Vec::with_capacity(branches.len());
@@ -1290,16 +1300,61 @@ fn union_carriers(
             stored.push((c, planned.stored(planned.column(c.id)?)?));
         }
         let first = stored.first().map(|(_, t)| *t);
-        let carrier = if stored.iter().all(|(_, t)| Some(*t) == first) {
-            first.cloned()
+        let (carrier, mixed) = if stored.iter().all(|(_, t)| Some(*t) == first) {
+            (first.cloned(), false)
         } else if stored.iter().all(|(c, _)| c.data_type == o.data_type) {
-            Some(o.data_type.to_arrow())
+            let binary = is_binary_safe_string(&o.data_type, stored.iter().map(|(_, t)| *t));
+            (
+                Some(if binary {
+                    arrow_schema::DataType::BinaryView
+                } else {
+                    o.data_type.to_arrow()
+                }),
+                binary,
+            )
         } else {
             return Err(internal("union inputs of different physical types"));
         };
-        carriers.push(carrier.ok_or_else(|| internal("a union without inputs"))?);
+        carriers.push((
+            carrier.ok_or_else(|| internal("a union without inputs"))?,
+            mixed,
+        ));
     }
     Ok(carriers)
+}
+
+/// Whether the `string` column stored as `stored` needs a binary union
+/// carrier: some branch holds it in a binary Arrow type, whose bytes are not
+/// necessarily valid UTF-8, so the validating `STRING` cast is not a way to
+/// meet the branches.
+fn is_binary_safe_string<'a>(
+    spark: &krishiv_types::DataType,
+    mut stored: impl Iterator<Item = &'a arrow_schema::DataType>,
+) -> bool {
+    *spark == krishiv_types::DataType::String
+        && stored.any(|t| {
+            matches!(
+                t,
+                arrow_schema::DataType::BinaryView
+                    | arrow_schema::DataType::Binary
+                    | arrow_schema::DataType::LargeBinary
+            )
+        })
+}
+
+/// The Spark type a union branch casts to so its column lands on `carrier`:
+/// the column's own Spark type — unless the carrier is a binary-safe
+/// `string` union's `BinaryView`, whose Spark type is `binary`, so the cast
+/// is a byte-preserving reinterpretation, never a validating string cast.
+fn carrier_cast_target(
+    spark: &krishiv_types::DataType,
+    carrier: &arrow_schema::DataType,
+) -> krishiv_types::DataType {
+    if *spark == krishiv_types::DataType::String && *carrier == arrow_schema::DataType::BinaryView {
+        krishiv_types::DataType::Binary
+    } else {
+        spark.clone()
+    }
 }
 
 /// The id of a plain (or aliased plain) column expression.

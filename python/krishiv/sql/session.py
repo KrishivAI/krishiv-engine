@@ -354,7 +354,8 @@ class SparkSession:
                 if len(row) != width:
                     raise _axis_length_mismatch(width, len(row))
                 valued.append(list(row))
-        return self._from_rows(valued, infer_schema(valued, names), verify, Row)
+        timestamp_ntz = self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ").strip().upper() == "TIMESTAMP_NTZ"
+        return self._from_rows(valued, infer_schema(valued, names, timestamp_ntz), verify, Row)
 
     def stop(self) -> None:
         """Ends this session; the next ``getOrCreate`` makes a new one."""

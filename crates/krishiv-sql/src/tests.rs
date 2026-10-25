@@ -187,6 +187,20 @@ fn options_follow_spark_confs() {
         conf(&[("spark.sql.sources.bucketing.maxBuckets", "many")]).max_buckets,
         100_000
     );
+    // Spark declares the limit a positive `Int`: zero and values above
+    // `i32::MAX` fall back to the default, `i32::MAX` itself is accepted.
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", "0")]).max_buckets,
+        100_000
+    );
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", "2147483648")]).max_buckets,
+        100_000
+    );
+    assert_eq!(
+        conf(&[("spark.sql.sources.bucketing.maxBuckets", "2147483647")]).max_buckets,
+        2_147_483_647
+    );
     let all = conf(&[
         ("spark.sql.ansi.enforceReservedKeywords", "true"),
         ("spark.sql.ansi.doubleQuotedIdentifiers", " TRUE "),

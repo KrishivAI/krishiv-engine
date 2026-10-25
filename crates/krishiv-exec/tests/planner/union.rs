@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Int32Array, RecordBatch, StringArray};
+use arrow_array::{Array, BinaryViewArray, Int32Array, RecordBatch, StringArray, cast::AsArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use krishiv_common::error::ErrorClass;
 use krishiv_exec::planner::{DefaultPlanner, MemoryTable, MemoryTables, PhysicalPlanner as _};
@@ -13,7 +13,7 @@ use krishiv_plan::{LogicalPlan, Plan, PlanNode};
 use krishiv_types::DataType;
 use krishiv_types::batch::Batch;
 
-use super::{Env, env, table};
+use super::{Env, env, run, table};
 
 /// `t` of [`env`] (`s` is `Utf8View`) and `u(a INT, s STRING)` with `s`
 /// stored as `Utf8`: the same logical type in two Arrow carriers.
@@ -121,4 +121,105 @@ fn branches_of_different_logical_types_are_rejected() {
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     assert!(e.to_string().contains("different physical types"), "{e}");
+}
+
+/// `t` of [`env`] (`s` is `Utf8View`) and `b(a INT, s STRING)` with `s`
+/// stored as tagged `BinaryView` (binary-safe: bytes that are not UTF-8).
+fn mixed_string_carriers() -> Env {
+    let (t_schema, t_batches) = table(10);
+    let b_schema = Arc::new(Schema::new(vec![
+        Field::new("a", ArrowType::Int32, true),
+        DataType::String
+            .to_arrow_field_with_storage("s", ArrowType::BinaryView, true)
+            .unwrap(),
+    ]));
+    let b = RecordBatch::try_new(
+        Arc::clone(&b_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(BinaryViewArray::from(vec![
+                Some(b"\xff\xfe".as_slice()),
+                Some(b"ok".as_slice()),
+                None,
+            ])),
+        ],
+    )
+    .unwrap();
+    let columns = |schema: &Schema| -> Vec<TableColumn> {
+        schema
+            .fields()
+            .iter()
+            .map(|f| TableColumn {
+                name: f.name().clone(),
+                data_type: DataType::from_arrow_field(f).unwrap(),
+                nullable: f.is_nullable(),
+            })
+            .collect()
+    };
+    let catalog = MemoryCatalog::new("spark_catalog")
+        .with_table(&["default"], "t", columns(&t_schema), None)
+        .with_table(&["default"], "b", columns(&b_schema), None);
+    let tables = MemoryTables::new()
+        .with_table(
+            &["spark_catalog", "default", "t"],
+            Arc::new(MemoryTable::new(t_schema, t_batches)),
+        )
+        .with_table(
+            &["spark_catalog", "default", "b"],
+            Arc::new(MemoryTable::new(b_schema, vec![Batch::new(b)])),
+        );
+    Env {
+        ctx: context(catalog, ResolutionConf::default()),
+        tables: Arc::new(tables),
+    }
+}
+
+/// A `STRING` branch of non-UTF-8 bytes (tagged `BinaryView` storage) beside
+/// a `Utf8View` one: the union rides on `BinaryView` and returns the bytes
+/// unchanged, instead of raising `INVALID_UTF8_STRING`.
+#[test]
+fn string_branches_with_non_utf8_bytes_union() {
+    use arrow_array::types::Int32Type;
+
+    let env = mixed_string_carriers();
+    let mut expected: Vec<(Option<i32>, Option<Vec<u8>>)> = (0..10)
+        .map(|i: i32| {
+            (
+                (i % 4 != 3).then_some(i),
+                Some(format!("s{i}").into_bytes()),
+            )
+        })
+        .collect();
+    expected.extend([
+        (Some(1), Some(b"\xff\xfe".to_vec())),
+        (Some(2), Some(b"ok".to_vec())),
+        (Some(3), None),
+    ]);
+    expected.sort();
+    for sql in [
+        "SELECT a, s FROM b UNION ALL SELECT a, s FROM t",
+        "SELECT a, s FROM t UNION ALL SELECT a, s FROM b",
+    ] {
+        let plan = env.plan(sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        assert_eq!(
+            plan.schema().field(1).data_type(),
+            &ArrowType::BinaryView,
+            "{sql}: {plan}"
+        );
+        assert!(format!("{:?}", plan.root()).contains("Cast"), "{plan}");
+        let batches = run(&plan).unwrap_or_else(|e| panic!("{sql}: {e}"));
+        let mut rows = Vec::new();
+        for batch in &batches {
+            let a = batch.column(0).as_primitive::<Int32Type>();
+            let s = batch.column(1).as_binary_view();
+            for r in 0..batch.num_rows() {
+                rows.push((
+                    (!a.is_null(r)).then(|| a.value(r)),
+                    (!s.is_null(r)).then(|| s.value(r).to_vec()),
+                ));
+            }
+        }
+        rows.sort();
+        assert_eq!(rows, expected, "{sql}");
+    }
 }

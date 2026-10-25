@@ -5,6 +5,12 @@ The rules of ``pyspark.sql.types._infer_type`` and ``_merge_type`` (PySpark 4.2)
 value has the Spark type its Python type maps to, a row's types are merged with the
 types of the rows before it, and a column that is still ``void`` at the end cannot be
 typed. Merging is strict: ``bigint`` with ``double`` is an error, not a widening.
+
+Naive datetimes infer ``timestamp``; with ``spark.sql.timestampType = TIMESTAMP_NTZ``
+they infer ``timestamp_ntz`` instead (time-zone-aware datetimes always infer
+``timestamp``). Two Python types have no Spark type here yet: ``datetime.timedelta``
+and ``datetime.time`` are ``UNSUPPORTED_DATA_TYPE`` until the engine can materialize
+their types.
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from krishiv.sql.types import (
     StringType,
     StructField,
     StructType,
+    TimestampNTZType,
     TimestampType,
 )
 
@@ -50,8 +57,11 @@ _ATOMIC: dict[type, Callable[[], DataType]] = {
 }
 
 
-def infer_type(value: Any) -> DataType:
-    """The Spark type of one Python value."""
+def infer_type(value: Any, timestamp_ntz: bool = False) -> DataType:
+    """The Spark type of one Python value: a naive datetime is ``timestamp_ntz``
+    when the session prefers ``TIMESTAMP_NTZ``, else ``timestamp``."""
+    if type(value) is datetime.datetime and value.tzinfo is None and timestamp_ntz:
+        return TimestampNTZType()
     atomic = _ATOMIC.get(type(value))
     if atomic is not None:
         return atomic()
@@ -60,26 +70,28 @@ def infer_type(value: Any) -> DataType:
         value_type: DataType = NullType()
         for k, v in value.items():
             if k is not None:
-                key_type = merge_type(key_type, infer_type(k))
+                key_type = merge_type(key_type, infer_type(k, timestamp_ntz))
             if v is not None:
-                value_type = merge_type(value_type, infer_type(v))
+                value_type = merge_type(value_type, infer_type(v, timestamp_ntz))
         return MapType(key_type, value_type, True)
     if isinstance(value, list):
-        element = reduce(merge_type, (infer_type(v) for v in value)) if value else NullType()
+        element = reduce(merge_type, (infer_type(v, timestamp_ntz) for v in value)) if value else NullType()
         return ArrayType(element, True)
     if isinstance(value, tuple):
-        return infer_row(value, None)
+        return infer_row(value, None, timestamp_ntz)
     raise PySparkTypeError(errorClass="UNSUPPORTED_DATA_TYPE", messageParameters={"data_type": type(value).__name__})
 
 
-def infer_row(row: Any, names: list[str] | None) -> StructType:
+def infer_row(row: Any, names: list[str] | None, timestamp_ntz: bool = False) -> StructType:
     """The struct of one row's values: named by ``names``, else by the row's own
     field names (a ``Row``, a named tuple), else ``_1``, ``_2``, ..."""
     if names is None:
         names = getattr(row, "__fields__", None) or getattr(row, "_fields", None)
     if names is None:
         names = [f"_{i + 1}" for i in range(len(row))]
-    return StructType([StructField(name, infer_type(v), True) for name, v in zip(names, row, strict=True)])
+    return StructType(
+        [StructField(name, infer_type(v, timestamp_ntz), True) for name, v in zip(names, row, strict=True)]
+    )
 
 
 def merge_type(a: DataType, b: DataType) -> DataType:
@@ -119,7 +131,7 @@ def has_nulltype(data_type: DataType) -> bool:
     return isinstance(data_type, NullType)
 
 
-def infer_schema(rows: list[list[Any]], names: list[str]) -> StructType:
+def infer_schema(rows: list[list[Any]], names: list[str], timestamp_ntz: bool = False) -> StructType:
     """The struct that every row of ``rows`` (one value per name) fits.
 
     Raises ``CANNOT_MERGE_TYPE`` at the first row whose types do not merge with the rows
@@ -127,7 +139,7 @@ def infer_schema(rows: list[list[Any]], names: list[str]) -> StructType:
     holds empty lists and dicts)."""
     if not rows:
         raise PySparkValueError(errorClass="CANNOT_INFER_EMPTY_SCHEMA")
-    merged = reduce(merge_type, (infer_row(row, names) for row in rows))
+    merged = reduce(merge_type, (infer_row(row, names, timestamp_ntz) for row in rows))
     if has_nulltype(merged):
         raise PySparkValueError(errorClass="CANNOT_DETERMINE_TYPE")
     return cast(StructType, merged)

@@ -234,3 +234,25 @@ def test_infer_schema_merges_rows_in_order() -> None:
     with pytest.raises(errors.PySparkValueError, match="CANNOT_INFER_EMPTY_SCHEMA") as empty:
         infer_schema([], ["x", "y"])
     assert empty.value.getCondition() == "CANNOT_INFER_EMPTY_SCHEMA"
+
+
+def test_naive_datetimes_follow_the_timestamp_type_preference() -> None:
+    naive = datetime.datetime(2024, 1, 2, 3, 4, 5)
+    aware = datetime.datetime(2024, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
+    assert infer_type(naive) == T.TimestampType()
+    assert infer_type(naive, True) == T.TimestampNTZType()
+    # Time-zone-aware datetimes always infer `timestamp`.
+    assert infer_type(aware) == T.TimestampType()
+    assert infer_type(aware, True) == T.TimestampType()
+    # The preference flows through rows, lists and schemas.
+    assert infer_row((naive,), None, True).fields[0].dataType == T.TimestampNTZType()
+    assert infer_type([naive], True) == T.ArrayType(T.TimestampNTZType(), True)
+    schema = infer_schema([[naive]], ["t"], True)
+    assert schema.fields[0].dataType == T.TimestampNTZType()
+    assert infer_schema([[naive]], ["t"]).fields[0].dataType == T.TimestampType()
+
+
+def test_create_dataframe_honors_timestamp_ntz() -> None:
+    spark = SparkSession.builder.config("spark.sql.timestampType", "TIMESTAMP_NTZ").create()
+    df = spark.createDataFrame([(datetime.datetime(2024, 1, 2, 3, 4, 5),)])
+    assert df.dtypes == [("_1", "timestamp_ntz")]
