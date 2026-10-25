@@ -473,8 +473,8 @@ fn values_plans_hold_no_inline_table() {
             .unwrap();
         assert!(!body.contains("InlineTable"), "{body}");
     }
-    // The analyzed plan is a union of row projects, and the physical plan
-    // runs the existing operators.
+    // The analyzed plan is one row expansion per table row over a
+    // single row, and the physical plan runs the existing operators.
     let analyzed = text
         .split("== Analyzed Logical Plan ==")
         .nth(1)
@@ -482,11 +482,66 @@ fn values_plans_hold_no_inline_table() {
         .split("== Optimized Logical Plan ==")
         .next()
         .unwrap();
-    assert!(analyzed.contains("Union"), "{analyzed}");
-    assert!(analyzed.contains("Project"), "{analyzed}");
+    assert!(analyzed.contains("Expand"), "{analyzed}");
     assert!(analyzed.contains("OneRowRelation"), "{analyzed}");
     let physical = text.split("== Physical Plan ==").nth(1).unwrap();
     assert!(!physical.contains("InlineTable"), "{physical}");
+    assert!(physical.contains("Expand"), "{physical}");
+}
+
+/// `LIMIT` without a sort keeps an inline table's row order: the first
+/// row of the `VALUES` list. Repeated so a parallel fan-in of row plans
+/// flakes (it returns whichever row's pipeline wins the race).
+#[test]
+fn inline_table_limit_keeps_row_order() {
+    let s = session();
+    // One hundred rows: a parallel union almost never returns the first
+    // row first.
+    let values = (1..=100)
+        .map(|i| format!("({i}, {i})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("SELECT * FROM VALUES {values} AS t(a, b) LIMIT 1");
+    for _ in 0..50 {
+        let df = block_on(s.sql(&sql)).unwrap();
+        let batches = block_on(df.collect()).unwrap();
+        let mut rows = Vec::new();
+        for b in &batches {
+            for r in 0..b.num_rows() {
+                rows.push(
+                    (0..b.num_columns())
+                        .map(|c| cell(b, c, r))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        assert_eq!(rows, [vec!["1".to_owned(), "1".to_owned()]]);
+    }
+    // The golden shape: a scalar subquery with `LIMIT 1` over a temporary
+    // view of an inline table, grouped by ordinal. Spark returns the first
+    // row of the inline table.
+    block_on(s.sql(&format!(
+        "CREATE TEMPORARY VIEW data AS SELECT * FROM VALUES {values} AS data(a, b)"
+    )))
+    .unwrap();
+    for _ in 0..20 {
+        let df = block_on(
+            s.sql("SELECT (SELECT a FROM data LIMIT 1) AS subq1 FROM VALUES (1) GROUP BY 1"),
+        )
+        .unwrap();
+        let batches = block_on(df.collect()).unwrap();
+        let mut rows = Vec::new();
+        for b in &batches {
+            for r in 0..b.num_rows() {
+                rows.push(
+                    (0..b.num_columns())
+                        .map(|c| cell(b, c, r))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        assert_eq!(rows, [vec!["1".to_owned()]]);
+    }
 }
 
 /// The views and queries of the `using-join.sql` and `group-by-all.sql`

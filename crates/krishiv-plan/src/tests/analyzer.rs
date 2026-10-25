@@ -2522,9 +2522,9 @@ fn inline_table_of_one_row_is_a_project() {
     assert_eq!(datatypes(&a), [DataType::String, DataType::Integer]);
 }
 
-/// Several rows are `Project`s over `OneRowRelation` joined by a `Union`;
-/// each column widens to the wider type and is nullable where any row's
-/// value is.
+/// Several rows are one `Expand` over `OneRowRelation` with a projection
+/// per row, in row order; each column widens to the wider type and is
+/// nullable where any row's value is.
 #[test]
 fn inline_table_rows_widen_and_nullable() {
     let ctx = ctx();
@@ -2544,18 +2544,19 @@ fn inline_table_rows_widen_and_nullable() {
     assert!(a.plan.root().is_resolved());
     assert!(!has_inline_table(a.plan.root()));
     assert_eq!(datatypes(&a), [DataType::String, DataType::Long]);
-    let PlanNode::Union { inputs, .. } = &a.plan.root().node else {
-        panic!("a union of row projects:\n{}", a.plan.root());
+    let PlanNode::Expand {
+        input,
+        projections,
+        output,
+    } = &a.plan.root().node
+    else {
+        panic!("an expand of row projections:\n{}", a.plan.root());
     };
-    assert_eq!(inputs.len(), 3);
-    for input in inputs {
-        let PlanNode::Project { input, .. } = &input.node else {
-            panic!("a row project:\n{input}");
-        };
-        assert!(
-            matches!(input.node, PlanNode::OneRowRelation),
-            "over one row:\n{input}"
-        );
+    assert!(matches!(input.node, PlanNode::OneRowRelation));
+    assert_eq!(projections.len(), 3);
+    assert_eq!(output.len(), 2);
+    for row in projections {
+        assert_eq!(row.len(), 2);
     }
 }
 
@@ -2707,7 +2708,7 @@ fn inline_table_of_unknown_column_is_unresolved() {
 }
 
 /// A large inline table analyzes in time linear in its rows: ten thousand
-/// rows become one n-ary union, not a deep tree.
+/// rows become one `Expand` with ten thousand projections, not a deep tree.
 #[test]
 fn inline_table_of_many_rows_resolves() {
     let ctx = ctx();
@@ -2717,10 +2718,10 @@ fn inline_table_of_many_rows_resolves() {
     let a = r.unwrap();
     assert!(a.plan.root().is_resolved());
     assert!(!has_inline_table(a.plan.root()));
-    let PlanNode::Union { inputs, .. } = &a.plan.root().node else {
-        panic!("one n-ary union:\n{}", a.plan.root());
+    let PlanNode::Expand { projections, .. } = &a.plan.root().node else {
+        panic!("one expand:\n{}", a.plan.root());
     };
-    assert_eq!(inputs.len(), 10_000);
+    assert_eq!(projections.len(), 10_000);
 }
 
 /// A hand-built row of the wrong width fails rather than NULL-fills or

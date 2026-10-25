@@ -283,9 +283,12 @@ pub enum PlanNode {
     /// An unresolved inline table (`VALUES ...`, Spark's
     /// `UnresolvedInlineTable`): each row's expressions over no input.
     /// Unresolved plans only: the analyzer resolves the expressions and
-    /// rewrites the node into [`PlanNode::Project`]s over
-    /// [`PlanNode::OneRowRelation`] joined by a [`PlanNode::Union`]
-    /// (Spark's `ResolveInlineTables`).
+    /// rewrites the node into a [`PlanNode::Project`] over
+    /// [`PlanNode::OneRowRelation`] for a single row, or into a
+    /// [`PlanNode::Expand`] over [`PlanNode::OneRowRelation`] with one
+    /// projection per row otherwise (row order is the projections'
+    /// order, so a downstream `LIMIT` without a sort keeps the first
+    /// rows; Spark's `ResolveInlineTables`).
     InlineTable {
         /// One expression per column per row; row aliases (`VALUES (1 AS
         /// a)`) are stripped at lowering, the schema comes from `columns`.

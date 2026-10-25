@@ -100,16 +100,19 @@ impl Resolver<'_> {
     /// An inline table (`VALUES ...`, Spark's `ResolveInlineTables`):
     /// resolves every row's expressions with no input columns, then rewrites
     /// the node into one [`PlanNode::Project`] over
-    /// [`PlanNode::OneRowRelation`] per row (each value cast to its column's
-    /// type, aliased to the column's name), joined by an n-ary
-    /// [`PlanNode::Union`] (a single row is just the `Project`).
+    /// [`PlanNode::OneRowRelation`] (each value cast to its column's
+    /// type, aliased to the column's name) for a single row, or into one
+    /// [`PlanNode::Expand`] over [`PlanNode::OneRowRelation`] with one
+    /// projection per row otherwise.
     ///
     /// Each column's type is the wider type of its values: the wider type
     /// set operations use with ANSI on, without string promotion with ANSI
     /// off (as Spark's `ResolveInlineTables`); a column whose values share
     /// no type is `INVALID_INLINE_TABLE.INCOMPATIBLE_TYPES_IN_INLINE_TABLE`.
     /// A column is nullable where any row's value is. Row order is the
-    /// union's, as Spark leaves it.
+    /// projections' order: an inline table keeps its rows through a
+    /// downstream `LIMIT` without a sort, which an n-ary
+    /// [`PlanNode::Union`] (fanned into parallel pipelines) does not keep.
     pub(super) fn inline_table(
         &mut self,
         p: &LogicalPlan,
@@ -175,8 +178,10 @@ impl Resolver<'_> {
             }
             types.push(acc.unwrap_or(DataType::Null));
         }
-        let mut kids = Vec::with_capacity(rows.len());
-        for row in &bound {
+        if bound.len() == 1 {
+            let Some(row) = bound.first() else {
+                return Err(unsupported("an inline table", o));
+            };
             let mut exprs = Vec::with_capacity(width);
             let mut out = Vec::with_capacity(width);
             for (c, name) in columns.iter().enumerate() {
@@ -204,29 +209,53 @@ impl Resolver<'_> {
             let one = Arc::new(LogicalPlan::new(PlanNode::OneRowRelation).with_origin(o));
             let base = self.wrap(Arc::clone(&one), o.plan_id, Vec::new(), &[]);
             let node = PlanNode::Project { input: one, exprs };
-            kids.push(self.make(o, node, out, &[&base]));
+            return Ok(self.make(o, node, out, &[&base]));
         }
-        if kids.len() == 1 {
-            let [only] = kids
-                .try_into()
-                .map_err(|_| unsupported("an inline table", o))?;
-            return Ok(only);
-        }
-        // The first row's attributes, nullable where any row's column is
-        // (as a set operation's output is).
-        let mut out = kids[0].out.to_vec();
-        for k in &kids[1..] {
-            for (a, b) in out.iter_mut().zip(k.out.iter()) {
-                a.col.nullable |= b.col.nullable;
+        // One projection per row over a single row: the table keeps its
+        // row order through a downstream `LIMIT` (each projection emits
+        // in order in the one pipeline), where a union of row plans fans
+        // into parallel pipelines and loses it.
+        let one = Arc::new(LogicalPlan::new(PlanNode::OneRowRelation).with_origin(o));
+        let base = self.wrap(Arc::clone(&one), o.plan_id, Vec::new(), &[]);
+        let mut projections = Vec::with_capacity(bound.len());
+        let mut nullable = vec![false; width];
+        for row in &bound {
+            let mut exprs = Vec::with_capacity(width);
+            for (c, ty) in types.iter().enumerate() {
+                let Some(b) = row.get(c) else {
+                    return Err(unsupported("an inline table row of the wrong width", o));
+                };
+                let cast =
+                    self.implicit_cast(b, coerce::cast_to(b.ty.data_type.as_ref(), Some(ty)));
+                nullable[c] |= cast.ty.nullable;
+                exprs.push(cast.expr);
             }
+            projections.push(exprs);
         }
-        let node = PlanNode::Union {
-            inputs: kids.iter().map(|k| Arc::clone(&k.plan)).collect(),
-            by_name: false,
-            allow_missing_columns: false,
+        let mut output = Vec::with_capacity(width);
+        for (c, name) in columns.iter().enumerate() {
+            output.push(self.attr(
+                name,
+                &ArgType {
+                    data_type: Some(types[c].clone()),
+                    nullable: nullable[c],
+                },
+            ));
+        }
+        let out: Vec<Attr> = output
+            .iter()
+            .map(|col| Attr {
+                col: col.clone(),
+                qual: no_qual(),
+                source: None,
+            })
+            .collect();
+        let node = PlanNode::Expand {
+            input: Arc::clone(&base.plan),
+            projections,
+            output,
         };
-        let refs: Vec<&Rel> = kids.iter().collect();
-        Ok(self.make(o, node, out, &refs))
+        Ok(self.make(o, node, out, &[&base]))
     }
 
     /// Whether a row expression of an inline table may stay: it holds no
