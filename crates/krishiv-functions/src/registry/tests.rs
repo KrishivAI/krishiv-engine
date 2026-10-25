@@ -1284,3 +1284,67 @@ fn regex_signatures() {
     let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
     assert_eq!(r, ArgType::new(DataType::Integer, true));
 }
+
+/// The cast-named functions (`float(x)`, `int(x)`, ...): kind scalar,
+/// arity exactly 1 from Spark's catalog, any input, result the target
+/// type (`decimal(10,0)` for `decimal`). The analyzer rewrites every
+/// call to a cast, so they run as `Execution::Cast` and are never
+/// executed or bound as functions.
+#[test]
+fn cast_named_functions_rewrite_to_casts() {
+    let targets = [
+        ("boolean", DataType::Boolean),
+        ("tinyint", DataType::Byte),
+        ("smallint", DataType::Short),
+        ("int", DataType::Integer),
+        ("bigint", DataType::Long),
+        ("float", DataType::Float),
+        ("double", DataType::Double),
+        ("decimal", dec(10, 0)),
+        ("string", DataType::String),
+        ("binary", DataType::Binary),
+        ("date", DataType::Date),
+        ("timestamp", DataType::Timestamp),
+    ];
+    assert_eq!(targets.len(), 12);
+    for (name, target) in targets {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
+        assert_eq!(d.execution, Execution::Cast, "{name}");
+        assert_eq!(d.inputs, Inputs::Any, "{name}");
+        assert!(
+            d.arity.accepts(1) && !d.arity.accepts(0) && !d.arity.accepts(2),
+            "{name}"
+        );
+        assert_eq!(d.arity.expected(), "1", "{name}");
+        // The catalog agrees (the registry takes arity from it).
+        let row = builtins().spark_function(name).unwrap();
+        assert_eq!(row.kind, Some(FunctionKind::Scalar), "{name}");
+        // The result is the target type; NULL only with a nullable argument.
+        assert_eq!(
+            result(name, &[ty(target.clone())], &[]).unwrap(),
+            ty(target.clone()),
+            "{name}"
+        );
+        assert_eq!(
+            result(name, &[ArgType::new(target.clone(), true)], &[]).unwrap(),
+            ArgType::new(target.clone(), true),
+            "{name}"
+        );
+        assert_eq!(
+            result(name, &[null_ty()], &[]).unwrap(),
+            ArgType::new(target.clone(), true),
+            "{name}"
+        );
+    }
+    // `timestamp_ntz` is not a function (Spark has no such name).
+    assert!(matches!(
+        builtins().lookup("timestamp_ntz", SparkProfile::V4_2),
+        Lookup::NotFound
+    ));
+    // Lookups stay ASCII case-insensitive.
+    assert!(matches!(
+        builtins().lookup("FLOAT", SparkProfile::V4_2),
+        Lookup::Found(_)
+    ));
+}

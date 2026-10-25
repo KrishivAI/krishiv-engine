@@ -109,6 +109,38 @@ fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Boolean, c)
 }
 
+fn byte(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Byte, c)
+}
+
+fn short(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Short, c)
+}
+
+fn long(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Long, c)
+}
+
+fn float(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Float, c)
+}
+
+fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Double, c)
+}
+
+fn decimal_default(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Decimal(DecimalType::USER_DEFAULT), c)
+}
+
+fn binary(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Binary, c)
+}
+
+fn timestamp(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Timestamp, c)
+}
+
 /// `regexp_substr`: Spark marks it nullable whatever its arguments.
 fn always_null(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::String, true))
@@ -678,5 +710,38 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::bitwise::specs());
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
+    out.extend(casts());
     out
+}
+
+/// The cast-named functions (`float(x)`, `int(x)`, ...): Spark analyzes
+/// them as `CAST(x AS target)` (its `RuntimeReplaceable`), with
+/// `decimal(10,0)` for `decimal`. One definition per name: kind scalar,
+/// arity exactly 1 from Spark's catalog, any input, result the target
+/// type. The analyzer rewrites the call to a cast during analysis (a call
+/// with `DISTINCT` or `FILTER` stays an ordinary call: it has no cast
+/// form), so they run as [`Execution::Cast`] and are never executed as
+/// functions.
+fn casts() -> Vec<Spec> {
+    let cast = |name: &'static str, result: Rule| Spec {
+        name,
+        kind: FunctionKind::Scalar,
+        inputs: Inputs::Any,
+        result,
+        execution: Execution::Cast,
+    };
+    vec![
+        cast("boolean", boolean),
+        cast("tinyint", byte),
+        cast("smallint", short),
+        cast("int", int),
+        cast("bigint", long),
+        cast("float", float),
+        cast("double", double),
+        cast("decimal", decimal_default),
+        cast("string", string),
+        cast("binary", binary),
+        cast("date", date),
+        cast("timestamp", timestamp),
+    ]
 }

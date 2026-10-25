@@ -16,7 +16,7 @@ use proptest::prelude::*;
 use serde_json::Value;
 
 use super::depth::{on_small_stack, self_joins};
-use super::dsl::{add, c, eq, f, gt, int, s, star};
+use super::dsl::{add, c, date, eq, f, gt, int, s, star};
 use super::tpch::QUERIES;
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
@@ -1547,6 +1547,175 @@ fn unsupported_inputs_fail_explicitly() {
         text.contains("The `upper` requires 1 parameters but the actual number is 2"),
         "{text}"
     );
+}
+
+/// The cast-named functions (`float(x)`, `int(x)`, ...): Spark analyzes
+/// each call as `CAST(x AS target)`, so the analyzer rewrites the call
+/// to a cast during analysis and the plan only ever holds the `Cast`
+/// node. The output column is named by the argument, as Spark names it.
+#[test]
+fn cast_named_functions_rewrite_to_casts() {
+    use krishiv_types::DecimalType;
+
+    let ctx = ctx();
+    let double = |v: f64| Expr::from(Literal::Double(v));
+    let long = |v: i64| Expr::from(Literal::Long(v));
+    let boolean = |v: bool| Expr::from(Literal::Boolean(v));
+    let decimal = |p: u32, s: u32| DataType::Decimal(DecimalType::try_new(p, s).unwrap());
+    // (call, type, output name, nullable).
+    let cases: Vec<(Expr, DataType, &str, bool)> = vec![
+        (
+            f("float", vec![double(15.0)]),
+            DataType::Float,
+            "15.0",
+            false,
+        ),
+        (f("double", vec![s("1.5")]), DataType::Double, "1.5", true),
+        (f("int", vec![s("7")]), DataType::Integer, "7", true),
+        (f("boolean", vec![int(1)]), DataType::Boolean, "1", false),
+        (f("tinyint", vec![long(1)]), DataType::Byte, "1", false),
+        (f("smallint", vec![long(1)]), DataType::Short, "1", false),
+        (
+            f("bigint", vec![boolean(true)]),
+            DataType::Long,
+            "true",
+            false,
+        ),
+        (
+            f("decimal", vec![s("1.234")]),
+            decimal(10, 0),
+            "1.234",
+            true,
+        ),
+        (f("string", vec![int(42)]), DataType::String, "42", false),
+        (f("binary", vec![s("x")]), DataType::Binary, "x", false),
+        (
+            f("date", vec![s("2024-01-02")]),
+            DataType::Date,
+            "2024-01-02",
+            true,
+        ),
+        (
+            f("timestamp", vec![s("2024-01-02 12:34:56")]),
+            DataType::Timestamp,
+            "2024-01-02 12:34:56",
+            true,
+        ),
+        // A cast of a column keeps the column's name.
+        (f("int", vec![c("c")]), DataType::Integer, "c", true),
+        // Names resolve ASCII case-insensitively.
+        (f("FLOAT", vec![int(1)]), DataType::Float, "1", false),
+    ];
+    for (call, data_type, name, nullable) in cases {
+        let plan = LogicalPlan::table(["t"]).project(vec![call]);
+        let a = run(plan, &ctx).unwrap();
+        assert_eq!(a.output.len(), 1);
+        assert_eq!(a.output[0].data_type, data_type);
+        assert_eq!(a.output[0].name, name);
+        assert_eq!(a.output[0].nullable, nullable);
+        // The plan holds a cast, never a function call.
+        let text = a.plan.root().to_string();
+        assert!(text.contains("CAST("), "{text}");
+        assert!(!text.contains("float(") && !text.contains("int("), "{text}");
+    }
+    // Resolving a resolved plan changes nothing.
+    let plan = LogicalPlan::table(["t"]).project(vec![f("int", vec![s("7")])]);
+    let a = run(plan, &ctx).unwrap();
+    let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx)).unwrap();
+    assert!(again.plan.structurally_eq(&a.plan));
+}
+
+/// The arity error of a cast-named function quotes the call, with
+/// Spark's `expectedNum` text.
+#[test]
+fn cast_named_functions_check_arity() {
+    let ctx = ctx();
+    for (args, actual) in [(Vec::new(), "0"), (vec![int(1), int(2)], "2")] {
+        let plan = LogicalPlan::table(["t"]).project(vec![f("float", args)]);
+        let err = run(plan, &ctx).unwrap_err();
+        assert_eq!(
+            err.error.error_class().name(),
+            "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+        );
+        let params = err.error.message_parameters();
+        let get = |k: &str| params.iter().find(|(k2, _)| *k2 == k).unwrap().1.clone();
+        assert_eq!(get("functionName"), "`float`");
+        assert_eq!(get("expectedNum"), "1");
+        assert_eq!(get("actualNum"), actual);
+    }
+}
+
+/// A pair the cast path does not support fails as `CAST(x AS T)` fails,
+/// quoting the argument as Spark does.
+#[test]
+fn cast_named_functions_fail_like_casts() {
+    let ctx = ctx();
+    let binary = Expr::from(Literal::Binary(vec![1]));
+    let plan = LogicalPlan::table(["t"]).project(vec![f("boolean", vec![binary])]);
+    let err = run(plan, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+    );
+    let params = err.error.message_parameters();
+    let get = |k: &str| params.iter().find(|(k2, _)| *k2 == k).unwrap().1.clone();
+    assert_eq!(get("sqlExpr"), "\"X'01'\"");
+    assert_eq!(get("srcType"), "\"BINARY\"");
+    assert_eq!(get("targetType"), "\"BOOLEAN\"");
+    // A suggestion or a config hint fails as `CAST` does, quoting the
+    // argument.
+    let plan = LogicalPlan::table(["t"]).project(vec![f("bigint", vec![date("2024-01-02")])]);
+    let err = run(plan, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION"
+    );
+    let params = err.error.message_parameters();
+    let get = |k: &str| params.iter().find(|(k2, _)| *k2 == k).unwrap().1.clone();
+    assert_eq!(get("sqlExpr"), "\"CAST(2024-01-02 AS DATE)\"");
+    assert_eq!(get("functionNames"), "`UNIX_DATE`");
+    let plan = LogicalPlan::table(["t"]).project(vec![f("binary", vec![int(1)])]);
+    let err = run(plan, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION"
+    );
+    let params = err.error.message_parameters();
+    let get = |k: &str| params.iter().find(|(k2, _)| *k2 == k).unwrap().1.clone();
+    assert_eq!(get("sqlExpr"), "\"1\"");
+    assert_eq!(get("srcType"), "\"INT\"");
+    assert_eq!(get("targetType"), "\"BINARY\"");
+    // Without ANSI the same pair is allowed, as `CAST` allows it.
+    let legacy = context(
+        catalog(),
+        ResolutionConf {
+            ansi: false,
+            ..ResolutionConf::default()
+        },
+    );
+    let plan = LogicalPlan::table(["t"]).project(vec![f("binary", vec![int(1)])]);
+    let a = run(plan, &legacy).unwrap();
+    assert_eq!(a.output[0].data_type, DataType::Binary);
+    assert_eq!(a.output[0].name, "1");
+    // `timestamp_ntz` is not a function.
+    let plan = LogicalPlan::table(["t"]).project(vec![f("timestamp_ntz", vec![int(1)])]);
+    assert_eq!(class(&run(plan, &ctx)), "UNRESOLVED_ROUTINE");
+    // A malformed string analyzes in both modes (it fails at run time):
+    // nullability follows the cast, which may yield NULL.
+    for ansi in [true, false] {
+        let ctx = context(
+            catalog(),
+            ResolutionConf {
+                ansi,
+                ..ResolutionConf::default()
+            },
+        );
+        let plan = LogicalPlan::table(["t"]).project(vec![f("int", vec![s("x")])]);
+        let a = run(plan, &ctx).unwrap();
+        assert_eq!(a.output[0].data_type, DataType::Integer);
+        assert_eq!(a.output[0].name, "x");
+        assert!(a.output[0].nullable);
+    }
 }
 
 /// A column a projection dropped comes back from below it, as Spark's

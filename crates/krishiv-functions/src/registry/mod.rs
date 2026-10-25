@@ -46,6 +46,10 @@ pub enum Execution {
     /// By the executor's window operator, over a window (`row_number`,
     /// `rank`, ...); never called without `OVER`.
     Window,
+    /// Rewritten to a `CAST` during analysis (the cast-named functions:
+    /// `float(x)`, `int(x)`, ...); the plan only ever holds the `Cast`
+    /// node, so this is never executed and never bound.
+    Cast,
 }
 
 /// The aggregates the executor implements.
