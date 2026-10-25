@@ -20,7 +20,7 @@ from typing import Any
 from krishiv import _native
 from krishiv.errors import not_expected_type
 from krishiv.sql import _generated_functions
-from krishiv.sql._function_support import ColumnOrName, _call, _named, _num_or_col
+from krishiv.sql._function_support import ColumnOrName, _call, _lit, _named, _num_or_col
 from krishiv.sql._generated_functions import *  # noqa: F403  # re-exported through `__all__`
 from krishiv.sql.column import Column, _literal, _operand
 
@@ -31,6 +31,7 @@ _HAND_WRITTEN = [
     "col",
     "column",
     "concat",
+    "convert_timezone",
     "count",
     "countDistinct",
     "count_distinct",
@@ -94,6 +95,21 @@ def log(arg1: ColumnOrName | float, arg2: ColumnOrName | None = None) -> Column:
     if arg2 is None:
         return _call("ln", _named(arg1, "arg1"))
     return _call("log", _num_or_col(arg1, "arg1"), _named(arg2, "arg2"))
+
+
+def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: ColumnOrName) -> Column:
+    """Converts ``sourceTs`` from the ``sourceTz`` time zone to ``targetTz``.
+
+    When ``sourceTz`` is None the current session time zone is used.
+    """
+    if sourceTz is None:
+        return _call("convert_timezone", _lit(targetTz, "targetTz"), _named(sourceTs, "sourceTs"))
+    return _call(
+        "convert_timezone",
+        _lit(sourceTz, "sourceTz"),
+        _lit(targetTz, "targetTz"),
+        _named(sourceTs, "sourceTs"),
+    )
 
 
 def concat(*cols: ColumnOrName) -> Column:
