@@ -1025,6 +1025,8 @@ fn large_offsets_work_too() {
 }
 
 proptest! {
+    #![proptest_config(ProptestConfig { cases: if cfg!(miri) { 2 } else { 256 }, failure_persistence: None, ..ProptestConfig::default() })]
+
     #[test]
     fn reverse_is_an_involution(text in ".{0,40}") {
         let twice = one(|a| s::reverse(a).unwrap(), &text);
