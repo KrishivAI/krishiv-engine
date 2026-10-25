@@ -1303,16 +1303,19 @@ impl AvroDecoder {
             .build()
             .map_err(|e| corrupt(format!("an unreadable schema: {e}")))?;
         let mut cursor = std::io::Cursor::new(&open.bytes[open.pos..]);
+        // `apache-avro`'s `GenericDatumReader::read_value` can panic on
+        // malformed datum bytes (out-of-range indexes, unchecked slices)
+        // instead of returning `Err`; catching the unwind turns such input
+        // into the same typed corrupt-record path as a decode error. Both
+        // paths leave position accounting to `corrupt_record` (which drops
+        // the rest of the block), so neither advances `pos`/`left`/`file_row`
+        // here.
         let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             reader.read_value(&mut cursor)
         }));
         let value = match value {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
-                let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
-                open.pos = open.pos.saturating_add(consumed);
-                open.left = open.left.saturating_sub(1);
-                open.file_row += 1;
                 return self.corrupt_record(format!("an undecodable record: {e}"));
             }
             Err(_) => {

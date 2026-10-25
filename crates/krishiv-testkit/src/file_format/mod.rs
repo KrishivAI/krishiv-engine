@@ -37,6 +37,7 @@
 //! Split-planning parity with Spark is format-independent and checked in
 //! `krishiv-io` against Spark 4.2 goldens.
 
+pub mod avro;
 pub mod csv;
 pub mod data;
 pub mod drive;
@@ -115,6 +116,17 @@ pub trait FormatFixture: Send + Sync {
     /// errors.
     fn footerless(&self) -> bool {
         false
+    }
+    /// Whether the format stores column statistics that prune units (Avro
+    /// reports only row and byte counts, so the pruning-vacuity check does
+    /// not apply to it).
+    fn has_statistics(&self) -> bool {
+        true
+    }
+    /// Whether the format preserves field ids for [`FieldMapping::FieldId`]
+    /// (Avro has no field ids, so the field-id check does not apply to it).
+    fn supports_field_ids(&self) -> bool {
+        true
     }
     /// How scans and writes run: the framework's loops ([`drive::Direct`],
     /// the default) or the executor ([`drive::ThroughExecutor`]).
@@ -760,9 +772,10 @@ pub fn pruning_soundness(fx: &dyn FormatFixture) -> SuiteResult {
             }
         }
     }
-    // Not vacuous: statistics pruned some units.
+    // Not vacuous: statistics pruned some units (formats without column
+    // statistics, like Avro, cannot prune and skip this).
     ensure!(
-        fx.footerless() || returned_rows < 150 * input.num_rows(),
+        fx.footerless() || !fx.has_statistics() || returned_rows < 150 * input.num_rows(),
         "no predicate pruned anything"
     );
     nan_behind_float_bounds(&env, fx)
@@ -1046,18 +1059,21 @@ pub fn schema_evolution(fx: &dyn FormatFixture) -> SuiteResult {
         b.column(0).null_count() == 300,
         "case-sensitive mode matched another case"
     );
-    // Field ids: renamed columns.
-    let b = read(
-        Schema::new(vec![
-            Field::new("renamed", DataType::Utf8View, true).with_metadata(id_meta("2")),
-        ]),
-        FieldMapping::FieldId,
-    )
-    .map_err(|e| e.to_string())?;
-    ensure!(
-        b.column(0).to_data() == input.column(1).to_data(),
-        "field-id mapping read other data"
-    );
+    // Field ids: renamed columns (formats without field ids, like Avro,
+    // skip this: their files carry no ids to map by).
+    if fx.supports_field_ids() {
+        let b = read(
+            Schema::new(vec![
+                Field::new("renamed", DataType::Utf8View, true).with_metadata(id_meta("2")),
+            ]),
+            FieldMapping::FieldId,
+        )
+        .map_err(|e| e.to_string())?;
+        ensure!(
+            b.column(0).to_data() == input.column(1).to_data(),
+            "field-id mapping read other data"
+        );
+    }
     // Ambiguous.
     let dup = Arc::new(Schema::new(vec![
         Field::new("a", DataType::Int32, true),

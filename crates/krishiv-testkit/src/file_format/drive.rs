@@ -384,6 +384,12 @@ impl<F: FormatFixture> FormatFixture for ThroughExecutor<F> {
     fn footerless(&self) -> bool {
         self.0.footerless()
     }
+    fn has_statistics(&self) -> bool {
+        self.0.has_statistics()
+    }
+    fn supports_field_ids(&self) -> bool {
+        self.0.supports_field_ids()
+    }
     fn statistics_edge_cases(&self) -> Vec<(String, Vec<(String, String)>)> {
         self.0.statistics_edge_cases()
     }

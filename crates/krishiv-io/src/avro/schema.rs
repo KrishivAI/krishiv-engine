@@ -274,8 +274,11 @@ fn decimal_size(precision: u8) -> usize {
     }
     let (mut size, mut cap) = (1, 256_u128);
     while cap < need {
-        cap *= 256;
+        cap = cap.saturating_mul(256);
         size += 1;
+        if size >= 16 {
+            break;
+        }
     }
     size.min(16)
 }
@@ -332,33 +335,39 @@ impl Writer {
             }
             DataType::Struct(fields) => self.record(scope, fields)?,
             DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _) => {
-                format!(
-                    r#"{{"type":"array","items":{items}}}"#,
-                    items = self.fragment(item.data_type(), scope)?
-                )
+                let inner = self.fragment(item.data_type(), scope)?;
+                let items = if item.is_nullable() {
+                    format!("[\"null\",{inner}]")
+                } else {
+                    inner
+                };
+                format!(r#"{{"type":"array","items":{items}}}"#)
             }
             DataType::Map(entries, _) => {
                 let (key, value) = match entries.data_type() {
                     DataType::Struct(fields) => {
                         let key = fields.first().map(|f| (f.name(), f.data_type()));
-                        let value = fields.get(1).map(|f| f.data_type());
+                        let value = fields.get(1).map(|f| f.as_ref().clone());
                         (key, value)
                     }
                     _ => (None, None),
                 };
                 let (
                     Some((_, DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8)),
-                    Some(vt),
+                    Some(value),
                 ) = (key, value)
                 else {
                     return Err(unsupported(
                         "an Avro map needs string keys (only UTF-8 keys are supported)".to_owned(),
                     ));
                 };
-                format!(
-                    r#"{{"type":"map","values":{values}}}"#,
-                    values = self.fragment(vt, scope)?
-                )
+                let inner = self.fragment(value.data_type(), scope)?;
+                let values = if value.is_nullable() {
+                    format!("[\"null\",{inner}]")
+                } else {
+                    inner
+                };
+                format!(r#"{{"type":"map","values":{values}}}"#)
             }
             other => {
                 return Err(unsupported(format!(

@@ -9,7 +9,9 @@
 //! [`Encoder::flush`]) and drained through [`Encoder::take_bytes`], so the
 //! framework uploads while the next block builds. The sync marker is fixed
 //! per schema (never random): two writes of the same rows and options agree
-//! byte for byte.
+//! byte for byte. This deterministic marker is intentional and differs from
+//! writers that use a random marker per file; files stay readable because
+//! readers use the marker stored in each file's header.
 
 use std::collections::BTreeMap;
 

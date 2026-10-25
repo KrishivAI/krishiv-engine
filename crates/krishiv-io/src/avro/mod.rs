@@ -12,6 +12,10 @@
 //! column statistics, page pruning or late materialisation;
 //! `_metadata.row_index` and file-relative row selections are honoured from
 //! the block index.
+//!
+//! Typed refusals (`KRISHIV_UNSUPPORTED_FEATURE`): the `bzip2` and `xz`
+//! block codecs (reads and writes), and `LEGACY` rebase of dates and
+//! timestamps before 1582-10-15.
 
 mod decode;
 mod encode;
@@ -99,7 +103,18 @@ impl FileMetadata for AvroMetadata {
     }
 
     fn heap_size(&self) -> usize {
-        size_of::<Self>() + self.blocks.len() * size_of::<ScannedBlock>()
+        let schemas = self.writer.canonical_form().len()
+            + self.reader.canonical_form().len()
+            + self
+                .arrow
+                .fields()
+                .iter()
+                .map(|f| f.name().len() + 64)
+                .sum::<usize>();
+        size_of::<Self>()
+            + self.blocks.len() * size_of::<ScannedBlock>()
+            + self.sync.len()
+            + schemas
     }
 }
 

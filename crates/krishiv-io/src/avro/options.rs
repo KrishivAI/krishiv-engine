@@ -11,7 +11,7 @@
 
 use std::sync::LazyLock;
 
-use crate::error::Result;
+use crate::error::{Result, unsupported};
 use crate::options::{FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec};
 use crate::text::invalid_option;
 
@@ -68,7 +68,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         OptionSpec { name: "compression", kind: OptionKind::Enum(COMPRESSIONS), default: OptionDefault::Str("snappy"), conf_fallback: None, metadata_key: false, doc: "The block codec: uncompressed (null), snappy (default), deflate, bzip2, xz, zstandard.", };
         spec("recordName", "topLevelRecord", "The record name of a written schema built from the data (without `avroSchema`).");
         spec("recordNamespace", "", "The record namespace of a written schema built from the data (without `avroSchema`).");
-        flag("ignoreExtension", true, "Accepted: the framework lists files without filtering by extension, so extensions are always ignored.");
+        flag("ignoreExtension", true, "Must be true (the default): the framework lists files without filtering by extension, so extensions are always ignored; false is refused.");
         flag("positionalFieldMatching", false, "Match a file's fields to the read schema by position instead of by name.");
         OptionSpec { name: "mode", kind: OptionKind::Enum(MODES), default: OptionDefault::Str("PERMISSIVE"), conf_fallback: None, metadata_key: false, doc: "How corrupt records are handled.", };
         OptionSpec { name: "datetimeRebaseMode", kind: OptionKind::Enum(REBASE_MODES), default: OptionDefault::Str("EXCEPTION"), conf_fallback: None, metadata_key: false, doc: "How dates and timestamps before 1582-10-15 are handled (Spark's Avro default is EXCEPTION).", };
@@ -151,9 +151,14 @@ impl AvroOptions {
     ///
     /// # Errors
     /// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for a value that cannot be
-    /// honoured.
+    /// honoured; `KRISHIV_UNSUPPORTED_FEATURE` for `ignoreExtension=false`.
     pub(crate) fn new(o: &FormatOptions, writing: bool) -> Result<Self> {
         let _ = writing;
+        if matches!(o.bool("ignoreExtension"), Some(false)) {
+            return Err(unsupported(
+                "ignoreExtension=false (Avro files are always listed without filtering by extension)".to_owned(),
+            ));
+        }
         let record_name = o.str("recordName").unwrap_or("topLevelRecord").to_owned();
         if record_name.trim().is_empty() {
             return Err(invalid_option(

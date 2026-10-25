@@ -502,9 +502,13 @@ fn options_are_validated() {
             String::from_utf8_lossy(needle)
         );
     }
+    // `ignoreExtension=false` is refused: extensions are always ignored.
+    let o = env.options(&[("ignoreExtension", "false")]);
+    let e = AvroEncoder::new(&schema, &o).unwrap_err();
+    assert_eq!(class_of(&e), ErrorClass::KrishivUnsupportedFeature);
     // Every other option is accepted (here: parsed without a warning).
     for kv in [
-        ("ignoreExtension", "false"),
+        ("ignoreExtension", "true"),
         ("positionalFieldMatching", "true"),
         ("datetimeRebaseMode", "LEGACY"),
         ("mode", "DROPMALFORMED"),
