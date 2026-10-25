@@ -394,8 +394,11 @@ impl Lowerer {
     /// A query body: a `SELECT`, a set operation, a table, ...
     fn body(&mut self, body: &SetExpr) -> R<LogicalPlan> {
         Ok(match &body.kind {
+            SetExprKind::Pipe(_) => return Err(unsupported("pipe operators", body.span)),
+            SetExprKind::Transform(_) => return Err(unsupported("TRANSFORM", body.span)),
             SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
             SetExprKind::Query(inner) => self.query(inner)?,
+            SetExprKind::DynamicTable(_) => return Err(unsupported("IDENTIFIER()", body.span)),
             SetExprKind::Table(name) => self.node(
                 PlanNode::Read(ReadSource::Table {
                     name: name.parts.iter().map(|p| p.value.clone()).collect(),
@@ -703,6 +706,7 @@ impl Lowerer {
         written: &mut Vec<Arc<IrExpr>>,
     ) -> R<Vec<Vec<Arc<IrExpr>>>> {
         Ok(match &item.kind {
+            GroupItemKind::Named(_) => return Err(unsupported("named grouping items", item.span)),
             GroupItemKind::Expr(e) => {
                 let e = arc(self.expr(e)?);
                 written.push(Arc::clone(&e));
@@ -832,6 +836,9 @@ impl Lowerer {
                 JoinConstraint::Using(cols) => {
                     JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
                 }
+                JoinConstraint::NearestBy(n) => {
+                    return Err(unsupported("NEAREST BY joins", n.span));
+                }
             };
             plan = self.node(
                 PlanNode::Join {
@@ -847,6 +854,9 @@ impl Lowerer {
     }
 
     fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
+        if let Some(sample) = &tf.sample {
+            return Err(unsupported("TABLESAMPLE", sample.span));
+        }
         let plan = match &tf.kind {
             TableFactorKind::Table {
                 name,
@@ -901,6 +911,9 @@ impl Lowerer {
                 inner
             }
             TableFactorKind::Nested(r) => self.deeper(|l| l.relation(r))?,
+            TableFactorKind::DynamicTable { name, .. } => {
+                return Err(unsupported("IDENTIFIER()", name.span));
+            }
             TableFactorKind::Values(rows) => self.inline_table(rows, tf.alias.as_ref(), tf.span)?,
             _ => return Err(unsupported("table-valued functions", tf.span)),
         };
@@ -1242,6 +1255,9 @@ impl Lowerer {
                 self.call(Builtin::When.name(), args, sp)
             }
             ExprKind::Function(f) => {
+                if let Some(dynamic) = &f.dynamic_name {
+                    return Err(unsupported("IDENTIFIER() function names", dynamic.span));
+                }
                 let [name] = &f.name.parts[..] else {
                     return Err(unsupported("qualified function names", f.name.span));
                 };
@@ -1334,6 +1350,9 @@ impl Lowerer {
             ExprKind::Nested(inner) => self.expr(inner)?,
             ExprKind::Parameter(_) => return Err(unsupported("parameter markers", sp)),
             ExprKind::Subscript(..) => return Err(unsupported("subscripts", sp)),
+            ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
+            ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
+            ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
             ExprKind::Lambda { .. } => return Err(unsupported("lambda functions", sp)),
             ExprKind::Row(_) | ExprKind::Struct(_) => {
                 return Err(unsupported("row and struct constructors", sp));
