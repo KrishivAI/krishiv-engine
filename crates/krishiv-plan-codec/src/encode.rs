@@ -313,7 +313,11 @@ impl Encoder {
         Ok(pb::AggregateNode {
             input: self.node_index(input)?,
             group_by: indexes(&plan.group_by),
-            aggregates: plan.aggregates.iter().map(aggregate_expr).collect(),
+            aggregates: plan
+                .aggregates
+                .iter()
+                .map(aggregate_expr)
+                .collect::<Result<_>>()?,
             distinct: plan.distinct.clone(),
             output: match plan.output {
                 AggregateOutput::Final => pb::AggregateOutput::Final,
@@ -532,6 +536,9 @@ fn join_type(t: JoinType) -> pb::JoinType {
         JoinType::LeftSemi => pb::JoinType::LeftSemi,
         JoinType::LeftAnti => pb::JoinType::LeftAnti,
         JoinType::NullAwareAnti => pb::JoinType::NullAwareAnti,
+        JoinType::RightSemi => pb::JoinType::RightSemi,
+        JoinType::RightAnti => pb::JoinType::RightAnti,
+        JoinType::RightOuter => pb::JoinType::RightOuter,
     }
 }
 
@@ -608,7 +615,35 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
         WindowFunction::PercentRank => Function::PercentRank(pb::Empty {}),
         WindowFunction::CumeDist => Function::CumeDist(pb::Empty {}),
         WindowFunction::Ntile(buckets) => Function::Ntile(*buckets),
-        WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a)),
+        WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a)?),
+        WindowFunction::Offset {
+            input,
+            offset,
+            default,
+            ignore_nulls,
+            data_type,
+        } => Function::OffsetValue(pb::OffsetFunction {
+            input: *input as u64,
+            offset: *offset,
+            default: default.map(|c| c as u64),
+            ignore_nulls: *ignore_nulls,
+            data_type: type_bytes(data_type),
+        }),
+        WindowFunction::NthValue {
+            input,
+            n,
+            ignore_nulls,
+            data_type,
+        } => Function::NthValue(pb::NthValueFunction {
+            input: *input as u64,
+            n: *n,
+            ignore_nulls: *ignore_nulls,
+            data_type: type_bytes(data_type),
+        }),
+    };
+    let offset = |b: FrameBound| match b {
+        FrameBound::Offset(k) => k,
+        _ => 0,
     };
     Ok(pb::WindowFunctionPlan {
         function: Some(function),
@@ -619,6 +654,8 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
             } as i32,
             lower: frame_bound(f.frame.lower)? as i32,
             upper: frame_bound(f.frame.upper)? as i32,
+            lower_offset: offset(f.frame.lower),
+            upper_offset: offset(f.frame.upper),
         }),
         filter: f.filter.map(|c| c as u64),
         name: f.name.clone(),
@@ -630,6 +667,7 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
         FrameBound::UnboundedPreceding => Ok(pb::FrameBound::UnboundedPreceding),
         FrameBound::CurrentRow => Ok(pb::FrameBound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(pb::FrameBound::UnboundedFollowing),
+        FrameBound::Offset(_) => Ok(pb::FrameBound::Offset),
         // `FrameBound` is `#[non_exhaustive]`: a bound added later needs a
         // codec change, not a silently wrong frame.
         _ => Err(CodecError::Unsupported(
@@ -638,7 +676,7 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
     }
 }
 
-fn aggregate_expr(a: &AggregateExpr) -> pb::AggregateExpr {
+fn aggregate_expr(a: &AggregateExpr) -> Result<pb::AggregateExpr> {
     let (function, ignore_nulls) = match a.function {
         AggregateFunction::Count => (pb::AggregateFunction::Count, false),
         AggregateFunction::Sum => (pb::AggregateFunction::Sum, false),
@@ -647,8 +685,16 @@ fn aggregate_expr(a: &AggregateExpr) -> pb::AggregateExpr {
         AggregateFunction::Max => (pb::AggregateFunction::Max, false),
         AggregateFunction::First { ignore_nulls } => (pb::AggregateFunction::First, ignore_nulls),
         AggregateFunction::Last { ignore_nulls } => (pb::AggregateFunction::Last, ignore_nulls),
+        // The format has no ids for these yet.
+        AggregateFunction::AnyValue { .. }
+        | AggregateFunction::MaxBy
+        | AggregateFunction::MinBy => {
+            return Err(CodecError::Unsupported(
+                "an aggregate function the format does not know".to_owned(),
+            ));
+        }
     };
-    pb::AggregateExpr {
+    Ok(pb::AggregateExpr {
         function: function as i32,
         ignore_nulls,
         args: indexes(&a.args),
@@ -658,7 +704,7 @@ fn aggregate_expr(a: &AggregateExpr) -> pb::AggregateExpr {
         } as i32,
         arg_type: type_bytes(&a.arg_type),
         name: a.name.clone(),
-    }
+    })
 }
 
 fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {

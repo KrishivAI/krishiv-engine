@@ -15,8 +15,8 @@ use krishiv_exec::physical::{PhysNode, PhysicalPlan};
 use krishiv_plan::{Expr, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
-    CodecError, FORMAT_VERSION, Limits, MIN_READER_VERSION, ReaderFeatures, decode, decode_with,
-    encode, to_message,
+    CodecError, FORMAT_VERSION, Feature, FeatureKind, Limits, MIN_READER_VERSION,
+    POST_MIGRATION_READER_VERSION, ReaderFeatures, decode, decode_with, encode, to_message,
 };
 use prost::Message as _;
 
@@ -294,6 +294,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit" => 6,
+            n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
+            "window_frames" | "window_offset_values" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");
@@ -320,7 +322,12 @@ fn a_legacy_plan_decodes_by_its_content() {
 
 #[test]
 fn a_window_plan_survives_the_wire_with_every_field() {
-    for name in ["window_ranking", "window_aggregates"] {
+    for name in [
+        "window_ranking",
+        "window_aggregates",
+        "window_frames",
+        "window_offset_values",
+    ] {
         let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
         assert_eq!(round_trip(&plan), plan, "{name}");
     }
@@ -431,6 +438,46 @@ fn a_corrupt_expand_is_refused() {
         &edit(&|e| e.projections[0].items[0].kind = None),
         "a project item kind",
     );
+}
+
+#[test]
+fn joins_that_build_their_preserved_side_are_a_feature() {
+    // The three join types are the `join_build_preserved` feature, which
+    // the planner can avoid (it builds the other side instead). A reader
+    // that predates features refuses the plan as too new rather than as an
+    // unknown join type.
+    assert_eq!(
+        Feature::JoinBuildPreserved.kind(),
+        FeatureKind::Optimization
+    );
+    for name in ["hash_join", "hash_join_anti", "nested_loop_join"] {
+        let m = message(name);
+        assert!(m.features.is_empty(), "{name}");
+        assert_eq!(m.min_reader_version, MIN_READER_VERSION, "{name}");
+    }
+    for name in [
+        "hash_join_right_semi",
+        "hash_join_right_anti",
+        "hash_join_right_outer",
+    ] {
+        let m = message(name);
+        assert_eq!(m.features, ["join_build_preserved"], "{name}");
+        assert_eq!(
+            m.min_reader_version, POST_MIGRATION_READER_VERSION,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn an_unspecified_join_type_is_corrupt() {
+    let mut m = message("hash_join");
+    for node in &mut m.nodes {
+        if let Some(pb::node::Kind::HashJoin(j)) = &mut node.kind {
+            j.join_type = pb::JoinType::Unspecified as i32;
+        }
+    }
+    corrupt(&m, "join type");
 }
 
 #[test]
@@ -733,4 +780,71 @@ fn an_exchange_without_a_partitioning_kind_is_corrupt() {
     };
     e.partitioning = Some(pb::Partitioning { kind: None });
     corrupt(&m, "partitioning kind is missing");
+}
+
+/// `any_value`, `max_by` and `min_by` have no ids in the format yet: a plan
+/// holding one is refused with the typed error (not encoded as another
+/// function), in an aggregate node and as a window function.
+#[test]
+fn aggregates_the_format_does_not_know_are_refused() {
+    use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
+    use krishiv_exec::physical::AggregatePlan;
+    use krishiv_exec::window::{WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan};
+    let exprs = [
+        AggregateExpr::new(
+            AggregateFunction::AnyValue { ignore_nulls: true },
+            0,
+            arrow_schema::DataType::Int32,
+            "a",
+        ),
+        AggregateExpr::by(
+            AggregateFunction::MaxBy,
+            (0, 1),
+            (
+                arrow_schema::DataType::Utf8View,
+                arrow_schema::DataType::Int64,
+            ),
+            "b",
+        ),
+        AggregateExpr::by(
+            AggregateFunction::MinBy,
+            (0, 1),
+            (
+                arrow_schema::DataType::Int32,
+                arrow_schema::DataType::Float64,
+            ),
+            "c",
+        ),
+    ];
+    for e in exprs {
+        let refused = |plan: &PhysicalPlan| {
+            let err = encode(plan).unwrap_err();
+            assert!(
+                matches!(&err, CodecError::Unsupported(m) if m.contains("aggregate function")),
+                "{err:?}"
+            );
+        };
+        refused(&plan_of(PhysNode::Aggregate {
+            input: Box::new(inventory::scan()),
+            aggregate: AggregatePlan {
+                group_by: vec![0],
+                aggregates: vec![e.clone()],
+                distinct: vec![false],
+                output: AggregateOutput::Final,
+            },
+        }));
+        refused(&plan_of(PhysNode::Window {
+            input: Box::new(inventory::scan()),
+            window: WindowPlan {
+                partition_by: Vec::new(),
+                order_by: Vec::new(),
+                functions: vec![WindowFunctionPlan {
+                    function: WindowFunction::Aggregate(e),
+                    frame: WindowFrame::whole(krishiv_exec::window::FrameUnits::Rows),
+                    filter: None,
+                    name: "w".to_owned(),
+                }],
+            },
+        }));
+    }
 }

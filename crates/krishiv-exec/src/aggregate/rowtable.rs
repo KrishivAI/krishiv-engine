@@ -418,6 +418,9 @@ impl RowTable {
     /// new rows; a fixed one is cleared (as when full: later rows of its
     /// keys become partial duplicates); append mode has none. Partition
     /// sketches start from the rows.
+    ///
+    /// The copy is built beside the table, which changes only once it is
+    /// complete: on an error the table keeps its rows, states and width.
     pub(crate) fn widen(&mut self) -> Result<()> {
         if self.widen_to <= self.bits {
             return Ok(());
@@ -425,7 +428,6 @@ impl RowTable {
         let (bits, refs) = (self.widen_to, Refs::new(self.widen_to));
         let stride = self.stride;
         let nparts = 1usize << bits;
-        let old = std::mem::take(&mut self.parts);
         let mut parts = (0..nparts)
             .map(|_| {
                 Ok(Part {
@@ -435,7 +437,7 @@ impl RowTable {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        for part in &old {
+        for (copied, part) in self.parts.iter().enumerate() {
             // Rows per new partition first, so each grows once and exactly
             // (no doubling slack: widening runs under a memory limit too).
             let mut ids: Vec<Vec<u32>> = vec![Vec::new(); nparts];
@@ -473,8 +475,8 @@ impl RowTable {
                     acc.merge(&to, &from.state(ids)?)?;
                 }
             }
+            widen_fault(copied)?;
         }
-        drop(old);
         self.parts = parts;
         self.bits = bits;
         self.refs = refs;
@@ -717,7 +719,7 @@ impl RowTable {
             .map(|(part, n)| {
                 part.accs
                     .iter()
-                    .map(|a| a.projected(n, None))
+                    .map(|a| a.projected(n, None, None))
                     .sum::<usize>()
             })
             .sum();
@@ -726,12 +728,16 @@ impl RowTable {
                 .iter()
                 .zip(&self.core.ranges)
                 .map(|(a, r)| {
-                    let at = match fold {
-                        Fold::States { offset } => r.start.checked_sub(offset),
-                        Fold::Raw => a.args().first().copied(),
+                    // The value column, then (`max_by`/`min_by`) the key.
+                    let at = |n: usize| {
+                        let i = match fold {
+                            Fold::States { offset } => r.start.checked_sub(offset).map(|i| i + n),
+                            Fold::Raw => a.args().get(n).copied(),
+                        };
+                        i.and_then(|i| cols.get(i))
                     };
-                    let col = at.and_then(|i| cols.get(i));
-                    a.projected(0, col).saturating_sub(a.projected(0, None))
+                    a.projected(0, at(0), at(1))
+                        .saturating_sub(a.projected(0, None, None))
                 })
                 .sum()
         });
@@ -1447,6 +1453,29 @@ impl RowTable {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Tests: [`RowTable::widen`] fails once it has copied the old
+    /// partition of this index.
+    static WIDEN_FAULT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The fault tests inject into [`RowTable::widen`] after it copied old
+/// partition `copied` (none outside tests).
+#[cfg(not(test))]
+#[inline]
+fn widen_fault(_copied: usize) -> Result<()> {
+    Ok(())
+}
+
+#[cfg(test)]
+fn widen_fault(copied: usize) -> Result<()> {
+    if WIDEN_FAULT.get() == Some(copied) {
+        return Err(internal("injected widening fault".to_owned()));
+    }
+    Ok(())
+}
+
 /// One accumulator per aggregate of `core`.
 fn new_accs(core: &AggCore) -> Result<Vec<Accumulator>> {
     core.spec
@@ -2099,6 +2128,41 @@ mod tests {
             let n = t.len();
             t.widen().unwrap();
             assert_eq!(t.len(), n);
+        }
+    }
+
+    /// A widening that fails part-way leaves the table as it was: every
+    /// group with its states, its width and an index that still finds
+    /// every key; a later widening succeeds.
+    #[test]
+    fn failed_widening_keeps_the_table() {
+        let core = core();
+        let seed = HashSeed::new(Some(8));
+        for (bits, copied) in [(0, 0), (2, 1)] {
+            let mut t = RowTable::new(&core, &seed, Mode::Grow, true, bits)
+                .unwrap()
+                .widening(RADIX_BITS, 64);
+            apply(&mut t, &batch(&core, (0..3_000).map(|i| i % 2_500)));
+            assert!(t.wants_widen());
+            let all = |t: &RowTable| sorted(&t.output_batch(&t.ids(0..t.len())).unwrap());
+            let (want, groups, parts) = (all(&t), t.len(), t.part_count());
+            WIDEN_FAULT.set(Some(copied));
+            let err = t.widen().unwrap_err();
+            WIDEN_FAULT.set(None);
+            assert!(err.to_string().contains("injected widening fault"), "{err}");
+            assert_eq!((t.len(), t.part_count()), (groups, parts), "bits {bits}");
+            assert_eq!(all(&t), want, "bits {bits}");
+            // The index still finds every key: no new groups.
+            apply(&mut t, &batch(&core, 0..2_500));
+            assert_eq!((t.len(), t.is_unique()), (groups, true), "bits {bits}");
+            t.widen().unwrap();
+            assert_eq!(t.part_count(), PARTS);
+            let mut twice = want.clone();
+            for row in &mut twice {
+                row.1 = row.1.map(|c| c + 1);
+                row.2 = row.2.map(|v| v + 1);
+            }
+            assert_eq!(all(&t), twice, "bits {bits}");
         }
     }
 

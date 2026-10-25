@@ -40,7 +40,7 @@ use std::fmt;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::AggregateFunction;
 use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
-use krishiv_exec::window::WindowFunction;
+use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 
 /// The `min_reader_version` of a plan that uses no feature (the epoch-1
 /// baseline): the format of version 2.
@@ -115,9 +115,12 @@ macro_rules! registry {
 // (id, variant, legacy level, kind, meaning)
 registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
+    (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
+    (window_offset_functions, WindowOffsetFunctions, POST_MIGRATION_READER_VERSION, Semantic, "The window functions `lag`, `lead` and `nth_value`."),
 }
 
 /// Ids retired at an epoch change: never reused.
@@ -151,6 +154,8 @@ pub enum Construct<'a> {
     Partitioning(&'a Partitioning),
     /// A window function.
     Window(&'a WindowFunction),
+    /// A window function's frame.
+    Frame(&'a WindowFrame),
     /// An aggregate function (of an aggregate or a window).
     Aggregate(AggregateFunction),
 }
@@ -188,6 +193,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::NullAwareAnti => None,
+            JoinType::RightSemi | JoinType::RightAnti | JoinType::RightOuter => {
+                Some(Feature::JoinBuildPreserved)
+            }
         },
         Construct::Partitioning(p) => match p {
             Partitioning::Hash { .. }
@@ -205,7 +213,24 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | WindowFunction::CumeDist
             | WindowFunction::Ntile(_)
             | WindowFunction::Aggregate(_) => Some(Feature::Window),
+            WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+                Some(Feature::WindowOffsetFunctions)
+            }
         },
+        // The `Window` node's format carries every frame between unbounded
+        // and current-row bounds; an offset bound is newer. `FrameBound` is
+        // non-exhaustive, so a bound added later counts as newer too.
+        Construct::Frame(frame) => {
+            let newer = |b: FrameBound| {
+                !matches!(
+                    b,
+                    FrameBound::UnboundedPreceding
+                        | FrameBound::CurrentRow
+                        | FrameBound::UnboundedFollowing
+                )
+            };
+            (newer(frame.lower) || newer(frame.upper)).then_some(Feature::WindowFrameOffsets)
+        }
         Construct::Aggregate(a) => match a {
             AggregateFunction::Count
             | AggregateFunction::Sum
@@ -213,7 +238,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::Min
             | AggregateFunction::Max
             | AggregateFunction::First { .. }
-            | AggregateFunction::Last { .. } => None,
+            | AggregateFunction::Last { .. }
+            | AggregateFunction::AnyValue { .. }
+            | AggregateFunction::MaxBy
+            | AggregateFunction::MinBy => None,
         },
     }
 }
@@ -230,6 +258,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::Window { window, .. } => {
             for function in &window.functions {
                 f(Construct::Window(&function.function));
+                f(Construct::Frame(&function.frame));
                 if let WindowFunction::Aggregate(a) = &function.function {
                     f(Construct::Aggregate(a.function));
                 }

@@ -357,21 +357,36 @@ fn post_parse_checks_raise_spark_classes() {
 
 /// A statement of many `::` complex casts with a syntax error at its end is
 /// retried a bounded number of times (the bare-type retry in `run`), and
-/// its error is the one the same statement gets with few casts.
+/// its error is the one the same statement gets with few casts. The work is
+/// counted in parse attempts, so the test does not depend on machine load.
 #[test]
 fn many_complex_casts_fail_in_bounded_time() {
+    use crate::parser::PARSERS;
     let options = ParserOptions::default();
     let statement = |casts: usize| {
         let items: Vec<String> = (0..casts).map(|i| format!("c{i}::array<int>")).collect();
         format!("SELECT {} FROM t WHERE x +", items.join(", "))
     };
-    let few = parse_statement(&statement(2), &options).unwrap_err();
-    let start = std::time::Instant::now();
-    let many = parse_statement(&statement(20_000), &options).unwrap_err();
-    // Generous: the cap makes this a handful of parses; the uncapped retry
-    // loop took minutes at this size.
-    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
-    assert_eq!(many.error.to_string(), few.error.to_string());
+    let attempts = |casts: usize| {
+        PARSERS.set(0);
+        let error = parse_statement(&statement(casts), &options).unwrap_err();
+        (PARSERS.get(), error.error.to_string())
+    };
+    let (few, few_error) = attempts(2);
+    // Spark 4.2.0's error for the two-cast statement.
+    assert!(
+        few_error.starts_with("[PARSE_SYNTAX_ERROR] Syntax error at or near end of input."),
+        "{few_error}"
+    );
+    let (many, many_error) = attempts(500);
+    // Past the cap of 16 retried casts, more casts add no attempts: the
+    // uncapped retry made one attempt per cast.
+    assert_eq!(attempts(100).0, many, "attempts grow with the casts");
+    assert!(
+        many <= few + 16,
+        "{many} attempts for 500 casts, {few} for 2"
+    );
+    assert_eq!(many_error, few_error);
     // The retry still finds the bare reading when a cast needs it.
     assert!(parse_statement("SELECT x::array<int> > y", &options).is_ok());
 }

@@ -1289,7 +1289,7 @@ impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::BuiltinFunctio
 fn every_context_input_changes_the_key() {
     use crate::analyzer::BuiltinFunctions;
     use crate::analyzer::testing::OneCatalog;
-    use crate::analyzer::{PrincipalKind, fingerprint};
+    use crate::analyzer::{PrincipalKind, SessionVariable, VariableSnapshot, fingerprint};
     let digest = |c: &AnalysisContext, epochs: &[(&str, u64)]| {
         let e = epochs.iter().map(|(n, v)| ((*n).to_owned(), *v)).collect();
         fingerprint(c, e).digest()
@@ -1348,6 +1348,20 @@ fn every_context_input_changes_the_key() {
         c.principal = Arc::new(p);
     });
     v("policy", &|c| c.policy = Arc::new(DenyOne(String::new())));
+    v("variables", &|c| {
+        c.variables = Arc::new(VariableSnapshot {
+            variables: [(
+                "v".to_owned(),
+                SessionVariable {
+                    data_type: DataType::Integer,
+                    value: Literal::Integer(1),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            version: 1,
+        });
+    });
     let key = digest(&base, &[("spark_catalog", 1)]);
     assert_ne!(
         key,
@@ -1587,6 +1601,85 @@ fn missing_references_come_before_outer_ones() {
     // a semi join on it.
     let outer = shown("b");
     assert!(outer.contains("Join LeftSemi, (CAST(b#1 "), "{outer}");
+}
+
+/// Session variables resolve after columns and outer references: a name
+/// a column has is the column, a qualified `session.v` skips the columns,
+/// and anything else stays an unresolved column.
+#[test]
+fn session_variables_resolve_after_columns() {
+    use crate::analyzer::{SessionVariable, VariableSnapshot};
+    use std::collections::BTreeMap;
+    let catalog = || {
+        MemoryCatalog::new("spark_catalog").with_table(
+            &["default"],
+            "t",
+            vec![TableColumn {
+                name: "var1".to_owned(),
+                data_type: DataType::String,
+                nullable: true,
+            }],
+            None,
+        )
+    };
+    let variables = || {
+        let mut ctx = context(catalog(), ResolutionConf::default());
+        ctx.variables = Arc::new(VariableSnapshot {
+            variables: BTreeMap::from([(
+                "var1".to_owned(),
+                SessionVariable {
+                    data_type: DataType::Integer,
+                    value: Literal::Integer(1),
+                },
+            )]),
+            version: 3,
+        });
+        ctx
+    };
+    // A name a column has is the column, even when a variable has it too.
+    let plan = LogicalPlan::table(["t"]).project(vec![c("var1")]);
+    let a = run(plan, &variables()).unwrap();
+    assert_eq!(a.output[0].data_type, DataType::String);
+    // A qualified `session.v` skips the columns for the variable.
+    for name in ["session.var1", "system.session.var1", "SESSION.VAR1"] {
+        let plan = LogicalPlan::table(["t"]).project(vec![c(name)]);
+        let a = run(plan, &variables()).unwrap();
+        assert_eq!(a.output[0].data_type, DataType::Integer, "{name}");
+    }
+    // Anything else stays an unresolved column, never a variable error.
+    // (Outer references before variables are covered end to end, where a
+    // correlated `EXISTS` reads the outer column.)
+    for name in ["nope", "ses.var1", "b.ses.var1", "var1.var1"] {
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![c(name)]);
+        assert_eq!(
+            class(&run(plan, &variables())),
+            "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+            "{name}"
+        );
+    }
+}
+
+/// A changed variable version changes the context fingerprint, so a
+/// cached resolved plan is never reused after a variable changed.
+#[test]
+fn variable_versions_change_the_fingerprint() {
+    use crate::analyzer::{SessionVariable, VariableSnapshot, fingerprint};
+    use std::collections::BTreeMap;
+    let digest = |c: &AnalysisContext| fingerprint(c, BTreeMap::new()).digest();
+    let base = ctx();
+    let key = digest(&base);
+    let mut changed = base.clone();
+    changed.variables = Arc::new(VariableSnapshot {
+        variables: BTreeMap::from([(
+            "var1".to_owned(),
+            SessionVariable {
+                data_type: DataType::Integer,
+                value: Literal::Integer(1),
+            },
+        )]),
+        version: base.variables.version + 1,
+    });
+    assert_ne!(key, digest(&changed));
 }
 
 /// A subexpression shared through `Arc` inside a lateral alias item and a
@@ -2454,4 +2547,328 @@ fn cte_name_matching_follows_case_sensitivity() {
         class(&run(plan(), &context(catalog(), sensitive))),
         "TABLE_OR_VIEW_NOT_FOUND"
     );
+}
+
+/// An unresolved inline table over `rows` with `columns`.
+fn inline_table(rows: Vec<Vec<Expr>>, columns: &[&str]) -> LogicalPlan {
+    LogicalPlan::new(PlanNode::InlineTable {
+        rows: rows
+            .into_iter()
+            .map(|r| r.into_iter().map(Arc::new).collect())
+            .collect(),
+        columns: columns.iter().map(|c| (*c).to_owned()).collect(),
+    })
+}
+
+fn null() -> Expr {
+    Literal::Null(None).into()
+}
+
+fn long(v: i64) -> Expr {
+    Literal::Long(v).into()
+}
+
+fn boolean(v: bool) -> Expr {
+    Literal::Boolean(v).into()
+}
+
+/// Whether an `InlineTable` node remains anywhere under `plan`.
+fn has_inline_table(plan: &LogicalPlan) -> bool {
+    let mut found = false;
+    let _ = visit_distinct(Node::Plan(plan), |node| {
+        if let Node::Plan(p) = node
+            && matches!(p.node, PlanNode::InlineTable { .. })
+        {
+            found = true;
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    });
+    found
+}
+
+fn datatypes(a: &AnalyzedPlan) -> Vec<DataType> {
+    a.output.iter().map(|c| c.data_type.clone()).collect()
+}
+
+/// A single row is just the `Project`: names, types and nullability come
+/// from the row, and no `InlineTable` node remains.
+#[test]
+fn inline_table_of_one_row_is_a_project() {
+    let ctx = ctx();
+    let r = run(
+        inline_table(vec![vec![s("one"), int(1)]], &["col1", "col2"]),
+        &ctx,
+    );
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([["col1", false], ["col2", false]])
+    );
+    let a = r.unwrap();
+    assert!(a.plan.root().is_resolved());
+    assert!(!has_inline_table(a.plan.root()));
+    assert!(
+        matches!(a.plan.root().node, PlanNode::Project { .. }),
+        "{}",
+        a.plan.root()
+    );
+    assert_eq!(datatypes(&a), [DataType::String, DataType::Integer]);
+}
+
+/// Several rows are one `Expand` over `OneRowRelation` with a projection
+/// per row, in row order; each column widens to the wider type and is
+/// nullable where any row's value is.
+#[test]
+fn inline_table_rows_widen_and_nullable() {
+    let ctx = ctx();
+    let r = run(
+        inline_table(
+            vec![
+                vec![s("one"), int(1)],
+                vec![s("two"), long(2)],
+                vec![s("three"), null()],
+            ],
+            &["a", "b"],
+        ),
+        &ctx,
+    );
+    assert_eq!(summary(&r), serde_json::json!([["a", false], ["b", true]]));
+    let a = r.unwrap();
+    assert!(a.plan.root().is_resolved());
+    assert!(!has_inline_table(a.plan.root()));
+    assert_eq!(datatypes(&a), [DataType::String, DataType::Long]);
+    let PlanNode::Expand {
+        input,
+        projections,
+        output,
+    } = &a.plan.root().node
+    else {
+        panic!("an expand of row projections:\n{}", a.plan.root());
+    };
+    assert!(matches!(input.node, PlanNode::OneRowRelation));
+    assert_eq!(projections.len(), 3);
+    assert_eq!(output.len(), 2);
+    for row in projections {
+        assert_eq!(row.len(), 2);
+    }
+}
+
+/// An all-NULL column is `VOID`.
+#[test]
+fn inline_table_of_nulls_is_void() {
+    let ctx = ctx();
+    let r = run(
+        inline_table(
+            vec![vec![s("one"), null()], vec![s("two"), null()]],
+            &["a", "b"],
+        ),
+        &ctx,
+    );
+    assert_eq!(summary(&r), serde_json::json!([["a", false], ["b", true]]));
+    assert_eq!(datatypes(&r.unwrap()), [DataType::String, DataType::Null]);
+}
+
+/// A column whose values share no type names it, quoted, in
+/// `INVALID_INLINE_TABLE.INCOMPATIBLE_TYPES_IN_INLINE_TABLE` (`INT` meets
+/// `STRING` at `BIGINT`, so only the second column fails here).
+#[test]
+fn inline_table_of_incompatible_types_fails() {
+    let ctx = ctx();
+    let r = run(
+        inline_table(
+            vec![vec![int(1), int(2)], vec![s("x"), boolean(true)]],
+            &["a", "b"],
+        ),
+        &ctx,
+    );
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([
+            "INVALID_INLINE_TABLE.INCOMPATIBLE_TYPES_IN_INLINE_TABLE",
+            {"colName": "`b`"}
+        ])
+    );
+}
+
+/// An aggregate, a nondeterministic call, a window and a subquery cannot
+/// be evaluated in an inline table.
+#[test]
+fn inline_table_of_unevaluable_expressions_fails() {
+    let ctx = ctx();
+    for (cell, expr) in [
+        (f("count", vec![int(1)]), "\"count(1)\""),
+        (f("rand", vec![int(5)]), "\"rand(5)\""),
+    ] {
+        let r = run(inline_table(vec![vec![cell]], &["a"]), &ctx);
+        assert_eq!(
+            summary(&r),
+            serde_json::json!([
+                "INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE",
+                {"expr": expr}
+            ]),
+            "{expr}"
+        );
+    }
+    // An unknown routine is `UNRESOLVED_ROUTINE`, as elsewhere.
+    let r = run(
+        inline_table(vec![vec![f("nosuchfunc", vec![int(1)])]], &["a"]),
+        &ctx,
+    );
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([
+            "UNRESOLVED_ROUTINE",
+            {
+                "routineName": "`nosuchfunc`",
+                "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+            }
+        ])
+    );
+    // A window and a subquery cannot be evaluated either.
+    let window = Expr::new(ExprNode::Window(crate::WindowExpr {
+        function: Arc::new(f("row_number", Vec::new())),
+        window: crate::WindowSpecRef::Spec(crate::WindowSpec {
+            partition_by: Vec::new(),
+            order_by: Vec::new(),
+            frame: None,
+        }),
+    }));
+    let r = run(inline_table(vec![vec![window]], &["a"]), &ctx);
+    assert_eq!(
+        class(&r),
+        "INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE"
+    );
+    let subquery = Expr::new(ExprNode::Subquery {
+        kind: crate::SubqueryKind::Scalar,
+        plan: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+    });
+    let r = run(inline_table(vec![vec![subquery]], &["a"]), &ctx);
+    assert_eq!(
+        class(&r),
+        "INVALID_INLINE_TABLE.CANNOT_EVALUATE_EXPRESSION_IN_INLINE_TABLE"
+    );
+}
+
+/// The clock functions evaluate once per query, so they may stay.
+#[test]
+fn inline_table_of_clock_calls_resolves() {
+    let ctx = ctx();
+    let r = run(
+        inline_table(vec![vec![f("now", Vec::new())]], &["ct"]),
+        &ctx,
+    );
+    assert_eq!(summary(&r), serde_json::json!([["ct", false]]));
+    let a = r.unwrap();
+    assert_eq!(datatypes(&a), [DataType::Timestamp]);
+    assert!(!has_inline_table(a.plan.root()));
+}
+
+/// Degenerate hand-built tables (the parser rejects these): no rows is an
+/// error.
+#[test]
+fn inline_table_edge_cases() {
+    let ctx = ctx();
+    let r = run(
+        LogicalPlan::new(PlanNode::InlineTable {
+            rows: Vec::new(),
+            columns: Vec::new(),
+        }),
+        &ctx,
+    );
+    assert_eq!(class(&r), "KRISHIV_UNSUPPORTED_FEATURE");
+    // Rewriting an inline table's expressions visits every cell (and an
+    // unchanged rewrite shares the plan).
+    let p = Arc::new(inline_table(vec![vec![int(1)]], &["a"]));
+    let q = Arc::clone(&p)
+        .map_expressions(|e| Ok::<_, ()>(Arc::clone(&e)))
+        .expect("an infallible rewrite");
+    assert!(Arc::ptr_eq(&p, &q));
+}
+
+/// A column name resolves against nothing in an inline table: it is
+/// `UNRESOLVED_COLUMN`, as in Spark (not `CANNOT_EVALUATE_...`), also
+/// inside a larger expression.
+#[test]
+fn inline_table_of_unknown_column_is_unresolved() {
+    let ctx = ctx();
+    for cell in [c("x"), add(c("x"), int(1))] {
+        let r = run(inline_table(vec![vec![int(0)], vec![cell]], &["a"]), &ctx);
+        assert_eq!(
+            summary(&r),
+            serde_json::json!(["UNRESOLVED_COLUMN.WITHOUT_SUGGESTION", {"objectName": "`x`"}])
+        );
+    }
+}
+
+/// A large inline table analyzes in time linear in its rows: ten thousand
+/// rows become one `Expand` with ten thousand projections, not a deep tree.
+#[test]
+fn inline_table_of_many_rows_resolves() {
+    let ctx = ctx();
+    let rows: Vec<Vec<Expr>> = (0..10_000).map(|i| vec![int(i), s("v")]).collect();
+    let r = run(inline_table(rows, &["a", "b"]), &ctx);
+    assert_eq!(summary(&r), serde_json::json!([["a", false], ["b", false]]));
+    let a = r.unwrap();
+    assert!(a.plan.root().is_resolved());
+    assert!(!has_inline_table(a.plan.root()));
+    let PlanNode::Expand { projections, .. } = &a.plan.root().node else {
+        panic!("one expand:\n{}", a.plan.root());
+    };
+    assert_eq!(projections.len(), 10_000);
+}
+
+/// A hand-built row of the wrong width fails rather than NULL-fills or
+/// truncates (the parser rejects these).
+#[test]
+fn inline_table_of_ragged_rows_fails() {
+    let ctx = ctx();
+    for rows in [vec![vec![int(1)], vec![]], vec![vec![int(1), int(2)]]] {
+        let r = run(inline_table(rows, &["a"]), &ctx);
+        assert_eq!(class(&r), "KRISHIV_UNSUPPORTED_FEATURE");
+    }
+}
+
+/// A DataFrame reference (`df["a"]`) names a column no input has.
+#[test]
+fn inline_table_of_dataframe_reference_fails() {
+    let ctx = ctx();
+    let cell = Expr::new(ExprNode::Column(ColumnRef {
+        name: vec!["a".to_owned()],
+        plan_id: Some(PlanId(1)),
+    }));
+    let r = run(inline_table(vec![vec![cell]], &["a"]), &ctx);
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([
+            "CANNOT_RESOLVE_DATAFRAME_COLUMN",
+            {"name": "\"a\""}
+        ])
+    );
+}
+
+/// Without ANSI a string never meets another type in an inline table; with
+/// ANSI it does (`INT` and `STRING` meet at `BIGINT`).
+#[test]
+fn inline_table_string_promotion_follows_ansi() {
+    let rows = || inline_table(vec![vec![int(1)], vec![s("x")]], &["a"]);
+    let mut off = ctx();
+    off.conf.ansi = false;
+    let r = run(rows(), &off);
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([
+            "INVALID_INLINE_TABLE.INCOMPATIBLE_TYPES_IN_INLINE_TABLE",
+            {"colName": "`a`"}
+        ])
+    );
+    let mut on = ctx();
+    on.conf.ansi = true;
+    let r = run(rows(), &on);
+    assert_eq!(datatypes(&r.unwrap()), [DataType::Long]);
+    // The remaining widening is the set operations' either way.
+    let r = run(
+        inline_table(vec![vec![int(1)], vec![long(2)]], &["a"]),
+        &off,
+    );
+    assert_eq!(datatypes(&r.unwrap()), [DataType::Long]);
 }
