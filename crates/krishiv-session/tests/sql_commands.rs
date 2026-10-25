@@ -246,6 +246,20 @@ fn bucketing_max_buckets_limit_is_configured_and_validated() {
     // Resetting restores the default limit.
     block_on(s.sql("RESET spark.sql.sources.bucketing.maxBuckets")).unwrap();
     assert_eq!(class(block_on(s.sql(over))), ErrorClass::InvalidBucketCount);
+    // The engine key aliases the Spark one: setting through it applies the
+    // same limit, and resetting through it restores the default.
+    block_on(s.sql("SET krishiv.sql.sources.bucketing.maxBuckets = 2")).unwrap();
+    let e = block_on(s.sql("CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 3 BUCKETS")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InvalidBucketCount);
+    assert!(e.to_string().contains("(`2`). Got `3`"), "{e}");
+    assert_eq!(
+        class(block_on(s.sql(
+            "CREATE TABLE t (a INT) CLUSTERED BY (a) INTO 2 BUCKETS"
+        ))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    block_on(s.sql("RESET krishiv.sql.sources.bucketing.maxBuckets")).unwrap();
+    assert_eq!(class(block_on(s.sql(over))), ErrorClass::InvalidBucketCount);
 }
 
 #[test]
