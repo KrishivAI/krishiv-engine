@@ -35,10 +35,9 @@ pub(crate) struct BuildGlobal {
     pub(crate) hashing: Hashing,
     /// Level-0 partitions spilled by any driver (bit per partition).
     spilled: Arc<AtomicU64>,
-    /// Build rows, NULL keys included (null-aware anti and mark-in: is the
-    /// build empty?).
+    /// Build rows, NULL keys included (null-aware anti: is it empty?).
     pub(crate) rows: AtomicU64,
-    /// A build key was NULL (null-aware anti and mark-in).
+    /// A build key was NULL (null-aware anti).
     pub(crate) null_key: AtomicBool,
     collect: Mutex<Collect>,
     pub(crate) built: OnceLock<Built>,
@@ -513,9 +512,7 @@ impl Sink for BuildSink {
             .map(|&k| Arc::clone(&columns[k]))
             .collect();
         let keys = s.keys.encode(&key_columns, &g.hashing)?;
-        if matches!(s.join_type, JoinType::NullAwareAnti | JoinType::MarkIn)
-            && any_invalid(keys.valid.as_ref())
-        {
+        if s.join_type == JoinType::NullAwareAnti && any_invalid(keys.valid.as_ref()) {
             g.null_key.store(true, Ordering::Release);
         }
         let payload = match (s.row_payload(g.hashing.rows()), &s.payload) {

@@ -11,7 +11,11 @@
 //! - inner: the matching pairs;
 //! - left outer: the matching pairs, and each probe row without a match
 //!   with NULL build columns once the chunk met every build row;
-//! - left semi / anti: each probe row with / without a match, once.
+//! - left semi / anti: each probe row with / without a match, once;
+//! - existence: each probe row once with `exists` (whether it matched;
+//!   never NULL). Spark plans `k NOT IN (uncorrelated subquery)` outside a
+//!   filter conjunct this way, as the negation of the existence join on
+//!   `(k = c) OR isnull(k = c)`.
 //!
 //! Rows must be insert-only (weight 1); weighted input is
 //! `KRISHIV_UNSUPPORTED_FEATURE` until IVM, as for the hash join's build.
@@ -39,7 +43,7 @@ pub(crate) const TARGET_PAIRS: usize = 8192;
 /// What a nested-loop join joins.
 #[derive(Debug)]
 pub struct NestedLoopSpec {
-    /// Inner, left outer, left semi or left anti.
+    /// Inner, left outer, left semi, left anti or existence.
     pub join_type: JoinType,
     /// The probe (left) input's schema.
     pub probe_schema: SchemaRef,
@@ -73,9 +77,6 @@ impl NestedLoopJoin {
         if spec.join_type == JoinType::NullAwareAnti {
             return Err(unsupported("a null-aware anti join without a key"));
         }
-        if matches!(spec.join_type, JoinType::MarkExists | JoinType::MarkIn) {
-            return Err(unsupported("a mark join by nested loops"));
-        }
         if spec.join_type.builds_preserved() {
             return Err(unsupported(
                 "nested-loop joins that return rows of their build side by their matches",
@@ -97,6 +98,7 @@ impl NestedLoopJoin {
         let schema = match spec.join_type {
             JoinType::Inner => Arc::clone(&pairs),
             JoinType::LeftOuter => Arc::new(Schema::new(fields(true))),
+            JoinType::Existence => super::existence_schema(&spec.probe_schema),
             _ => Arc::clone(&spec.probe_schema),
         };
         Ok(Self(Arc::new(Shared {
@@ -380,8 +382,9 @@ impl ProbeOp {
             .map_err(|e| internal(e.to_string()))
     }
 
-    /// Once a chunk met every build row: semi and anti rows, and the
-    /// null-padded probe rows of a left outer join.
+    /// Once a chunk met every build row: semi and anti rows, the
+    /// null-padded probe rows of a left outer join, and every probe row with
+    /// its `exists` of an existence join.
     fn unmatched(
         &self,
         probe: &RecordBatch,
@@ -394,6 +397,7 @@ impl ProbeOp {
             .filter(|(_, m)| match self.0.spec.join_type {
                 JoinType::LeftSemi => **m,
                 JoinType::LeftAnti | JoinType::LeftOuter => !**m,
+                JoinType::Existence => true,
                 _ => false,
             })
             .map(|(i, _)| {
@@ -412,10 +416,16 @@ impl ProbeOp {
                     .map_err(|e| internal(e.to_string()))
             })
             .collect::<Result<Vec<_>>>()?;
-        if self.0.spec.join_type == JoinType::LeftOuter {
-            for f in self.0.spec.build_schema.fields() {
-                columns.push(new_null_array(f.data_type(), idx.len()));
+        match self.0.spec.join_type {
+            JoinType::LeftOuter => {
+                for f in self.0.spec.build_schema.fields() {
+                    columns.push(new_null_array(f.data_type(), idx.len()));
+                }
             }
+            JoinType::Existence => {
+                columns.push(Arc::new(BooleanArray::from(matched.to_vec())) as ArrayRef);
+            }
+            _ => {}
         }
         let options = RecordBatchOptions::new().with_row_count(Some(idx.len()));
         RecordBatch::try_new_with_options(Arc::clone(&self.0.schema), columns, &options)

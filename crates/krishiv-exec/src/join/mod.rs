@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Hash join (P2-T052a; ADR 0011, E02): inner, left outer, left semi, left
-//! anti, null-aware anti (`NOT IN`), mark (`EXISTS`, `IN`) and single-match
-//! left outer (scalar subquery) equi-joins with an optional residual filter
-//! and partitioned grace-hash spill.
+//! anti, null-aware anti (`NOT IN`), existence (Spark's `ExistenceJoin`:
+//! `EXISTS` and `IN` outside a filter conjunct) and single-match left outer
+//! (scalar subquery) equi-joins with an optional residual filter and
+//! partitioned grace-hash spill.
 //!
 //! # Shape
 //! The **build** side is the right input: a [`Sink`] ending a child
@@ -10,8 +11,9 @@
 //! [`Operator`] in the parent pipeline that reads the finalized build
 //! through [`TaskContext::dependency`](crate::TaskContext::dependency).
 //! Output columns are the probe columns, then (inner and left outer) every
-//! build column; build columns are nullable in a left outer join. A mark
-//! join outputs the probe columns plus one boolean mark column. A
+//! build column; build columns are nullable in a left outer join. An
+//! existence join outputs the probe columns plus one non-nullable boolean
+//! column, `exists`. A
 //! single-match left outer join outputs what a left outer join does, and
 //! fails when a probe row matches more than once.
 //! [`HashJoinNode`] wires both.
@@ -30,15 +32,18 @@
 //!   keeps every probe row (NULL keys too); a NULL key on the build side
 //!   keeps none; otherwise a probe row is kept if its key is not NULL and
 //!   matches no build key.
-//! - Mark joins emit every probe row once plus one boolean mark column:
-//!   `MarkExists` (`EXISTS`) is TRUE on a match and FALSE otherwise;
-//!   `MarkIn` (`IN`, one key, no null-safe keys) is TRUE on a match, else
-//!   NULL when the probe key is NULL or the build side holds a NULL key,
-//!   else FALSE, except that an empty build side gives FALSE for every row
-//!   (NULL keys included, as with Spark's default
-//!   `spark.sql.legacy.nullInEmptyListBehavior=false`). A residual filter,
-//!   when present, decides matches as in the other join types (NULL is not
-//!   a match); it may be present on either mark join.
+//! - Existence joins emit every probe row once plus `exists`: TRUE when
+//!   some build row matches it (keys equal and the residual filter TRUE),
+//!   else FALSE. `exists` is never NULL, as in Spark 4.2 (checked on Spark
+//!   4.2.0 in every context that plans an `ExistenceJoin`: `k IN (subquery)`
+//!   is FALSE, not NULL, when the subquery holds a NULL or `k` is NULL).
+//!   `IN` is the existence join on `k = subquery column`; `NOT IN` is the
+//!   negation of the existence join whose residual is
+//!   `(k = c) OR isnull(k = c)` (with the correlation equalities as keys, or
+//!   by nested loops when there are none), exactly the conditions Spark
+//!   plans. A probe row's `exists` depends only on the build rows with its
+//!   key, so the join needs no build-wide facts and runs broadcast or
+//!   partitioned alike.
 //! - A single-match left outer join (a correlated scalar subquery without
 //!   an aggregate) emits what a left outer join does, and fails the query
 //!   with `SCALAR_SUBQUERY_TOO_MANY_ROWS` when a probe row matches more
@@ -185,16 +190,11 @@ pub enum JoinType {
     LeftAnti,
     /// `NOT IN`: see the module docs.
     NullAwareAnti,
-    /// `EXISTS`: every probe row once, plus a boolean mark column that is
-    /// TRUE on a match and FALSE otherwise (never NULL). A residual filter,
-    /// when present, decides matches as in the other join types.
-    MarkExists,
-    /// `IN`: every probe row once, plus a nullable boolean mark column.
-    /// TRUE on a match; else NULL when the probe key is NULL or the build
-    /// side holds a NULL key; else FALSE; an empty build side gives FALSE
-    /// for every row. One key, no null-safe keys; a residual filter, when
-    /// present, decides matches as in the other join types.
-    MarkIn,
+    /// Spark's `ExistenceJoin` (`EXISTS`/`IN` outside a filter conjunct):
+    /// every probe row once, plus a non-nullable boolean column `exists`,
+    /// TRUE when some build row matches (keys equal and the residual filter
+    /// TRUE), else FALSE. See the module docs.
+    Existence,
     /// Build rows with at least one match, each once: a left semi join
     /// that builds its left input. Planned data only for now: no operator
     /// runs it yet.
@@ -439,25 +439,12 @@ fn unsupported(feature: &str) -> KrishivError {
     .into()
 }
 
-/// Global build facts a mark join's tail needs: whether the build holds no
-/// rows at all, and whether it holds a NULL key. Both count spilled rows
-/// too, so the grace phase reads them from the finalized build.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct MarkBuild {
-    /// The build holds no rows at all.
-    pub(crate) empty: bool,
-    /// A build row has a NULL key.
-    pub(crate) null_key: bool,
-}
-
-impl MarkBuild {
-    pub(crate) fn of(build: &build::BuildGlobal) -> Self {
-        use std::sync::atomic::Ordering;
-        Self {
-            empty: build.rows.load(Ordering::Acquire) == 0,
-            null_key: build.null_key.load(Ordering::Acquire),
-        }
-    }
+/// The probe columns plus Spark's non-nullable `exists` column: the output
+/// of an existence join (hash or nested loop).
+pub(crate) fn existence_schema(probe: &Schema) -> SchemaRef {
+    let mut fields: Vec<Field> = probe.fields().iter().map(|f| f.as_ref().clone()).collect();
+    fields.push(Field::new("exists", DataType::Boolean, false));
+    Arc::new(Schema::new(fields))
 }
 
 impl Shared {
@@ -494,11 +481,6 @@ impl Shared {
         {
             return Err(unsupported(
                 "null-aware anti join over several keys or with a residual condition",
-            ));
-        }
-        if join_type == JoinType::MarkIn && (n != 1 || null_safe.contains(&true)) {
-            return Err(unsupported(
-                "null-aware mark join over several keys or null-safe keys",
             ));
         }
         let mut types = Vec::with_capacity(n);
@@ -557,19 +539,7 @@ impl Shared {
         let schema = match join_type {
             JoinType::Inner => joined(false),
             JoinType::LeftOuter => joined(true),
-            JoinType::MarkExists | JoinType::MarkIn => {
-                let mut fields: Vec<Field> = probe_schema
-                    .fields()
-                    .iter()
-                    .map(|f| f.as_ref().clone())
-                    .collect();
-                fields.push(Field::new(
-                    "mark",
-                    DataType::Boolean,
-                    join_type == JoinType::MarkIn,
-                ));
-                Arc::new(Schema::new(fields))
-            }
+            JoinType::Existence => existence_schema(&probe_schema),
             _ => Arc::clone(&probe_schema),
         };
         // Build columns as payload rows: only when every build column is
@@ -753,8 +723,7 @@ impl HashJoin {
     /// different types on the two sides, and for `single_match` on a join
     /// that is not left outer; `KRISHIV_UNSUPPORTED_FEATURE` for a
     /// null-aware anti join over several keys, null-safe keys or with a
-    /// residual filter (Spark plans those as a nested-loop join), for a
-    /// null-aware mark join over several keys or null-safe keys, and for
+    /// residual filter (Spark plans those as a nested-loop join), and for
     /// the joins that return rows of their build side by their matches.
     pub fn try_new(spec: JoinSpec) -> Result<Self> {
         Ok(Self(Arc::new(Shared::new(spec)?)))
@@ -897,8 +866,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::NullAwareAnti,
-            JoinType::MarkExists,
-            JoinType::MarkIn,
+            JoinType::Existence,
         ] {
             assert!(!t.builds_preserved(), "{t:?}");
         }
@@ -909,10 +877,6 @@ mod tests {
         assert!(HashJoin::try_new(spec(JoinType::Inner, 0, false)).is_err());
         assert!(HashJoin::try_new(spec(JoinType::NullAwareAnti, 2, false)).is_err());
         assert!(HashJoin::try_new(spec(JoinType::NullAwareAnti, 1, true)).is_err());
-        assert!(HashJoin::try_new(spec(JoinType::MarkIn, 2, false)).is_err());
-        let mut s = spec(JoinType::MarkIn, 1, false);
-        s.null_safe = vec![true];
-        assert!(HashJoin::try_new(s).is_err(), "null-safe mark keys");
         let mut s = spec(JoinType::Inner, 1, false);
         s.build_keys = vec![1];
         assert!(HashJoin::try_new(s).is_err(), "Int64 vs Utf8");
@@ -936,22 +900,20 @@ mod tests {
             HashJoin::try_new(spec(JoinType::LeftSemi, 1, false)).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(j.schema().fields().len(), 2);
         assert!(format!("{j:?}").contains("LeftSemi"));
-        // Mark joins carry the probe columns plus one boolean mark column:
-        // nullable for `IN` (the mark may be NULL), never NULL for `EXISTS`.
-        let j = HashJoin::try_new(spec(JoinType::MarkExists, 1, false))
-            .unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(j.schema().fields().len(), 3);
-        assert_eq!(
-            j.schema().field(2),
-            &Field::new("mark", DataType::Boolean, false)
-        );
-        let j =
-            HashJoin::try_new(spec(JoinType::MarkIn, 1, true)).unwrap_or_else(|e| panic!("{e}"));
-        assert_eq!(
-            j.schema().field(2),
-            &Field::new("mark", DataType::Boolean, true)
-        );
-        assert!(format!("{j:?}").contains("MarkIn"));
+        // Existence joins carry the probe columns plus Spark's
+        // non-nullable `exists`, over any number of keys, null-safe or
+        // not, with or without a residual condition.
+        for (keys, filter) in [(1, false), (2, true)] {
+            let mut s = spec(JoinType::Existence, keys, filter);
+            s.null_safe = vec![true; keys];
+            let j = HashJoin::try_new(s).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(j.schema().fields().len(), 3);
+            assert_eq!(
+                j.schema().field(2),
+                &Field::new("exists", DataType::Boolean, false)
+            );
+            assert!(format!("{j:?}").contains("Existence"));
+        }
         // Single match is a flag on the left outer join only.
         let mut s = spec(JoinType::LeftOuter, 1, false);
         s.single_match = true;
@@ -961,8 +923,7 @@ mod tests {
             JoinType::LeftSemi,
             JoinType::LeftAnti,
             JoinType::NullAwareAnti,
-            JoinType::MarkExists,
-            JoinType::MarkIn,
+            JoinType::Existence,
         ] {
             let mut s = spec(t, 1, false);
             s.single_match = true;

@@ -138,20 +138,25 @@ impl Planner<'_> {
             (&logical.0, &logical.1)
         };
         let build_rows = self.estimated_rows(build_plan);
+        // No logical join is a scalar subquery's single-match join yet
+        // (design P2-T115 unit 2); orientation already refuses to flip one.
+        let single_match = false;
         // Which side the statistics say to build (design P2-T166). The
         // joins that build their preserved side do not run yet: the plan
         // keeps the right build and shows the preference.
         let preferred = if choice.distribution.is_none() {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
-            let other = orient(join_type, &probe_stats, &build_stats);
+            let other = orient(join_type, single_match, &probe_stats, &build_stats);
             (other != join_type).then_some((other, probe_stats, build_stats))
         } else {
             None
         };
         // A hint decides, else the build's estimated size. The null-aware
         // anti join reads whether the whole build has a NULL key, so its
-        // build is always broadcast.
+        // build is always broadcast. An existence join reads only the build
+        // rows with the probe row's key (its `exists` is never NULL), so,
+        // like the other equi-joins, it is broadcast or partitioned by size.
         let distribution = if join_type == JoinType::NullAwareAnti {
             JoinDistribution::Broadcast
         } else {
@@ -232,7 +237,8 @@ impl Planner<'_> {
             build_keys,
             null_safe,
             residual: filter,
-            single_match: false,
+            single_match,
+            distinct_build: false,
             runtime_filters,
             distribution,
         };

@@ -370,6 +370,7 @@ fn join(join_type: JoinType) -> HashJoinPlan {
         null_safe: vec![false, true],
         residual: Some(residual()),
         single_match: false,
+        distinct_build: false,
         runtime_filters: vec![JoinFilterPlan {
             id: FilterId(3),
             key: 0,
@@ -387,10 +388,10 @@ fn join(join_type: JoinType) -> HashJoinPlan {
     }
 }
 
-/// A mark or single-match join over one key, without a residual condition
-/// or runtime filters (the single-match flag rides on a plain left outer
-/// join).
-fn mark_join(join_type: JoinType) -> HashJoinPlan {
+/// An existence or single-match join over one key, without a residual
+/// condition or runtime filters (the single-match flag rides on a plain
+/// left outer join).
+fn subquery_join(join_type: JoinType) -> HashJoinPlan {
     HashJoinPlan {
         probe: boxed(scan()),
         build: boxed(PhysNode::Scan(file_scan())),
@@ -400,6 +401,7 @@ fn mark_join(join_type: JoinType) -> HashJoinPlan {
         null_safe: vec![false],
         residual: None,
         single_match: false,
+        distinct_build: false,
         runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
     }
@@ -672,18 +674,26 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             }),
         ),
         (
-            "hash_join_mark_exists",
-            PhysNode::HashJoin(mark_join(JoinType::MarkExists)),
-        ),
-        (
-            "hash_join_mark_in",
-            PhysNode::HashJoin(mark_join(JoinType::MarkIn)),
+            "hash_join_existence",
+            PhysNode::HashJoin(HashJoinPlan {
+                distinct_build: true,
+                ..subquery_join(JoinType::Existence)
+            }),
         ),
         (
             "hash_join_single_match",
             PhysNode::HashJoin(HashJoinPlan {
                 single_match: true,
-                ..mark_join(JoinType::LeftOuter)
+                ..subquery_join(JoinType::LeftOuter)
+            }),
+        ),
+        (
+            "nested_loop_existence",
+            PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe: boxed(scan()),
+                build: boxed(PhysNode::OneRow),
+                join_type: JoinType::Existence,
+                residual: Some(residual()),
             }),
         ),
         (
