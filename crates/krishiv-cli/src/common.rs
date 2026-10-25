@@ -91,13 +91,26 @@ pub(crate) fn split_statements(input: &str) -> Vec<(usize, String)> {
                     }
                 }
                 '/' if chars.peek() == Some(&'*') => {
-                    let mut prev = '\0';
+                    // Bracketed comments nest, as in Spark: the comment
+                    // ends at the `*/` that closes the outermost one.
+                    if let Some(open) = chars.next() {
+                        cur.push(open);
+                    }
+                    let (mut depth, mut prev) = (1_usize, '\0');
                     for n in chars.by_ref() {
                         cur.push(n);
                         if prev == '*' && n == '/' {
-                            break;
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            prev = '\0';
+                        } else if prev == '/' && n == '*' {
+                            depth += 1;
+                            prev = '\0';
+                        } else {
+                            prev = n;
                         }
-                        prev = n;
                     }
                 }
                 ';' => {
@@ -140,6 +153,18 @@ mod tests {
         assert_eq!(c, vec![(1, "select 1 -- tail".to_owned())]);
         let esc = split_statements("select 'it\\'s;' ; select 2");
         assert_eq!(esc.len(), 2, "{esc:?}");
+        // Nested block comments hide the semicolons inside them.
+        let nested = split_statements("select 1 /* a /* b; */ c; */ ; select 2");
+        assert_eq!(
+            nested,
+            vec![
+                (0, "select 1 /* a /* b; */ c; */".to_owned()),
+                (0, "select 2".to_owned())
+            ]
+        );
+        // `/*/` does not close the comment it opens.
+        let tight = split_statements("select 1 /*/ ; */ ; select 2");
+        assert_eq!(tight.len(), 2, "{tight:?}");
     }
 
     #[test]

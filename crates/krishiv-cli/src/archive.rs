@@ -209,10 +209,83 @@ fn contains_placeholder(s: &str) -> bool {
     false
 }
 
-/// Masks single-quoted string contents with `?` and standalone digit runs
-/// with `0`, skipping only `<path-N>` placeholders (never generic `<...>`
-/// text such as `a < b`). Deterministic and idempotent over its own output.
+/// Masks single-quoted string contents (and double-quoted ones, unless the
+/// session reads `"..."` as an identifier) with `?` and whole numeric
+/// literals, suffixes and exponents included, with `0`, skipping only
+/// `<path-N>` placeholders (never generic `<...>` text such as `a < b`).
+/// Deterministic and idempotent over its own output.
 fn mask_literals(text: &str) -> String {
+    mask_literals_with(
+        text,
+        DOUBLE_QUOTED_IDENTIFIERS.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// Whether the session reads `"..."` as an identifier (ANSI mode with
+/// `spark.sql.ansi.doubleQuotedIdentifiers`) rather than as a string
+/// literal, which is Spark's default. Set once by the command from the
+/// session configs; query text masks double-quoted spans unless it is on.
+static DOUBLE_QUOTED_IDENTIFIERS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Records whether `"..."` is an identifier for the rest of the run.
+pub(crate) fn set_double_quoted_identifiers(on: bool) {
+    DOUBLE_QUOTED_IDENTIFIERS.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The end (exclusive) of the quoted span starting at `start` (a `quote`
+/// byte), and whether it closed. Doubled quotes and backslash escapes stay
+/// inside the span.
+fn quoted_span_end(bytes: &[u8], start: usize, quote: u8) -> (usize, bool) {
+    let mut j = start + 1;
+    while j < bytes.len() {
+        let d = bytes[j];
+        if d == b'\\' {
+            j += 2;
+            continue;
+        }
+        if d == quote {
+            if bytes.get(j + 1) == Some(&quote) {
+                j += 2;
+                continue;
+            }
+            return (j + 1, true);
+        }
+        j += 1;
+    }
+    (bytes.len(), false)
+}
+
+/// The end (exclusive) of the numeric literal starting at the digit at
+/// `start`: digits, an optional fraction, an optional exponent with its
+/// sign, and any type suffix (`100L`, `1.5BD`, `1e-3D`, `0x1F`).
+fn numeric_literal_end(bytes: &[u8], start: usize) -> usize {
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut j = start;
+    while j < bytes.len() && word(bytes[j]) {
+        j += 1;
+    }
+    if bytes.get(j) == Some(&b'.') && bytes.get(j + 1).is_some_and(u8::is_ascii_digit) {
+        j += 1;
+        while j < bytes.len() && word(bytes[j]) {
+            j += 1;
+        }
+    }
+    // `1e-3`: the sign belongs to the literal when the word ends in `e`.
+    if matches!(bytes.get(j), Some(b'+' | b'-'))
+        && matches!(bytes.get(j - 1), Some(b'e' | b'E'))
+        && bytes.get(j + 1).is_some_and(u8::is_ascii_digit)
+    {
+        j += 1;
+        while j < bytes.len() && word(bytes[j]) {
+            j += 1;
+        }
+    }
+    j
+}
+
+/// [`mask_literals`] with the double-quote reading given.
+fn mask_literals_with(text: &str, double_quoted_identifiers: bool) -> String {
     let mut out = String::with_capacity(text.len());
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -228,33 +301,17 @@ fn mask_literals(text: &str) -> String {
             i += 1;
             continue;
         }
-        if c == b'\'' {
+        if c == b'\'' || (c == b'"' && !double_quoted_identifiers) {
             // Find the closing quote first, so a string holding a
             // placeholder or the redaction marker is kept verbatim.
-            let mut j = i + 1;
-            let mut closed = false;
-            while j < bytes.len() {
-                let d = bytes[j];
-                if d == b'\\' {
-                    j += 2;
-                    continue;
-                }
-                if d == b'\'' {
-                    if bytes.get(j + 1) == Some(&b'\'') {
-                        j += 2;
-                        continue;
-                    }
-                    closed = true;
-                    break;
-                }
-                j += 1;
-            }
-            let end = if closed { j + 1 } else { bytes.len() };
+            let (end, _closed) = quoted_span_end(bytes, i, c);
             let literal = &text[i..end];
             if contains_placeholder(literal) || literal.contains(krishiv_common::secret::REDACTED) {
                 out.push_str(literal);
             } else {
-                out.push_str("'?'");
+                out.push(char::from(c));
+                out.push('?');
+                out.push(char::from(c));
             }
             i = end;
             continue;
@@ -264,20 +321,20 @@ fn mask_literals(text: &str) -> String {
                 let p = bytes[i - 1];
                 !(p.is_ascii_alphanumeric() || p == b'_')
             };
-            let mut j = i;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
-            }
-            let next_ok = j >= bytes.len() || {
-                let n = bytes[j];
-                !(n.is_ascii_alphanumeric() || n == b'_')
-            };
-            if prev_ok && next_ok {
+            if prev_ok {
+                // The whole numeric literal becomes one `0`: a suffix or
+                // an exponent must not keep its digits.
                 out.push('0');
+                i = numeric_literal_end(bytes, i);
             } else {
+                // Digits that continue an identifier stay.
+                let mut j = i;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
                 out.push_str(&text[i..j]);
+                i = j;
             }
-            i = j;
             continue;
         }
         // ASCII fast path; non-ASCII copied by char.

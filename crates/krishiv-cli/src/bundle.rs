@@ -72,16 +72,29 @@ pub(crate) fn run(args: &BundleArgs) -> i32 {
 fn run_inner(args: &BundleArgs) -> Result<(), String> {
     let input = read_input(args.execute.as_ref(), args.file.as_ref())?;
     let session = build_session(&args.conf, &args.table)?;
+    // Query text masks `"..."` as a string literal unless the session reads
+    // it as an identifier (the parser's reading of the same configs).
+    let parser = krishiv_sql::ParserOptions::from_conf(|k| {
+        args.conf
+            .iter()
+            .rev()
+            .find(|(key, _)| key == k)
+            .map(|(_, v)| v.as_str())
+    });
+    crate::archive::set_double_quoted_identifiers(parser.double_quoted_identifiers);
     let table_paths: Vec<String> = args.table.iter().map(|(_, p)| p.clone()).collect();
     let statements = split_statements(&input);
     let mut groups = table_spellings(&table_paths);
-    let inline: Vec<String> = direct_parquet_paths(
+    let inline: Vec<String> = direct_format_paths(
         &statements
             .iter()
             .map(|(_, s)| s.clone())
             .collect::<Vec<_>>(),
     );
-    for p in inline {
+    // Absolute paths held by config values (spill and cache directories)
+    // get their own placeholders too, as table paths do.
+    let configured = config_paths(&session, &args.conf);
+    for p in inline.into_iter().chain(configured) {
         if table_paths.iter().any(|t| t == &p) {
             continue;
         }
@@ -189,13 +202,33 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     out
 }
 
-/// Paths referenced inline as `parquet.'<path>'` (any quote style, any case)
-/// in the SQL text. These bypass `--table`, but plans still print them, so
-/// each gets its own `<path-N>` placeholder.
-fn direct_parquet_paths(statements: &[String]) -> Vec<String> {
+/// The absolute paths config values hold: a value that is one, or a
+/// comma-separated list of them.
+fn config_paths(session: &krishiv::Session, conf_args: &[(String, String)]) -> Vec<String> {
+    let mut values: Vec<String> = krishiv_common::config::REGISTRY
+        .iter()
+        .filter_map(|entry| session.conf().get(entry.key))
+        .collect();
+    values.extend(conf_args.iter().map(|(_, v)| v.clone()));
+    let mut out: Vec<String> = Vec::new();
+    for value in values {
+        for part in value.split(',').map(str::trim) {
+            if std::path::Path::new(part).is_absolute() && !out.iter().any(|p| p == part) {
+                out.push(part.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// Paths referenced inline as `<format>.'<path>'` (`parquet`, `csv`, `json`,
+/// `orc`, ... in any quote style and case) in the SQL text. These bypass
+/// `--table`, but plans still print them, so each gets its own `<path-N>`
+/// placeholder.
+fn direct_format_paths(statements: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     for stmt in statements {
-        for p in parquet_paths_in(stmt) {
+        for p in format_paths_in(stmt) {
             if !out.contains(&p) {
                 out.push(p);
             }
@@ -204,35 +237,34 @@ fn direct_parquet_paths(statements: &[String]) -> Vec<String> {
     out
 }
 
-/// Quoted paths after `parquet.` in one statement.
-fn parquet_paths_in(stmt: &str) -> Vec<String> {
+/// Quoted paths after `<format>.` in one statement: a quoted string that
+/// directly follows an identifier and a dot (the relation shape of the
+/// lowerer for a file read by path).
+fn format_paths_in(stmt: &str) -> Vec<String> {
     let bytes = stmt.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
     while i < bytes.len() {
-        let is_parquet = stmt
-            .get(i..i + 7)
-            .is_some_and(|s| s.eq_ignore_ascii_case("parquet"));
-        if is_parquet {
-            let mut j = i + 7;
+        if bytes[i] == b'.' {
+            let ident_before = bytes[..i]
+                .iter()
+                .rev()
+                .find(|b| !b.is_ascii_whitespace())
+                .is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'`');
+            let mut j = i + 1;
             while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                 j += 1;
             }
-            if bytes.get(j) == Some(&b'.') {
-                j += 1;
-                while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                    j += 1;
+            if ident_before
+                && let Some(&q) = bytes.get(j)
+                && (q == b'\'' || q == b'"' || q == b'`')
+            {
+                let (path, next) = read_quoted(stmt, j, q);
+                if !path.is_empty() && !out.contains(&path) {
+                    out.push(path);
                 }
-                if let Some(&q) = bytes.get(j)
-                    && (q == b'\'' || q == b'"' || q == b'`')
-                {
-                    let (path, next) = read_quoted(stmt, j, q);
-                    if !path.is_empty() && !out.contains(&path) {
-                        out.push(path);
-                    }
-                    i = next;
-                    continue;
-                }
+                i = next;
+                continue;
             }
         }
         let ch = stmt[i..].chars().next().unwrap_or('\u{FFFD}');
@@ -392,8 +424,8 @@ fn environment_json(session: &krishiv::Session) -> String {
     push_json_string(&mut out, cpu_level());
     out.push_str(",\"logical_cpus\":");
     out.push_str(&logical.to_string());
-    out.push_str(",\"rust_target\":");
-    push_json_string(&mut out, &rust_target());
+    out.push_str(",\"platform\":");
+    push_json_string(&mut out, &platform());
     out.push_str(",\"features\":[");
     for (i, f) in features.iter().enumerate() {
         if i > 0 {
@@ -409,17 +441,40 @@ fn environment_json(session: &krishiv::Session) -> String {
     out
 }
 
+/// The x86-64 microarchitecture level the build's target features reach,
+/// or the aarch64 baseline: what the binary may assume, not what the host
+/// CPU supports.
 fn cpu_level() -> &'static str {
-    #[cfg(target_arch = "x86_64")]
-    {
-        "x86-64-v3"
-    }
-    #[cfg(all(target_arch = "aarch64", not(target_arch = "x86_64")))]
-    {
-        "neoverse-n1"
-    }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    {
+    if cfg!(target_arch = "x86_64") {
+        if cfg!(all(
+            target_feature = "avx512f",
+            target_feature = "avx512bw",
+            target_feature = "avx512cd",
+            target_feature = "avx512dq",
+            target_feature = "avx512vl"
+        )) {
+            "x86-64-v4"
+        } else if cfg!(all(
+            target_feature = "avx2",
+            target_feature = "bmi1",
+            target_feature = "bmi2",
+            target_feature = "fma",
+            target_feature = "lzcnt",
+            target_feature = "movbe"
+        )) {
+            "x86-64-v3"
+        } else if cfg!(all(
+            target_feature = "sse4.2",
+            target_feature = "popcnt",
+            target_feature = "ssse3"
+        )) {
+            "x86-64-v2"
+        } else {
+            "x86-64"
+        }
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
         "unknown"
     }
 }
@@ -435,7 +490,9 @@ fn allocator_name() -> &'static str {
     }
 }
 
-fn rust_target() -> String {
+/// The architecture and operating system of the build (`arch-os`, not a
+/// full Rust target triple: std does not expose the triple).
+fn platform() -> String {
     format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS)
 }
 
@@ -585,24 +642,47 @@ fn push_json_string(out: &mut String, s: &str) {
 }
 
 /// Writes `bytes` to `path` via a temp file in the same directory, renamed
-/// on success and removed on error.
+/// on success and removed on error. The temp file is created exclusively
+/// (`create_new`), so a file or symlink already at that name is never
+/// written through: the name is tried again with the next counter.
 fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
     let parent = path.parent().filter(|p| !p.as_os_str().is_empty());
     if let Some(dir) = parent {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     let dir: &Path = parent.unwrap_or_else(|| Path::new("."));
-    let tmp_name = format!(
-        ".{}.tmp.{}",
-        path.file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("bundle"),
-        std::process::id()
-    );
-    let tmp = dir.join(tmp_name);
+    let base = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bundle");
+    let mut created = None;
+    for attempt in 0..64_u32 {
+        let tmp = dir.join(format!(".{base}.tmp.{}.{attempt}", std::process::id()));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+        {
+            Ok(file) => {
+                created = Some((tmp, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(format!("cannot write {}: {e}", tmp.display())),
+        }
+    }
+    let Some((tmp, mut file)) = created else {
+        return Err(format!(
+            "cannot create a temporary file next to {}",
+            path.display()
+        ));
+    };
     let result = (|| -> Result<(), String> {
-        std::fs::write(&tmp, bytes).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
+        file.write_all(bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
         std::fs::rename(&tmp, path).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
         Ok(())
     })();
@@ -690,22 +770,28 @@ mod tests {
     }
 
     #[test]
-    fn inline_parquet_paths_are_found_in_any_quote_or_case() {
+    fn inline_format_paths_are_found_in_any_format_quote_or_case() {
         let stmts = vec![
             "select * from parquet.`/a/b.parquet`".to_owned(),
             "SELECT * FROM PARQUET.'/c/d.parquet'".to_owned(),
             "select * from parquet . \"/e/f.parquet\"".to_owned(),
+            "select * from csv.`/g/h.csv` join JSON.'/i/j.json' join orc.\"/k/l.orc\"".to_owned(),
         ];
-        let paths = direct_parquet_paths(&stmts);
+        let paths = direct_format_paths(&stmts);
         assert_eq!(
             paths,
             vec![
                 "/a/b.parquet".to_owned(),
                 "/c/d.parquet".to_owned(),
                 "/e/f.parquet".to_owned(),
+                "/g/h.csv".to_owned(),
+                "/i/j.json".to_owned(),
+                "/k/l.orc".to_owned(),
             ]
         );
-        assert!(direct_parquet_paths(&["select 1".to_owned()]).is_empty());
+        // A dotted name or a number is not a path.
+        assert!(direct_format_paths(&["select t.a, 1.5, 'x.y' from d.t".to_owned()]).is_empty());
+        assert!(direct_format_paths(&["select 1".to_owned()]).is_empty());
     }
 
     #[test]
@@ -737,6 +823,39 @@ mod tests {
         assert!(!doc.contains("cred-value"), "{doc}");
         assert!(doc.contains("*********(redacted)"), "{doc}");
         assert!(doc.contains("krishiv.exec.batchSize"), "{doc}");
+    }
+
+    #[test]
+    fn write_atomically_never_writes_through_an_existing_temp_name() {
+        let dir = tempfile::tempdir().expect("dir");
+        let out = dir.path().join("b.tar");
+        // A file squatting on the first temp name is left untouched.
+        let squat = dir
+            .path()
+            .join(format!(".b.tar.tmp.{}.0", std::process::id()));
+        std::fs::write(&squat, b"keep").expect("squat");
+        write_atomically(&out, b"bundle").expect("write");
+        assert_eq!(std::fs::read(&out).expect("out"), b"bundle");
+        assert_eq!(std::fs::read(&squat).expect("squat"), b"keep");
+    }
+
+    #[test]
+    fn absolute_config_paths_get_placeholders() {
+        let conf = vec![(
+            "krishiv.spill.dir".to_owned(),
+            "/srv/private-4e1c/spill".to_owned(),
+        )];
+        let session = build_session(&conf, &[]).expect("session");
+        let paths = config_paths(&session, &conf);
+        assert!(
+            paths.contains(&"/srv/private-4e1c/spill".to_owned()),
+            "{paths:?}"
+        );
+        let groups: Vec<Vec<String>> = paths.iter().map(|p| absolute_spellings(p)).collect();
+        let subs = PathSub::for_table_spellings(&groups);
+        let doc = config_json(&session, &conf, &subs);
+        assert!(!doc.contains("private-4e1c"), "{doc}");
+        assert!(doc.contains("<path-"), "{doc}");
     }
 
     #[test]

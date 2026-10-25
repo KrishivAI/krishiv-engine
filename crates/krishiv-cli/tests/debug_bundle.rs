@@ -189,22 +189,32 @@ fn redaction_hides_literals_secrets_and_paths() {
         all_text.contains("*********(redacted)"),
         "no redaction marker"
     );
-    // Failing statements record their error class, redacted.
-    let plan3 = std::str::from_utf8(&files["queries/003.plan.json"]).expect("utf-8");
-    assert!(plan3.contains("TABLE_OR_VIEW_NOT_FOUND"), "{plan3}");
-    assert!(plan3.contains("error_class"), "{plan3}");
-    let profile4 = std::str::from_utf8(&files["queries/004.profile.json"]).expect("utf-8");
-    assert!(
-        profile4.contains("DIVIDE_BY_ZERO") || profile4.contains("error_class"),
-        "{profile4}"
+    // Failing statements record their exact error class, redacted.
+    let json = |name: &str| -> serde_json::Value {
+        serde_json::from_slice(&files[name]).unwrap_or_else(|e| panic!("{name} is not JSON: {e}"))
+    };
+    assert_eq!(
+        json("queries/003.plan.json")["error_class"],
+        "TABLE_OR_VIEW_NOT_FOUND"
     );
-    // Manifest lists every file, sorted; version matches --version.
-    let manifest = std::str::from_utf8(&files["manifest.json"]).expect("utf-8");
+    assert_eq!(
+        json("queries/004.profile.json")["error_class"],
+        "DIVIDE_BY_ZERO"
+    );
+    // The manifest names the format and version and lists exactly the
+    // bundle's files, sorted.
+    let manifest = json("manifest.json");
+    assert_eq!(manifest["format"], "krishiv.debug-bundle");
+    assert_eq!(manifest["version"], 1);
     let mut listed: Vec<String> = files.keys().cloned().collect();
     listed.sort();
-    for f in &listed {
-        assert!(manifest.contains(f), "{manifest}");
-    }
+    let in_manifest: Vec<String> = manifest["files"]
+        .as_array()
+        .expect("files array")
+        .iter()
+        .map(|f| f.as_str().expect("file name").to_owned())
+        .collect();
+    assert_eq!(in_manifest, listed);
     let version = std::str::from_utf8(&files["version.txt"]).expect("utf-8");
     assert!(version.starts_with("krishiv "), "{version}");
     assert!(version.contains("allocator="), "{version}");
