@@ -903,3 +903,485 @@ fn variadic_udfs_take_any_arity_above_the_minimum() {
     let e = block_on(s.sql("SELECT join_strings()")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
 }
+
+/// A strict UDF declaring non-nullable results, over a nullable column.
+#[derive(Debug)]
+struct StrictNonNull;
+
+impl ScalarUdf for StrictNonNull {
+    fn name(&self) -> &str {
+        "strict_nonnull"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(int_sig)
+    }
+
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Integer,
+            nullable: false,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[UdfArg<'_>],
+        rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        let input = args[0].array();
+        let input = input
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| UdfError::new("strict_nonnull needs INT"))?;
+        assert_eq!(input.null_count(), 0, "a strict UDF never sees a null");
+        assert_eq!(
+            input.len(),
+            if matches!(args[0], UdfArg::Scalar(_)) {
+                1
+            } else {
+                rows
+            }
+        );
+        Ok(Arc::new(input.clone()))
+    }
+}
+
+#[test]
+fn strict_non_nullable_declared_udf_widens_over_nullable_args() {
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]))],
+    )
+    .unwrap();
+    s.register_batches("nums", schema, vec![batch]).unwrap();
+    s.register_udf(StrictNonNull);
+    // The analyzer widens the result to nullable: the field accepts nulls.
+    let df = block_on(s.sql("SELECT strict_nonnull(a) AS x FROM nums")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert!(schema.field(0).is_nullable(), "strict widens to nullable");
+    let rows = block_on(df.collect()).unwrap();
+    let values: Vec<Option<i32>> = rows
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    // Order is not guaranteed without ORDER BY; sort for determinism.
+    let mut sorted = values;
+    sorted.sort();
+    assert_eq!(sorted, [None, Some(1), Some(3)]);
+}
+
+/// A session UDF named like the built-in `nvl`: strict, so a null input
+/// gives null, while the built-in coalesces.
+#[derive(Debug)]
+struct NvlUdf;
+
+impl ScalarUdf for NvlUdf {
+    fn name(&self) -> &str {
+        "nvl"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(|| {
+            Signature::Exact(vec![
+                UdfInputType::Exact(DataType::Integer),
+                UdfInputType::Exact(DataType::Integer),
+            ])
+        })
+    }
+
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Integer,
+            nullable: true,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[UdfArg<'_>],
+        _rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        let first = args[0].array();
+        let first = first
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| UdfError::new("nvl needs INT"))?;
+        // Markedly not `coalesce`: adds a thousand to the first argument.
+        Ok(Arc::new(
+            first
+                .iter()
+                .map(|v| v.map(|v| v.wrapping_add(1000)))
+                .collect::<Int32Array>(),
+        ))
+    }
+}
+
+fn nvl_table() -> Session {
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![None, Some(1)]))],
+    )
+    .unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    s.register_udf(NvlUdf);
+    s
+}
+
+#[test]
+fn nvl_builtin_wins_unqualified_but_qualified_reaches_the_udf() {
+    let s = nvl_table();
+    // SQL: bare `nvl` is the built-in (`coalesce`); qualified reaches the UDF.
+    let rows = collect(&s, "SELECT nvl(a, 0) AS x FROM t ORDER BY a");
+    // Built-in: NULL -> 0, 1 -> 1. `ORDER BY a` is nulls first: [0, 1].
+    assert_eq!(ints(&rows), [Some(0), Some(1)]);
+    let rows = collect(&s, "SELECT session.nvl(a, 0) AS x FROM t ORDER BY a");
+    // UDF (strict): NULL -> NULL, 1 -> 1001.
+    assert_eq!(ints(&rows), [None, Some(1001)]);
+    let rows = collect(&s, "SELECT system.session.nvl(a, 0) AS x FROM t ORDER BY a");
+    assert_eq!(ints(&rows), [None, Some(1001)]);
+    // DataFrame API follows the same rule.
+    let df = s
+        .table("t")
+        .select([call_function("nvl", [col("a"), 0.into()]).alias("x")]);
+    let via_df = block_on(df.order_by([col("x").asc()]).collect()).unwrap();
+    assert_eq!(ints(&via_df), [Some(0), Some(1)]);
+    let df = s
+        .table("t")
+        .select([call_function("session.nvl", [col("a"), 0.into()]).alias("x")]);
+    let via_df = block_on(df.order_by([col("x").asc()]).collect()).unwrap();
+    // NULL sorts first ascending: [NULL, 1001].
+    assert_eq!(ints(&via_df), [None, Some(1001)]);
+    let df = s
+        .table("t")
+        .select([call_function("system.session.nvl", [col("a"), 0.into()]).alias("x")]);
+    let via_df = block_on(df.order_by([col("x").asc()]).collect()).unwrap();
+    assert_eq!(ints(&via_df), [None, Some(1001)]);
+}
+
+/// A session UDF named like the built-in `assert_true`: returns NOT cond,
+/// never raising, while the built-in raises on false.
+#[derive(Debug)]
+struct AssertTrueUdf;
+
+impl ScalarUdf for AssertTrueUdf {
+    fn name(&self) -> &str {
+        "assert_true"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Boolean)]))
+    }
+
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Boolean,
+            nullable: true,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[UdfArg<'_>],
+        rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        use arrow_array::BooleanArray;
+        let input = args[0].array();
+        let input = input
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| UdfError::new("assert_true needs BOOLEAN"))?;
+        assert_eq!(
+            input.len(),
+            if matches!(args[0], UdfArg::Scalar(_)) {
+                1
+            } else {
+                rows
+            }
+        );
+        Ok(Arc::new(
+            input
+                .iter()
+                .map(|v| v.map(|v| !v))
+                .collect::<BooleanArray>(),
+        ))
+    }
+}
+
+fn bools(batches: &[RecordBatch]) -> Vec<Option<bool>> {
+    use arrow_array::BooleanArray;
+    batches
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn assert_true_builtin_wins_unqualified_but_qualified_reaches_the_udf() {
+    let s = Session::new().unwrap();
+    s.register_udf(AssertTrueUdf);
+    // SQL: bare `assert_true(true)` is the built-in (`void`, always NULL);
+    // qualified runs the UDF (NOT cond, boolean).
+    let rows = collect(&s, "SELECT assert_true(true) AS x");
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    // `void` travels as `Null`: one null row.
+    assert_eq!(rows[0].column(0).data_type(), &ArrowType::Null);
+    let rows = collect(&s, "SELECT session.assert_true(true) AS x");
+    assert_eq!(bools(&rows), [Some(false)]);
+    let rows = collect(&s, "SELECT system.session.assert_true(false) AS x");
+    assert_eq!(bools(&rows), [Some(true)]);
+    // DataFrame API follows the same rule, through a real table.
+    let s2 = Session::new().unwrap();
+    s2.register_udf(AssertTrueUdf);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "b",
+        ArrowType::Boolean,
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(arrow_array::BooleanArray::from(vec![true]))],
+    )
+    .unwrap();
+    s2.register_batches("b", schema, vec![batch]).unwrap();
+    let df = s2
+        .table("b")
+        .select([call_function("assert_true", [col("b")]).alias("x")]);
+    let rows = block_on(df.collect()).unwrap();
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    assert_eq!(rows[0].column(0).data_type(), &ArrowType::Null);
+    let df = s2
+        .table("b")
+        .select([call_function("session.assert_true", [col("b")]).alias("x")]);
+    assert_eq!(bools(&block_on(df.collect()).unwrap()), [Some(false)]);
+    let df = s2
+        .table("b")
+        .select([call_function("system.session.assert_true", [col("b")]).alias("x")]);
+    assert_eq!(bools(&block_on(df.collect()).unwrap()), [Some(false)]);
+}
+
+/// A scalar session UDF named like the window function `ntile`.
+#[derive(Debug)]
+struct NtileUdf;
+
+impl ScalarUdf for NtileUdf {
+    fn name(&self) -> &str {
+        "ntile"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(int_sig)
+    }
+
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Integer,
+            nullable: true,
+        })
+    }
+
+    fn invoke(
+        &self,
+        args: &[UdfArg<'_>],
+        rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        let input = args[0].array();
+        let input = input
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .ok_or_else(|| UdfError::new("ntile needs INT"))?;
+        assert_eq!(
+            input.len(),
+            if matches!(args[0], UdfArg::Scalar(_)) {
+                1
+            } else {
+                rows
+            }
+        );
+        Ok(Arc::new(
+            input
+                .iter()
+                .map(|v| v.map(|v| v.wrapping_add(100)))
+                .collect::<Int32Array>(),
+        ))
+    }
+}
+
+#[test]
+fn ntile_qualified_reaches_the_udf_unqualified_stays_the_window() {
+    let s = Session::new().unwrap();
+    s.register_udf(NtileUdf);
+    // SQL: qualified calls run the scalar UDF.
+    let rows = collect(&s, "SELECT session.ntile(5) AS x");
+    assert_eq!(ints(&rows), [Some(105)]);
+    let rows = collect(&s, "SELECT system.session.ntile(5) AS x");
+    assert_eq!(ints(&rows), [Some(105)]);
+    // Unqualified `ntile` stays the window function: without OVER it fails
+    // as the built-in does, never running the UDF.
+    let e = block_on(s.sql("SELECT ntile(5)")).unwrap_err();
+    assert_ne!(e.error_class(), ErrorClass::FailedExecuteUdf);
+    // DataFrame API follows the same rule.
+    let s2 = Session::new().unwrap();
+    s2.register_udf(NtileUdf);
+    let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![5]))],
+    )
+    .unwrap();
+    s2.register_batches("n", schema, vec![batch]).unwrap();
+    let df = s2
+        .table("n")
+        .select([call_function("session.ntile", [col("a")]).alias("x")]);
+    assert_eq!(ints(&block_on(df.collect()).unwrap()), [Some(105)]);
+    let df = s2
+        .table("n")
+        .select([call_function("system.session.ntile", [col("a")]).alias("x")]);
+    assert_eq!(ints(&block_on(df.collect()).unwrap()), [Some(105)]);
+}
+
+/// A UDF whose `return_field` panics.
+#[derive(Debug)]
+struct PanicReturn;
+
+impl ScalarUdf for PanicReturn {
+    fn name(&self) -> &str {
+        "panic_return"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(int_sig)
+    }
+
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        panic!("return_field went bang");
+    }
+
+    fn invoke(
+        &self,
+        _: &[UdfArg<'_>],
+        rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        Ok(Arc::new(Int32Array::from(vec![1; rows])))
+    }
+}
+
+/// A UDF whose `signature` panics.
+#[derive(Debug)]
+struct PanicSignature;
+
+impl ScalarUdf for PanicSignature {
+    fn name(&self) -> &str {
+        "panic_signature"
+    }
+
+    fn version(&self) -> u32 {
+        1
+    }
+
+    fn signature(&self) -> &Signature {
+        panic!("signature went bang");
+    }
+
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Integer,
+            nullable: true,
+        })
+    }
+
+    fn invoke(
+        &self,
+        _: &[UdfArg<'_>],
+        rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        Ok(Arc::new(Int32Array::from(vec![1; rows])))
+    }
+}
+
+#[test]
+fn panicking_return_field_and_signature_become_failed_execute_udf() {
+    let s = Session::new().unwrap();
+    s.register_udf(PanicReturn);
+    s.register_udf(PanicSignature);
+    for query in ["SELECT panic_return(1)", "SELECT panic_signature(1)"] {
+        let e = block_on(s.sql(query)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf, "{query}");
+        assert_eq!(e.sql_state(), Some("39000"), "{query}");
+        assert!(e.to_string().contains("went bang"), "{query}: {e}");
+    }
+    // DataFrame calls fail the same way, through a real table.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1]))],
+    )
+    .unwrap();
+    s.register_batches("p", schema, vec![batch]).unwrap();
+    let df = s
+        .table("p")
+        .select([call_function("panic_return", [col("a")])]);
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf);
+}
+
+#[test]
+fn udf_not_available_uses_kd003() {
+    use krishiv_common::error::ErrorClass;
+    assert_eq!(
+        ErrorClass::KrishivUdfNotAvailable.sql_state(),
+        Some("KD003")
+    );
+}

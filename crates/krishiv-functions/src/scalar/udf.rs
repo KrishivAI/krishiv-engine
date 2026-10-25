@@ -13,7 +13,6 @@
 //! row (null inputs give null without invoking, as Spark's strict
 //! functions do).
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, UInt32Array, new_null_array};
@@ -21,6 +20,7 @@ use arrow_buffer::BooleanBuffer;
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{FailedExecuteUdf, KrishivError};
 use krishiv_types::DataType;
+use krishiv_udf_sdk::guard_call;
 
 use super::ScalarFunction;
 use super::args::{Arg, broadcast, internal};
@@ -45,9 +45,26 @@ pub fn bind_udf(
     ansi: bool,
     time_zone: Option<i32>,
 ) -> Result<Arc<dyn ScalarFunction>, KrishivError> {
-    let name = udf.name().to_lowercase();
-    let version = udf.version();
-    let signature = udf.signature();
+    // Every trait call goes through `guard_call`: a panicking UDF becomes
+    // `FAILED_EXECUTE_UDF`, never an unwinding engine.
+    let name = match guard_call("unknown", "name", || udf.name().to_owned()) {
+        Ok(n) => n.to_lowercase(),
+        Err(e) => {
+            return Err(failed_execute("unknown", "unknown", "unknown", e.message()));
+        }
+    };
+    let version = match guard_call(&name, "version", || udf.version()) {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(failed_execute(&name, "unknown", "unknown", e.message()));
+        }
+    };
+    let signature = match guard_call(&name, "signature", || udf.signature().clone()) {
+        Ok(s) => s,
+        Err(e) => {
+            return Err(failed_execute(&name, "unknown", "unknown", e.message()));
+        }
+    };
     if !signature.accepts(args.len()) {
         return Err(internal(format!(
             "udf {name} bound to {} arguments",
@@ -55,6 +72,18 @@ pub fn bind_udf(
         )));
     }
     let signature_sql = signature.inputs_sql();
+    let strict = match guard_call(&name, "properties", || udf.properties()) {
+        Ok(p) => matches!(p.null_handling, krishiv_udf_sdk::NullHandling::Strict),
+        Err(e) => {
+            return Err(failed_execute(
+                &name,
+                &signature_sql,
+                "unknown",
+                e.message(),
+            ));
+        }
+    };
+    let _ = version;
     Ok(Arc::new(UdfBound {
         udf: Arc::clone(udf),
         name,
@@ -63,13 +92,20 @@ pub fn bind_udf(
         args: args.to_vec(),
         return_type: plain_carrier(data_type),
         nullable,
-        strict: matches!(
-            udf.properties().null_handling,
-            krishiv_udf_sdk::NullHandling::Strict
-        ),
+        strict,
         ansi,
         time_zone,
     }))
+}
+
+/// `FAILED_EXECUTE_UDF` for `name` (`signature` => `result`) and `reason`.
+fn failed_execute(name: &str, signature: &str, result: &str, reason: &str) -> KrishivError {
+    KrishivError::from(FailedExecuteUdf {
+        function_name: name.to_owned(),
+        signature: signature.to_owned(),
+        result: result.to_owned(),
+        reason: reason.to_owned(),
+    })
 }
 
 /// The plain Arrow carrier of `t`: what UDFs return (`Utf8` for `STRING`,
@@ -239,7 +275,8 @@ impl UdfBound {
         self.call(&udf_args, rows)
     }
 
-    /// Calls the UDF implementation, catching panics.
+    /// Calls the UDF implementation through `guard_call`: every user error
+    /// or panic is `FAILED_EXECUTE_UDF`.
     fn call(
         &self,
         args: &[krishiv_udf_sdk::UdfArg<'_>],
@@ -251,11 +288,10 @@ impl UdfBound {
             time_zone: self.time_zone,
         };
         let udf = Arc::clone(&self.udf);
-        let out = catch_unwind(AssertUnwindSafe(|| udf.invoke(args, rows, &ctx)));
-        match out {
+        let name = self.name.clone();
+        match guard_call(&name, "invoke", || udf.invoke(args, rows, &ctx)) {
             Ok(Ok(out)) => Ok(out),
-            Ok(Err(e)) => Err(self.execute(e.message().to_owned())),
-            Err(payload) => Err(self.execute(panic_message(&payload))),
+            Ok(Err(e)) | Err(e) => Err(self.execute(e.message().to_owned())),
         }
     }
 
@@ -297,17 +333,6 @@ impl UdfBound {
         DataType::from_arrow(&self.return_type)
             .map(|t| t.sql())
             .unwrap_or_else(|_| self.return_type.to_string())
-    }
-}
-
-/// The panic payload as a message.
-fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_owned()
-    } else {
-        "a panic without a message".to_owned()
     }
 }
 
@@ -676,5 +701,71 @@ mod tests {
         assert!(text.contains("broken"), "{text}");
         assert!(text.contains("\"INT\""), "{text}");
         assert!(text.contains("nope"), "{text}");
+    }
+
+    #[derive(Debug)]
+    struct PanicMeta {
+        what: &'static str,
+    }
+
+    impl ScalarUdf for PanicMeta {
+        fn name(&self) -> &str {
+            "panic_meta"
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        fn signature(&self) -> &Signature {
+            if self.what == "signature" {
+                panic!("signature went bang");
+            }
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn properties(&self) -> UdfProperties {
+            if self.what == "properties" {
+                panic!("properties went bang");
+            }
+            UdfProperties::default()
+        }
+
+        fn invoke(
+            &self,
+            args: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Ok(args[0].array())
+        }
+    }
+
+    #[test]
+    fn panicking_signature_and_properties_become_failed_execute_udf() {
+        for what in ["signature", "properties"] {
+            let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(PanicMeta { what });
+            let err = bind_udf(
+                &udf,
+                &[ArrowType::Int32],
+                &DataType::Integer,
+                true,
+                true,
+                Some(0),
+            )
+            .unwrap_err();
+            assert_eq!(err.error_class(), ErrorClass::FailedExecuteUdf, "{what}");
+            assert!(err.to_string().contains("went bang"), "{what}: {err}");
+            assert!(err.to_string().contains("panic_meta"), "{what}: {err}");
+        }
     }
 }

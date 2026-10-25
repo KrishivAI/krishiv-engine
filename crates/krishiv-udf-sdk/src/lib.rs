@@ -76,5 +76,5 @@ mod udf;
 pub use library::UdfLibrary;
 pub use udf::{
     ArgField, InvokeContext, NullHandling, ReturnField, ScalarUdf, Signature, UdfArg, UdfError,
-    UdfInputType, UdfProperties,
+    UdfInputType, UdfProperties, guard_call,
 };

@@ -167,6 +167,10 @@ pub enum Construct<'a> {
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
 #[must_use]
+#[expect(
+    clippy::match_same_arms,
+    reason = "every current FunctionId is listed explicitly"
+)]
 pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
     match construct {
         Construct::Node(node) => match node {
@@ -249,12 +253,14 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::MinBy => None,
         },
         // Built-ins and registry functions travel by name; only a
-        // session UDF (by name and version) needs a reader with it. A
-        // future identity is baseline until it is classified (encoding
-        // refuses it first).
+        // session UDF (by name and version) needs a reader with it.
         Construct::Function(id) => match id {
             FunctionId::Udf { .. } => Some(Feature::RustUdf),
-            FunctionId::Builtin(_) | FunctionId::Registry { .. } | _ => None,
+            FunctionId::Builtin(_) => None,
+            FunctionId::Registry { .. } => None,
+            // A future identity is baseline until it is classified
+            // (encoding refuses it first).
+            _ => None,
         },
     }
 }
@@ -302,6 +308,8 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
 }
 
 /// Every expression `node` holds (not its children's or its subqueries').
+/// Every [`PhysNode`] variant appears here explicitly, so a new node kind
+/// holding an expression cannot silently skip UDF feature detection.
 fn exprs_of(node: &PhysNode) -> Vec<&Arc<Expr>> {
     match node {
         PhysNode::Filter { predicate, .. } => vec![predicate],
@@ -327,19 +335,46 @@ fn exprs_of(node: &PhysNode) -> Vec<&Arc<Expr>> {
             .map(|f| &f.predicate)
             .into_iter()
             .collect(),
-        _ => vec![],
+        PhysNode::OneRow
+        | PhysNode::Limit { .. }
+        | PhysNode::Sort { .. }
+        | PhysNode::TopN { .. }
+        | PhysNode::Window { .. }
+        | PhysNode::WindowGroupLimit { .. }
+        | PhysNode::Aggregate { .. }
+        | PhysNode::HashJoin(_)
+        | PhysNode::NestedLoopJoin(_)
+        | PhysNode::Union { .. }
+        | PhysNode::WriteFiles { .. }
+        | PhysNode::Exchange(_) => Vec::new(),
     }
     .into_iter()
     .chain(residual_of(node))
     .collect()
 }
 
-/// The conjuncts of a join's residual, if it has one.
+/// The conjuncts of a join's residual, if it has one. Every [`PhysNode`]
+/// variant appears here explicitly, so a new join kind cannot silently skip
+/// UDF feature detection.
 fn residual_of(node: &PhysNode) -> Vec<&Arc<Expr>> {
     match node {
         PhysNode::HashJoin(j) => residual(j.residual.as_ref()),
         PhysNode::NestedLoopJoin(j) => residual(j.residual.as_ref()),
-        _ => Vec::new(),
+        PhysNode::Scan(_)
+        | PhysNode::OneRow
+        | PhysNode::Filter { .. }
+        | PhysNode::Project { .. }
+        | PhysNode::Limit { .. }
+        | PhysNode::ReplicateRows { .. }
+        | PhysNode::Expand { .. }
+        | PhysNode::Sort { .. }
+        | PhysNode::TopN { .. }
+        | PhysNode::Window { .. }
+        | PhysNode::WindowGroupLimit { .. }
+        | PhysNode::Aggregate { .. }
+        | PhysNode::Union { .. }
+        | PhysNode::WriteFiles { .. }
+        | PhysNode::Exchange(_) => Vec::new(),
     }
 }
 
@@ -350,9 +385,17 @@ fn residual(residual: Option<&Residual>) -> Vec<&Arc<Expr>> {
 }
 
 /// Calls `f` with every function call `e` holds: only a session UDF needs
-/// a feature, so only those arms matter. Physical expressions hold no
-/// subquery nodes (the codec refuses them); values of one are still
-/// entered, so nothing hides.
+/// a feature, so only those arms matter. Every current [`ExprNode`] variant
+/// appears here explicitly, so a new expression kind holding a call cannot
+/// silently skip UDF feature detection (a future variant hits the wildcard,
+/// whose children are still walked below; encoding refuses unknown nodes
+/// first). Physical expressions hold no subquery nodes (the codec refuses
+/// them); values of one are still entered, so nothing hides.
+#[expect(
+    clippy::match_same_arms,
+    clippy::collapsible_match,
+    reason = "every current expression kind is listed explicitly"
+)]
 fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
     let mut stack = vec![e];
     let mut seen = std::collections::HashSet::new();
@@ -362,12 +405,28 @@ fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
         }
         match &e.node {
             ExprNode::Resolved(ResolvedExpr::Function(c)) => f(Construct::Function(&c.id)),
+            ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::Alias { .. },
+            ) => {}
             // Physical expressions hold no subqueries; the values of one
-            // are still entered, so nothing hides.
-            ExprNode::Subquery {
-                kind: SubqueryKind::In(values),
-                ..
-            } => stack.extend(values.iter()),
+            // are still entered, so nothing hides (`SubqueryKind` is
+            // non-exhaustive, so a future kind is ignored here but still
+            // walked through `for_each_child` below).
+            ExprNode::Subquery { kind, .. } => {
+                if let SubqueryKind::In(values) = kind {
+                    stack.extend(values.iter());
+                }
+            }
+            ExprNode::Column(_)
+            | ExprNode::Literal(_)
+            | ExprNode::TypedLiteral { .. }
+            | ExprNode::Star(_)
+            | ExprNode::Function(_)
+            | ExprNode::Cast { .. }
+            | ExprNode::Alias { .. }
+            | ExprNode::Window(_) => {}
+            // A future expression kind: its children are still walked below,
+            // so nested calls cannot hide; encoding refuses it first.
             _ => {}
         }
         e.for_each_child(&mut |c| stack.push(c));

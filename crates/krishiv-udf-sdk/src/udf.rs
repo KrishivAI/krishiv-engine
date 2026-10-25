@@ -272,32 +272,69 @@ impl From<&str> for UdfError {
     }
 }
 
+/// Calls a UDF trait method, catching panics as [`UdfError`].
+///
+/// Every engine call to a UDF trait method (`signature`, `return_field`,
+/// `properties`, `invoke`, and the `name`/`version` reads in the query
+/// path) goes through this, so a panicking UDF becomes an error
+/// (eventually Spark's `FAILED_EXECUTE_UDF`) rather than unwinding the
+/// engine.
+pub fn guard_call<T>(
+    udf_name: &str,
+    method: &'static str,
+    f: impl FnOnce() -> T,
+) -> Result<T, UdfError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(v) => Ok(v),
+        Err(payload) => Err(UdfError::new(format!(
+            "UDF {udf_name}.{method} panicked: {}",
+            panic_payload(&payload)
+        ))),
+    }
+}
+
+/// The panic payload as a message.
+fn panic_payload(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_owned()
+    } else {
+        "a panic without a message".to_owned()
+    }
+}
+
 /// A native Rust scalar function: one row in, one value out.
 ///
 /// The implementation must be pure besides what [`InvokeContext`] carries:
 /// the same arguments (and context) give the same result, unless
 /// [`properties`](Self::properties) declares otherwise. It must not retain
-/// state between invocations, and it must never panic (a panic fails the
-/// query with `FAILED_EXECUTE_UDF`, but only after unwinding the worker).
+/// state between invocations, and it must never panic: the engine catches
+/// panics in every trait method through [`guard_call`] and fails the query
+/// with `FAILED_EXECUTE_UDF` (but only after unwinding the worker).
 /// Results use the plain Arrow carriers (`Utf8` for `STRING`, `Binary` for
 /// `BINARY`); the engine converts strings and binaries to views itself.
 pub trait ScalarUdf: Send + Sync + fmt::Debug + 'static {
     /// The function name, resolved case-insensitively (stored lower-case).
     /// Built-ins win over a same-name session UDF on the bare search path.
+    /// A panic becomes `FAILED_EXECUTE_UDF` through [`guard_call`].
     fn name(&self) -> &str;
 
     /// The implementation version. Plans reference the UDF by name and
     /// version, so bump it whenever the behaviour changes: a cached plan
     /// naming an older version never runs the newer code, and a worker
     /// holding another version refuses the plan instead of misreading it.
+    /// A panic becomes `FAILED_EXECUTE_UDF` through [`guard_call`].
     fn version(&self) -> u32;
 
     /// The arity and argument types (see [`Signature`]).
+    /// A panic becomes `FAILED_EXECUTE_UDF` through [`guard_call`].
     fn signature(&self) -> &Signature;
 
     /// The result type and nullability for arguments of these types (after
     /// the analyzer's implicit casts). Pure: the same argument fields give
     /// the same field, so analysis and execution always agree.
+    /// A panic becomes `FAILED_EXECUTE_UDF` through [`guard_call`].
     ///
     /// # Errors
     /// A [`UdfError`] when these argument types have no result (raised as
@@ -306,6 +343,7 @@ pub trait ScalarUdf: Send + Sync + fmt::Debug + 'static {
 
     /// Determinism and null handling; deterministic and [`Strict`](NullHandling::Strict)
     /// unless overridden.
+    /// A panic becomes `FAILED_EXECUTE_UDF` through [`guard_call`].
     fn properties(&self) -> UdfProperties {
         UdfProperties::default()
     }
@@ -316,6 +354,7 @@ pub trait ScalarUdf: Send + Sync + fmt::Debug + 'static {
     /// [`Strict`](NullHandling::Strict) handling the engine only invokes
     /// this for rows without nulls (and returns null without invoking when
     /// every row has one).
+    /// A panic becomes `FAILED_EXECUTE_UDF` through [`guard_call`].
     ///
     /// # Errors
     /// A [`UdfError`] when the values cannot be computed (raised as

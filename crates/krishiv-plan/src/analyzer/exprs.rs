@@ -227,6 +227,16 @@ impl Conditional {
     }
 }
 
+/// Whether `entry` is a built-in (a canonical operator or a registry
+/// function), rather than a session UDF. Every special-cased built-in path
+/// (`assert_true`'s default message, the `Conditional` rewrites, `ntile`'s
+/// folding) goes through this one rule: built-ins win over a same-name
+/// session UDF for unqualified names, and a qualified call to the session
+/// UDF reaches the UDF.
+fn is_builtin_entry(entry: &FunctionEntry) -> bool {
+    !matches!(entry.id, FunctionId::Udf { .. })
+}
+
 /// Whether `t` is a numeric type.
 fn is_conditional_numeric(t: &DataType) -> bool {
     matches!(
@@ -865,20 +875,28 @@ impl Resolver<'_> {
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
                 // Spark's constructor materializes the default message, so
                 // the schema names it (`assert_true(true, 'true' is not
-                // true!)`) and the kernel raises it.
+                // true!)`) and the kernel raises it. Only for the built-in:
+                // a qualified session UDF named `assert_true` takes its
+                // arguments as written.
                 let mut owned: Vec<Bound>;
-                let (kids, n) = if entry.id.name() == "assert_true" && n == 1 {
-                    owned = kids.to_vec();
-                    owned.insert(
-                        1,
-                        assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
-                    );
-                    (&owned[..], 2)
-                } else {
-                    (kids, n)
-                };
-                if let Some(which) =
-                    Conditional::of(f.name.last().map(String::as_str).unwrap_or(""))
+                let (kids, n) =
+                    if is_builtin_entry(&entry) && entry.id.name() == "assert_true" && n == 1 {
+                        owned = kids.to_vec();
+                        owned.insert(
+                            1,
+                            assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
+                        );
+                        (&owned[..], 2)
+                    } else {
+                        (kids, n)
+                    };
+                // Only for built-ins: a qualified session UDF named like a
+                // conditional (`session.nvl`, `system.session.nvl`, ...) runs
+                // the UDF, while a bare `nvl` runs the built-in (which wins
+                // the search path).
+                if is_builtin_entry(&entry)
+                    && let Some(which) =
+                        Conditional::of(f.name.last().map(String::as_str).unwrap_or(""))
                 {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
@@ -1085,14 +1103,16 @@ impl Resolver<'_> {
 
     /// `ntile`'s bucket count as the literal it folds to (`ntile(1 + 1)`):
     /// the window operator reads a literal. The rule above checked it is an
-    /// `int` constant.
+    /// `int` constant. Only for the built-in: a session UDF named `ntile`
+    /// keeps its arguments as written.
     #[inline(never)]
     fn folded_ntile(
         entry: &FunctionEntry,
         constants: &[Option<Constant>],
         mut kids: Vec<Bound>,
     ) -> Vec<Bound> {
-        if entry.id.name() == "ntile"
+        if is_builtin_entry(entry)
+            && entry.id.name() == "ntile"
             && let (Some(Some(Constant::Integral(n))), Some(k)) =
                 (constants.first(), kids.first_mut())
             && let Ok(n) = i32::try_from(*n)

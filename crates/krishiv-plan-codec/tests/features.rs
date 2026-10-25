@@ -345,3 +345,71 @@ fn features_of_refuses_what_it_cannot_interpret() {
         CodecError::Corrupt("feature ids that are not sorted or repeat".to_owned())
     );
 }
+
+#[test]
+fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
+    // Negative: no inventory case but `rust_udf` uses it, and the
+    // `expressions` case (a registry call) does not.
+    for (name, plan) in cases() {
+        if name == "rust_udf" {
+            assert!(plan_features(&plan).contains(&Feature::RustUdf), "{name}");
+        } else {
+            assert!(
+                !plan_features(&plan).contains(&Feature::RustUdf),
+                "{name} must not need rust_udf"
+            );
+        }
+    }
+    // The UDF expression of the inventory case, reused in every position
+    // holding an expression.
+    let udf_expr = match inventory::udf_call() {
+        PhysNode::Project { items, .. } => match &items[..] {
+            [krishiv_exec::physical::ProjectItemPlan::Expr { expr, .. }] => {
+                std::sync::Arc::clone(expr)
+            }
+            _ => panic!("inventory udf_call holds one expression"),
+        },
+        _ => panic!("inventory udf_call is a project"),
+    };
+    let builtin_expr = inventory::predicate();
+    // A UDF in a filter predicate needs the feature; a built-in does not.
+    for (predicate, wants) in [(&udf_expr, true), (&builtin_expr, false)] {
+        let plan = plan_of(PhysNode::Filter {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            predicate: std::sync::Arc::clone(predicate),
+            subqueries: Vec::new(),
+        });
+        assert_eq!(plan_features(&plan).contains(&Feature::RustUdf), wants);
+    }
+    // A UDF in a scan's pushed filter needs the feature; a built-in does not.
+    for (predicate, wants) in [(&udf_expr, true), (&builtin_expr, false)] {
+        let mut scan = inventory::table_scan();
+        scan.filter = Some(krishiv_exec::physical::ScanFilter {
+            layout: vec![krishiv_plan::AttrId(1)],
+            predicate: std::sync::Arc::clone(predicate),
+            exact: true,
+        });
+        let plan = plan_of(PhysNode::Scan(scan));
+        assert_eq!(plan_features(&plan).contains(&Feature::RustUdf), wants);
+    }
+    // A UDF in a join residual needs the feature; a built-in does not.
+    for (conjunct, wants) in [(&udf_expr, true), (&builtin_expr, false)] {
+        let residual = krishiv_exec::physical::Residual {
+            layout: vec![krishiv_plan::AttrId(1)],
+            conjuncts: vec![std::sync::Arc::clone(conjunct)],
+        };
+        let plan = plan_of(PhysNode::HashJoin(krishiv_exec::physical::HashJoinPlan {
+            probe: Box::new(PhysNode::OneRow),
+            build: Box::new(PhysNode::OneRow),
+            join_type: krishiv_exec::JoinType::Inner,
+            probe_keys: Vec::new(),
+            build_keys: Vec::new(),
+            null_safe: Vec::new(),
+            residual: Some(residual),
+            runtime_filters: Vec::new(),
+            distribution: krishiv_exec::physical::JoinDistribution::Broadcast,
+        }));
+        assert_eq!(plan_features(&plan).contains(&Feature::RustUdf), wants);
+    }
+}

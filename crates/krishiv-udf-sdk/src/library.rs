@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock};
 
-use super::ScalarUdf;
+use super::{ScalarUdf, guard_call};
 
 /// The UDFs registered on one session, by lower-case name.
 ///
@@ -59,11 +59,17 @@ impl UdfLibrary {
 
     /// The UDF named `name` at `version` (both case- and
     /// version-sensitive), as a plan references it; `None` when the name is
-    /// unregistered or holds another version.
+    /// unregistered or holds another version. A panicking `version` matches
+    /// (through [`guard_call`]) so that binding surfaces `FAILED_EXECUTE_UDF`
+    /// rather than `KRISHIV_UDF_NOT_AVAILABLE`.
     #[must_use]
     pub fn get_versioned(&self, name: &str, version: u32) -> Option<Arc<dyn ScalarUdf>> {
         let udf = self.get(name)?;
-        (udf.version() == version).then_some(udf)
+        let matches = match guard_call(name, "version", || udf.version()) {
+            Ok(v) => v == version,
+            Err(_) => true,
+        };
+        matches.then_some(udf)
     }
 
     /// Bumped on every registration; part of the analysis fingerprint.
@@ -98,7 +104,14 @@ impl fmt::Debug for UdfLibrary {
         let mut names: Vec<String> = inner
             .udfs
             .values()
-            .map(|u| format!("{}@{}", u.name(), u.version()))
+            .map(|u| {
+                let name = guard_call("unknown", "name", || u.name().to_owned())
+                    .unwrap_or_else(|_| "<panicking>".to_owned());
+                let version = guard_call(&name, "version", || u.version())
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|_| "<panicking>".to_owned());
+                format!("{name}@{version}")
+            })
             .collect();
         names.sort();
         f.debug_struct("UdfLibrary")

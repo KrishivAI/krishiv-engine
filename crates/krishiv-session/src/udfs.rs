@@ -18,7 +18,9 @@ use krishiv_plan::analyzer::{
     InputType, Inputs, SparkProfile,
 };
 use krishiv_plan::{FunctionId, FunctionKind};
-use krishiv_udf_sdk::{ArgField, ScalarUdf, Signature, UdfInputType, UdfLibrary};
+use krishiv_udf_sdk::{
+    ArgField, NullHandling, ScalarUdf, Signature, UdfInputType, UdfLibrary, guard_call,
+};
 
 /// The function registry of a session: built-ins plus its UDFs.
 #[derive(Clone)]
@@ -62,17 +64,45 @@ impl SessionFunctions {
     /// The [`FunctionEntry`] of the UDF named `name` (already lower-case),
     /// or [`FunctionLookup::NotFound`]. A signature form the engine does
     /// not implement is [`FunctionLookup::KnownUnsupported`], as for a
-    /// built-in it lacks.
+    /// built-in it lacks. Every UDF trait call goes through
+    /// [`guard_call`], so a panicking `signature`, `properties`,
+    /// `return_field` or `version` becomes `FAILED_EXECUTE_UDF` rather
+    /// than unwinding the analyzer.
     fn udf_entry(&self, name: &str) -> FunctionLookup {
         let Some(udf) = self.udfs.get(name) else {
             return FunctionLookup::NotFound;
         };
-        let Some((arity, inputs)) = signature_parts(udf.signature()) else {
+        // `version` is part of the plan identity: a panic fails the call
+        // rather than the analyzer.
+        let version = match guard_call(name, "version", || udf.version()) {
+            Ok(v) => v,
+            Err(e) => return FunctionLookup::Found(failing_entry(name, 0, "unknown", e.message())),
+        };
+        let signature = match guard_call(name, "signature", || udf.signature().clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return FunctionLookup::Found(failing_entry(name, version, "unknown", e.message()));
+            }
+        };
+        let Some((arity, inputs)) = signature_parts(&signature) else {
             return FunctionLookup::KnownUnsupported;
         };
+        let properties = match guard_call(name, "properties", || udf.properties()) {
+            Ok(p) => p,
+            Err(e) => {
+                return FunctionLookup::Found(failing_entry(
+                    name,
+                    version,
+                    &signature.inputs_sql(),
+                    e.message(),
+                ));
+            }
+        };
+        let strict = matches!(properties.null_handling, NullHandling::Strict);
+        let deterministic = properties.deterministic;
         let entry_udf = Arc::clone(&udf);
         let entry_name = name.to_owned();
-        let signature_sql = udf.signature().inputs_sql();
+        let signature_sql = signature.inputs_sql();
         let result = Arc::new(move |call: &CallTypes<'_>| {
             let fields: Vec<ArgField> = call
                 .args()
@@ -82,32 +112,69 @@ impl SessionFunctions {
                     nullable: a.nullable,
                 })
                 .collect();
-            entry_udf
-                .return_field(&fields)
-                .map(|r| ArgType {
+            // A strict UDF never sees a null row (null inputs give null
+            // without invoking), so its result is nullable whenever any
+            // argument may be null, even when it declares non-nullable
+            // results.
+            let any_nullable = fields.iter().any(|f| f.nullable);
+            let widen = strict && any_nullable;
+            let entry_name = entry_name.clone();
+            let signature_sql = signature_sql.clone();
+            match guard_call(&entry_name, "return_field", || {
+                entry_udf.return_field(&fields)
+            }) {
+                Ok(Ok(r)) => Ok(ArgType {
                     data_type: Some(r.data_type),
-                    nullable: r.nullable,
-                })
-                .map_err(|e| {
-                    KrishivError::from(FailedExecuteUdf {
-                        function_name: entry_name.clone(),
-                        signature: signature_sql.clone(),
-                        result: "unknown".to_owned(),
-                        reason: e.message().to_owned(),
-                    })
-                })
+                    nullable: r.nullable || widen,
+                }),
+                Ok(Err(e)) | Err(e) => Err(KrishivError::from(FailedExecuteUdf {
+                    function_name: entry_name,
+                    signature: signature_sql,
+                    result: "unknown".to_owned(),
+                    reason: e.message().to_owned(),
+                })),
+            }
         });
         FunctionLookup::Found(FunctionEntry {
             id: FunctionId::Udf {
                 name: name.to_owned(),
-                version: udf.version(),
+                version,
             },
             kind: FunctionKind::Scalar,
             arity,
             inputs,
             result,
-            deterministic: udf.properties().deterministic,
+            deterministic,
         })
+    }
+}
+
+/// A UDF entry that always fails with `FAILED_EXECUTE_UDF`: what a UDF
+/// whose `signature`, `properties` or `version` panics resolves to, so
+/// the panic surfaces as an error at analysis rather than unwinding it.
+fn failing_entry(name: &str, version: u32, signature: &str, reason: &str) -> FunctionEntry {
+    let entry_name = name.to_owned();
+    let signature_sql = signature.to_owned();
+    let reason = reason.to_owned();
+    let result = Arc::new(move |_: &CallTypes<'_>| {
+        Err(KrishivError::from(FailedExecuteUdf {
+            function_name: entry_name.clone(),
+            signature: signature_sql.clone(),
+            result: "unknown".to_owned(),
+            reason: reason.clone(),
+        }))
+    });
+    FunctionEntry {
+        id: FunctionId::Udf {
+            name: name.to_owned(),
+            version,
+        },
+        kind: FunctionKind::Scalar,
+        arity: Arity::any(),
+        inputs: Inputs::Any,
+        result,
+        // Never folded, moved or duplicated: the error surfaces at execution.
+        deterministic: false,
     }
 }
 
@@ -144,9 +211,13 @@ impl FunctionRegistry for SessionFunctions {
     }
 
     fn spark_deterministic(&self, name: &str) -> Option<bool> {
-        self.inner
-            .spark_deterministic(name)
-            .or_else(|| self.udfs.get(name).map(|u| u.properties().deterministic))
+        if let Some(known) = self.inner.spark_deterministic(name) {
+            return Some(known);
+        }
+        let udf = self.udfs.get(name)?;
+        guard_call(name, "properties", || udf.properties())
+            .ok()
+            .map(|p| p.deterministic)
     }
 
     fn resolve_udf(&self, name: &str, version: u32) -> Option<Arc<dyn ScalarUdf>> {
