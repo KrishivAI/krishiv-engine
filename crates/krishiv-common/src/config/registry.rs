@@ -13,6 +13,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
     &SESSION_TIME_ZONE,
     &STORE_ASSIGNMENT_POLICY,
+    &CTE_PRECEDENCE_POLICY,
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
@@ -163,6 +164,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
     (
+        "spark.sql.legacy.ctePrecedencePolicy",
+        &CTE_PRECEDENCE_POLICY,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.minRows",
         &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     ),
@@ -173,6 +178,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.leafNodeDefaultParallelism",
         &LEAF_NODE_DEFAULT_PARALLELISM,
+    ),
+    (
+        "krishiv.sql.legacy.ctePrecedencePolicy",
+        &CTE_PRECEDENCE_POLICY,
     ),
     (
         "krishiv.runtimeFilter.exactSet.maxValues",
@@ -241,6 +250,19 @@ pub static STORE_ASSIGNMENT_POLICY: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.storeAssignmentPolicy"),
+};
+
+/// How nested `WITH` definitions with the same name resolve.
+pub static CTE_PRECEDENCE_POLICY: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.ctePrecedencePolicy",
+    value_type: ValueType::Enum(&["EXCEPTION", "LEGACY", "CORRECTED"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("CORRECTED"))),
+    doc: "How nested WITH definitions with the same name resolve: EXCEPTION fails on a \
+          nested definition shadowing an outer one, LEGACY inlines outer definitions first, \
+          CORRECTED lets inner definitions shadow outer ones.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.ctePrecedencePolicy"),
 };
 
 /// Target partition size, replacing a fixed shuffle partition count.
