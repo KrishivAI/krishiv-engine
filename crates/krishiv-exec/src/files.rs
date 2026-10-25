@@ -17,11 +17,13 @@
 //! it, or ends with `._COPYING_`; hidden directories are skipped whole.
 //! The format infers the schema from the files by path (Spark without
 //! `mergeSchema`): Parquet reads the first file's footer, CSV samples
-//! all of them. Not yet supported, failing with
-//! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories (Spark's
-//! partition discovery), paths with a scheme other than `file`, and file
-//! sources without a [`FileFormat`] here, and merging the files' schemas
-//! (`mergeSchema`).
+//! all of them. Local paths and cloud URLs (`s3://`, `s3a://`, `gs://`,
+//! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
+//! [`StoreRegistry`]) are supported. Not yet
+//! supported, failing with `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns,
+//! subdirectories (Spark's partition discovery), paths with any other
+//! scheme, and file sources without a [`FileFormat`] here, and merging the
+//! files' schemas (`mergeSchema`).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,7 +36,9 @@ use krishiv_common::error::{
     KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
-use krishiv_io::{FileFormat, FileRef, FormatOptions, IoContext, StoreId};
+use krishiv_io::{
+    FileFormat, FileRef, FormatOptions, IoContext, IoScheduler, StoreId, StoreRegistry,
+};
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
 use krishiv_types::DataType;
 use object_store::path::Path;
@@ -135,6 +139,58 @@ impl PathLocator for LocalPaths {
         Ok(LocatedPath {
             store: self.store.clone(),
             path: Path::from_iter(parts),
+            display,
+        })
+    }
+}
+
+/// User paths in the local file system and in cloud object stores
+/// (P2-T084): `file:` URLs and bare paths resolve as [`LocalPaths`] does,
+/// while `s3://`, `s3a://`, `gs://`, `abfs://`, `abfss://` and `az://` URLs
+/// resolve through the session's [`StoreRegistry`],
+/// which builds (or reuses, within the query) the bucket's store from the
+/// session configuration and registers it on the scheduler. Locating is
+/// synchronous and performs no I/O: store construction only reads
+/// configuration and the environment. A located cloud path re-parses to
+/// itself through its [`LocatedPath::display`].
+#[derive(Debug, Clone)]
+pub struct ObjectPaths {
+    local: LocalPaths,
+    sched: Arc<IoScheduler>,
+    stores: Arc<StoreRegistry>,
+}
+
+impl ObjectPaths {
+    /// Paths in `store` under `cwd`, with cloud stores built by `stores`
+    /// and registered on `sched`.
+    #[must_use]
+    pub fn new(
+        store: StoreId,
+        cwd: impl Into<String>,
+        sched: Arc<IoScheduler>,
+        stores: Arc<StoreRegistry>,
+    ) -> Self {
+        Self {
+            local: LocalPaths::new(store, cwd),
+            sched,
+            stores,
+        }
+    }
+}
+
+impl PathLocator for ObjectPaths {
+    fn locate(&self, path: &str) -> Result<LocatedPath> {
+        let cloud = match scheme(path) {
+            None | Some("file") => false,
+            Some(_) => true,
+        };
+        if !cloud {
+            return self.local.locate(path);
+        }
+        let (store, key, display) = self.stores.ensure(&self.sched, path)?;
+        Ok(LocatedPath {
+            store,
+            path: key,
             display,
         })
     }
@@ -459,6 +515,56 @@ mod tests {
         // A colon later in a name is no scheme.
         assert_eq!(locate("/a:b").unwrap().display, "file:/a:b");
         assert_eq!(locate("1a:b").unwrap().display, "file:/work/dir/1a:b");
+    }
+
+    #[test]
+    fn cloud_urls_locate_in_their_bucket_stores() {
+        use krishiv_common::config::Config;
+        use krishiv_io::{IoConfig, IoScheduler, StoreRegistry};
+
+        let (config, _) = Config::from_pairs([
+            ("fs.s3a.endpoint", "http://127.0.0.1:9000"),
+            ("fs.azure.account.name", "acct"),
+            (
+                "fs.azure.account.key.acct",
+                "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+            ),
+        ])
+        .unwrap();
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let paths = ObjectPaths::new(
+            StoreId::new("file"),
+            "/work/dir",
+            sched,
+            Arc::new(StoreRegistry::new(Arc::new(config))),
+        );
+        for (input, store, path, display) in [
+            ("s3a://bucket/k", "s3://bucket", "k", "s3a://bucket/k"),
+            ("s3://bucket/", "s3://bucket", "", "s3://bucket"),
+            ("gs://bucket/k", "gs://bucket", "k", "gs://bucket/k"),
+            (
+                "abfss://cont@acct.dfs.core.windows.net/k",
+                "abfss://cont@acct",
+                "k",
+                "abfss://cont@acct.dfs.core.windows.net/k",
+            ),
+            ("az://cont/k", "abfss://cont", "k", "az://cont/k"),
+            ("/a/b.parquet", "file", "a/b.parquet", "file:/a/b.parquet"),
+        ] {
+            let at = paths.locate(input).unwrap();
+            assert_eq!(at.store, StoreId::new(store), "{input}");
+            assert_eq!(at.path.as_ref(), path, "{input}");
+            assert_eq!(at.display, display, "{input}");
+            assert_eq!(paths.locate(&at.display).unwrap(), at, "{input}");
+        }
+        for input in ["ftp://x/y", "s3a://AKIA:secret@bucket/k"] {
+            let e = paths.locate(input).unwrap_err();
+            assert_eq!(
+                e.error_class().name(),
+                "KRISHIV_UNSUPPORTED_FEATURE",
+                "{input}"
+            );
+        }
     }
 
     #[test]

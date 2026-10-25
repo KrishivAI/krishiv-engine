@@ -19,7 +19,7 @@ use krishiv_common::error::{
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
-use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
+use krishiv_exec::files::{FileReads, ObjectPaths, PathLocator as _};
 use krishiv_exec::physical::{SpillScopes, WorkerContext};
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
@@ -29,7 +29,9 @@ use krishiv_exec::{
     TokioExecutor, WorkloadClass,
 };
 use krishiv_io::parquet::ParquetFormat;
-use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
+use krishiv_io::{
+    DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId, StoreRegistry,
+};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
@@ -570,12 +572,18 @@ impl Session {
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
         let (config, conf_version) = self.state.conf.versioned_snapshot();
+        // Cloud stores are built from this snapshot, lazily per query:
+        // plans carry only path strings, and the worker resolves the store
+        // at instantiation (P2-T084).
+        let stores = Arc::new(StoreRegistry::new(Arc::clone(&config)));
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
             self.state.formats.clone(),
-            Arc::new(LocalPaths::new(
+            Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
                 self.state.cwd.clone(),
+                Arc::clone(&self.state.io),
+                Arc::clone(&stores),
             )),
             Arc::clone(&config),
         ));
@@ -801,7 +809,14 @@ impl Session {
             }
             .into());
         };
-        let at = LocalPaths::new(StoreId::new(LOCAL_STORE), self.state.cwd.clone()).locate(text)?;
+        let stores = Arc::new(StoreRegistry::new(Arc::clone(&env.config)));
+        let at = ObjectPaths::new(
+            StoreId::new(LOCAL_STORE),
+            self.state.cwd.clone(),
+            Arc::clone(&self.state.io),
+            stores,
+        )
+        .locate(text)?;
         let io = self.state.io.context();
         let Some(write) = DirectoryWrite::begin(&io, at.store, at.path, mode, job_uuid()).await?
         else {

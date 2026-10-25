@@ -75,7 +75,13 @@ arrow-flight = { version = "60", default-features = false }
 parquet = { version = "60", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
 # update 2026-10-17); never enable parquet's `object_store` feature (deny.toml).
-object_store = { version = "=0.14.2", default-features = false }
+# The `aws`, `gcp` and `azure` features bring reqwest over rustls (aws-lc-rs);
+# OpenSSL stays banned (deny.toml).
+object_store = { version = "=0.14.2", default-features = false, features = [
+    "aws",
+    "azure",
+    "gcp",
+] }
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
 async-trait = { version = "0.1.89", default-features = false }

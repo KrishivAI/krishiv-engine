@@ -20,7 +20,8 @@ atomic generation is only a "changed?" hint), `ScanFilter` (lowering cached per 
 normalization that producers and consumers share), `RuntimeBloom` (Parquet's split-block Bloom filter over hashes),
 and a loom model of publication · `write.rs` FileWriter · `commit.rs` `SaveMode` + `DirectoryWrite` (Spark's save modes on a
 directory, `_SUCCESS`, the empty-output file; files written under final names, never renamed) · `io/` IoScheduler,
-IoContext (reads, uploads, listing), coalescing, metadata cache,
+IoContext (reads, uploads, listing), coalescing, metadata cache, cloud store registry (`stores.rs`: S3, GCS and
+Azure stores built per session from Spark `fs.*` keys),
 multipart `Upload`, `FaultStore` (fault injection + unscheduled-request detection), `pace.rs` prefix pacing
 (`StorePolicy`, per-store; single-flight footer reads live in `cache.rs`).
 `parquet/` (P2-T080a) `ParquetFormat` over arrow-rs's `ParquetPushDecoder`, no custom decoders: `meta.rs` footer
