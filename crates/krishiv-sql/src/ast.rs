@@ -120,6 +120,14 @@ pub enum Statement {
     DropNamespace(DropNamespace),
     /// `USE name` or `USE DATABASE|SCHEMA|NAMESPACE name`.
     Use(Use),
+    /// `DECLARE [OR REPLACE] [VARIABLE | VAR] name [, ...] [type]
+    /// [{DEFAULT | =} expr]`.
+    DeclareVariable(DeclareVariable),
+    /// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
+    /// (query)`.
+    SetVariable(SetVariable),
+    /// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name`.
+    DropVariable(DropVariable),
 }
 
 impl Statement {
@@ -139,6 +147,9 @@ impl Statement {
             Self::CreateNamespace(n) => n.span,
             Self::DropNamespace(n) => n.span,
             Self::Use(u) => u.span,
+            Self::DeclareVariable(d) => d.span,
+            Self::SetVariable(s) => s.span,
+            Self::DropVariable(d) => d.span,
         }
     }
 }
@@ -727,6 +738,74 @@ pub struct DropTable {
     pub name: DdlName,
     /// `PURGE`.
     pub purge: bool,
+    /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
+}
+
+/// `DECLARE [OR REPLACE] [VARIABLE | VAR] name [, ...] [type] [{DEFAULT
+/// | =} expr]`: one or several session variables sharing a type and a
+/// default (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeclareVariable {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// The variable names (each 1-3 parts: `v`, `session.v` or
+    /// `system.session.v`).
+    pub names: Vec<ObjectName>,
+    /// The declared type, if written.
+    pub data_type: Option<DataTypeSpec>,
+    /// The default (`DEFAULT expr` or `= expr`), if written.
+    pub default: Option<Expr>,
+    /// Source text, from `DECLARE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
+/// (query)` (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SetVariable {
+    /// What it is.
+    pub kind: SetVariableKind,
+    /// Source text, from `SET` to the end of the statement.
+    pub span: Span,
+}
+
+/// The kinds of [`SetVariable`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SetVariableKind {
+    /// `v = expr [, ...]`.
+    Single {
+        /// The assignments, in order.
+        assignments: Vec<SetAssignment>,
+    },
+    /// `(v, ...) = (query)`.
+    Row {
+        /// The target variables, in order.
+        targets: Vec<ObjectName>,
+        /// The query whose single row is assigned.
+        query: Box<Query>,
+    },
+}
+
+/// `v = expr` in a [`SetVariableKind::Single`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SetAssignment {
+    /// The target variable.
+    pub name: ObjectName,
+    /// The value (`DEFAULT` reads the variable's default).
+    pub value: Expr,
+    /// Source text, from the name to the end of the expression.
+    pub span: Span,
+}
+
+/// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name` (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropVariable {
+    /// `IF EXISTS`.
+    pub if_exists: bool,
+    /// The variable name (`v`, `session.v` or `system.session.v`).
+    pub name: ObjectName,
     /// Source text, from `DROP` to the end of the statement.
     pub span: Span,
 }
@@ -1845,4 +1924,113 @@ pub enum ExprKind {
     Struct(Vec<SelectItem>),
     /// `(expr)`.
     Nested(Box<Expr>),
+}
+
+impl Expr {
+    /// Calls `f` on each direct child expression, in order. Subquery plans
+    /// are not expressions and are not visited; window specifications after
+    /// `OVER` are visited (their partitioning, ordering and frame-offset
+    /// expressions).
+    pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Self)) {
+        match &self.kind {
+            ExprKind::Literal(_)
+            | ExprKind::Parameter(_)
+            | ExprKind::Keyword(_)
+            | ExprKind::Column(_)
+            | ExprKind::Wildcard { .. }
+            | ExprKind::Exists(_)
+            | ExprKind::Subquery(_) => {}
+            ExprKind::Field(inner, _)
+            | ExprKind::Unary(_, inner)
+            | ExprKind::Not(inner)
+            | ExprKind::Nested(inner)
+            | ExprKind::IsNull { expr: inner, .. }
+            | ExprKind::IsTruth { expr: inner, .. }
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Lambda { body: inner, .. } => f(inner),
+            ExprKind::Subscript(first, second) | ExprKind::Binary(first, _, second) => {
+                f(first);
+                f(second);
+            }
+            ExprKind::IsDistinctFrom { left, right, .. } => {
+                f(left);
+                f(right);
+            }
+            ExprKind::Between {
+                expr, low, high, ..
+            } => {
+                f(expr);
+                f(low);
+                f(high);
+            }
+            ExprKind::InList { expr, list, .. } => {
+                f(expr);
+                list.iter().for_each(&mut *f);
+            }
+            ExprKind::InSubquery { expr, .. } => f(expr),
+            ExprKind::Like { expr, pattern, .. } | ExprKind::RLike { expr, pattern, .. } => {
+                f(expr);
+                f(pattern);
+            }
+            ExprKind::LikeQuantified { expr, patterns, .. } => {
+                f(expr);
+                patterns.iter().for_each(&mut *f);
+            }
+            ExprKind::Case {
+                operand,
+                branches,
+                else_result,
+            } => {
+                if let Some(inner) = operand {
+                    f(inner);
+                }
+                for branch in branches {
+                    f(&branch.condition);
+                    f(&branch.result);
+                }
+                if let Some(inner) = else_result {
+                    f(inner);
+                }
+            }
+            ExprKind::Function(function) => {
+                for arg in &function.args {
+                    f(&arg.expr);
+                }
+                if let Some(inner) = function.filter.as_ref() {
+                    f(inner);
+                }
+                for item in &function.within_group {
+                    f(&item.expr);
+                }
+                if let Some(over) = &function.over {
+                    for_each_window_expr(over, f);
+                }
+            }
+            ExprKind::Row(items) | ExprKind::Struct(items) => {
+                for item in items {
+                    f(&item.expr);
+                }
+            }
+        }
+    }
+}
+
+/// Calls `f` on each expression of the inline window specification `window`
+/// (a named window holds none).
+fn for_each_window_expr<'a>(window: &'a WindowRef, f: &mut impl FnMut(&'a Expr)) {
+    let WindowRef::Spec(spec) = window else {
+        return;
+    };
+    spec.partition_by.iter().for_each(&mut *f);
+    for item in &spec.order_by {
+        f(&item.expr);
+    }
+    if let Some(frame) = &spec.frame {
+        for bound in [&frame.start].into_iter().chain(frame.end.as_ref()) {
+            match &bound.kind {
+                FrameBoundKind::Preceding(expr) | FrameBoundKind::Following(expr) => f(expr),
+                _ => {}
+            }
+        }
+    }
 }
