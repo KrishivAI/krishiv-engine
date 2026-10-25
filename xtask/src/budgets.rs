@@ -19,9 +19,18 @@
 //! reference record that is not updated per merge (the main measurement is
 //! authoritative); the gate falls back to it only when main has no
 //! measurement.
+//!
+//! `cargo xtask precheck` runs the same delta locally through `--precheck`:
+//! it measures the checkout and compares it with the cached measurement of
+//! the merge-base with `--base` (see [`NO_MAIN_BASELINE`]), applying the same
+//! [`compare`] rule as CI. `budgets.json` is never read on that path, so a
+//! stale absolute baseline cannot fail the step. `--cache-main` records the
+//! measurement (run it on a main checkout); the cache lives per main commit
+//! under the target directory, so it is measured once.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
@@ -51,34 +60,170 @@ pub enum Mode {
         /// The baseline to compare with, e.g. a measurement of main.
         baseline: Option<PathBuf>,
     },
+    /// Measure this checkout and compare it with the cached measurement of
+    /// the merge-base with `base` (the precheck budgets step). When no cached
+    /// measurement exists the step skips (see [`NO_MAIN_BASELINE`]) instead
+    /// of failing: CI checks the delta. `budgets.json` is never read.
+    Precheck {
+        /// The main ref the merge-base is taken against (`origin/main`).
+        base: String,
+        /// Repository to measure; `None` is the workspace root.
+        repo: Option<PathBuf>,
+    },
+    /// Measure this checkout and cache it as the main measurement of `HEAD`,
+    /// so later `--precheck` runs compare against it. Run on a main checkout.
+    CacheMain {
+        /// Repository to measure; `None` is the workspace root.
+        repo: Option<PathBuf>,
+    },
+}
+
+/// What `--precheck` prints when no cached main measurement exists yet.
+pub const NO_MAIN_BASELINE: &str = "budgets: skipped (no main baseline; CI checks it)";
+
+/// Whether `id` is safe to embed in a cache file name: a non-empty hex
+/// commit id, so a hostile `--base` cannot escape the cache directory.
+///
+/// # Examples
+///
+/// ```rust
+/// assert!(xtask::budgets::is_safe_sha(&"a".repeat(40)));
+/// assert!(!xtask::budgets::is_safe_sha("../nope"));
+/// ```
+#[must_use]
+pub fn is_safe_sha(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Where the main measurement for `sha` is cached: `budgets-main-<sha>.json`
+/// under `<target>/precheck`, or `None` when `sha` is not a safe id.
+///
+/// # Examples
+///
+/// ```rust
+/// let dir = std::path::Path::new("/t");
+/// let sha = "a".repeat(40);
+/// assert_eq!(
+///     xtask::budgets::main_baseline_path(dir, &sha),
+///     Some(dir.join("precheck").join(format!("budgets-main-{sha}.json")))
+/// );
+/// assert_eq!(xtask::budgets::main_baseline_path(dir, "../x"), None);
+/// ```
+#[must_use]
+pub fn main_baseline_path(target_dir: &Path, sha: &str) -> Option<PathBuf> {
+    is_safe_sha(sha).then(|| {
+        target_dir
+            .join("precheck")
+            .join(format!("budgets-main-{sha}.json"))
+    })
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .map_err(|e| format!("failed to run git: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_owned())
+}
+
+/// The merge-base of `HEAD` and `base`: the main commit a `--precheck` run
+/// gates its delta against.
+///
+/// # Errors
+/// Returns the git failure, or when it reports something that is not a
+/// commit id.
+pub fn merge_base(root: &Path, base: &str) -> Result<String, String> {
+    let sha = git_output(root, &["merge-base", "HEAD", base])?;
+    if is_safe_sha(&sha) {
+        Ok(sha)
+    } else {
+        Err(format!("bad merge-base for {base:?}: {sha:?}"))
+    }
+}
+
+/// The id of `HEAD`, the key `--cache-main` files the measurement under.
+///
+/// # Errors
+/// Returns the git failure, or when it reports something that is not a
+/// commit id.
+pub fn head_sha(root: &Path) -> Result<String, String> {
+    let sha = git_output(root, &["rev-parse", "HEAD"])?;
+    if is_safe_sha(&sha) {
+        Ok(sha)
+    } else {
+        Err(format!("bad HEAD id: {sha:?}"))
+    }
 }
 
 /// Parses the `budgets` flags; `None` on an unknown flag or a conflicting
 /// combination (`--compare` measures nothing, so it takes no other flag
-/// besides `--baseline`, which only `--compare` accepts).
+/// besides `--baseline`, which only `--compare` accepts; `--precheck` takes
+/// only `--base` and `--repo`, `--cache-main` only `--repo`).
 #[must_use]
 pub fn parse_flags(flags: &[&str]) -> Option<Mode> {
     let (mut build_time, mut measure_only, mut write_baseline) = (false, false, false);
+    let (mut precheck, mut cache_main) = (false, false);
     let (mut compare, mut baseline) = (None, None);
+    let (mut base, mut repo): (Option<String>, Option<PathBuf>) = (None, None);
     let mut it = flags.iter();
     while let Some(f) = it.next() {
         match *f {
             "--build-time" => build_time = true,
             "--measure-only" => measure_only = true,
             "--write-baseline" => write_baseline = true,
+            "--precheck" => precheck = true,
+            "--cache-main" => cache_main = true,
             "--compare" => compare = Some(PathBuf::from(it.next()?)),
             "--baseline" => baseline = Some(PathBuf::from(it.next()?)),
+            "--base" => base = Some(it.next()?.to_string()),
+            "--repo" => repo = Some(PathBuf::from(it.next()?)),
             _ => return None,
         }
     }
     if baseline.is_some() && compare.is_none() {
         return None;
     }
+    if !precheck && base.is_some() {
+        return None;
+    }
+    if repo.is_some() && !(precheck || cache_main) {
+        return None;
+    }
+    if precheck && (compare.is_some() || measure_only || write_baseline || build_time) {
+        return None;
+    }
+    if cache_main
+        && (compare.is_some()
+            || measure_only
+            || write_baseline
+            || precheck
+            || build_time
+            || base.is_some())
+    {
+        return None;
+    }
     match (compare, measure_only, write_baseline) {
-        (Some(measured), false, false) if !build_time => Some(Mode::Compare { measured, baseline }),
-        (None, false, false) => Some(Mode::Check { build_time }),
-        (None, true, false) => Some(Mode::Measure { build_time }),
-        (None, false, true) => Some(Mode::WriteBaseline { build_time }),
+        (Some(measured), false, false) if !build_time && !precheck && !cache_main => {
+            Some(Mode::Compare { measured, baseline })
+        }
+        (None, false, false) if !precheck && !cache_main && base.is_none() && repo.is_none() => {
+            Some(Mode::Check { build_time })
+        }
+        (None, true, false) if !precheck && !cache_main => Some(Mode::Measure { build_time }),
+        (None, false, true) if !precheck && !cache_main => Some(Mode::WriteBaseline { build_time }),
+        (None, false, false) if precheck => Some(Mode::Precheck {
+            base: base.unwrap_or_else(|| "origin/main".to_owned()),
+            repo,
+        }),
+        (None, false, false) if cache_main => Some(Mode::CacheMain { repo }),
         _ => None,
     }
 }
@@ -357,6 +502,103 @@ mod tests {
             ..b(1, None)
         };
         assert_eq!(compare(&base, &with(1)).unsafe_violations.len(), 1);
+    }
+
+    #[test]
+    fn parses_precheck_and_cache_main_flags() {
+        assert_eq!(
+            parse_flags(&["--precheck", "--base", "origin/main"]),
+            Some(Mode::Precheck {
+                base: "origin/main".to_owned(),
+                repo: None
+            })
+        );
+        assert_eq!(
+            parse_flags(&["--precheck"]),
+            Some(Mode::Precheck {
+                base: "origin/main".to_owned(),
+                repo: None
+            })
+        );
+        assert_eq!(
+            parse_flags(&["--precheck", "--base", "b", "--repo", "r"]),
+            Some(Mode::Precheck {
+                base: "b".to_owned(),
+                repo: Some(PathBuf::from("r"))
+            })
+        );
+        assert_eq!(
+            parse_flags(&["--cache-main"]),
+            Some(Mode::CacheMain { repo: None })
+        );
+        assert_eq!(
+            parse_flags(&["--cache-main", "--repo", "r"]),
+            Some(Mode::CacheMain {
+                repo: Some(PathBuf::from("r"))
+            })
+        );
+        for bad in [
+            &["--precheck", "--compare", "m.json"][..],
+            &["--precheck", "--baseline", "b.json"],
+            &["--precheck", "--build-time"],
+            &["--precheck", "--measure-only"],
+            &["--precheck", "--write-baseline"],
+            &["--cache-main", "--build-time"],
+            &["--cache-main", "--measure-only"],
+            &["--cache-main", "--base", "b"],
+            &["--cache-main", "--compare", "m.json"],
+            &["--cache-main", "--precheck"],
+            &["--base", "b"],
+            &["--repo", "r"],
+            &["--compare", "m.json", "--base", "b"],
+            &["--compare", "m.json", "--repo", "r"],
+            &["--measure-only", "--repo", "r"],
+            &["--precheck", "--base"],
+            &["--precheck", "--repo"],
+        ] {
+            assert_eq!(parse_flags(bad), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn precheck_delta_applies_the_ci_rule_not_the_absolute_baseline() {
+        // The branch equals the cached main measurement, but both sit far
+        // above the stale absolute baseline: the old gate (against
+        // budgets.json) would fail, the delta gate passes.
+        let stale = b(100, Some(1_000_000));
+        let main = b(150, Some(2_000_000));
+        let branch = b(150, Some(2_000_000));
+        assert!(!compare(&stale, &branch).violations.is_empty());
+        assert_eq!(compare(&main, &branch).verdict(false, false), Ok(false));
+        // Past the budget over main still fails without the label (the gate
+        // is live, not skipped): 160 is more than 5% above 150.
+        let grown = b(160, Some(2_000_000));
+        assert!(
+            compare(&main, &grown)
+                .verdict(false, false)
+                .unwrap_err()
+                .contains("budget-approved")
+        );
+        assert_eq!(compare(&main, &grown).verdict(true, false), Ok(true));
+    }
+
+    #[test]
+    fn main_baseline_cache_paths_are_keyed_by_sha() {
+        let dir = Path::new("/t");
+        let sha = "a".repeat(40);
+        assert_eq!(
+            main_baseline_path(dir, &sha),
+            Some(
+                dir.join("precheck")
+                    .join(format!("budgets-main-{sha}.json"))
+            )
+        );
+        assert!(is_safe_sha(&sha));
+        assert!(is_safe_sha(&"9".repeat(64)));
+        for bad in ["", "../x", "a/b", "a b", "ab!c", "g", &"a".repeat(65)] {
+            assert!(!is_safe_sha(bad), "{bad:?}");
+            assert_eq!(main_baseline_path(dir, bad), None);
+        }
     }
 
     #[test]

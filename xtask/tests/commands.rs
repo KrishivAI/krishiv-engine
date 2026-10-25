@@ -906,3 +906,151 @@ fn wheel_sizes_record_and_gate() {
         "{out:?}"
     );
 }
+
+/// `budgets --cache-main` + `budgets --precheck`: the local equivalent of
+/// CI's measure/compare split, through a fake `cargo` and a throwaway repo.
+/// Without a cached main measurement the step skips (never a false failure);
+/// with one it gates the delta with the CI rule. The throwaway repo has no
+/// `budgets.json` at all, so a passing run also proves the stale absolute
+/// baseline is never read.
+#[cfg(unix)]
+#[test]
+fn budgets_precheck_gates_the_delta_against_the_cached_main() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("budgets-precheck");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    write(&dir, "README.md", "hi\n");
+    // The unsafe-site scan reads `crates/`; an empty one measures nothing.
+    std::fs::create_dir_all(dir.join("crates")).unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    git(&dir, &["switch", "-q", "-c", "feature"]);
+    write(&dir, "feature.txt", "work\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "work"]);
+    let repo = dir.to_str().unwrap().to_owned();
+
+    // A fixed measurement (1 transitive crate, a 10-byte binary), whatever
+    // the checkout holds; the target directory comes from `FAKE_TARGET`.
+    let target = dir.join("target");
+    let fake = dir.join("cargo");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+case "$1" in
+  metadata) printf '{"workspace_members":["w"],"resolve":{"nodes":[{"id":"w"},{"id":"dep"}]},"target_directory":"%s"}' "$FAKE_TARGET" ;;
+  tree) printf 'krishiv-cli v0.1.0 (/w)\ndep v1.0.0\n' ;;
+  build)
+    while [ $# -gt 0 ]; do [ "$1" = --target-dir ] && d=$2; shift; done
+    mkdir -p "$d/dist" && printf '0123456789' > "$d/dist/krishiv" ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let sha_of = |rev: &str| {
+        let out = Command::new("git")
+            .args(["rev-parse", rev])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let run = |args: &[&str], approved: bool| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_xtask"));
+        c.arg("budgets")
+            .args(args)
+            .env("CARGO", &fake)
+            .env("FAKE_TARGET", &target)
+            .env("CARGO_TARGET_DIR", &target)
+            .env_remove("GITHUB_STEP_SUMMARY")
+            .env_remove("BUDGET_APPROVED")
+            .env_remove("UNSAFE_APPROVED");
+        if approved {
+            c.env("BUDGET_APPROVED", "1");
+        }
+        c.output().unwrap()
+    };
+    let precheck = ["--precheck", "--repo", &repo, "--base", "main"];
+
+    // No cached measurement yet: skip, never fail.
+    let out = run(&precheck, false);
+    assert!(out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout)
+            .contains("budgets: skipped (no main baseline; CI checks it)"),
+        "{out:?}"
+    );
+    // An unknown base is an error, not a silent skip.
+    let out = run(
+        &["--precheck", "--repo", &repo, "--base", "no-such-ref"],
+        false,
+    );
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("merge-base"),
+        "{out:?}"
+    );
+
+    // Cache the main measurement (as on a main checkout), then switch back:
+    // the feature branch's merge-base is that main commit.
+    git(&dir, &["switch", "-q", "main"]);
+    let out = run(&["--cache-main", "--repo", &repo], false);
+    assert!(out.status.success(), "{out:?}");
+    let cache = target
+        .join("precheck")
+        .join(format!("budgets-main-{}.json", sha_of("HEAD")));
+    assert!(cache.is_file(), "cache-main wrote {cache:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("cached the main measurement"),
+        "{out:?}"
+    );
+    // Back on the branch: the delta against the cached main passes. The
+    // feature commit only adds a text file outside `crates/`, which the
+    // measurement does not see.
+    git(&dir, &["switch", "-q", "feature"]);
+    let out = run(&precheck, false);
+    assert!(out.status.success(), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(stdout.contains("| transitive crates | 1 | 1 |"), "{out:?}");
+    assert!(
+        stdout.contains("| dist binary bytes | 10 | 10 |"),
+        "{out:?}"
+    );
+
+    // Growth over the cached main fails without the label, passes with it.
+    let mut measured: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&cache).unwrap()).unwrap();
+    measured["binary_bytes"] = serde_json::json!(9);
+    std::fs::write(&cache, serde_json::to_string_pretty(&measured).unwrap()).unwrap();
+    let out = run(&precheck, false);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("dist binary bytes: 9 -> 10"),
+        "{out:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("budget-approved"),
+        "{out:?}"
+    );
+    assert!(
+        run(&precheck, true).status.success(),
+        "approved growth passes"
+    );
+    // A corrupt cache is an error, never a silent pass.
+    std::fs::write(&cache, "{").unwrap();
+    let out = run(&precheck, false);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("bad "),
+        "{out:?}"
+    );
+    // Flag soup is a usage error.
+    assert!(
+        !run(&["--precheck", "--compare", "x"], false)
+            .status
+            .success()
+    );
+}
