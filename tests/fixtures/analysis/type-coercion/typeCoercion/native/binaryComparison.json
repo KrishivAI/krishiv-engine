@@ -1,0 +1,198 @@
+{
+  "entries": [
+    {
+      "query": "SELECT '1996-09-09 12:12:12.4' = timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT '1996-09-09 12:12:12.5' < timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT '1996-09-09 12:12:12.5' <= timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT '1996-09-09 12:12:12.5' <> timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT '1996-09-09 12:12:12.5' > timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT '1996-09-09 12:12:12.5' >= timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT '1996-09-09' = date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT '1996-9-10' < date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT '1996-9-10' <= date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT '1996-9-10' <> date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT '1996-9-10' > date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT '1996-9-10' >= date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT cast(null as string) < timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT cast(null as string) <= timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT cast(null as string) <> timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT cast(null as string) = date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT cast(null as string) = timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT cast(null as string) > timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT cast(null as string) >= timestamp('1996-09-09 12:12:12.4') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT cast(null as string)< date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT cast(null as string)<= date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT cast(null as string)<> date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT cast(null as string)> date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT cast(null as string)>= date('1996-09-09') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-09-09') = '1996-09-09' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-09-09') = cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') < '1996-09-09' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') < cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') <= '1996-09-09' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') <= cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') <> '1996-09-09' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') <> cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') > '1996-09-09' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') > cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') >= '1996-09-09' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT date('1996-9-10') >= cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.4' )= '1996-09-09 12:12:12.4' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.4' )= cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )< '1996-09-09 12:12:12.4' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )< cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )<= '1996-09-09 12:12:12.4' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )<= cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )<> '1996-09-09 12:12:12.4' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )<> cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )> '1996-09-09 12:12:12.4' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )> cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )>= '1996-09-09 12:12:12.4' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT timestamp('1996-09-09 12:12:12.5' )>= cast(null as string) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    }
+  ],
+  "file": "typeCoercion/native/binaryComparison",
+  "format_version": 1
+}

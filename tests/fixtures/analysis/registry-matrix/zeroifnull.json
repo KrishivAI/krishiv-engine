@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "zeroifnull#05644a809fb4/ansi_on",
+      "reason": "SELECT zeroifnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#05644a809fb4/ansi_off",
+      "reason": "SELECT zeroifnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#525de99a30fd/ansi_on",
+      "reason": "SELECT zeroifnull(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#525de99a30fd/ansi_off",
+      "reason": "SELECT zeroifnull(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#5369bb95092d/ansi_on",
+      "reason": "SELECT zeroifnull(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#5369bb95092d/ansi_off",
+      "reason": "SELECT zeroifnull(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#583a6c570fa6/ansi_on",
+      "reason": "SELECT zeroifnull(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#583a6c570fa6/ansi_off",
+      "reason": "SELECT zeroifnull(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#da0e05d51fd1/ansi_on",
+      "reason": "SELECT zeroifnull(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "zeroifnull#da0e05d51fd1/ansi_off",
+      "reason": "SELECT zeroifnull(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "zeroifnull"
+}

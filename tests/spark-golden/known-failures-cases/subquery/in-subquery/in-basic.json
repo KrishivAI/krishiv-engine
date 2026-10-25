@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "depends-on-command": [
+      4,
+      5,
+      6
+    ],
+    "sql-commands": [
+      2
+    ]
+  },
+  "file": "subquery/in-subquery/in-basic",
+  "format_version": 1
+}

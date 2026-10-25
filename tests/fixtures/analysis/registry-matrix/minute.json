@@ -1,0 +1,62 @@
+{
+  "entries": [
+    {
+      "id": "minute#4480f918603c/ansi_on",
+      "reason": "SELECT minute(CAST(NULL AS time(6))) | parse: KRISHIV_UNSUPPORTED_FEATURE: the time data type (\"TIME\") where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "minute#4480f918603c/ansi_off",
+      "reason": "SELECT minute(CAST(NULL AS time(6))) | parse: KRISHIV_UNSUPPORTED_FEATURE: the time data type (\"TIME\") where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "minute#73d04a408bd8/ansi_on",
+      "reason": "SELECT minute(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#73d04a408bd8/ansi_off",
+      "reason": "SELECT minute(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#7cec507eaf54/ansi_on",
+      "reason": "SELECT minute(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#7cec507eaf54/ansi_off",
+      "reason": "SELECT minute(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#7dda78084d4d/ansi_on",
+      "reason": "SELECT minute(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#7dda78084d4d/ansi_off",
+      "reason": "SELECT minute(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#cd42aa4498df/ansi_on",
+      "reason": "SELECT minute(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#cd42aa4498df/ansi_off",
+      "reason": "SELECT minute(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#ebcc0b17159f/ansi_on",
+      "reason": "SELECT minute(TIME'23:59:59.999999') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "minute#ebcc0b17159f/ansi_off",
+      "reason": "SELECT minute(TIME'23:59:59.999999') | parse: KRISHIV_UNSUPPORTED_FEATURE: TIME literals where Spark has UNSUPPORTED_TIME_TYPE"
+    },
+    {
+      "id": "minute#f6488f513369/ansi_on",
+      "reason": "SELECT minute(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "minute#f6488f513369/ansi_off",
+      "reason": "SELECT minute(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "minute"
+}

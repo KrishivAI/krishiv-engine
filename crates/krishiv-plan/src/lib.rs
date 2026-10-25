@@ -82,7 +82,10 @@
 //! | `PlanNode::Distinct` | U | - | - |
 //! | `PlanNode::SetOp` | U | - | - |
 //! | `PlanNode::ReplicateRows` | R | - | - |
+//! | `PlanNode::Pivot` | U | - | - |
+//! | `PlanNode::Unpivot` | U | - | - |
 //! | `PlanNode::Expand` | R | - | - |
+//! | `PlanNode::InlineTable` | U | - | - |
 //! | `PlanNode::Window` | R | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
 //! | `ExprNode::Literal` | U, R | all | `lit` |
@@ -113,6 +116,7 @@ pub mod function;
 mod literal;
 mod origin;
 mod plan;
+mod raises;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
@@ -124,11 +128,13 @@ pub use expr::{
     NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind,
     TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
 };
-pub use function::{Builtin, FunctionId, FunctionKind};
+pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use plan::{
-    Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, Plan,
-    PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
+    Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan,
+    PivotValue, Plan, PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
+    UnpivotColumnSet,
 };
+pub use raises::{conjuncts, may_raise};
 pub use walk::{MAX_DEPTH, check_depth};

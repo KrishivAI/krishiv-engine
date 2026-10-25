@@ -12,6 +12,9 @@
     )
 )]
 
+mod archive;
+mod bundle;
+mod common;
 mod sql;
 
 use clap::Parser;
@@ -41,6 +44,13 @@ struct Cli {
 enum Command {
     /// Run SQL from `-e`, `-f` or stdin and print the result.
     Sql(sql::SqlArgs),
+    /// Collect a redacted diagnostic archive.
+    ///
+    /// Per-statement failures are recorded in the bundle and the exit status
+    /// stays 0; only I/O or setup failures exit non-zero (unlike
+    /// `krishiv sql`, which exits 1 on a query error).
+    #[command(name = "debug-bundle")]
+    DebugBundle(bundle::BundleArgs),
     /// Serve the web UI and admin API.
     #[cfg(feature = "ui")]
     Server {
@@ -72,6 +82,7 @@ fn run() {
     let cli = Cli::parse();
     match cli.command {
         Command::Sql(args) => std::process::exit(sql::run(&args)),
+        Command::DebugBundle(args) => std::process::exit(bundle::run(&args)),
         #[cfg(feature = "ui")]
         Command::Server { port, host } => {
             let addr = std::net::SocketAddr::new(host, port);

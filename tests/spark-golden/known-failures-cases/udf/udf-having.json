@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      2,
+      3
+    ],
+    "test-udfs": [
+      4
+    ]
+  },
+  "file": "udf/udf-having",
+  "format_version": 1
+}
