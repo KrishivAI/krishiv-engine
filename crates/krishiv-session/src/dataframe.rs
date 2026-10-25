@@ -1436,9 +1436,11 @@ impl DataFrameWriter {
         self
     }
 
-    /// Partition the output by `cols` (PySpark's `partitionBy`). The engine
-    /// writes no partitioned layout yet: any column fails the write with
-    /// `KRISHIV_UNSUPPORTED_FEATURE`, rather than silently ignoring it.
+    /// Partition the output by `cols` (PySpark's `partitionBy`); each call
+    /// replaces the columns of the one before, so an empty call clears them.
+    /// The engine writes no partitioned layout yet: any column fails the
+    /// write with `KRISHIV_UNSUPPORTED_FEATURE`, rather than silently
+    /// ignoring it.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -1446,8 +1448,7 @@ impl DataFrameWriter {
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
     pub fn partition_by(mut self, cols: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        self.partition_by
-            .extend(cols.into_iter().map(|c| c.as_ref().to_owned()));
+        self.partition_by = cols.into_iter().map(|c| c.as_ref().to_owned()).collect();
         self
     }
 

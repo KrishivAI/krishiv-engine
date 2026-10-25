@@ -117,6 +117,25 @@ def test_partition_by_empty_is_a_noop(df: DataFrame, tmp_path: Any) -> None:
     assert len(df.sparkSession.read.parquet(path).collect()) == 3
 
 
+def test_partition_by_replaces_and_is_forwarded_by_the_shortcuts(df: DataFrame, tmp_path: Any) -> None:
+    # Each call replaces the earlier columns, so an empty call clears them.
+    path = str(tmp_path / "t")
+    df.write.partitionBy("name").partitionBy([]).save(path)
+    assert len(df.sparkSession.read.parquet(path).collect()) == 3
+    for shortcut in ("parquet", "csv", "json"):
+        with pytest.raises(errors.UnsupportedOperationException) as bad:
+            getattr(df.write, shortcut)(str(tmp_path / shortcut), partitionBy="name")
+        assert "writing partitioned output" in str(bad.value)
+    with pytest.raises(errors.UnsupportedOperationException):
+        df.write.save(str(tmp_path / "s"), partitionBy=["id"])
+
+
+def test_none_options_are_skipped(df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "t")
+    df.write.csv(path, header=True, nullValue=None)
+    assert len(df.sparkSession.read.csv(path, header=True).collect()) == 3
+
+
 def test_invalid_frame_reports_analysis_error_before_partitioning(spark: SparkSession, tmp_path: Any) -> None:
     with pytest.raises(errors.AnalysisException) as bad:
         spark.table("missing").write.partitionBy("name").save(str(tmp_path / "t"))

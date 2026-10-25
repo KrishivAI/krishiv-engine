@@ -307,6 +307,52 @@ fn partition_by_empty_is_a_noop() {
 }
 
 #[test]
+fn partition_by_replaces_the_earlier_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let path = out(&dir, "t");
+    block_on(
+        s.table("people")
+            .write()
+            .partition_by(["name"])
+            .partition_by(Vec::<&str>::new())
+            .save(&path),
+    )
+    .unwrap();
+    assert_eq!(block_on(s.read().parquet([&path]).count()).unwrap(), 3);
+}
+
+#[test]
+fn write_to_collects_format_mode_options_and_partitions() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let path = out(&dir, "t");
+    let df = s.table("people");
+    block_on(df.write_to(
+        "csv",
+        "error",
+        &path,
+        vec![("header".to_owned(), "true".to_owned())],
+        Vec::new(),
+    ))
+    .unwrap();
+    assert_eq!(
+        csv_rows(&s, &path, &[("header", "true")]).len(),
+        3,
+        "the options reach the writer"
+    );
+    let err = block_on(df.write_to(
+        "parquet",
+        "error",
+        &out(&dir, "p"),
+        Vec::new(),
+        vec!["name".to_owned()],
+    ))
+    .unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+}
+
+#[test]
 fn invalid_frame_reports_analysis_error_before_partitioning() {
     let dir = tempfile::tempdir().unwrap();
     let s = session();

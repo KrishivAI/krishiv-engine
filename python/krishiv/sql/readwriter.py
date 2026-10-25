@@ -90,7 +90,8 @@ class DataFrameWriter:
         return self
 
     def partitionBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriter:
-        """Names of columns to partition by. Only column names (``str``) are
+        """Names of columns to partition by; each call replaces the columns of
+        the one before. Only column names (``str``) are
         accepted; ``Column`` objects raise a type error. The engine writes no
         partitioned layout, so any column fails ``save`` with
         ``KRISHIV_UNSUPPORTED_FEATURE``; an empty ``partitionBy`` is a no-op,
@@ -106,7 +107,7 @@ class DataFrameWriter:
                     names.append(item)
             else:
                 raise not_expected_type("cols", "str", c)
-        self._partition_by.extend(names)
+        self._partition_by = names
         return self
 
     def save(
@@ -114,25 +115,47 @@ class DataFrameWriter:
         path: str | None = None,
         format: str | None = None,
         mode: str | None = None,
+        partitionBy: str | list[str] | tuple[str, ...] | None = None,
         **options: object,
     ) -> None:
         if format is not None:
             self.format(format)
         if mode is not None:
             self.mode(mode)
-        self.options(**options)
+        if partitionBy is not None:
+            self.partitionBy(partitionBy)
+        # As PySpark's shortcuts do, skip options given as ``None``.
+        self.options(**{k: v for k, v in options.items() if v is not None})
         if path is None:
             raise not_expected_type("path", "str", path)
         self._df._df.write(self._format, self._mode, path, self._options, self._partition_by)
 
-    def parquet(self, path: str, mode: str | None = None, **options: object) -> None:
-        self.save(path, format="parquet", mode=mode, **options)
+    def parquet(
+        self,
+        path: str,
+        mode: str | None = None,
+        partitionBy: str | list[str] | tuple[str, ...] | None = None,
+        **options: object,
+    ) -> None:
+        self.save(path, format="parquet", mode=mode, partitionBy=partitionBy, **options)
 
-    def csv(self, path: str, mode: str | None = None, **options: object) -> None:
-        self.save(path, format="csv", mode=mode, **options)
+    def csv(
+        self,
+        path: str,
+        mode: str | None = None,
+        partitionBy: str | list[str] | tuple[str, ...] | None = None,
+        **options: object,
+    ) -> None:
+        self.save(path, format="csv", mode=mode, partitionBy=partitionBy, **options)
 
-    def json(self, path: str, mode: str | None = None, **options: object) -> None:
-        self.save(path, format="json", mode=mode, **options)
+    def json(
+        self,
+        path: str,
+        mode: str | None = None,
+        partitionBy: str | list[str] | tuple[str, ...] | None = None,
+        **options: object,
+    ) -> None:
+        self.save(path, format="json", mode=mode, partitionBy=partitionBy, **options)
 
 
 def _option_text(value: object) -> str:
