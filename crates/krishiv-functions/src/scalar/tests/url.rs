@@ -274,6 +274,7 @@ fn parse_url_reads_every_part() {
     for part in [
         "",
         "abc",
+        "FOO",
         "1",
         "host",
         "Host",
@@ -568,6 +569,51 @@ fn parse_url_reads_query_keys() {
         class(&f.invoke(&[col(&u), col(&p), lit(&k)], 1).unwrap_err()),
         ErrorClass::InvalidUrl
     );
+}
+
+#[test]
+fn parse_url_key_is_a_java_regex() {
+    // Spark's `ParseUrlEvaluator.getPattern` compiles `(&|^)key=([^&]*)`
+    // with the key unquoted: metacharacters act as regex (checked against
+    // Spark 4.2.0). Group 2 of the first match is read, so a key with
+    // groups reads the key's first group.
+    let keys = |url: &str, key: Option<&str>| {
+        let (u, p) = (strs(&[Some(url)]), part("QUERY"));
+        let f = bind("parse_url", &[&u, &p, &strs(&[key])]);
+        text(
+            &f.invoke(&[col(&u), col(&p), lit(&strs(&[key]))], 1)
+                .unwrap(),
+        )
+    };
+    assert_eq!(
+        keys("http://h/?aXb=1&a.b=2", Some("a.b")),
+        owned(&[Some("1")])
+    );
+    assert_eq!(keys("http://h/?aXb=1", Some("a.b")), owned(&[Some("1")]));
+    assert_eq!(keys("http://h/?aab=1", Some("a*b")), owned(&[Some("1")]));
+    assert_eq!(keys("http://h/?ab=1", Some("a+b")), owned(&[Some("1")]));
+    assert_eq!(keys("http://h/?a=1", Some("^a")), owned(&[Some("1")]));
+    assert_eq!(keys("http://h/?ab=1", Some("(a)(b)")), owned(&[Some("a")]));
+    assert_eq!(keys("http://h/?b=1", Some("a|b")), owned(&[Some("1")]));
+    // A regex that matches no `key=` pair is NULL, as a missing key is.
+    assert_eq!(keys("http://h/?a=1", Some("a$")), owned(&[None]));
+    assert_eq!(keys("http://h/?a=1", Some("b")), owned(&[None]));
+    // An invalid pattern fails the query in both modes (Spark itself
+    // throws `PatternSyntaxException`, which has no error class, also for
+    // `try_parse_url`), as an untyped internal error. The URL still parses
+    // first: an invalid URL raises `INVALID_URL` before the key compiles.
+    for name in ["parse_url", "try_parse_url"] {
+        for opts in [BindOptions::new(), legacy()] {
+            let (u, p, k) = (
+                strs(&[Some("http://h/?a=1")]),
+                part("QUERY"),
+                strs(&[Some("[")]),
+            );
+            let f = bind_with(name, &[&u, &p, &k], &opts);
+            let err = f.invoke(&[col(&u), col(&p), lit(&k)], 1).unwrap_err();
+            assert_eq!(class(&err), ErrorClass::InternalError, "{name}");
+        }
+    }
 }
 
 #[test]

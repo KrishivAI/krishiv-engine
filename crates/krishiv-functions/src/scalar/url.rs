@@ -13,13 +13,23 @@
 //! `PATH`, `QUERY`, `REF`, `PROTOCOL`, `FILE`, `AUTHORITY` and `USERINFO`
 //! are the URI's (raw) components, matched case-sensitively, anything else
 //! is NULL. A `key` is only read for `QUERY` (any other part with a key is
-//! NULL); it finds `key=value` in the raw query the way Spark's
-//! `(&|^)key=([^&]*)` search does for a literal key. A URL the URI parser
+//! NULL); it searches the raw query with Spark's `(&|^)key=([^&]*)`
+//! pattern, where `key` is a Java regular expression (so `a.b` also matches
+//! `aXb=`, and `(a)(b)` reads group 2), returning group 2 of the first
+//! match. An invalid key pattern fails the query, as Spark's untyped
+//! `PatternSyntaxException` does. A URL the URI parser
 //! rejects is `INVALID_URL` under ANSI and NULL otherwise; `try_parse_url`
 //! is NULL whatever the mode. A NULL argument makes the row NULL.
 //!
+//! The key pattern is compiled through the same Java-to-`fancy_regex`
+//! translation the `regexp` functions use, with the same backtracking cap:
+//! one compile per distinct key (a literal key compiles once per call).
+//! A pattern that does not build is `INTERNAL_ERROR` (Spark's
+//! `PatternSyntaxException` has no error class); a backtracking cap hit is
+//! `KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED`, as for `regexp`.
+//!
 //! The URI splitter below is hand-written against OpenJDK's `java.net.URI`
-//! (no regex on untrusted input, no new dependency): strict character
+//! (no regex in the splitter itself, no new dependency): strict character
 //! tables per component (`%` must open two hex digits; visible non-ASCII
 //! of U+0081 and above except spaces and controls is allowed), first-`@`
 //! userinfo, registry-based authorities (kept, with a NULL host) versus
@@ -30,9 +40,13 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
-use krishiv_common::error::{CannotDecodeUrl, InvalidUrl, KrishivError};
+use fancy_regex::{Regex, RegexBuilder};
+use krishiv_common::error::{
+    CannotDecodeUrl, InvalidUrl, KrishivError, KrishivRegexpBacktrackLimitExceeded,
+};
 
-use super::args::{Inputs, is_string};
+use super::args::{Inputs, internal, is_string};
+use super::regex::{BACKTRACK_LIMIT, translate};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 /// Every name this family binds.
@@ -94,6 +108,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let (urls, parts) = (x.strings(0)?, x.strings(1)?);
                 let keys = keyed.then(|| x.strings(2)).transpose()?;
                 let mut out = Vec::with_capacity(urls.len());
+                // The compiled key pattern of the last distinct key: a
+                // literal key compiles once per call.
+                let mut keys_cache: Option<KeyPattern> = None;
                 for i in 0..urls.len() {
                     // A NULL key (like a NULL anything else) makes NULL.
                     let mut key = "";
@@ -128,7 +145,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         Ok(uri) => {
                             out.push(if keyed {
                                 let q = uri.query.unwrap_or_default();
-                                find_query_key(q, key)
+                                key_value(q, key, &mut keys_cache)?
                             } else {
                                 extract_part(&uri, part)
                             });
@@ -759,21 +776,95 @@ fn extract_part(uri: &Uri<'_>, part: &str) -> Option<String> {
     .map(str::to_owned)
 }
 
-/// The value of `key` in the raw `query`: the first `key=value` pair that
-/// starts the query or follows a `&`, the value to the next `&` (as
-/// Spark's `(&|^)key=([^&]*)` search finds it for a literal key).
-fn find_query_key(query: &str, key: &str) -> Option<String> {
-    let mut i = 0;
-    while i <= query.len() {
-        if (i == 0 || query.as_bytes()[i - 1] == b'&')
-            && query[i..].starts_with(key)
-            && query[i + key.len()..].starts_with('=')
-        {
-            let val = &query[i + key.len() + 1..];
-            let end = val.find('&').unwrap_or(val.len());
-            return Some(val[..end].to_owned());
-        }
-        i += query[i..].find('&')? + 1;
+/// Spark's `(&|^)key=([^&]*)` search of the raw `query`, where `key` is a
+/// Java regular expression: group 2 of the first match (`None` when the
+/// pattern does not match or group 2 takes no part, as Spark's
+/// `m.group(2)` reads null then).
+///
+/// # Errors
+/// `INTERNAL_ERROR` for a key that is not a valid Java pattern (Spark
+/// itself throws an untyped `PatternSyntaxException`, which has no error
+/// class); `KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED` past the
+/// backtracking cap, as for `regexp`.
+fn key_value(
+    query: &str,
+    key: &str,
+    cache: &mut Option<KeyPattern>,
+) -> Result<Option<String>, KrishivError> {
+    if cache.as_ref().is_none_or(|c| c.key != key) {
+        *cache = Some(KeyPattern::new(key)?);
     }
-    None
+    let compiled = cache
+        .as_ref()
+        .ok_or_else(|| internal("no key pattern".to_owned()))?;
+    let found = compiled
+        .for_query(query)
+        .captures_from_pos(query, 0)
+        .map_err(|e| compiled.backtrack(e))?;
+    Ok(found
+        .and_then(|caps| caps.get(2))
+        .map(|m| m.as_str().to_owned()))
+}
+
+/// The compiled `(&|^)key=([^&]*)` search for one `key`.
+struct KeyPattern {
+    /// The key as written, for the error message.
+    key: String,
+    /// Matches `$` (in the key) at the very end of the query only.
+    plain: Regex,
+    /// Matches `$` before a final line terminator as well; only used for
+    /// queries that end with one (as the `regexp` engine does).
+    terminated: Option<Regex>,
+}
+
+impl KeyPattern {
+    /// Compiles `key` the way Spark's `ParseUrlEvaluator.getPattern` does.
+    fn new(key: &str) -> Result<Self, KrishivError> {
+        let source = format!("(&|^){key}=([^&]*)");
+        let invalid = || {
+            internal(format!(
+                "parse_url: the key is not a valid pattern: {key:?}"
+            ))
+        };
+        let translated = translate(&source, false).map_err(|_| invalid())?;
+        let build = |text: &str| {
+            RegexBuilder::new(text)
+                .backtrack_limit(BACKTRACK_LIMIT)
+                .build()
+                .map_err(|_| invalid())
+        };
+        Ok(Self {
+            key: key.to_owned(),
+            terminated: translated
+                .has_dollar
+                .then(|| translate(&source, true).map_err(|_| invalid()))
+                .transpose()?
+                .map(|t| build(&t.text))
+                .transpose()?,
+            plain: build(&translated.text)?,
+        })
+    }
+
+    /// The regex for a query ending (or not) in a line terminator.
+    fn for_query(&self, query: &str) -> &Regex {
+        match &self.terminated {
+            Some(t) if query.ends_with(['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}']) => t,
+            _ => &self.plain,
+        }
+    }
+
+    /// [`BACKTRACK_LIMIT`] exceeded while matching the key.
+    fn backtrack(&self, e: fancy_regex::Error) -> KrishivError {
+        match e {
+            fancy_regex::Error::RuntimeError(fancy_regex::RuntimeError::BacktrackLimitExceeded) => {
+                KrishivRegexpBacktrackLimitExceeded {
+                    pattern: format!("'(&|^){}=([^&]*)'", self.key),
+                    function_name: "`parse_url`".to_owned(),
+                    limit: BACKTRACK_LIMIT.to_string(),
+                }
+                .into()
+            }
+            e => internal(format!("parse_url key {:?}: {e}", self.key)),
+        }
+    }
 }

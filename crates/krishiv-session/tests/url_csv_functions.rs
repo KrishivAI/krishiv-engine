@@ -123,6 +123,10 @@ fn url_goldens() {
         run(&s, "select url_encode('https://spark.apache.org')"),
         ["https%3A%2F%2Fspark.apache.org"]
     );
+    // The codecs cast any argument: an `int` encodes as its text
+    // (checked against Spark 4.2.0).
+    assert_eq!(run(&s, "select url_encode(123)"), ["123"]);
+    assert_eq!(run(&s, "select url_decode(123)"), ["123"]);
     // `url_encode` (the golden writes `\;`, which this engine's lexer
     // reads as `;` while Spark keeps `\;`; `\\;` is a backslash in both).
     assert_eq!(
@@ -242,10 +246,40 @@ fn parse_url_keys_and_invalid_urls() {
         ),
         ["NULL"]
     );
+    // The key is a Java regular expression, not a literal: `a.b` matches
+    // `aXb=` first (checked against Spark 4.2.0).
+    assert_eq!(
+        run(
+            &s,
+            "select parse_url('http://h/?aXb=1&a.b=2', 'QUERY', 'a.b')"
+        ),
+        ["1"]
+    );
+    assert_eq!(
+        run(&s, "select parse_url('http://h/?aXb=1', 'QUERY', 'a.b')"),
+        ["1"]
+    );
+    // An invalid key pattern fails the query in both modes (Spark itself
+    // throws `PatternSyntaxException`, which has no error class, also for
+    // `try_parse_url`), as an untyped internal error.
+    assert_eq!(
+        class_of(&s, "select parse_url('http://h/?a=1', 'QUERY', '[')"),
+        ErrorClass::InternalError
+    );
+    assert_eq!(
+        class_of(&s, "select try_parse_url('http://h/?a=1', 'QUERY', '[')"),
+        ErrorClass::InternalError
+    );
     // A mistyped URL is refused, not cast.
     assert_eq!(
         class_of(&s, "select parse_url(1, 'HOST')"),
         ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // An unknown part is NULL, not an error (checked against Spark 4.2.0).
+    assert_eq!(run(&s, "select parse_url('http://h/', 'FOO')"), ["NULL"]);
+    assert_eq!(
+        run(&s, "select try_parse_url('http://h/', 'FOO')"),
+        ["NULL"]
     );
     // Wrong argument counts name what Spark expects.
     assert_eq!(
@@ -322,6 +356,18 @@ fn schema_of_csv_goldens() {
         run(&s, "select schema_of_csv('14:30:45.123456')"),
         ["STRUCT<_c0: TIMESTAMP>"]
     );
+    // Function names are case-insensitive: the upper-case call resolves
+    // to the same DDL (checked against Spark 4.2.0).
+    assert_eq!(
+        run(&s, "select SCHEMA_OF_CSV('1,abc')"),
+        ["STRUCT<_c0: INT, _c1: STRING>"]
+    );
+    // An empty literal parses to no record: an internal error, as Spark
+    // 4.2.0 fails it with `INTERNAL_ERROR` during constant folding.
+    assert_eq!(
+        class_of(&s, "select schema_of_csv('')"),
+        ErrorClass::InternalError
+    );
     // A null CSV.
     assert_eq!(
         class_of(&s, "select schema_of_csv(null)"),
@@ -377,8 +423,9 @@ fn schema_of_csv_goldens() {
 
 #[test]
 fn schema_of_csv_rejects_an_untokenizable_literal() {
-    // Past `maxColumns` the tokenizer gives up: an internal error, as
-    // Spark's own crash on such input is.
+    // Past `maxColumns` the tokenizer gives up: an internal error. Spark
+    // 4.2.0 fails this same literal during constant folding too (its own
+    // parser throws `TextParsingException` past 20480 columns).
     let s = session();
     let csv = "a,".repeat(20_481);
     assert_eq!(

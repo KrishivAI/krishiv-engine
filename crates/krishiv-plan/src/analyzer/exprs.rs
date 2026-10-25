@@ -875,6 +875,9 @@ impl Resolver<'_> {
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `schema_of_csv(lit)` resolves below to the DDL literal.
+                // The registry lookup is ASCII case-insensitive and
+                // `id.name()` is the canonical lower-case name, so a
+                // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
                 let is_schema_of_csv = entry.id.name() == "schema_of_csv";
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
@@ -1108,8 +1111,13 @@ impl Resolver<'_> {
     /// `SchemaOfCsv` evaluates its foldable child during analysis, keeping
     /// the call as the output name). The signature's result rule already
     /// rejected a non-foldable, null or non-string child, so anything but
-    /// a folded string here (a custom registry's rule) keeps the call.
-    /// Out of line: it is on the path of every call.
+    /// a folded string here (a custom registry's rule) keeps the call;
+    /// that call has no scalar binding and fails at execution binding, so
+    /// it never resolves silently. Only the one-argument form resolves
+    /// here: the two-argument options form is rejected by the signature
+    /// (options are a map, which Krishiv cannot type yet), so the default
+    /// options below always match the accepted call. Out of line: it is on
+    /// the path of every call.
     #[inline(never)]
     fn resolve_schema_of_csv(
         &self,
@@ -1117,6 +1125,9 @@ impl Resolver<'_> {
         kids: &[Bound],
         bound: &mut Bound,
     ) -> Result<(), AnalysisError> {
+        if kids.len() != 1 {
+            return Ok(());
+        }
         let csv = kids
             .first()
             .and_then(|k| self.fold(&k.expr, self.ctx.conf.ansi));

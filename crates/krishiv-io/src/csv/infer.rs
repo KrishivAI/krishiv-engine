@@ -12,7 +12,7 @@ use krishiv_kernels::text::{java_parse_double, java_parse_long};
 use super::decode::skip_line;
 use super::options::CsvOptions;
 use super::sampling::Sampler;
-use super::tokenizer::{Eol, Token, Tokenizer};
+use super::tokenizer::{Eol, Token, TokenizeError, Tokenizer};
 use crate::error::{FormatError, FormatResult, internal};
 use crate::io::{ByteRange, FileRef, IoContext};
 use crate::options::FormatOptions;
@@ -262,9 +262,21 @@ pub(crate) fn ddl_type(t: &DataType) -> FormatResult<String> {
 /// (`STRUCT<_c0: INT, _c1: STRING>`).
 ///
 /// # Errors
-/// What the CSV reader's options reject, and `INTERNAL_ERROR` for a
-/// record the tokenizer cannot tokenize at all.
+/// What the CSV reader's options reject, and `INTERNAL_ERROR` for an empty
+/// literal or a record the tokenizer cannot tokenize at all: Spark's
+/// `SchemaOfCsvEvaluator` asserts the parsed record is not null (an empty
+/// literal parses to no record, checked against Spark 4.2.0, which fails
+/// such a query with `INTERNAL_ERROR` during constant folding), and its
+/// parser throws past `maxColumns` (checked against Spark 4.2.0, whose
+/// Univocity parser throws `TextParsingException` there).
 pub fn ddl_of_string(csv: &str, options: &FormatOptions) -> FormatResult<String> {
+    if csv.is_empty() {
+        // Univocity parses an empty literal to no record, which Spark's
+        // assert rejects; Krishiv's tokenizer would yield one empty field.
+        return Err(FormatError::Other(internal(
+            "the CSV literal is empty (Spark's parser yields no record for it)".to_owned(),
+        )));
+    }
     let opts = CsvOptions::new(options, false)?;
     let dt = Datetimes::new(options, Purpose::Parse)?;
     let date = DateTimePattern::new(
@@ -283,8 +295,15 @@ pub fn ddl_of_string(csv: &str, options: &FormatOptions) -> FormatResult<String>
     let tok = Tokenizer::new(syntax);
     let mut tokens = Vec::new();
     tok.record(csv, 0, &mut tokens).map_err(|e| {
+        // A stable message per failure (not the tokenizer error's debug
+        // form, which names engine internals).
+        let what = match e {
+            TokenizeError::TooManyColumns => "has more columns than maxColumns",
+            TokenizeError::ValueTooLong => "has a value longer than maxCharsPerColumn",
+            TokenizeError::UnescapedQuote => "has an unescaped quote",
+        };
         FormatError::Other(internal(format!(
-            "the CSV literal cannot be tokenized ({e:?})"
+            "the CSV literal cannot be tokenized ({what})"
         )))
     })?;
     let mut types = vec![T::Null; tokens.len()];

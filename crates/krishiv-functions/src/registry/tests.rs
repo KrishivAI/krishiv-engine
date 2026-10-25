@@ -1328,3 +1328,17 @@ fn csv_signatures() {
     let err = result("schema_of_csv", std::slice::from_ref(&s), &[Some(failed)]).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::CastInvalidInput);
 }
+
+/// `schema_of_csv` never executes: the analyzer replaces every
+/// well-typed call with the DDL literal, so it has no scalar binding. A
+/// call that kept its shape (unreachable with the built-in registry: the
+/// signature rejects everything the analyzer does not resolve) fails at
+/// execution binding rather than running something unassigned.
+#[test]
+fn schema_of_csv_has_no_scalar_binding() {
+    use crate::scalar::{BindArg, BindOptions, bind_scalar};
+    assert_eq!(def("schema_of_csv").execution, Execution::Evaluator);
+    let args = [BindArg::from(arrow_schema::DataType::Utf8)];
+    let err = bind_scalar("schema_of_csv", &args, &BindOptions::new()).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
