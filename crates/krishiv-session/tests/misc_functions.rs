@@ -2,14 +2,15 @@
 //! The misc-function goldens end to end: every `misc-functions.sql`,
 //! `random.sql` and `current_database_catalog.sql` statement that uses only
 //! the implemented functions matches Spark 4.2.0 exactly (schema, rows,
-//! error class and parameters), and the nondeterministic functions are
+//! error class and parameters), except the multi-row `VALUES` statements:
+//! the engine runs those tiny scans in one partition while Spark CI splits
+//! them over two, so the row multisets differ. The single-partition draws
+//! are asserted here; their decomposition into per-partition streams is
+//! pinned at the binding level (`scalar/tests/random.rs`: partition 0's
+//! first `uniform(10, 20, 0)` draw is 17, partition 1's next two are 16 and
+//! 15 — the golden multiset — and `randstr`'s partition-1 rows match the
+//! golden's rows 2-3 exactly). The nondeterministic functions are otherwise
 //! deterministic per partition.
-//!
-//! Two multi-row statements depend on Spark CI's partitioning (two slices
-//! for three `VALUES` rows, then sorted output): the engine runs tiny scans
-//! in one partition, so those exact row orders are asserted sorted where the
-//! value multiset agrees, and at the operator level otherwise (see the
-//! `#[test]` docs).
 #![cfg(test)]
 
 use arrow_array::cast::AsArray;
@@ -208,6 +209,10 @@ fn typeof_needs_no_execution() {
         rows(&s, "select typeof(1 / 0)").0,
         vec!["typeof((CAST(1 AS DOUBLE) / CAST(0 AS DOUBLE)))".to_owned()]
     );
+    assert_eq!(
+        rows(&s, "select typeof(1 / 0)").1,
+        vec![vec!["double".to_owned()]]
+    );
 }
 
 #[test]
@@ -238,8 +243,11 @@ fn current_database_and_catalog() {
     );
 }
 
+/// Seeded draws match Spark exactly; the multi-row `VALUES` cases assert
+/// the engine's single-partition stream (Spark CI splits those rows over
+/// two partitions — see the module docs).
 #[test]
-fn rand_and_randn_match_spark() {
+fn rand_and_randn_match_spark_single_partition() {
     let s = session();
     // `random.sql`, exactly.
     assert_eq!(
@@ -293,10 +301,16 @@ fn rand_and_randn_match_spark() {
     assert_eq!(e.error_class(), ErrorClass::SeedExpressionIsUnfoldable);
     let e = error(&s, "SELECT rand(id) FROM (SELECT 1 AS id)");
     assert_eq!(e.error_class(), ErrorClass::SeedExpressionIsUnfoldable);
+    // Too many seeds is an arity error.
+    let e = error(&s, "SELECT rand(1, 2)");
+    assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
 }
 
+/// Seeded values match Spark exactly; the multi-row `VALUES` case asserts
+/// the engine's single-partition draws (Spark CI splits those rows over
+/// two partitions — see the module docs).
 #[test]
-fn uniform_matches_spark() {
+fn uniform_matches_spark_single_partition() {
     let s = session();
     let value = |sql: &str| rows(&s, sql).1.into_iter().flatten().collect::<Vec<_>>();
     assert_eq!(value("SELECT uniform(0, 1, 0) AS result"), ["0"]);
@@ -324,6 +338,7 @@ fn uniform_matches_spark() {
         ["17.604953758285916"]
     );
     assert_eq!(value("SELECT uniform(-10L, 10L, 0) AS result"), ["5"]);
+    assert_eq!(value("SELECT uniform(-20L, -10L, 0) AS result"), ["-12"]);
     assert_eq!(value("SELECT uniform(-20L, -10L, -10) AS result"), ["-17"]);
     // NULL bounds are NULL results; a NULL seed reads as 0.
     assert_eq!(value("SELECT uniform(NULL, 1, 0) AS result"), ["~"]);
@@ -347,6 +362,9 @@ fn uniform_matches_spark() {
     assert!(e.to_string().contains("`seed`"), "{e}");
     let e = error(&s, "SELECT uniform(10) AS result");
     assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
+    let e = error(&s, "SELECT uniform(10, 20, 30, 40) AS result");
+    assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
+    assert!(e.to_string().contains("[2, 3]"), "{e}");
     let e = error(&s, "SELECT uniform(10.0F, 20.0F, 0.0F) AS result");
     assert_eq!(
         e.error_class(),
@@ -359,6 +377,13 @@ fn uniform_matches_spark() {
         ErrorClass::DatatypeMismatchUnexpectedInputType
     );
     assert!(e.to_string().contains("\"NUMERIC\""), "{e}");
+    let e = error(&s, "SELECT uniform(0, 'def', 0) AS result");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(e.to_string().contains("\"NUMERIC\""), "{e}");
+    assert!(e.to_string().contains("second"), "{e}");
     // Several partitions draw several streams: the engine runs the tiny
     // scan in one partition, so the rows are one stream's first draws
     // (Spark CI splits the rows over two partitions and sorts).
@@ -372,8 +397,11 @@ fn uniform_matches_spark() {
     assert_eq!(got, ["10", "15", "17"]);
 }
 
+/// Seeded strings match Spark exactly; the multi-row `VALUES` case asserts
+/// the engine's single-partition draws (Spark CI splits those rows over
+/// two partitions — see the module docs).
 #[test]
-fn randstr_matches_spark() {
+fn randstr_matches_spark_single_partition() {
     let s = session();
     let value = |sql: &str| rows(&s, sql).1.into_iter().flatten().collect::<Vec<_>>();
     assert_eq!(value("SELECT randstr(1, 0) AS result"), ["c"]);
@@ -407,6 +435,14 @@ fn randstr_matches_spark() {
     assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
     let e = error(&s, "SELECT randstr(-1, 0) AS result");
     assert_eq!(e.error_class(), ErrorClass::InvalidParameterValueLength);
+    // A string seed is neither an `int` nor a `bigint`.
+    let e = error(&s, "SELECT randstr(10, 'a') AS result");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(e.to_string().contains("second"), "{e}");
+    assert!(e.to_string().contains("(\"INT\" or \"BIGINT\")"), "{e}");
     // The engine's tiny scan is one partition: consecutive draws of one
     // stream (Spark CI splits the rows over two partitions and sorts).
     let v = values_session();

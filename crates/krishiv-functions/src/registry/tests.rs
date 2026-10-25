@@ -983,6 +983,56 @@ fn uniform_and_randstr_signatures() {
     assert!(err.to_string().contains("\"INT\""), "{err}");
 }
 
+/// The analyzer's `uniform` result type and the executor's bind type agree
+/// on every pair of bound kinds: both layers map their own type to the
+/// shared `uniform_result` rule, and the test pins the two mappers against
+/// each other so one side cannot drift without the other.
+#[test]
+fn uniform_result_agrees_with_the_executor_bind() {
+    use crate::scalar::{BindArg, BindOptions, bind_scalar};
+    // One foldable constant per bound type, as the analyzer sees them.
+    let cases: Vec<(Option<DataType>, Option<Constant>)> = vec![
+        (Some(DataType::Byte), Some(Constant::Integral(1))),
+        (Some(DataType::Short), Some(Constant::Integral(1))),
+        (Some(DataType::Integer), Some(Constant::Integral(10))),
+        (Some(DataType::Long), Some(Constant::Integral(20))),
+        (Some(DataType::Float), Some(Constant::Fractional(1))),
+        (Some(DataType::Double), Some(Constant::Fractional(1))),
+        (Some(dec(10, 3)), Some(Constant::Fractional(1))),
+        (Some(dec(11, 4)), Some(Constant::Fractional(1))),
+        (None, Some(Constant::Null)),
+    ];
+    for (a, ca) in &cases {
+        for (b, cb) in &cases {
+            let args = [
+                ArgType {
+                    data_type: a.clone(),
+                    nullable: a.is_none(),
+                },
+                ArgType {
+                    data_type: b.clone(),
+                    nullable: b.is_none(),
+                },
+            ];
+            let reg = result("uniform", &args, &[ca.clone(), cb.clone()]).unwrap();
+            let bound = bind_scalar(
+                "uniform",
+                &[
+                    BindArg::Column(a.clone().unwrap_or(DataType::Null).to_arrow()),
+                    BindArg::Column(b.clone().unwrap_or(DataType::Null).to_arrow()),
+                ],
+                &BindOptions::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                reg.data_type.clone().map(|t| t.to_arrow()),
+                Some(bound.return_type().clone()),
+                "uniform({a:?}, {b:?})"
+            );
+        }
+    }
+}
+
 #[test]
 fn bitwise_signatures() {
     let (b, s, i, l) = (

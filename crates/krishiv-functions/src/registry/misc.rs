@@ -27,6 +27,7 @@ use krishiv_common::error::{
 };
 use krishiv_types::DataType;
 
+use super::super::uniform::{UniformKind, uniform_result};
 use super::defs::{Spec, scalar};
 use crate::signature::{ArgType, CallTypes, Constant, Inputs};
 
@@ -143,27 +144,23 @@ fn is_uniform_bound(t: Option<&DataType>) -> bool {
     })
 }
 
-/// The wider of two integral types (Spark's `UpCastRule` order).
-fn wider_integral(left: &DataType, right: &DataType) -> DataType {
-    let rank = |t: &DataType| match t {
-        DataType::Byte => 0,
-        DataType::Short => 1,
-        DataType::Integer => 2,
-        _ => 3,
-    };
-    if rank(left) >= rank(right) {
-        left.clone()
-    } else {
-        right.clone()
+/// The [`UniformKind`] of a `uniform` bound (an untyped `NULL` reads as
+/// `DOUBLE`, as Spark casts it).
+fn uniform_kind(t: Option<&DataType>) -> UniformKind {
+    match t {
+        None | Some(DataType::Double) => UniformKind::Double,
+        Some(DataType::Byte) => UniformKind::Byte,
+        Some(DataType::Short) => UniformKind::Short,
+        Some(DataType::Integer) => UniformKind::Int,
+        Some(DataType::Long) => UniformKind::Long,
+        Some(DataType::Float) => UniformKind::Float,
+        Some(DataType::Decimal(d)) => UniformKind::Decimal {
+            precision: d.precision(),
+            // A decimal scale is `0..=38`: the widening never fires.
+            scale: i8::try_from(d.scale()).unwrap_or(i8::MAX),
+        },
+        Some(_) => UniformKind::Other,
     }
-}
-
-/// Whether `left` is wider than `right` (Spark's
-/// `DecimalType.isWiderThan`).
-fn is_wider_decimal(left: (u8, u8), right: (u8, u8)) -> bool {
-    let (p1, s1) = (i32::from(left.0), i32::from(left.1));
-    let (p2, s2) = (i32::from(right.0), i32::from(right.1));
-    p1 - s1 >= p2 - s2 && s1 >= s2 && p1 >= p2
 }
 
 /// `uniform(min, max[, seed])`: Spark's `Uniform.dataType` (an untyped
@@ -210,32 +207,24 @@ fn uniform(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             Some(_) => {}
         }
     }
-    let num = |t: Option<&DataType>| t.cloned().unwrap_or(DataType::Double);
-    let (min, max) = (num(c.data_type(0)), num(c.data_type(1)));
-    let data_type = match (&min, &max) {
-        (a, b)
-            if matches!(
-                a,
-                DataType::Byte | DataType::Short | DataType::Integer | DataType::Long
-            ) && matches!(
-                b,
-                DataType::Byte | DataType::Short | DataType::Integer | DataType::Long
-            ) =>
-        {
-            wider_integral(a, b)
+    let data_type = match uniform_result(uniform_kind(c.data_type(0)), uniform_kind(c.data_type(1)))
+    {
+        UniformKind::Byte => DataType::Byte,
+        UniformKind::Short => DataType::Short,
+        UniformKind::Int => DataType::Integer,
+        UniformKind::Long => DataType::Long,
+        UniformKind::Float => DataType::Float,
+        UniformKind::Double | UniformKind::Other => DataType::Double,
+        UniformKind::Decimal { precision, scale } => {
+            use krishiv_types::DecimalType;
+            // The kind came from a valid decimal bound, so the
+            // reconstruction holds; `try_new` guards the impossible fall.
+            let scale = u8::try_from(scale).unwrap_or(u8::MAX);
+            DataType::Decimal(DecimalType::try_new(
+                u32::from(precision),
+                u32::from(scale),
+            )?)
         }
-        (DataType::Double, _) | (_, DataType::Double) => DataType::Double,
-        (DataType::Float, _) | (_, DataType::Float) => DataType::Float,
-        (DataType::Decimal(left), DataType::Decimal(right))
-            if is_wider_decimal(
-                (left.precision(), left.scale()),
-                (right.precision(), right.scale()),
-            ) =>
-        {
-            min
-        }
-        (_, d @ DataType::Decimal(_)) | (d @ DataType::Decimal(_), _) => d.clone(),
-        _ => DataType::Double,
     };
     Ok(ArgType::new(data_type, c.any_nullable()))
 }

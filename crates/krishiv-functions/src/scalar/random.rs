@@ -19,7 +19,8 @@
 //! exactly (`rand(0)` is `0.7604953758285915`). `uuid` draws its 128 bits
 //! from the same generator and sets the RFC 4122 version and variant bits;
 //! Spark fills those bits from a Mersenne Twister instead, so only the
-//! shape (and the per-seed determinism) matches, not Spark's values.
+//! shape (and the per-seed determinism) matches, not Spark's values. No
+//! golden pins seeded `uuid` values (see `misc`).
 
 use std::sync::{Arc, Mutex};
 
@@ -30,6 +31,7 @@ use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::cast::{CastMode, CastOptions, TimeZoneRules, cast};
 
+use super::super::uniform::{UniformKind, uniform_result as shared_result};
 use super::args::{Inputs, internal};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
@@ -194,17 +196,34 @@ impl Stream {
 }
 
 /// The per-partition streams of one bound function, by partition index.
+/// The seed is fixed per binding (the folded seed argument, or the query
+/// seed for an absent or NULL seed), so the first bind records it and every
+/// slot `j` draws `base + j`: a driver that binds a higher partition first
+/// no longer seeds the lower slots with the wrong seed. The table is
+/// untracked by `krishiv-memory`, but bounded by the partition count
+/// (bytes), like the other per-partition counters.
 #[derive(Debug, Default)]
 struct Streams {
+    base: Option<i64>,
     streams: Vec<Stream>,
 }
 
 impl Streams {
-    /// The stream of `partition`, seeded once.
+    /// The stream of `partition`: slot `j` draws `seed + j`, seeded once.
+    /// (`seed` is the binding's base seed; the callers pass it unfolded.)
     fn stream(&mut self, partition: u32, seed: i64) -> &mut Stream {
+        let base = *self.base.get_or_insert(seed);
         let index = partition as usize;
         if self.streams.len() <= index {
-            self.streams.resize_with(index + 1, || Stream::new(seed));
+            let have = self.streams.len();
+            self.streams.reserve(index + 1 - have);
+            for slot in have..=index {
+                // `slot <= index`, and `index` is a `u32` widened to
+                // `usize`: `slot` fits a `u32` (the fallback never fires).
+                let p = u32::try_from(slot).unwrap_or(u32::MAX);
+                self.streams
+                    .push(Stream::new(base.wrapping_add(i64::from(p))));
+            }
         }
         &mut self.streams[index]
     }
@@ -302,7 +321,7 @@ fn rand(opts: &BindOptions, args: &[BindArg]) -> Binding {
             queries
         };
         let mut streams = lock(&state)?;
-        let s = streams.stream(partition, seed.wrapping_add(i64::from(partition)));
+        let s = streams.stream(partition, seed);
         let out: Vec<f64> = (0..x.rows()).map(|_| s.rng.next_double()).collect();
         Ok(Arc::new(Float64Array::from(out)) as ArrayRef)
     })
@@ -320,7 +339,7 @@ fn randn(opts: &BindOptions, args: &[BindArg]) -> Binding {
             queries
         };
         let mut streams = lock(&state)?;
-        let s = streams.stream(partition, seed.wrapping_add(i64::from(partition)));
+        let s = streams.stream(partition, seed);
         let out: Vec<f64> = (0..x.rows())
             .map(|_| s.rng.next_gaussian(&mut s.gaussian))
             .collect();
@@ -341,7 +360,7 @@ fn uuid(opts: &BindOptions, args: &[BindArg]) -> Binding {
             queries
         };
         let mut streams = lock(&state)?;
-        let s = streams.stream(partition, seed.wrapping_add(i64::from(partition)));
+        let s = streams.stream(partition, seed);
         let out: Vec<String> = (0..x.rows())
             .map(|_| {
                 let most = (s.rng.next_long().cast_unsigned() & 0xffff_ffff_ffff_0fff)
@@ -362,62 +381,36 @@ fn uuid(opts: &BindOptions, args: &[BindArg]) -> Binding {
     })
 }
 
-/// Whether `t` is an integral Arrow type.
-fn is_integral(t: &DataType) -> bool {
-    matches!(
-        t,
-        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
-    )
-}
-
-/// The wider of two integral Arrow types (Spark's `UpCastRule` order).
-fn wider_integral(a: &DataType, b: &DataType) -> DataType {
-    let rank = |t: &DataType| match t {
-        DataType::Int8 => 0,
-        DataType::Int16 => 1,
-        DataType::Int32 => 2,
-        _ => 3,
-    };
-    if rank(a) >= rank(b) {
-        a.clone()
-    } else {
-        b.clone()
+/// The [`UniformKind`] of a `uniform` bound (an untyped `NULL` reads as
+/// `DOUBLE`, as Spark casts it).
+fn uniform_kind(t: &DataType) -> UniformKind {
+    match t {
+        DataType::Int8 => UniformKind::Byte,
+        DataType::Int16 => UniformKind::Short,
+        DataType::Int32 => UniformKind::Int,
+        DataType::Int64 => UniformKind::Long,
+        DataType::Float32 => UniformKind::Float,
+        DataType::Float64 | DataType::Null => UniformKind::Double,
+        DataType::Decimal128(p, s) => UniformKind::Decimal {
+            precision: *p,
+            scale: *s,
+        },
+        _ => UniformKind::Other,
     }
 }
 
 /// The Arrow result type of `uniform(min, max)` for argument types
-/// `min`/`max` (an untyped `NULL` reads as `DOUBLE`, as Spark casts it):
-/// Spark's `Uniform.dataType`.
+/// `min`/`max`: Spark's `Uniform.dataType` (see `uniform_kind`).
 fn uniform_result(min: &DataType, max: &DataType) -> DataType {
-    let num = |t: &DataType| {
-        if *t == DataType::Null {
-            DataType::Float64
-        } else {
-            t.clone()
-        }
-    };
-    let (min, max) = (num(min), num(max));
-    match (&min, &max) {
-        (a, b) if is_integral(a) && is_integral(b) => wider_integral(a, b),
-        (DataType::Float64, _) | (_, DataType::Float64) => DataType::Float64,
-        (DataType::Float32, _) | (_, DataType::Float32) => DataType::Float32,
-        (DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)) => {
-            if is_wider_decimal((*p1, *s1), (*p2, *s2)) {
-                min
-            } else {
-                max
-            }
-        }
-        (_, d @ DataType::Decimal128(..)) | (d @ DataType::Decimal128(..), _) => d.clone(),
-        _ => DataType::Float64,
+    match shared_result(uniform_kind(min), uniform_kind(max)) {
+        UniformKind::Byte => DataType::Int8,
+        UniformKind::Short => DataType::Int16,
+        UniformKind::Int => DataType::Int32,
+        UniformKind::Long => DataType::Int64,
+        UniformKind::Float => DataType::Float32,
+        UniformKind::Double | UniformKind::Other => DataType::Float64,
+        UniformKind::Decimal { precision, scale } => DataType::Decimal128(precision, scale),
     }
-}
-
-/// Spark's `DecimalType.isWiderThan`: every part at least as wide.
-fn is_wider_decimal(left: (u8, i8), right: (u8, i8)) -> bool {
-    let (p1, s1) = (i32::from(left.0), i32::from(left.1));
-    let (p2, s2) = (i32::from(right.0), i32::from(right.1));
-    p1 - s1 >= p2 - s2 && s1 >= s2 && p1 >= p2
 }
 
 /// `uniform(min, max[, seed])`: Spark's `Uniform` is a `RuntimeReplaceable`
@@ -443,7 +436,7 @@ fn uniform(opts: &BindOptions, args: &[BindArg]) -> Binding {
             return Ok(arrow_array::new_null_array(&out_type, x.rows()));
         };
         let mut streams = lock(&state)?;
-        let s = streams.stream(partition, seed.wrapping_add(i64::from(partition)));
+        let s = streams.stream(partition, seed);
         let draws: Vec<f64> = (0..x.rows())
             .map(|_| lo + (hi - lo) * s.rng.next_double())
             .collect();
@@ -481,7 +474,7 @@ fn randstr(opts: &BindOptions, args: &[BindArg]) -> Binding {
             .into());
         }
         let mut streams = lock(&state)?;
-        let s = streams.stream(partition, seed.wrapping_add(i64::from(partition)));
+        let s = streams.stream(partition, seed);
         let out: Vec<String> = (0..x.rows())
             .map(|_| {
                 (0..n)

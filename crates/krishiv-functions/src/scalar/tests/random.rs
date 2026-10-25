@@ -119,6 +119,21 @@ fn partitions_own_their_streams() {
 }
 
 #[test]
+fn a_late_partition_does_not_reuse_an_early_partitions_seed() {
+    // Regression: a driver that bound a higher partition first seeded the
+    // lower slots with its own seed. Each slot draws `base + slot`, so
+    // partition 0 still draws Spark's first draw of seed 0 here.
+    let s = seed_i32(0);
+    let bound = vec![BindArg::Literal(Arc::clone(&s))];
+    let f = super::bind_scalar("rand", &bound, &BindOptions::new()).unwrap();
+    let a = lit(&s);
+    let p1 = f64s(&f.invoke_in(std::slice::from_ref(&a), 1, 1).unwrap());
+    let p0 = f64s(&f.invoke_in(std::slice::from_ref(&a), 1, 0).unwrap());
+    assert_eq!(p1, vec![Some(0.6363787615254752)]);
+    assert_eq!(p0, vec![Some(0.7604953758285915)]);
+}
+
+#[test]
 fn uniform_matches_the_golden_values() {
     // `SELECT uniform(0, 10, 0)` is 7, `(10, 20, 0)` is 17.
     let bound = |lo: &ArrayRef, hi: &ArrayRef, sd: &ArrayRef| {

@@ -16,6 +16,11 @@
 //! context yet, so they return what Spark returns with no file being read
 //! (the empty string, `-1`).
 //!
+//! No golden pins the `version`, `input_file_*` or `uuid` values (no such
+//! value queries in any `.out` file: `string-functions.sql` only pins
+//! `length(uuid())` and that distinct calls differ), so those stand on the
+//! documented behavior, unverified against a golden run.
+//!
 //! `monotonically_increasing_id` is `(partition << 33) + row_in_partition`
 //! and `spark_partition_id` is the partition index, both from the
 //! executing partition (see [`super::ScalarFunction::invoke_in`]); each
@@ -101,12 +106,16 @@ fn input_file_block() -> Binding {
 /// `spark_partition_id()`: the executing partition's index.
 fn spark_partition_id() -> Binding {
     Binding::partitioned(DataType::Int32, |x: &Inputs<'_>, partition| {
+        // Driver counts never approach `2^31` (one slot per worker thread).
+        debug_assert!(i32::try_from(partition).is_ok());
         Ok(Arc::new(Int32Array::from(vec![partition as i32; x.rows()])) as ArrayRef)
     })
 }
 
 /// `monotonically_increasing_id()`: `(partition << 33) + row_in_partition`,
-/// counted per partition in the partitioned body.
+/// counted per partition in the partitioned body. The per-partition counts
+/// are untracked by `krishiv-memory`, but bounded by the partition count
+/// (bytes), like the other per-partition state.
 fn monotonically_increasing_id() -> Binding {
     let counts = Mutex::new(Vec::<u64>::new());
     Binding::partitioned(DataType::Int64, move |x: &Inputs<'_>, partition| {

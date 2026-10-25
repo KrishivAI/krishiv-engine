@@ -8,8 +8,8 @@ use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions};
 use arrow_schema::{Field, Schema, SchemaRef};
 use krishiv_types::batch::Batch;
 
-use super::PartitionState;
 use super::expr::ScalarExpr;
+use super::{PartitionState, local_mut};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{LocalState, Operator, OperatorOutput};
@@ -149,10 +149,7 @@ impl Operator for Project {
         if rows == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let partition = local
-            .downcast_ref::<PartitionState>()
-            .map(|s| s.partition)
-            .unwrap_or(0);
+        let partition = local_mut::<PartitionState>(local, "Project")?.partition;
         let data = input.data();
         let columns = self
             .items
