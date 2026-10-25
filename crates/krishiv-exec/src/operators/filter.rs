@@ -6,8 +6,8 @@ use std::sync::Arc;
 use arrow_schema::SchemaRef;
 use krishiv_types::batch::Batch;
 
+use super::PartitionState;
 use super::expr::Predicate;
-use super::no_state;
 use crate::context::TaskContext;
 use crate::error::Result;
 use crate::operator::{LocalState, Operator, OperatorOutput};
@@ -38,15 +38,21 @@ impl Operator for Filter {
         Arc::clone(&self.schema)
     }
 
-    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
-        Ok(no_state())
+    fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(PartitionState {
+            partition: ctx.partition(),
+        }))
     }
 
-    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+    fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
         if input.num_rows() == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
-        let mask = self.predicate.evaluate(input.data())?;
+        let partition = local
+            .downcast_ref::<PartitionState>()
+            .map(|s| s.partition)
+            .unwrap_or(0);
+        let mask = self.predicate.evaluate_in(input.data(), partition)?;
         let out = input.filter(&mask)?;
         Ok(OperatorOutput::NeedMoreInput(
             (out.num_rows() > 0).then_some(out),

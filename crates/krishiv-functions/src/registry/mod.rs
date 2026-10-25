@@ -19,6 +19,7 @@ mod conditional;
 mod defs;
 mod hashing;
 mod math;
+mod misc;
 mod number;
 mod predicate;
 

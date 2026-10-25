@@ -51,7 +51,8 @@ pub(super) fn compile(
         .with_kernel(input.env.kernels)
         .with_time_zone(Arc::new(zone))
         .with_query_start(input.env.query_start_micros)
-        .with_user(Arc::clone(&input.env.user));
+        .with_user(Arc::clone(&input.env.user))
+        .with_seed_salt(Arc::clone(&input.env.seed_salt));
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {
         if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {
             unsupported_expr(e)
@@ -98,18 +99,20 @@ impl PhysExpr for Call {
         self.nullable
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let args = self
             .args
             .iter()
             .map(|a| {
-                Ok(match a.eval(batch)? {
+                Ok(match a.eval(batch, partition)? {
                     Value::Array(v) => Arg::Array(v),
                     Value::Scalar(v) => Arg::Scalar(v),
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let out = self.function.invoke(&args, batch.num_rows())?;
+        let out = self
+            .function
+            .invoke_in(&args, batch.num_rows(), partition)?;
         Ok(Value::Array(if self.view { to_view(&out)? } else { out }))
     }
 }

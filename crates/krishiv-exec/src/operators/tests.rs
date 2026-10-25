@@ -965,3 +965,86 @@ fn expand_rejects_bad_plans() {
         .unwrap_or_else(|| unreachable!("an error"));
     assert_eq!(err.error_class(), ErrorClass::InternalError);
 }
+
+/// A stateful function sees the driver's partition: `rand(0)` draws
+/// partition 0's stream on one driver and partition 1's on another, and
+/// the same partition draws the same stream on a fresh evaluation.
+#[test]
+fn project_threads_the_drivers_partition_to_stateful_functions() {
+    use arrow_array::NullArray;
+    use arrow_array::types::Float64Type;
+    use krishiv_common::config::Config;
+    use krishiv_plan::{
+        Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr, ResolvedFunction,
+    };
+
+    use crate::planner::eval::{Compiled, EvalEnv, Input, compile};
+
+    // `rand(0)` analyzed: a non-nullable double of a folded seed.
+    let call = |seed: i32| {
+        let f = ResolvedFunction {
+            id: FunctionId::Registry {
+                name: "rand".to_owned(),
+                id: 0,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(
+                seed,
+            ))))],
+            distinct: false,
+            filter: None,
+            data_type: krishiv_types::DataType::Double,
+            nullable: false,
+            deterministic: false,
+        };
+        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f)))
+    };
+    let one_row = || {
+        let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Null, true)]));
+        let data = RecordBatch::try_new(schema, vec![Arc::new(NullArray::new(1))])
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        Batch::new(data)
+    };
+    let project = |seed: i32| {
+        let config = Config::new();
+        let env = EvalEnv::new(&config, Arc::from("test"));
+        let schema = Arc::new(Schema::empty());
+        let compiled = compile(
+            &call(seed),
+            Input {
+                layout: &[],
+                schema: &schema,
+                env: &env,
+                subqueries: &[],
+            },
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let input = one_row();
+        Project::try_new(
+            &input.schema(),
+            vec![ProjectItem::expr(
+                "r",
+                Arc::new(Compiled(compiled)) as Arc<dyn crate::operators::expr::ScalarExpr>,
+            )],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"))
+    };
+    let run = |seed: i32, partition: u32| {
+        let p = project(seed);
+        let (_root, ctx) = ctx();
+        let ctx = ctx.with_partition(partition);
+        let mut local = p.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+        let out = out_batch(
+            p.execute(&one_row(), &mut local)
+                .unwrap_or_else(|e| unreachable!("{e}")),
+        )
+        .unwrap_or_else(|| unreachable!("a row"));
+        out.data().column(0).as_primitive::<Float64Type>().value(0)
+    };
+    // Seed 0, partition 0 and 1: Spark's first draws.
+    assert_eq!(run(0, 0), 0.7604953758285915);
+    assert_eq!(run(0, 1), 0.6363787615254752);
+    // A fresh evaluation draws the same stream again: the stream is a pure
+    // function of (seed, partition, row).
+    assert_eq!(run(0, 0), 0.7604953758285915);
+}

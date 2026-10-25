@@ -398,6 +398,10 @@ pub struct TaskContext {
     name: &'static str,
     memory: OnceLock<MemoryHandle>,
     dependency: Option<GlobalState>,
+    /// The driver's index in its pipeline run (Spark's partition index for
+    /// the partition the driver computes): stateful functions own one value
+    /// stream per partition. One driver always reads partition 0.
+    partition: u32,
 }
 
 impl fmt::Debug for TaskContext {
@@ -426,7 +430,22 @@ impl TaskContext {
             name,
             memory: OnceLock::new(),
             dependency: None,
+            partition: 0,
         }
+    }
+
+    /// The same context for the driver `partition` (its index in the
+    /// pipeline run).
+    #[must_use]
+    pub(crate) fn with_partition(mut self, partition: u32) -> Self {
+        self.partition = partition;
+        self
+    }
+
+    /// The driver's index in its pipeline run (set when the driver is
+    /// spawned; 0 for a single driver).
+    pub fn partition(&self) -> u32 {
+        self.partition
     }
 
     pub(crate) fn with_dependency(mut self, state: GlobalState) -> Self {

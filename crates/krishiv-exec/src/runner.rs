@@ -432,7 +432,10 @@ fn start_group(
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
-        handles.extend((0..drivers).map(|_| spawn_driver(Arc::clone(&run))));
+        handles.extend((0..drivers).map(|i| {
+            let partition = u32::try_from(i).unwrap_or(u32::MAX);
+            spawn_driver(Arc::clone(&run), partition)
+        }));
         runs.push(run);
     }
     Ok((runs, handles))
