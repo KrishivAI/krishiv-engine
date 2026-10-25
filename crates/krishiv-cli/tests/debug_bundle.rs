@@ -158,7 +158,7 @@ fn redaction_hides_literals_secrets_and_paths() {
     let files = read_bundle(&out);
     let all: Vec<u8> = files.values().flatten().copied().collect();
     let all_text = String::from_utf8_lossy(&all);
-    for secret in [
+    for (n, secret) in [
         "alice-secret-literal-9f3a",
         "987654321",
         "AA110011",
@@ -169,11 +169,15 @@ fn redaction_hides_literals_secrets_and_paths() {
         secret_value,
         url_cred,
         "host-9f3a",
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        // The message names the entry by position: the planted value and
+        // the bundle text never go into a failure message or a log.
         assert!(
             !all_text.contains(secret),
-            "bundle leaks {secret}: {}",
-            &all_text[..all_text.len().min(2000)]
+            "the bundle leaks planted value #{n}"
         );
     }
     // Placeholders and the fixed marker survive.
@@ -230,11 +234,15 @@ fn direct_parquet_path_without_table_is_redacted() {
     let files = read_bundle(&out);
     let all: Vec<u8> = files.values().flatten().copied().collect();
     let all_text = String::from_utf8_lossy(&all);
-    for secret in ["recognizable-7f3a9c-dir", "sensitive-7f3a9c-data"] {
+    for (n, secret) in ["recognizable-7f3a9c-dir", "sensitive-7f3a9c-data"]
+        .into_iter()
+        .enumerate()
+    {
+        // The message names the entry by position: the planted value and
+        // the bundle text never go into a failure message or a log.
         assert!(
             !all_text.contains(secret),
-            "bundle leaks {secret}: {}",
-            &all_text[..all_text.len().min(2000)]
+            "the bundle leaks planted value #{n}"
         );
     }
     let plan = std::str::from_utf8(&files["queries/001.plan.json"]).expect("utf-8");
@@ -270,11 +278,15 @@ fn relative_table_spelling_is_redacted() {
     let files = read_bundle(&out);
     let all: Vec<u8> = files.values().flatten().copied().collect();
     let all_text = String::from_utf8_lossy(&all);
-    for secret in ["recognizable-7f3a9c-dir", "sensitive-7f3a9c-data"] {
+    for (n, secret) in ["recognizable-7f3a9c-dir", "sensitive-7f3a9c-data"]
+        .into_iter()
+        .enumerate()
+    {
+        // The message names the entry by position: the planted value and
+        // the bundle text never go into a failure message or a log.
         assert!(
             !all_text.contains(secret),
-            "bundle leaks {secret}: {}",
-            &all_text[..all_text.len().min(2000)]
+            "the bundle leaks planted value #{n}"
         );
     }
     let plan = std::str::from_utf8(&files["queries/002.plan.json"]).expect("utf-8");
