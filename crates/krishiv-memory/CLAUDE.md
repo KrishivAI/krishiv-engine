@@ -29,7 +29,8 @@ Paths are relative to this crate.
 - Spill files (`spillfile`): a finished `.spill` is complete (temp file + rename; no fsync by design: scratch data, deleted at the
   next start after a crash); every frame is checksummed, so damage is `SpillError::Corrupt`, never wrong data; all names are
   generated, never user-supplied; files go on drop, a query's directory on drop or `SpillScope::cancel`; crashed sessions are
-  reclaimed via a held advisory lock (not a pid); write/read scratch is accounted in the caller's `Reservation`.
+  reclaimed via a held advisory lock (not a pid); write/read scratch is accounted in the caller's `Reservation`; writers drop their written pages from the page cache as they go
+  (`krishiv.spill.dropBehindBytes`, `spillfile/cache.rs`; advisory, failures are logged), so dirty spill pages never pile up in a cgroup.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

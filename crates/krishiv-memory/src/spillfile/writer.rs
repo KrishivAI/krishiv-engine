@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Writing a spill file: atomic (temp file, then rename), capped, cancellable.
 
+use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -12,6 +13,7 @@ use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::SpillError;
+use super::cache;
 use super::compact;
 use super::dir::{ScopeInner, create_new_file};
 use super::format::{
@@ -55,7 +57,10 @@ const BUF_BYTES: usize = 64 << 10;
 /// file is discarded, not truncated.
 ///
 /// The I/O is blocking: call it from `spawn_blocking`. Each writer holds one
-/// file descriptor until it finishes or drops.
+/// file descriptor until it finishes or drops. That includes waiting for the
+/// disk: the drop-behind (`krishiv.spill.dropBehindBytes`, see the module
+/// docs) waits for each window's writeback one window later, and for the
+/// rest at `finish`.
 #[derive(Debug)]
 pub struct SpillWriter {
     scope: Arc<ScopeInner>,
@@ -70,6 +75,12 @@ pub struct SpillWriter {
     rows: u64,
     /// The largest frame plus its decoded bound ([`SpillFile::max_read_reservation`]).
     max_read: usize,
+    /// Drop-behind window (`krishiv.spill.dropBehindBytes`; 0: off).
+    window: u64,
+    /// Bytes whose writeback was started.
+    started: u64,
+    /// Ranges whose writeback was started and that are still cached.
+    behind: VecDeque<(u64, u64)>,
     committed: bool,
     failed: bool,
 }
@@ -88,6 +99,7 @@ impl SpillWriter {
         fields.push(Arc::new(Field::new(WEIGHT_COLUMN, DataType::Int64, false)));
         let weighted_schema =
             Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+        let window = scope.manager().drop_behind;
         let mut w = Self {
             scope,
             tmp,
@@ -100,6 +112,9 @@ impl SpillWriter {
             batches: 0,
             rows: 0,
             max_read: 0,
+            window,
+            started: 0,
+            behind: VecDeque::new(),
             committed: false,
             failed: false,
         };
@@ -268,6 +283,49 @@ impl SpillWriter {
         })?;
         self.batches += 1;
         self.rows += batch.num_rows() as u64;
+        self.drop_behind(false)
+    }
+
+    /// Keeps written spill pages from piling up in the page cache. Dirty
+    /// pages count against a memory cgroup's limit and cannot be reclaimed
+    /// until they are written back, so a spilling query could otherwise
+    /// drive its cgroup into the OOM killer with memory it no longer needs.
+    ///
+    /// Each time a window of bytes (`krishiv.spill.dropBehindBytes`) has
+    /// been written, writeback of the new window starts without waiting,
+    /// and the window started [`LAG`] windows earlier, whose writeback has
+    /// had a window's time to finish, is waited for and dropped from the
+    /// cache: at most about `LAG + 1` windows per writer stay cached. At
+    /// `finish` the rest is written back and dropped. Only complete frames
+    /// are covered (their headers are patched in place before), so no byte
+    /// is written after its range was dropped. The calls are advisory: a
+    /// failure is logged and the write goes on.
+    fn drop_behind(&mut self, finish: bool) -> Result<(), SpillError> {
+        let end = self.charged;
+        if self.window == 0 || (!finish && end.saturating_sub(self.started) < self.window) {
+            return Ok(());
+        }
+        let Some(out) = self.file.as_mut() else {
+            return Ok(());
+        };
+        out.flush()
+            .map_err(|e| SpillError::io("write to", &self.tmp, e))?;
+        let file = out.get_ref();
+        if end > self.started {
+            advisory(
+                &self.tmp,
+                cache::start_writeback(file, self.started, end - self.started),
+            );
+            self.behind.push_back((self.started, end));
+            self.started = end;
+        }
+        let keep = if finish { 0 } else { LAG };
+        while self.behind.len() > keep {
+            let Some((from, to)) = self.behind.pop_front() else {
+                break;
+            };
+            advisory(&self.tmp, cache::drop_range(file, from, to - from, true));
+        }
         Ok(())
     }
 
@@ -278,6 +336,7 @@ impl SpillWriter {
             sink.write_all(&batches.to_le_bytes())?;
             Ok(sink.write_all(&rows.to_le_bytes())?)
         })?;
+        self.drop_behind(true)?;
         // Flush and close before renaming so no descriptor outlives the writer.
         if let Some(file) = self.file.take() {
             let file = file
@@ -358,6 +417,26 @@ impl Drop for SpillWriter {
     fn drop(&mut self) {
         if !self.committed {
             self.abort();
+        }
+    }
+}
+
+/// How many windows behind the newest the drop-behind waits for and drops
+/// (see [`SpillWriter::drop_behind`]).
+const LAG: usize = 1;
+
+/// Logs a failed page-cache call once per process; the spill goes on.
+fn advisory(tmp: &Path, result: std::io::Result<()>) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if let Err(e) = result {
+        if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            tracing::warn!(
+                path = %tmp.display(),
+                error = %e,
+                "spill drop-behind failed; spill pages stay in the page cache"
+            );
+        } else {
+            tracing::debug!(path = %tmp.display(), error = %e, "spill drop-behind failed");
         }
     }
 }

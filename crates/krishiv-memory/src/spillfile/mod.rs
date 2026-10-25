@@ -58,13 +58,24 @@
 //!
 //! # Config keys
 //! `krishiv.spill.dir`, `krishiv.spill.maxBytes`, `krishiv.spill.compression`
-//! (`lz4` | `zstd` | `none`) and `krishiv.spill.zstd.level`, read by
-//! [`SpillConfig::from_config`].
+//! (`lz4` | `zstd` | `none`), `krishiv.spill.zstd.level` and
+//! `krishiv.spill.dropBehindBytes`, read by [`SpillConfig::from_config`].
+//!
+//! # Page cache
+//! A writer writes its file back and drops it from the page cache as it
+//! goes (every `krishiv.spill.dropBehindBytes`, and at `finish`; Linux).
+//! Dirty spill pages count against a memory cgroup and cannot be reclaimed
+//! until they are written back: left to the kernel's writeback, a spilling
+//! query can hold hundreds of MiB of them and push its cgroup to its limit,
+//! where the OOM killer ends the process. The cost is that spill data is
+//! written to disk even when its file is deleted before the kernel would
+//! have written it.
 
 use arrow_ipc::CompressionType;
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::ArrowError;
 
+mod cache;
 mod compact;
 mod dir;
 mod error;

@@ -35,7 +35,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, SchemaRef};
 use krishiv_common::config::{
-    Config, ConfigValue, SPILL_COMPRESSION, SPILL_DIR, SPILL_MAX_BYTES, SPILL_ZSTD_LEVEL,
+    Config, ConfigValue, SPILL_COMPRESSION, SPILL_DIR, SPILL_DROP_BEHIND_BYTES, SPILL_MAX_BYTES,
+    SPILL_ZSTD_LEVEL,
 };
 
 use super::writer::SpillWriter;
@@ -57,6 +58,9 @@ pub struct SpillConfig {
     pub codec: SpillCodec,
     /// `krishiv.spill.zstd.level`: used when `codec` is [`SpillCodec::Zstd`].
     pub zstd_level: i64,
+    /// `krishiv.spill.dropBehindBytes`: the drop-behind window of writers
+    /// (see [`SpillWriter`](super::SpillWriter)); 0 disables it.
+    pub drop_behind: u64,
 }
 
 impl Default for SpillConfig {
@@ -85,11 +89,16 @@ impl SpillConfig {
             .get(&SPILL_ZSTD_LEVEL)
             .and_then(ConfigValue::as_int)
             .unwrap_or(1);
+        let drop_behind = config
+            .get(&SPILL_DROP_BEHIND_BYTES)
+            .and_then(ConfigValue::as_size)
+            .unwrap_or(8 << 20);
         Self {
             dir,
             max_bytes,
             codec,
             zstd_level,
+            drop_behind,
         }
     }
 }
@@ -102,6 +111,7 @@ pub(crate) struct ManagerInner {
     used: AtomicU64,
     codec: SpillCodec,
     zstd_level: i64,
+    pub(crate) drop_behind: u64,
     next_scope: AtomicU64,
     stale_removed: usize,
     /// Holds the advisory lock; released by the kernel when dropped or when
@@ -225,6 +235,7 @@ impl SpillManager {
                     used: AtomicU64::new(0),
                     codec: config.codec,
                     zstd_level: config.zstd_level,
+                    drop_behind: config.drop_behind,
                     next_scope: AtomicU64::new(0),
                     stale_removed,
                     _lock: lock,
