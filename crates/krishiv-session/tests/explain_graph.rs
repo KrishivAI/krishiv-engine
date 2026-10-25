@@ -172,10 +172,13 @@ fn check_tree(nodes: &[usize], edges: &[(usize, usize)]) {
     }
 }
 
-/// Timings, byte counts and hash-seed-dependent table statistics vary from
-/// run to run; rows, batches and structure do not.
+/// Timings, byte counts, hash-seed-dependent table statistics and the rows a
+/// runtime filter sees before it arrives vary from run to run; rows, batches
+/// and structure do not.
 fn normalize_profile(text: &str) -> String {
-    const VOLATILE: [&str; 5] = [
+    const VOLATILE: [&str; 7] = [
+        "runtime_filter_rows_tested",
+        "runtime_filter_rows_dropped",
         "hash_buckets",
         "grace_hash_buckets",
         "probe_lookups",
@@ -219,6 +222,33 @@ fn normalize_profile(text: &str) -> String {
         }
         i = end.max(eq + 1);
     }
+    mask_filter_counts(&out)
+}
+
+/// `tested 2000, dropped 400` in a runtime filter's summary: both counts
+/// depend on how many rows were scanned before the filter arrived.
+fn mask_filter_counts(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(", tested ") {
+        let (head, tail) = rest.split_at(at);
+        out.push_str(head);
+        let after = &tail[", tested ".len()..];
+        let digits = after.bytes().take_while(u8::is_ascii_digit).count();
+        let tail_after = &after[digits..];
+        match tail_after.strip_prefix(", dropped ") {
+            Some(dropped) if digits > 0 => {
+                let n = dropped.bytes().take_while(u8::is_ascii_digit).count();
+                out.push_str(", tested <n>, dropped <n>");
+                rest = &dropped[n..];
+            }
+            _ => {
+                out.push_str(", tested ");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
     out
 }
 
@@ -251,6 +281,16 @@ fn normalize_masks_only_volatile_metrics() {
     assert!(normalized.contains("hash_buckets=<n>"), "{normalized}");
     assert!(normalized.contains("probe_lookups=<n>"), "{normalized}");
     assert!(normalized.contains("groups=4"), "{normalized}");
+    assert_eq!(
+        normalize_profile(
+            "runtime_filter_rows_tested=2000 f=#1 [c]: range, tested 2000, dropped 400\""
+        ),
+        "runtime_filter_rows_tested=<n> f=#1 [c]: range, tested <n>, dropped <n>\""
+    );
+    assert_eq!(
+        mask_filter_counts("x, tested y, tested 5 z, tested 7, dropped"),
+        "x, tested y, tested 5 z, tested 7, dropped"
+    );
     assert!(normalized.contains("out_rows=600"), "{normalized}");
     assert!(normalized.contains("drivers=1"), "{normalized}");
 }
