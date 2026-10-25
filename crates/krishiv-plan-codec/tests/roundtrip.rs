@@ -293,7 +293,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             "window_ranking" | "window_aggregates" => 4,
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
-            "window_group_limit" => 6,
+            "window_group_limit" | "one_row_legacy_statistical_aggregate" => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };

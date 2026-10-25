@@ -89,6 +89,13 @@ pub use sink::{AggregateMetrics, HashAggregate};
 
 use crate::error::{Result, internal};
 
+/// Whether `f` is a moment aggregate (`stddev`, `variance`, `skewness`,
+/// `kurtosis`, `covar_*`, `corr`): it reads its arguments as doubles, and
+/// the window planner refuses it.
+pub(crate) fn is_moment(f: AggregateFunction) -> bool {
+    moments::buffer(f).is_some()
+}
+
 /// An aggregate function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AggregateFunction {

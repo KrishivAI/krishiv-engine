@@ -340,12 +340,12 @@ impl Moments {
         Ok(row)
     }
 
-    fn store(&mut self, g: u32, row: &Row) {
+    fn store(&mut self, g: u32, row: &Row) -> Result<()> {
         for (col, v) in self.cols.iter_mut().zip(row) {
-            if let Some(slot) = col.get_mut(g as usize) {
-                *slot = *v;
-            }
+            *col.get_mut(g as usize)
+                .ok_or_else(|| internal(format!("aggregate group {g} out of range")))? = *v;
         }
+        Ok(())
     }
 
     /// Folds rows into `groups` (one group id per row). `args` are the
@@ -372,7 +372,7 @@ impl Moments {
             if valid(i) {
                 let mut s = self.load(g)?;
                 update(self.family, &mut s, x[i], y.map_or(0.0, |y| y[i]));
-                self.store(g, &s);
+                self.store(g, &s)?;
             }
         }
         Ok(())
@@ -393,7 +393,7 @@ impl Moments {
             }
             let mut s = self.load(g)?;
             merge(self.family, &mut s, &incoming);
-            self.store(g, &s);
+            self.store(g, &s)?;
         }
         Ok(())
     }

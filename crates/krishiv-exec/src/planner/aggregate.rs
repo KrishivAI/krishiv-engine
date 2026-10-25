@@ -67,37 +67,11 @@ impl Planner<'_> {
         let mut aggregates = Vec::with_capacity(calls.len());
         let mut distinct = Vec::with_capacity(calls.len());
         for (c, at) in calls.iter().zip(&arg_at) {
-            let function = match c.f.id.name() {
-                "count" => AggregateFunction::Count,
-                "sum" => AggregateFunction::Sum,
-                "avg" => AggregateFunction::Avg,
-                "min" => AggregateFunction::Min,
-                "max" => AggregateFunction::Max,
-                "stddev" | "std" | "stddev_samp" => AggregateFunction::StddevSamp,
-                "stddev_pop" => AggregateFunction::StddevPop,
-                "variance" | "var_samp" => AggregateFunction::VarSamp,
-                "var_pop" => AggregateFunction::VarPop,
-                "skewness" => AggregateFunction::Skewness,
-                "kurtosis" => AggregateFunction::Kurtosis,
-                "corr" => AggregateFunction::Corr,
-                "covar_samp" => AggregateFunction::CovarSamp,
-                "covar_pop" => AggregateFunction::CovarPop,
-                // `first(x, ignoreNulls)`: the analyzer checked the flag is a
-                // boolean literal.
-                name if picks(name).is_some() => {
-                    let ignore_nulls = matches!(
-                        c.f.args.get(1).map(|a| &a.node),
-                        Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
-                    );
-                    if picks(name) == Some(true) {
-                        AggregateFunction::Last { ignore_nulls }
-                    } else {
-                        AggregateFunction::First { ignore_nulls }
-                    }
-                }
-                other => {
-                    return Err(unsupported(&format!("the aggregate function {other}")));
-                }
+            let Some(function) = aggregate_function(c.f.id.name(), ignore_nulls_arg(&c.f)) else {
+                return Err(unsupported(&format!(
+                    "the aggregate function {}",
+                    c.f.id.name()
+                )));
             };
             if c.f.filter.is_some() {
                 return Err(unsupported("aggregate FILTER (WHERE ...) clauses"));
@@ -271,6 +245,48 @@ fn replace(
             None => x,
         })
     })
+}
+
+/// The executor's function for aggregate name `name` (`first`/`last`
+/// read `ignore_nulls`), or `None` for a name neither planner handles.
+/// The grouping and window planners share this table so a name never
+/// plans in one and is refused in the other.
+pub(super) fn aggregate_function(name: &str, ignore_nulls: bool) -> Option<AggregateFunction> {
+    Some(match name {
+        "count" => AggregateFunction::Count,
+        "sum" => AggregateFunction::Sum,
+        "avg" | "mean" => AggregateFunction::Avg,
+        "min" => AggregateFunction::Min,
+        "max" => AggregateFunction::Max,
+        "stddev" | "std" | "stddev_samp" => AggregateFunction::StddevSamp,
+        "stddev_pop" => AggregateFunction::StddevPop,
+        "variance" | "var_samp" => AggregateFunction::VarSamp,
+        "var_pop" => AggregateFunction::VarPop,
+        "skewness" => AggregateFunction::Skewness,
+        "kurtosis" => AggregateFunction::Kurtosis,
+        "corr" => AggregateFunction::Corr,
+        "covar_samp" => AggregateFunction::CovarSamp,
+        "covar_pop" => AggregateFunction::CovarPop,
+        // `first(x, ignoreNulls)`: the analyzer checked the flag is a
+        // boolean literal.
+        name if picks(name).is_some() => {
+            if picks(name) == Some(true) {
+                AggregateFunction::Last { ignore_nulls }
+            } else {
+                AggregateFunction::First { ignore_nulls }
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// Whether `first`/`last` call `f` ignores NULLs: the analyzer checked its
+/// second argument is a boolean literal when present.
+pub(super) fn ignore_nulls_arg(f: &ResolvedFunction) -> bool {
+    matches!(
+        f.args.get(1).map(|a| &a.node),
+        Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
+    )
 }
 
 /// `Some(true)` for `last`/`last_value`, `Some(false)` for `first`/

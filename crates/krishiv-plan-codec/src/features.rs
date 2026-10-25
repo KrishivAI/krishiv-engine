@@ -116,6 +116,7 @@ macro_rules! registry {
 registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
+    (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -271,10 +272,15 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
 }
 
 /// The features `plan` uses: a pure function of its content. Subquery plans
-/// count; nothing recurses.
+/// count; nothing recurses. The expression environment counts too: a plan
+/// whose session sets `spark.sql.legacy.statisticalAggregate` needs a reader
+/// that carries the flag, or it would compute NULL where Spark gives NaN.
 #[must_use]
 pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     let mut out = BTreeSet::new();
+    if plan.env().legacy_statistical_aggregate {
+        out.insert(Feature::LegacyStatisticalAggregate);
+    }
     let mut stack = vec![plan.root()];
     while let Some(node) = stack.pop() {
         constructs_of(node, &mut |c| out.extend(feature_of(c)));

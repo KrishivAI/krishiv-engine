@@ -74,6 +74,10 @@ message ExprEnv {
   optional sint32 zone = 2;
   sint64 query_start_micros = 3;
   string user = 4;
+  // feature: legacy_statistical_aggregate
+  // `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+  // give NaN instead of NULL where Spark divides by zero.
+  bool legacy_statistical_aggregate = 5;
 }
 
 message ExplainNode {

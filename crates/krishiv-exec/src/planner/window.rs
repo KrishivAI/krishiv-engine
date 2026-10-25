@@ -11,10 +11,10 @@ use krishiv_plan::{
     SortDirection, SortOrder, WindowSpecRef,
 };
 
-use super::aggregate::{non_null_literal, picks};
+use super::aggregate::{aggregate_function, ignore_nulls_arg, non_null_literal, picks};
 use super::build::{Planned, Planner, internal, list, orders, unsupported};
 use super::properties::Distribution;
-use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction};
+use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction, arity, is_moment};
 use crate::error::Result;
 use crate::operator::Source;
 use crate::operators::SortKey;
@@ -259,31 +259,21 @@ impl Planner<'_> {
                 other => return Err(unsupported(&format!("the window function {other}"))),
             });
         }
-        let function = match name {
-            "count" => AggregateFunction::Count,
-            "sum" => AggregateFunction::Sum,
-            "avg" | "mean" => AggregateFunction::Avg,
-            "min" => AggregateFunction::Min,
-            "max" => AggregateFunction::Max,
-            name if picks(name).is_some() => {
-                let ignore_nulls = matches!(
-                    c.f.args.get(1).map(|a| &a.node),
-                    Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
-                );
-                if picks(name) == Some(true) {
-                    AggregateFunction::Last { ignore_nulls }
-                } else {
-                    AggregateFunction::First { ignore_nulls }
-                }
+        let function = match aggregate_function(name, ignore_nulls_arg(c.f)) {
+            // The moment aggregates have no window form yet: refused, never
+            // computed as another function.
+            Some(function) if is_moment(function) => {
+                return Err(unsupported(&format!("the window aggregate {name}")));
             }
-            other => return Err(unsupported(&format!("the window aggregate {other}"))),
+            Some(function) => function,
+            None => return Err(unsupported(&format!("the window aggregate {name}"))),
         };
         // The analyzer rejects `count(DISTINCT x) OVER (...)` as Spark does;
         // a plan that still holds one must not be computed as `count(x)`.
         if c.f.distinct {
             return Err(unsupported("DISTINCT window aggregates"));
         }
-        if function != AggregateFunction::Count && args.len() != 1 {
+        if function != AggregateFunction::Count && args.len() != arity(function) {
             return Err(internal("a window aggregate of several arguments"));
         }
         // Spark's STRING and BINARY are views here whatever carrier the

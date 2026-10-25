@@ -26,8 +26,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float64Type, Int32Type, Int64Type};
-use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch};
+use arrow_array::types::{Float32Type, Float64Type, Int32Type, Int64Type};
+use arrow_array::{Array, ArrayRef, Float32Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
@@ -78,6 +78,7 @@ fn spark_type(t: &DataType) -> &'static str {
     match t {
         DataType::Int32 => "int",
         DataType::Int64 => "bigint",
+        DataType::Float32 => "float",
         DataType::Float64 => "double",
         _ => "other",
     }
@@ -90,6 +91,7 @@ fn cell(c: &dyn Array, row: usize) -> String {
     match c.data_type() {
         DataType::Int32 => c.as_primitive::<Int32Type>().value(row).to_string(),
         DataType::Int64 => c.as_primitive::<Int64Type>().value(row).to_string(),
+        DataType::Float32 => format!("{:?}", c.as_primitive::<Float32Type>().value(row)),
         DataType::Float64 => format!("{:?}", c.as_primitive::<Float64Type>().value(row)),
         other => format!("<{other}>"),
     }
@@ -135,6 +137,33 @@ fn table(s: &Session, name: &str, columns: &[&str], rows: &[&[Option<i32>]]) -> 
     let schema = Arc::new(Schema::new(fields));
     let batch = RecordBatch::try_new(Arc::clone(&schema), arrays)?;
     s.register_batches(name, schema, vec![batch])?;
+    Ok(())
+}
+
+/// The PostgreSQL `aggtest` table of the goldens (`a int`, `b float`).
+fn aggtest(s: &Session) -> R {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("a", DataType::Int32, true),
+        Field::new("b", DataType::Float32, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![
+                Some(56),
+                Some(100),
+                Some(0),
+                Some(42),
+            ])) as ArrayRef,
+            Arc::new(Float32Array::from(vec![
+                Some(7.8_f32),
+                Some(99.097_f32),
+                Some(0.09561_f32),
+                Some(324.78_f32),
+            ])) as ArrayRef,
+        ],
+    )?;
+    s.register_batches("aggtest", schema, vec![batch])?;
     Ok(())
 }
 
@@ -185,6 +214,7 @@ fn session() -> R<Session> {
             &[Some(2), Some(2)],
         ],
     )?;
+    aggtest(&s)?;
     Ok(s)
 }
 
@@ -282,6 +312,82 @@ fn linear_regression_golden_corr_columns() -> R {
     Ok(())
 }
 
+/// The `aggtest` moments of `postgreSQL/aggregates_part1.sql.out`: the
+/// plain, decimal-cast and pair statements, replayed exactly. The
+/// decimal casts exercise the analyzer-cast-to-double path end to end.
+#[test]
+fn postgresql_aggregates_part1_moments() -> R {
+    for query in [
+        "SELECT stddev_pop(b) FROM aggtest",
+        "SELECT stddev_samp(b) FROM aggtest",
+        "SELECT var_pop(b) FROM aggtest",
+        "SELECT var_samp(b) FROM aggtest",
+        "SELECT stddev_pop(CAST(b AS Decimal(38,0))) FROM aggtest",
+        "SELECT stddev_samp(CAST(b AS Decimal(38,0))) FROM aggtest",
+        "SELECT var_pop(CAST(b AS Decimal(38,0))) FROM aggtest",
+        "SELECT var_samp(CAST(b AS Decimal(38,0))) FROM aggtest",
+        "SELECT covar_pop(b, a), covar_samp(b, a) FROM aggtest",
+        "SELECT corr(b, a) FROM aggtest",
+    ] {
+        replay("postgreSQL/aggregates_part1.sql.out", query)?;
+    }
+    Ok(())
+}
+
+/// The single-row statements of `postgreSQL/aggregates_part1.sql.out`: a
+/// population statistic over one row is its value, a sample statistic is
+/// NULL.
+#[test]
+fn postgresql_aggregates_part1_single_row_moments() -> R {
+    for query in [
+        "SELECT var_pop(1.0), var_samp(2.0)",
+        "SELECT stddev_pop(CAST(3.0 AS Decimal(38,0))), stddev_samp(CAST(4.0 AS Decimal(38,0)))",
+    ] {
+        replay("postgreSQL/aggregates_part1.sql.out", query)?;
+    }
+    Ok(())
+}
+
+/// The string-literal moments of `promoteStrings.sql.out`: `'1'` promotes
+/// to double, so one row gives the population value and NULL for the
+/// sample statistics, skewness and kurtosis.
+#[test]
+fn promote_strings_moment_literals() -> R {
+    let s = Session::new()?;
+    table(&s, "t", &["v"], &[&[Some(1)]])?;
+    let cases = load("typeCoercion/native/promoteStrings.sql.out")?;
+    for query in [
+        "SELECT stddev_pop('1') FROM t",
+        "SELECT stddev_samp('1') FROM t",
+        "SELECT var_pop('1') FROM t",
+        "SELECT var_samp('1') FROM t",
+        "SELECT skewness('1') FROM t",
+        "SELECT kurtosis('1') FROM t",
+    ] {
+        let case = find(&cases, query)?;
+        let (schema, batches) = run(&s, &case.query)?;
+        let (schema, rows) = render(&schema, &batches);
+        assert_eq!(schema, case.schema, "{query}");
+        assert_rows(
+            rows,
+            case.output.lines().map(str::to_owned).collect(),
+            query,
+        );
+    }
+    Ok(())
+}
+
+/// `mean` is Spark's alias of `avg`: the grouping and window planners
+/// share one name table, so it plans in both.
+#[test]
+fn mean_plans_as_avg_in_group_by() -> R {
+    let (schema, batches) = run(&session()?, "SELECT mean(a), avg(a) FROM testData")?;
+    let (schema, rows) = render(&schema, &batches);
+    assert_eq!(schema, "struct<mean(a):double,avg(a):double>");
+    assert_eq!(rows, ["2.142857142857143\t2.142857142857143"]);
+    Ok(())
+}
+
 #[test]
 fn moments_over_the_golden_tables_follow_the_flags() -> R {
     let s = session()?;
@@ -335,9 +441,11 @@ fn moment_window_aggregates_are_refused() -> R {
     Ok(())
 }
 
-/// Statements of the three goldens that use these functions and are not
-/// claimed, each with the reason.
-const UNCLAIMED: [(&str, &str, &str); 4] = [
+/// Statements of the goldens that use these functions and are not
+/// claimed, each with the reason. The `udf`/`udaf` suites need SQL UDFs and
+/// user-defined aggregates, which are not implemented; the window suites
+/// need the window form of the moment aggregates, which is refused.
+const UNCLAIMED: [(&str, &str, &str); 10] = [
     (
         "group-by.sql.out",
         "SELECT corr(DISTINCT x, y), corr(DISTINCT y, x), count(*)",
@@ -358,6 +466,36 @@ const UNCLAIMED: [(&str, &str, &str); 4] = [
         "SELECT k, corr(y, x) FILTER (WHERE x IS NOT NULL), regr_r2(y, x) FROM testRegression GROUP BY k",
         "regr_r2 (out of scope) and aggregate FILTER clauses",
     ),
+    (
+        "postgreSQL/aggregates_part1.sql.out",
+        "SELECT avg(CAST(x AS DOUBLE)), var_pop(CAST(x AS DOUBLE))",
+        "inline VALUES, which the session runner does not support; infinite inputs are covered by the accumulator unit tests",
+    ),
+    (
+        "postgreSQL/window_part4.sql.out",
+        "OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+        "window form of the moment aggregates, which is refused",
+    ),
+    (
+        "udaf/udaf-group-by.sql.out",
+        "udaf(",
+        "user-defined aggregate functions are not implemented; its moment columns repeat the group-by golden checked above",
+    ),
+    (
+        "udf/postgreSQL/udf-aggregates_part1.sql.out",
+        "udf(",
+        "SQL UDFs are not implemented; the same statements without udf are checked above",
+    ),
+    (
+        "udf/udf-group-by.sql.out",
+        "udf(",
+        "SQL UDFs are not implemented; the DISTINCT pair without udf is checked above",
+    ),
+    (
+        "udf/udf-window.sql.out",
+        "udf(",
+        "window form of the moment aggregates over SQL UDFs, neither of which is implemented",
+    ),
 ];
 
 #[test]
@@ -376,11 +514,92 @@ fn every_statement_using_a_moment_function_is_claimed_or_listed() -> R {
         "skewness(",
         "kurtosis(",
     ];
-    let claimed = [("group-by.sql.out", "SELECT SKEWNESS(a)")];
+    let claimed = [
+        ("group-by.sql.out", "SELECT SKEWNESS(a)"),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT stddev_pop(b) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT stddev_samp(b) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT var_pop(b) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT var_samp(b) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT stddev_pop(CAST(b AS Decimal(38,0))) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT stddev_samp(CAST(b AS Decimal(38,0))) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT var_pop(CAST(b AS Decimal(38,0))) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT var_samp(CAST(b AS Decimal(38,0))) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT var_pop(1.0), var_samp(2.0)",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT stddev_pop(CAST(3.0 AS Decimal(38,0)))",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT covar_pop(b, a), covar_samp(b, a) FROM aggtest",
+        ),
+        (
+            "postgreSQL/aggregates_part1.sql.out",
+            "SELECT corr(b, a) FROM aggtest",
+        ),
+        (
+            "typeCoercion/native/promoteStrings.sql.out",
+            "SELECT stddev_pop('1') FROM t",
+        ),
+        (
+            "typeCoercion/native/promoteStrings.sql.out",
+            "SELECT stddev_samp('1') FROM t",
+        ),
+        (
+            "typeCoercion/native/promoteStrings.sql.out",
+            "SELECT var_pop('1') FROM t",
+        ),
+        (
+            "typeCoercion/native/promoteStrings.sql.out",
+            "SELECT var_samp('1') FROM t",
+        ),
+        (
+            "typeCoercion/native/promoteStrings.sql.out",
+            "SELECT skewness('1') FROM t",
+        ),
+        (
+            "typeCoercion/native/promoteStrings.sql.out",
+            "SELECT kurtosis('1') FROM t",
+        ),
+    ];
     for file in [
         "group-by.sql.out",
         "window.sql.out",
         "linear-regression.sql.out",
+        "postgreSQL/aggregates_part1.sql.out",
+        "postgreSQL/window_part4.sql.out",
+        "udaf/udaf-group-by.sql.out",
+        "typeCoercion/native/promoteStrings.sql.out",
+        "udf/postgreSQL/udf-aggregates_part1.sql.out",
+        "udf/udf-group-by.sql.out",
+        "udf/udf-window.sql.out",
     ] {
         for case in load(file)? {
             let lower = case.query.to_ascii_lowercase();

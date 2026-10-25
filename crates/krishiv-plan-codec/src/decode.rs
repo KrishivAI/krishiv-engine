@@ -288,9 +288,11 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         .ok_or_else(|| corrupt("no expression environment"))?;
     let env = ExprEnv {
         ansi: env.ansi,
-        // Not in the format: only the moment aggregates read it, and the
-        // encoder refuses those.
-        legacy_statistical_aggregate: false,
+        // The wire carries the flag since the `legacy_statistical_aggregate`
+        // feature: its absence in older bytes decodes as false, which is
+        // what every plan such an encoder could write carried (a plan that
+        // sets it needs a reader with the feature).
+        legacy_statistical_aggregate: env.legacy_statistical_aggregate,
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),

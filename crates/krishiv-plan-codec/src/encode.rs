@@ -115,6 +115,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: env.user.to_string(),
+        legacy_statistical_aggregate: env.legacy_statistical_aggregate,
     }
 }
 

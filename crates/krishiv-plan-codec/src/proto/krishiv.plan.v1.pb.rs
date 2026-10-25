@@ -67,6 +67,11 @@ pub struct ExprEnv {
     pub query_start_micros: i64,
     #[prost(string, tag = "4")]
     pub user: ::prost::alloc::string::String,
+    /// feature: legacy_statistical_aggregate
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+    /// give NaN instead of NULL where Spark divides by zero.
+    #[prost(bool, tag = "5")]
+    pub legacy_statistical_aggregate: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {
