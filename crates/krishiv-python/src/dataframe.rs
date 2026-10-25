@@ -274,6 +274,30 @@ impl PyDataFrame {
         block_on(py, async move { df.count().await })
     }
 
+    /// Writes the rows to `path` in `format` with `mode` (PySpark's
+    /// `DataFrameWriter.save` collected as one call). The mapping from the
+    /// facade's collected writer state to [`DataFrameWriter`] lives here,
+    /// in `krishiv-session`, not in the facade.
+    #[pyo3(signature = (format, mode, path, options=None, partition_by=None))]
+    fn write(
+        &self,
+        py: Python<'_>,
+        format: &str,
+        mode: &str,
+        path: &str,
+        options: Option<Vec<(String, String)>>,
+        partition_by: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let df = self.inner.clone();
+        let (format, mode, path) = (format.to_owned(), mode.to_owned(), path.to_owned());
+        let options = options.unwrap_or_default();
+        let partition_by = partition_by.unwrap_or_default();
+        block_on(py, async move {
+            df.write_to(&format, &mode, &path, options, partition_by)
+                .await
+        })
+    }
+
     /// The text (or, with `json`, the JSON document) of explain `mode`:
     /// Spark's `simple`, `extended`, `codegen`, `cost`, `formatted`, or
     /// Krishiv's `analyze` (runs the query) and `verbose`. JSON exists for
