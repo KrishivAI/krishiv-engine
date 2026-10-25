@@ -99,6 +99,7 @@ PYSPARK_SIGNATURES = {
     "lower": "col",
     "lpad": "col, len, pad",
     "ltrim": "col, trim=None",
+    "mask": "col, upperChar=None, lowerChar=None, digitChar=None, otherChar=None",
     "max": "col",
     "md5": "col",
     "mean": "col",
