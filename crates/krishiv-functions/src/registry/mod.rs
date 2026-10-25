@@ -18,6 +18,7 @@ mod catalog;
 mod conditional;
 mod defs;
 mod hashing;
+mod json;
 mod math;
 mod number;
 mod predicate;
@@ -29,6 +30,7 @@ use std::sync::{Arc, LazyLock};
 
 pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
+pub(crate) use json::parse_json_schema;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};
 

@@ -29,6 +29,9 @@ krishiv-common = { path = "../krishiv-common" }
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-types = { path = "../krishiv-types" }
 
+[dev-dependencies]
+arrow-buffer.workspace = true
+
 [package.metadata.cargo-machete]
 ignored = ["regex-automata", "regex-syntax"]
 

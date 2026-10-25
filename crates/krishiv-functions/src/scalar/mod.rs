@@ -30,6 +30,7 @@ mod chars;
 mod codec;
 mod datetime;
 mod hash;
+mod json;
 mod math;
 mod number;
 mod predicate;
@@ -285,13 +286,14 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 12] = [
+const FAMILIES: [(&[&str], Binder); 13] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
     (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
+    (json::NAMES, json::bind),
     (session::NAMES, session::bind),
     (bitwise::NAMES, bitwise::bind),
     (predicate::NAMES, predicate::bind),
@@ -313,14 +315,26 @@ pub fn scalar_names() -> Vec<&'static str> {
 }
 
 /// Whether the result of the scalar function `name` depends only on its
-/// arguments and `spark.sql.ansi.enabled`: the string (with its character and
-/// encoding families), math and arithmetic families. The datetime, session and
-/// hash families read the session time zone, the user or the query start, so a
-/// caller that evaluates a call before execution (constant folding) must not
-/// evaluate those.
+/// arguments and `spark.sql.ansi.enabled`: the string (with its character and encoding families), math and arithmetic
+/// families, and the zone-free JSON functions (`schema_of_json`,
+/// `json_array_length`, `json_object_keys`, `get_json_object`; `from_json`
+/// and `to_json` read the session time zone for timestamps). The datetime,
+/// session and hash families read the session time zone, the user or the
+/// query start, so a caller that evaluates a call before execution
+/// (constant folding) must not evaluate those.
 #[must_use]
 pub fn is_argument_pure(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
+    if [
+        "schema_of_json",
+        "json_array_length",
+        "json_object_keys",
+        "get_json_object",
+    ]
+    .contains(&lower.as_str())
+    {
+        return true;
+    }
     [
         string::NAMES,
         chars::NAMES,

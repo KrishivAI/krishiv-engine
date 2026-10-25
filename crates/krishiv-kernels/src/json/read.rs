@@ -1,0 +1,1125 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The streaming `from_json` reader: one JSON text per row straight into
+//! Arrow builders, following the target Arrow type.
+//!
+//! A conversion failure poisons only the value that holds it: a struct
+//! field catches it and is `NULL`, while an array element or map value
+//! nulls the whole array or map (as Spark's `JacksonParser` does; the
+//! goldens pin `[{"a": 1}, 2]` to `NULL` but `{"d": "02-29"}` to a null
+//! field). A value of the wrong shape for a struct (anything but an
+//! object, including JSON `null`) is a struct of `NULL`s; for an array
+//! only an object wraps to a single element and anything else is `NULL`;
+//! for a map anything but an object is `NULL`. Empty input and JSON `null`
+//! are `NULL`; anything after the first JSON value is ignored.
+//!
+//! Scalar conversions are strict except the documented ones: strings parse
+//! to dates, timestamps and timestamp-ntz values (in the session zone, as
+//! the CSV and JSON readers do) and to binary through base64; a string is
+//! never read as a number or boolean, and a number is never read as a
+//! string. Duplicate object keys: the last value wins for structs; map
+//! entries keep document order.
+
+use std::sync::Arc;
+
+use arrow_array::builder::ArrayBuilder;
+use arrow_array::builder::{
+    BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder, Float32Builder,
+    Float64Builder, Int8Builder, Int16Builder, Int32Builder, Int64Builder, StringViewBuilder,
+    TimestampMicrosecondBuilder,
+};
+use arrow_array::{Array, ArrayRef, NullArray, StringArray};
+use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_schema::{DataType as ArrowType, FieldRef, Fields};
+use krishiv_common::error::{InternalError, KrishivError};
+
+use super::JsonOptions;
+use super::base64;
+use super::parse::{Error as ParseError, Lexer, RawKey, RawStr, Token};
+use crate::cast::TimeZoneRules;
+use crate::text::{
+    java_parse_double, spark_string_to_date, spark_string_to_timestamp,
+    spark_string_to_timestamp_ntz, today_in,
+};
+
+/// Reads `json` into `target`, one row per string.
+pub fn read_json(
+    json: &StringArray,
+    target: &ArrowType,
+    opts: &JsonOptions,
+    zone: &dyn TimeZoneRules,
+    query_start_micros: i64,
+) -> Result<ArrayRef, KrishivError> {
+    let mut out = Builder::for_type(target)?;
+    let today = today_in(query_start_micros, zone);
+    let ctx = Ctx { opts, zone, today };
+    for i in 0..json.len() {
+        if json.is_null(i) {
+            out.append_null();
+            continue;
+        }
+        let mut lexer = Lexer::new(json.value(i), opts.lexer());
+        match read_top(&mut lexer, &mut out, &ctx) {
+            Ok(()) => {}
+            Err(Fault::Poison) => out.append_null(),
+            Err(Fault::Internal(e)) => return Err(e),
+        }
+    }
+    out.finish(target)
+}
+
+/// What reading one value can report.
+enum Fault {
+    /// A conversion failure: the enclosing array, map or row is `NULL` (a
+    /// struct field catches it and is `NULL` instead).
+    Poison,
+    /// An unreachable state (a kernel called with a type it does not
+    /// read).
+    Internal(KrishivError),
+}
+
+impl From<ParseError> for Fault {
+    fn from(_: ParseError) -> Self {
+        Self::Poison
+    }
+}
+
+impl From<Poison> for Fault {
+    fn from(_: Poison) -> Self {
+        Self::Poison
+    }
+}
+
+/// A conversion failure (maps to [`Fault::Poison`]).
+struct Poison;
+
+/// Unreachable states (a kernel called with a type it does not read).
+fn internal(message: String) -> Fault {
+    Fault::Internal(InternalError { message }.into())
+}
+
+/// The parsing context: options, session zone and today.
+struct Ctx<'a> {
+    opts: &'a JsonOptions,
+    zone: &'a dyn TimeZoneRules,
+    today: i32,
+}
+
+/// One row's value at the top level: empty input and JSON `null` are
+/// `NULL`, anything else is read against `target`. A struct target maps
+/// even unparseable text (but not empty input) to a struct of `NULL`s, as
+/// Spark does (`'abc'` reads as `{null, null}`).
+fn read_top(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    lexer.skip_trivia()?;
+    match lexer.peek() {
+        Ok(None) => {
+            out.append_null();
+            Ok(())
+        }
+        Err(_) if matches!(out, Builder::Struct { .. }) => {
+            if let Builder::Struct {
+                children, valid, ..
+            } = out
+            {
+                for child in children.iter_mut() {
+                    child.append_null();
+                }
+                valid.push(true);
+            }
+            Ok(())
+        }
+        Err(_) => Err(Poison.into()),
+        Ok(Some(Token::Null)) => {
+            lexer.next()?;
+            out.append_null();
+            Ok(())
+        }
+        Ok(Some(_)) => read_value(lexer, out, ctx),
+    }
+}
+
+/// One JSON value into `out` (the cursor is before its first token).
+fn read_value(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    match out {
+        Builder::Null { .. } => {
+            lexer.skip_value()?;
+            out.append_null();
+            Ok(())
+        }
+        Builder::Struct { .. } => read_struct(lexer, out, ctx),
+        Builder::List { .. } | Builder::Map { .. } => read_nested(lexer, out, ctx),
+        Builder::Scalar(scalar) => read_scalar_token(lexer, scalar, ctx),
+    }
+}
+
+/// A struct: an object fills its fields by name (missing is `NULL`, a
+/// failing value is `NULL`, the last duplicate wins); anything else,
+/// including JSON `null`, is a struct of `NULL`s.
+fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    let Builder::Struct {
+        fields,
+        children,
+        valid,
+    } = out
+    else {
+        return Err(internal("a struct value for a struct builder".to_owned()));
+    };
+    if !matches!(lexer.peek()?, Some(Token::OpenBrace)) {
+        // Not an object: skip the value and leave a struct of NULLs (the
+        // goldens pin `'1'` and `'abc'` to `{null, null}`).
+        lexer.skip_value()?;
+        for child in children.iter_mut() {
+            child.append_null();
+        }
+        valid.push(true);
+        return Ok(());
+    }
+    lexer.next()?;
+    // The value spans of this object, in order; the last span wins a
+    // duplicate key.
+    let mut spans: Vec<(String, usize, usize)> = Vec::new();
+    loop {
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::CloseBrace)? {
+            break;
+        }
+        let key = match lexer.raw_key()? {
+            RawKey::Quoted(raw) => raw.unescape().ok_or(Poison)?,
+            RawKey::Bare(word) => word.to_owned(),
+        };
+        lexer.skip_trivia()?;
+        if !lexer.eat(Token::Colon)? {
+            return Err(Poison.into());
+        }
+        let start = lexer.pos;
+        lexer.skip_value()?;
+        spans.push((key, start, lexer.pos));
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            continue;
+        }
+        if lexer.eat(Token::CloseBrace)? {
+            break;
+        }
+        return Err(Poison.into());
+    }
+    let text = lexer.text();
+    for (field, child) in fields.iter().zip(children.iter_mut()) {
+        let mut span = None;
+        for (key, start, end) in spans.iter() {
+            if key == field.name() {
+                span = Some((*start, *end));
+            }
+        }
+        match span {
+            None => child.append_null(),
+            Some((start, end)) => {
+                let body = text.get(start..end).ok_or(Poison)?;
+                let mut sub = Lexer::new(body, ctx.opts.lexer());
+                match read_value(&mut sub, child, ctx) {
+                    Ok(()) => {}
+                    Err(Fault::Poison) => child.append_null(),
+                    Err(Fault::Internal(e)) => return Err(Fault::Internal(e)),
+                }
+            }
+        }
+    }
+    valid.push(true);
+    Ok(())
+}
+
+/// An array or map: the shape must match, else the value is `NULL`.
+fn read_nested(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    match lexer.peek()? {
+        Some(Token::OpenBracket) if matches!(out, Builder::List { .. }) => {
+            read_list(lexer, out, ctx)
+        }
+        Some(Token::OpenBrace) if matches!(out, Builder::List { .. }) => {
+            // A single object wraps to a one-element array.
+            let Builder::List {
+                offsets, values, ..
+            } = out
+            else {
+                return Err(internal("a list value for a list builder".to_owned()));
+            };
+            match read_value(lexer, values, ctx) {
+                Ok(()) => {
+                    offsets.push(values.len_total());
+                    out.set_valid(true);
+                    Ok(())
+                }
+                Err(Fault::Poison) => {
+                    offsets.push(values.len_total());
+                    out.set_valid(false);
+                    Ok(())
+                }
+                Err(Fault::Internal(e)) => Err(Fault::Internal(e)),
+            }
+        }
+        Some(Token::OpenBrace) if matches!(out, Builder::Map { .. }) => read_map(lexer, out, ctx),
+        Some(Token::Null) => {
+            lexer.next()?;
+            out.append_null();
+            Ok(())
+        }
+        _ => Err(Poison.into()),
+    }
+}
+
+/// An array's elements; a failing element nulls the whole array.
+fn read_list(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    let Builder::List {
+        offsets, values, ..
+    } = out
+    else {
+        return Err(internal("a list value for a list builder".to_owned()));
+    };
+    lexer.next()?;
+    let base = values.len_total();
+    let mut ok = true;
+    if lexer.eat(Token::CloseBracket)? {
+        offsets.push(base);
+        out.set_valid(true);
+        return Ok(());
+    }
+    loop {
+        match read_value(lexer, values, ctx) {
+            Ok(()) => {}
+            Err(Fault::Poison) => {
+                ok = false;
+                break;
+            }
+            Err(Fault::Internal(e)) => return Err(Fault::Internal(e)),
+        }
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            continue;
+        }
+        if lexer.eat(Token::CloseBracket)? {
+            break;
+        }
+        ok = false;
+        break;
+    }
+    if !ok {
+        // Drain to the closing bracket so the caller's cursor is placed.
+        // Values appended before the failure fall inside this row's range,
+        // which is `NULL` and so never read.
+        drain_to_close(lexer, b']')?;
+        offsets.push(values.len_total());
+        out.set_valid(false);
+        return Ok(());
+    }
+    offsets.push(values.len_total());
+    out.set_valid(true);
+    Ok(())
+}
+
+/// Drains the rest of an array (`]`) or object (`}`) after a failure.
+fn drain_to_close(lexer: &mut Lexer<'_>, close: u8) -> Result<(), Fault> {
+    let mut depth = 1_usize;
+    loop {
+        match lexer.next()? {
+            None => return Err(Poison.into()),
+            Some(Token::OpenBrace) if close == b'}' => depth = depth.saturating_add(1),
+            Some(Token::OpenBracket) if close == b']' => depth = depth.saturating_add(1),
+            Some(Token::CloseBrace) if close == b'}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(());
+                }
+            }
+            Some(Token::CloseBracket) if close == b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(());
+                }
+            }
+            Some(_) => {}
+        }
+    }
+}
+
+/// A map's entries; a failing key or value nulls the whole map.
+fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    let Builder::Map {
+        offsets,
+        keys,
+        values,
+        ..
+    } = out
+    else {
+        return Err(internal("a map value for a map builder".to_owned()));
+    };
+    lexer.next()?;
+    let base = values.len_total();
+    let mut ok = true;
+    if lexer.eat(Token::CloseBrace)? {
+        offsets.push(base);
+        out.set_valid(true);
+        return Ok(());
+    }
+    loop {
+        let key = match lexer.raw_key()? {
+            RawKey::Quoted(raw) => raw.unescape().ok_or(Poison)?,
+            RawKey::Bare(word) => word.to_owned(),
+        };
+        lexer.skip_trivia()?;
+        if !lexer.eat(Token::Colon)? {
+            ok = false;
+            break;
+        }
+        // The key converts first (a bad key fails before the value is
+        // read); the converted key is appended whatever the value does, so
+        // keys and values stay aligned and a failing value only needs a
+        // `NULL` slot to keep them there.
+        let Ok(key) = convert_key(&key, keys) else {
+            ok = false;
+            break;
+        };
+        append_key(keys, key);
+        match read_value(lexer, values, ctx) {
+            Ok(()) => {}
+            Err(Fault::Poison) => {
+                values.append_null();
+                ok = false;
+                break;
+            }
+            Err(Fault::Internal(e)) => return Err(Fault::Internal(e)),
+        }
+        lexer.skip_trivia()?;
+        if lexer.eat(Token::Comma)? {
+            continue;
+        }
+        if lexer.eat(Token::CloseBrace)? {
+            break;
+        }
+        ok = false;
+        break;
+    }
+    if !ok {
+        drain_to_close(lexer, b'}')?;
+        offsets.push(values.len_total());
+        out.set_valid(false);
+        return Ok(());
+    }
+    offsets.push(values.len_total());
+    out.set_valid(true);
+    Ok(())
+}
+
+/// One converted map key.
+enum Key {
+    /// A boolean.
+    Bool(bool),
+    /// An integral key.
+    I64(i64),
+    /// A floating-point key.
+    F64(f64),
+    /// A decimal key (already fitted).
+    Decimal(i128),
+    /// A string key.
+    Str(String),
+    /// A date key.
+    Date(i32),
+    /// A binary key.
+    Binary(Vec<u8>),
+}
+
+/// Converts one map key (always a JSON string) for the key builder. A key
+/// is never a timestamp or nested value in Spark's JSON maps.
+fn convert_key(text: &str, keys: &Builder) -> Result<Key, Poison> {
+    let Builder::Scalar(scalar) = keys else {
+        return Err(Poison);
+    };
+    match scalar {
+        Scalar::Str(_) => Ok(Key::Str(text.to_owned())),
+        Scalar::Bool(_) => match text {
+            "true" => Ok(Key::Bool(true)),
+            "false" => Ok(Key::Bool(false)),
+            _ => Err(Poison),
+        },
+        Scalar::I8(_) => text
+            .parse::<i8>()
+            .map(|n| Key::I64(i64::from(n)))
+            .map_err(|_| Poison),
+        Scalar::I16(_) => text
+            .parse::<i16>()
+            .map(|n| Key::I64(i64::from(n)))
+            .map_err(|_| Poison),
+        Scalar::I32(_) => text
+            .parse::<i32>()
+            .map(|n| Key::I64(i64::from(n)))
+            .map_err(|_| Poison),
+        Scalar::I64(_) => text.parse::<i64>().map(Key::I64).map_err(|_| Poison),
+        Scalar::F32(_) | Scalar::F64(_) => java_parse_double(text).map(Key::F64).ok_or(Poison),
+        Scalar::Decimal(_, p, s) => decimal_from_text(text, *p, *s)
+            .map(Key::Decimal)
+            .ok_or(Poison),
+        Scalar::Date(_) => spark_string_to_date(text).map(Key::Date).ok_or(Poison),
+        Scalar::Binary(_) => base64::decode(text).map(Key::Binary).ok_or(Poison),
+        Scalar::Timestamp { .. } => Err(Poison),
+    }
+}
+
+/// Appends a converted key (ranges were validated at conversion).
+fn append_key(keys: &mut Builder, key: Key) {
+    let Builder::Scalar(scalar) = keys else {
+        return;
+    };
+    match (scalar, key) {
+        (Scalar::Str(b), Key::Str(v)) => b.append_value(&v),
+        (Scalar::Bool(b), Key::Bool(v)) => b.append_value(v),
+        (Scalar::I8(b), Key::I64(v)) => b.append_value(i8::try_from(v).unwrap_or(i8::MIN)),
+        (Scalar::I16(b), Key::I64(v)) => b.append_value(i16::try_from(v).unwrap_or(i16::MIN)),
+        (Scalar::I32(b), Key::I64(v)) => b.append_value(i32::try_from(v).unwrap_or(i32::MIN)),
+        (Scalar::I64(b), Key::I64(v)) => b.append_value(v),
+        (Scalar::F32(b), Key::F64(v)) => b.append_value(f32_from_f64(v)),
+        (Scalar::F64(b), Key::F64(v)) => b.append_value(v),
+        (Scalar::Decimal(b, _, _), Key::Decimal(v)) => b.append_value(v),
+        (Scalar::Date(b), Key::Date(v)) => b.append_value(v),
+        (Scalar::Binary(b), Key::Binary(v)) => b.append_value(&v),
+        _ => {}
+    }
+}
+
+/// One scalar token into `out`.
+fn read_scalar_token(lexer: &mut Lexer<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    match lexer.next()? {
+        Some(Token::Null) => {
+            out.append_null();
+            Ok(())
+        }
+        Some(Token::Bool(b)) => match out {
+            Scalar::Bool(o) => {
+                o.append_value(b);
+                Ok(())
+            }
+            _ => Err(Poison.into()),
+        },
+        Some(Token::Str(raw)) => read_string(raw, out, ctx),
+        Some(Token::Num(text, is_float)) => read_number(text, is_float, out),
+        None | Some(_) => Err(Poison.into()),
+    }
+}
+
+/// One JSON string into `out`.
+fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    let text = raw.unescape().ok_or(Poison)?;
+    match out {
+        Scalar::Str(b) => {
+            b.append_value(&text);
+            Ok(())
+        }
+        Scalar::Date(b) => {
+            let parsed = match &ctx.opts.date_format {
+                Some(pattern) => pattern.parse_date(&text).map_err(|_| Poison)?,
+                None => spark_string_to_date(&text),
+            };
+            match parsed {
+                Some(v) => {
+                    b.append_value(v);
+                    Ok(())
+                }
+                None => Err(Poison.into()),
+            }
+        }
+        Scalar::Timestamp { builder, ntz } => {
+            let parsed = if *ntz {
+                match &ctx.opts.timestamp_ntz_format {
+                    Some(pattern) => pattern.parse_local(&text, false).map_err(|_| Poison)?,
+                    None => spark_string_to_timestamp_ntz(&text),
+                }
+            } else {
+                match &ctx.opts.timestamp_format {
+                    Some(pattern) => pattern
+                        .parse_timestamp(&text, ctx.zone)
+                        .map_err(|_| Poison)?,
+                    None => {
+                        spark_string_to_timestamp(&text, ctx.zone, ctx.today).map_err(|_| Poison)?
+                    }
+                }
+            };
+            match parsed {
+                Some(v) => {
+                    builder.append_value(v);
+                    Ok(())
+                }
+                None => Err(Poison.into()),
+            }
+        }
+        Scalar::Binary(b) => match base64::decode(&text) {
+            Some(bytes) => {
+                b.append_value(&bytes);
+                Ok(())
+            }
+            None => Err(Poison.into()),
+        },
+        _ => Err(Poison.into()),
+    }
+}
+
+/// Narrows a double to a float, as Java's cast does.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Spark reads JSON numbers for `float` through Java's narrowing cast"
+)]
+fn f32_from_f64(v: f64) -> f32 {
+    v as f32
+}
+
+/// One JSON number into `out`.
+fn read_number(text: &str, is_float: bool, out: &mut Scalar) -> Result<(), Fault> {
+    if is_float {
+        return match out {
+            Scalar::F32(b) => match java_parse_double(text) {
+                Some(v) => {
+                    b.append_value(f32_from_f64(v));
+                    Ok(())
+                }
+                None => Err(Poison.into()),
+            },
+            Scalar::F64(b) => match java_parse_double(text) {
+                Some(v) => {
+                    b.append_value(v);
+                    Ok(())
+                }
+                None => Err(Poison.into()),
+            },
+            Scalar::Decimal(b, p, s) => match decimal_from_text(text, *p, *s) {
+                Some(v) => {
+                    b.append_value(v);
+                    Ok(())
+                }
+                None => Err(Poison.into()),
+            },
+            _ => Err(Poison.into()),
+        };
+    }
+    let int = text.parse::<i128>().map_err(|_| Poison)?;
+    match out {
+        Scalar::I8(b) => match i8::try_from(int) {
+            Ok(v) => {
+                b.append_value(v);
+                Ok(())
+            }
+            Err(_) => Err(Poison.into()),
+        },
+        Scalar::I16(b) => match i16::try_from(int) {
+            Ok(v) => {
+                b.append_value(v);
+                Ok(())
+            }
+            Err(_) => Err(Poison.into()),
+        },
+        Scalar::I32(b) => match i32::try_from(int) {
+            Ok(v) => {
+                b.append_value(v);
+                Ok(())
+            }
+            Err(_) => Err(Poison.into()),
+        },
+        Scalar::I64(b) => match i64::try_from(int) {
+            Ok(v) => {
+                b.append_value(v);
+                Ok(())
+            }
+            Err(_) => Err(Poison.into()),
+        },
+        Scalar::F32(b) => match java_parse_double(text) {
+            Some(v) => {
+                b.append_value(f32_from_f64(v));
+                Ok(())
+            }
+            None => Err(Poison.into()),
+        },
+        Scalar::F64(b) => match java_parse_double(text) {
+            Some(v) => {
+                b.append_value(v);
+                Ok(())
+            }
+            None => Err(Poison.into()),
+        },
+        Scalar::Decimal(b, p, s) => match decimal_from_text(text, *p, *s) {
+            Some(v) => {
+                b.append_value(v);
+                Ok(())
+            }
+            None => Err(Poison.into()),
+        },
+        _ => Err(Poison.into()),
+    }
+}
+
+/// The decimal `text` (integral or floating) rounded to `(p, s)` with
+/// `HALF_UP`; `None` past the precision or for malformed text.
+fn decimal_from_text(text: &str, p: u8, s: i8) -> Option<i128> {
+    let bytes = text.as_bytes();
+    let (negative, digits) = match bytes.first() {
+        Some(b'-') => (true, bytes.get(1..)?),
+        _ => (false, bytes),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    // Split off the exponent first.
+    let (mantissa, exp) = match digits.iter().position(|&b| b == b'e' || b == b'E') {
+        None => (digits, 0_i32),
+        Some(e) => {
+            let exp_text = digits.get(e.saturating_add(1)..)?;
+            let (sign, mag) = match exp_text.first() {
+                Some(b'+') => (1_i32, exp_text.get(1..)?),
+                Some(b'-') => (-1_i32, exp_text.get(1..)?),
+                Some(_) => (1_i32, exp_text),
+                None => return None,
+            };
+            if mag.is_empty() || mag.iter().any(|&b| !b.is_ascii_digit()) {
+                return None;
+            }
+            let magnitude: i32 = core::str::from_utf8(mag).ok()?.parse().ok()?;
+            let exp = if sign < 0 {
+                magnitude.checked_neg()?
+            } else {
+                magnitude
+            };
+            (digits.get(..e)?, exp)
+        }
+    };
+    let (int, frac) = match mantissa.iter().position(|&b| b == b'.') {
+        None => (mantissa, bytes.get(..0)?),
+        Some(dot) => (mantissa.get(..dot)?, mantissa.get(dot.saturating_add(1)..)?),
+    };
+    if int.iter().any(|&b| !b.is_ascii_digit())
+        || frac.iter().any(|&b| !b.is_ascii_digit())
+        || (int.is_empty() && frac.is_empty())
+    {
+        return None;
+    }
+    // Unscaled = int ++ frac, scale = frac.len() - exp.
+    let mut unscaled: i128 = 0;
+    for &d in int.iter().chain(frac.iter()) {
+        unscaled = unscaled
+            .checked_mul(10)?
+            .checked_add(i128::from(d.checked_sub(b'0')?))?;
+    }
+    let scale = i32::try_from(frac.len()).ok()?.checked_sub(exp)?;
+    fit_decimal(unscaled, scale, negative, p, s)
+}
+
+/// Rounds `unscaled × 10^-scale` to `s` fraction digits (`HALF_UP`) and
+/// checks it fits `p` digits.
+fn fit_decimal(unscaled: i128, scale: i32, negative: bool, p: u8, s: i8) -> Option<i128> {
+    let target = i32::from(s);
+    let mut value = unscaled;
+    let mut here = scale;
+    while here > target {
+        let digit = value.checked_rem(10)?.checked_abs()?;
+        value = value.checked_div(10)?;
+        if digit >= 5 {
+            value = if value >= 0 {
+                value.checked_add(1)?
+            } else {
+                value.checked_sub(1)?
+            };
+        }
+        here = here.checked_sub(1)?;
+    }
+    while here < target {
+        value = value.checked_mul(10)?;
+        here = here.checked_add(1)?;
+    }
+    let limit = 10_i128.checked_pow(u32::from(p))?;
+    if value.checked_abs()? >= limit {
+        return None;
+    }
+    Some(if negative {
+        value.checked_neg()?
+    } else {
+        value
+    })
+}
+
+/// A scalar builder.
+enum Scalar {
+    /// `boolean`.
+    Bool(BooleanBuilder),
+    /// `tinyint`.
+    I8(Int8Builder),
+    /// `smallint`.
+    I16(Int16Builder),
+    /// `int`.
+    I32(Int32Builder),
+    /// `bigint`.
+    I64(Int64Builder),
+    /// `float`.
+    F32(Float32Builder),
+    /// `double`.
+    F64(Float64Builder),
+    /// `decimal(p, s)`.
+    Decimal(Decimal128Builder, u8, i8),
+    /// `string`.
+    Str(StringViewBuilder),
+    /// `binary`.
+    Binary(BinaryViewBuilder),
+    /// `date`.
+    Date(Date32Builder),
+    /// `timestamp` (`ntz = false`) or `timestamp_ntz`.
+    Timestamp {
+        /// The values.
+        builder: TimestampMicrosecondBuilder,
+        /// Whether zone-less.
+        ntz: bool,
+    },
+}
+
+impl Scalar {
+    /// Appends a SQL `NULL`.
+    fn append_null(&mut self) {
+        match self {
+            Self::Bool(b) => b.append_null(),
+            Self::I8(b) => b.append_null(),
+            Self::I16(b) => b.append_null(),
+            Self::I32(b) => b.append_null(),
+            Self::I64(b) => b.append_null(),
+            Self::F32(b) => b.append_null(),
+            Self::F64(b) => b.append_null(),
+            Self::Decimal(b, _, _) => b.append_null(),
+            Self::Str(b) => b.append_null(),
+            Self::Binary(b) => b.append_null(),
+            Self::Date(b) => b.append_null(),
+            Self::Timestamp { builder, .. } => builder.append_null(),
+        }
+    }
+
+    /// Finishes the column, which must have `target`'s type.
+    fn finish(self, target: &ArrowType) -> Result<ArrayRef, KrishivError> {
+        let array: ArrayRef = match self {
+            Self::Bool(mut b) => Arc::new(b.finish()),
+            Self::I8(mut b) => Arc::new(b.finish()),
+            Self::I16(mut b) => Arc::new(b.finish()),
+            Self::I32(mut b) => Arc::new(b.finish()),
+            Self::I64(mut b) => Arc::new(b.finish()),
+            Self::F32(mut b) => Arc::new(b.finish()),
+            Self::F64(mut b) => Arc::new(b.finish()),
+            Self::Decimal(mut b, p, s) => {
+                let array =
+                    b.finish()
+                        .with_precision_and_scale(p, s)
+                        .map_err(|e| InternalError {
+                            message: format!("a decimal column past decimal({p},{s}): {e}"),
+                        })?;
+                Arc::new(array)
+            }
+            Self::Str(mut b) => Arc::new(b.finish()),
+            Self::Binary(mut b) => Arc::new(b.finish()),
+            Self::Date(mut b) => Arc::new(b.finish()),
+            Self::Timestamp { mut builder, ntz } => {
+                let mut array = builder.finish();
+                if !ntz {
+                    array = array.with_timezone("UTC");
+                }
+                Arc::new(array)
+            }
+        };
+        if array.data_type() != target {
+            return Err(InternalError {
+                message: format!("a {} column for {target}", array.data_type()),
+            }
+            .into());
+        }
+        Ok(array)
+    }
+}
+
+/// The length of a builder's column.
+fn len_of<B: ArrayBuilder>(builder: &B) -> i32 {
+    i32::try_from(builder.len()).unwrap_or(i32::MAX)
+}
+
+/// A builder for one Arrow type.
+enum Builder {
+    /// A `NULL` column (for a `void` schema).
+    Null {
+        /// Rows appended.
+        len: usize,
+    },
+    /// A scalar column.
+    Scalar(Scalar),
+    /// A list column: `offsets` has one more entry than rows, and `valid`
+    /// holds one entry per row.
+    List {
+        /// The list field (names the element).
+        field: FieldRef,
+        /// The row offsets into `values`.
+        offsets: Vec<i32>,
+        /// The elements.
+        values: Box<Builder>,
+        /// One per row.
+        valid: Vec<bool>,
+    },
+    /// A map column.
+    Map {
+        /// The entries field.
+        field: FieldRef,
+        /// The row offsets into `keys`/`values`.
+        offsets: Vec<i32>,
+        /// The keys.
+        keys: Box<Builder>,
+        /// The values.
+        values: Box<Builder>,
+        /// One per row.
+        valid: Vec<bool>,
+    },
+    /// A struct column.
+    Struct {
+        /// The struct fields.
+        fields: Fields,
+        /// One builder per field.
+        children: Vec<Builder>,
+        /// One per row.
+        valid: Vec<bool>,
+    },
+}
+
+impl Builder {
+    /// A builder reading `target`.
+    fn for_type(target: &ArrowType) -> Result<Self, KrishivError> {
+        Ok(match target {
+            ArrowType::Null => Self::Null { len: 0 },
+            ArrowType::Boolean => Self::Scalar(Scalar::Bool(BooleanBuilder::new())),
+            ArrowType::Int8 => Self::Scalar(Scalar::I8(Int8Builder::new())),
+            ArrowType::Int16 => Self::Scalar(Scalar::I16(Int16Builder::new())),
+            ArrowType::Int32 => Self::Scalar(Scalar::I32(Int32Builder::new())),
+            ArrowType::Int64 => Self::Scalar(Scalar::I64(Int64Builder::new())),
+            ArrowType::Float32 => Self::Scalar(Scalar::F32(Float32Builder::new())),
+            ArrowType::Float64 => Self::Scalar(Scalar::F64(Float64Builder::new())),
+            ArrowType::Decimal128(p, s) => {
+                Self::Scalar(Scalar::Decimal(Decimal128Builder::new(), *p, *s))
+            }
+            ArrowType::Utf8View | ArrowType::Utf8 | ArrowType::LargeUtf8 => {
+                Self::Scalar(Scalar::Str(StringViewBuilder::new()))
+            }
+            ArrowType::BinaryView | ArrowType::Binary | ArrowType::LargeBinary => {
+                Self::Scalar(Scalar::Binary(BinaryViewBuilder::new()))
+            }
+            ArrowType::Date32 => Self::Scalar(Scalar::Date(Date32Builder::new())),
+            ArrowType::Timestamp(_, tz) => Self::Scalar(Scalar::Timestamp {
+                builder: TimestampMicrosecondBuilder::new(),
+                ntz: tz.is_none(),
+            }),
+            ArrowType::List(field) => Self::List {
+                field: Arc::clone(field),
+                offsets: vec![0],
+                values: Box::new(Self::for_type(field.data_type())?),
+                valid: Vec::new(),
+            },
+            ArrowType::LargeList(_) => {
+                return Err(InternalError {
+                    message: "a JSON value for a large list (from_json builds lists)".to_owned(),
+                }
+                .into());
+            }
+            ArrowType::Map(field, _) => {
+                let (keys, values) = match field.data_type() {
+                    ArrowType::Struct(entries) if entries.len() == 2 => (
+                        Self::for_type(entries[0].data_type())?,
+                        Self::for_type(entries[1].data_type())?,
+                    ),
+                    other => {
+                        return Err(InternalError {
+                            message: format!("a map value with entries {other}"),
+                        }
+                        .into());
+                    }
+                };
+                Self::Map {
+                    field: Arc::clone(field),
+                    offsets: vec![0],
+                    keys: Box::new(keys),
+                    values: Box::new(values),
+                    valid: Vec::new(),
+                }
+            }
+            ArrowType::Struct(fields) => Self::Struct {
+                children: fields
+                    .iter()
+                    .map(|f| Self::for_type(f.data_type()))
+                    .collect::<Result<Vec<_>, _>>()?,
+                fields: fields.clone(),
+                valid: Vec::new(),
+            },
+            other => {
+                return Err(InternalError {
+                    message: format!("a JSON value for Arrow type {other}"),
+                }
+                .into());
+            }
+        })
+    }
+
+    /// The number of values appended: the elements of a list, the
+    /// entries of a map, the rows of anything else.
+    fn len_total(&self) -> i32 {
+        match self {
+            Self::Null { len } => i32::try_from(*len).unwrap_or(i32::MAX),
+            Self::List { valid, .. } | Self::Map { valid, .. } | Self::Struct { valid, .. } => {
+                i32::try_from(valid.len()).unwrap_or(i32::MAX)
+            }
+            Self::Scalar(scalar) => match scalar {
+                Scalar::Bool(b) => len_of(b),
+                Scalar::I8(b) => len_of(b),
+                Scalar::I16(b) => len_of(b),
+                Scalar::I32(b) => len_of(b),
+                Scalar::I64(b) => len_of(b),
+                Scalar::F32(b) => len_of(b),
+                Scalar::F64(b) => len_of(b),
+                Scalar::Decimal(b, _, _) => len_of(b),
+                Scalar::Str(b) => len_of(b),
+                Scalar::Binary(b) => len_of(b),
+                Scalar::Date(b) => len_of(b),
+                Scalar::Timestamp { builder, .. } => len_of(builder),
+            },
+        }
+    }
+
+    /// Appends a SQL `NULL`.
+    fn append_null(&mut self) {
+        match self {
+            Self::Null { len } => *len = len.saturating_add(1),
+            Self::Scalar(scalar) => scalar.append_null(),
+            Self::List { offsets, valid, .. } | Self::Map { offsets, valid, .. } => {
+                offsets.push(*offsets.last().unwrap_or(&0));
+                valid.push(false);
+            }
+            Self::Struct {
+                children, valid, ..
+            } => {
+                for child in children.iter_mut() {
+                    child.append_null();
+                }
+                valid.push(false);
+            }
+        }
+    }
+
+    /// Marks the open list, map or struct row valid (`valid = true`) or
+    /// `NULL` (`valid = false`).
+    fn set_valid(&mut self, valid: bool) {
+        match self {
+            Self::Null { .. } | Self::Scalar(_) => {}
+            Self::List { valid: v, .. }
+            | Self::Map { valid: v, .. }
+            | Self::Struct { valid: v, .. } => {
+                v.push(valid);
+            }
+        }
+    }
+
+    /// Finishes the column, which must have `target`'s type.
+    fn finish(self, target: &ArrowType) -> Result<ArrayRef, KrishivError> {
+        match self {
+            Self::Null { len } => {
+                if !matches!(target, ArrowType::Null) {
+                    return Err(InternalError {
+                        message: format!("a null column for {target}"),
+                    }
+                    .into());
+                }
+                Ok(Arc::new(NullArray::new(len)))
+            }
+            Self::Scalar(scalar) => scalar.finish(target),
+            Self::List {
+                field,
+                offsets,
+                values,
+                valid,
+            } => {
+                let values = values.finish(field.data_type())?;
+                let array = arrow_array::ListArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                    values,
+                    nulls(valid),
+                )
+                .map_err(|e| InternalError {
+                    message: e.to_string(),
+                })?;
+                check_type(Arc::new(array), target)
+            }
+            Self::Map {
+                field,
+                offsets,
+                keys,
+                values,
+                valid,
+            } => {
+                let (entries_fields, key_type, value_type) = match field.data_type() {
+                    ArrowType::Struct(entries) if entries.len() == 2 => (
+                        entries.clone(),
+                        entries[0].data_type(),
+                        entries[1].data_type(),
+                    ),
+                    other => {
+                        return Err(InternalError {
+                            message: format!("a map value with entries {other}"),
+                        }
+                        .into());
+                    }
+                };
+                let keys = keys.finish(key_type)?;
+                let values = values.finish(value_type)?;
+                let entries =
+                    arrow_array::StructArray::try_new(entries_fields, vec![keys, values], None)
+                        .map_err(|e| InternalError {
+                            message: e.to_string(),
+                        })?;
+                let array = arrow_array::MapArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                    entries,
+                    nulls(valid),
+                    false,
+                )
+                .map_err(|e| InternalError {
+                    message: e.to_string(),
+                })?;
+                check_type(Arc::new(array), target)
+            }
+            Self::Struct {
+                fields,
+                children,
+                valid,
+            } => {
+                let arrays = fields
+                    .iter()
+                    .zip(children)
+                    .map(|(f, child)| child.finish(f.data_type()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let array = arrow_array::StructArray::try_new(fields, arrays, nulls(valid))
+                    .map_err(|e| InternalError {
+                        message: e.to_string(),
+                    })?;
+                check_type(Arc::new(array), target)
+            }
+        }
+    }
+}
+
+/// The null buffer for `valid` (`None` when every row is valid).
+fn nulls(valid: Vec<bool>) -> Option<NullBuffer> {
+    if valid.iter().all(|v| *v) {
+        None
+    } else {
+        Some(NullBuffer::from(valid))
+    }
+}
+
+/// Checks a finished array against its target type.
+fn check_type(array: ArrayRef, target: &ArrowType) -> Result<ArrayRef, KrishivError> {
+    if array.data_type() != target {
+        return Err(InternalError {
+            message: format!("a {} column for {target}", array.data_type()),
+        }
+        .into());
+    }
+    Ok(array)
+}
