@@ -162,8 +162,8 @@ pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, Par
 /// `SHOW`, `DESCRIBE`, `CACHE`/`UNCACHE`/`CLEAR CACHE`, `REFRESH`,
 /// `ANALYZE`, `MSCK`/`REPAIR`, `ADD`/`LIST`, or `EXPLAIN [EXTENDED |
 /// FORMATTED | CODEGEN | COST]` of a statement.
-/// Commands beyond queries parse to syntax trees; lowering and execution
-/// answer them with `KRISHIV_UNSUPPORTED_FEATURE`.
+/// Commands beyond queries parse to syntax trees and are validated;
+/// there is no lowering for them.
 ///
 /// ```
 /// use krishiv_sql::ast::{ExplainMode, Statement};
