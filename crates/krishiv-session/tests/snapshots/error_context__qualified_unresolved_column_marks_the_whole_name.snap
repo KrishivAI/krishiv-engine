@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-session/tests/error_context.rs
+expression: "render_with_context(&e, sql)"
+---
+[UNRESOLVED_COLUMN.WITH_SUGGESTION] A column, variable, or function parameter with name `t`.`nme` cannot be resolved. Did you mean one of the following? [`t`.`name`]. SQLSTATE: 42703
+== SQL (line 1, position 8) ==
+SELECT t.nme
+       ^^^^^
