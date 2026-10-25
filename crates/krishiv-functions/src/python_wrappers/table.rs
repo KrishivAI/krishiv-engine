@@ -44,6 +44,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
 pub(super) const HANDWRITTEN: &[(&str, &str)] = &[
     ("count", "`count(\"*\")` is `count(*)`"),
     ("log", "`log(col)` is `ln(col)`; `log(base, col)` is `log`"),
+    (
+        "convert_timezone",
+        "the first parameter is `Optional[Column]` without a default, so `None` omits it",
+    ),
 ];
 
 const C: &str = "col: ColumnOrName";
@@ -93,11 +97,15 @@ pub(super) fn rows() -> Vec<Row> {
         "crc32",
         "csc",
         "day",
+        "dayname",
         "dayofmonth",
+        "dayofweek",
+        "dayofyear",
         "degrees",
         "exp",
         "expm1",
         "hex",
+        "hour",
         "initcap",
         "isnan",
         "isnotnull",
@@ -111,16 +119,20 @@ pub(super) fn rows() -> Vec<Row> {
         "max",
         "md5",
         "min",
+        "minute",
         "month",
+        "monthname",
         "negative",
         "nullifzero",
         "octet_length",
         "positive",
+        "quarter",
         "quote",
         "radians",
         "reverse",
         "rint",
         "sec",
+        "second",
         "sha",
         "sha1",
         "sign",
@@ -134,7 +146,10 @@ pub(super) fn rows() -> Vec<Row> {
         "tanh",
         "unbase64",
         "unhex",
+        "unix_date",
         "upper",
+        "weekday",
+        "weekofyear",
         "year",
         "zeroifnull",
     ] {
@@ -337,6 +352,30 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "substring",
             "str: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int",
+        ),
+        Row::new("last_day", "date: ColumnOrName"),
+        Row::new(
+            "add_months",
+            "start: ColumnOrName, months: ColumnOrName | int",
+        ),
+        Row::new(
+            "make_date",
+            "year: ColumnOrName, month: ColumnOrName, day: ColumnOrName",
+        ),
+        Row::new(
+            "months_between",
+            "date1: ColumnOrName, date2: ColumnOrName, roundOff: bool = True",
+        ),
+        Row::new("next_day", "date: ColumnOrName, dayOfWeek: str"),
+        Row::new("trunc", "date: ColumnOrName, format: str"),
+        Row::new("date_trunc", "format: str, timestamp: ColumnOrName"),
+        Row::new(
+            "from_utc_timestamp",
+            "timestamp: ColumnOrName, tz: Column | str",
+        ),
+        Row::new(
+            "to_utc_timestamp",
+            "timestamp: ColumnOrName, tz: Column | str",
         ),
     ]);
     // Spark's `trim(chars, str)`: PySpark's `(col, trim)` reaches the engine reversed.

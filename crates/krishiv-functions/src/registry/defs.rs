@@ -168,6 +168,24 @@ pub(super) fn first_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(t, c)
 }
 
+fn always_null_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Date, true))
+}
+
+fn always_null_timestamp(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Timestamp, true))
+}
+
+fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Double, c)
+}
+
+/// `make_date`: an invalid date is NULL with ANSI off, so the result may be
+/// null then whatever the arguments.
+fn make_date_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Date, !c.ansi() || c.any_nullable()))
+}
+
 fn clock_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Date, false))
 }
@@ -347,6 +365,64 @@ fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     })
 }
 
+/// `TimestampType` as `date_trunc` and `months_between` expect it: other
+/// types are cast to `TIMESTAMP` or refused naming it, but a
+/// `TIMESTAMP_NTZ` is kept (Spark casts it, as the binding does, in the
+/// session zone).
+fn instant_input(c: &CallTypes<'_>, i: usize) -> InputType {
+    if c.data_type(i) == Some(&DataType::TimestampNtz) {
+        InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz])
+    } else {
+        exact(DataType::Timestamp)
+    }
+}
+
+fn date_trunc_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![exact(DataType::String), instant_input(c, 1)]
+}
+
+fn months_between_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![
+        instant_input(c, 0),
+        instant_input(c, 1),
+        exact(DataType::Boolean),
+    ]
+}
+
+/// `TimestampNTZType` as `convert_timezone` expects it: a `TIMESTAMP` is
+/// kept (Spark casts it, as the binding does, to the wall clock of the
+/// session zone).
+fn wall_clock_input(c: &CallTypes<'_>, i: usize) -> InputType {
+    if c.data_type(i) == Some(&DataType::Timestamp) {
+        InputType::OneOf(vec![DataType::TimestampNtz, DataType::Timestamp])
+    } else {
+        exact(DataType::TimestampNtz)
+    }
+}
+
+fn zone_shift_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![instant_input(c, 0), exact(DataType::String)]
+}
+
+fn convert_timezone_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    match c.args().len() {
+        2 => vec![exact(DataType::String), wall_clock_input(c, 1)],
+        _ => vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            wall_clock_input(c, 2),
+        ],
+    }
+}
+
+fn timestamp_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Timestamp, c)
+}
+
+fn timestamp_ntz_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::TimestampNtz, c)
+}
+
 fn datetime() -> Vec<Spec> {
     let days = InputType::OneOf(vec![DataType::Integer, DataType::Short, DataType::Byte]);
     let day_inputs = Inputs::Expects(vec![exact(DataType::Date), days]);
@@ -357,10 +433,74 @@ fn datetime() -> Vec<Spec> {
         &Inputs::Expects(vec![exact(DataType::Date)]),
         int,
     ));
+    let date_only = Inputs::Expects(vec![exact(DataType::Date)]);
     out.extend(scalar(
-        &["year", "month", "day", "dayofmonth"],
-        &Inputs::Expects(vec![exact(DataType::Date)]),
+        &[
+            "year",
+            "month",
+            "day",
+            "dayofmonth",
+            "dayofweek",
+            "dayofyear",
+            "weekofyear",
+            "weekday",
+            "quarter",
+        ],
+        &date_only,
         int,
+    ));
+    // `UnixDate` expects a date and casts nothing else to one.
+    out.extend(scalar(
+        &["unix_date"],
+        &Inputs::Expects(vec![InputType::Strict(DataType::Date)]),
+        int,
+    ));
+    // The time fields read a timestamp of either kind; a date is cast to
+    // one.
+    let any_timestamp = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    out.extend(scalar(
+        &["hour", "minute", "second"],
+        &Inputs::Expects(vec![any_timestamp]),
+        int,
+    ));
+    out.extend(scalar(&["monthname", "dayname"], &date_only, string));
+    out.extend(scalar(
+        &["add_months"],
+        &Inputs::Expects(vec![exact(DataType::Date), exact(DataType::Integer)]),
+        date,
+    ));
+    out.extend(scalar(&["last_day"], &date_only, date));
+    // `NextDay`, `TruncDate` and `TruncTimestamp` are nullable whatever
+    // their arguments: an unknown weekday or unit gives NULL.
+    out.extend(scalar(
+        &["next_day", "trunc"],
+        &Inputs::Expects(vec![exact(DataType::Date), exact(DataType::String)]),
+        always_null_date,
+    ));
+    out.extend(scalar(
+        &["date_trunc"],
+        &Inputs::Built(InputBuilder(date_trunc_inputs)),
+        always_null_timestamp,
+    ));
+    out.extend(scalar(
+        &["months_between"],
+        &Inputs::Built(InputBuilder(months_between_inputs)),
+        double,
+    ));
+    out.extend(scalar(
+        &["from_utc_timestamp", "to_utc_timestamp"],
+        &Inputs::Built(InputBuilder(zone_shift_inputs)),
+        timestamp_result,
+    ));
+    out.extend(scalar(
+        &["convert_timezone"],
+        &Inputs::Built(InputBuilder(convert_timezone_inputs)),
+        timestamp_ntz_result,
+    ));
+    out.extend(scalar(
+        &["make_date"],
+        &Inputs::Expects(vec![exact(DataType::Integer)]),
+        make_date_result,
     ));
     out.extend(scalar(
         &["extract", "date_part"],

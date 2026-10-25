@@ -732,11 +732,6 @@
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT hour( '10:11:12') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function hour"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT length(date('1996-09-10')) FROM t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
     },
@@ -744,16 +739,6 @@
       "file": "typeCoercion/native/implicitTypeCasts",
       "query": "SELECT length(timestamp('1996-09-10 10:11:12.4')) FROM t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT minute( '10:11:12') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function minute"
-    },
-    {
-      "file": "typeCoercion/native/implicitTypeCasts",
-      "query": "SELECT second( '10:11:12') FROM t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function second"
     },
     {
       "file": "typeCoercion/native/implicitTypeCasts",
@@ -1007,16 +992,6 @@
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select next_day('2018-01-01', a) from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function next_day"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select next_day(a, 'MO') from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function next_day"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select to_timestamp('2018-01-01', a) from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp"
     },
@@ -1034,16 +1009,6 @@
       "file": "typeCoercion/native/stringCastAndExpressions",
       "query": "select to_unix_timestamp(a) from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_unix_timestamp"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select trunc('2018-01-01', a) from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function trunc"
-    },
-    {
-      "file": "typeCoercion/native/stringCastAndExpressions",
-      "query": "select trunc(a, 'MM') from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function trunc"
     },
     {
       "file": "typeCoercion/native/stringCastAndExpressions",

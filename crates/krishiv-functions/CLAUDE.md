@@ -49,6 +49,19 @@ Paths are relative to this crate.
 - A new registry function also needs a row in `src/python_wrappers/table.rs` (PySpark's parameters, from `pyspark/sql/functions/builtin.py`), then regenerate the Python wrappers (`F.__all__` follows by itself; add the name to `python/tests/_pyspark_signatures.py`); a function PySpark lacks goes in `NOT_EXPORTED`.
 - New function family: a `src/scalar/<family>.rs` with `NAMES` and `bind`, wired into `bind_scalar` in `src/scalar/mod.rs`.
 
+- `scalar/datetime`: the field accessors (`year` ... `second`, `dayofweek`, `weekday`, `weekofyear`, `quarter`), `monthname`/`dayname`,
+  `unix_date`, `add_months`, `last_day`, `next_day`, `trunc`, `date_trunc`, `months_between`, `make_date`, `from_utc_timestamp`/
+  `to_utc_timestamp` and `convert_timezone`. Only offsets `FixedOffset::parse` reads resolve (`UTC`, `+08:00`): a plausible
+  region id (`Asia/Seoul`), a short id (`CET`) or an offset spelled another way (`+0530`, seconds) is
+  `KRISHIV_UNSUPPORTED_FEATURE` until the time-zone database or a fuller offset parser, and anything else (`xx`, `abc`,
+  `etc/utc`) is `INVALID_TIMEZONE`. A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
+  NULL for every row), a column resolves per row. Out-of-range results raise `DATETIME_OVERFLOW` with ANSI on and are NULL
+  with it off (as `next_day`'s bad name and `make_date`'s bad field already do). A `timestamp_ntz`
+  argument of `date_trunc`, `months_between`, `from_utc_timestamp` and `to_utc_timestamp` (and a `timestamp` of `convert_timezone`)
+  is read in the session zone, as the implicit cast does. Not registered: `make_timestamp`, `try_make_timestamp` and the `_ltz`/
+  `_ntz` forms (their types need `TIME`, and `make_timestamp` follows `spark.sql.timestampType`), `timestampadd`/`timestampdiff` and
+  the unit forms of `dateadd`/`datediff` (the parser lowers them to calls the registry has no row for), `make_interval` and the
+  other interval functions (no interval type).
 - `scalar/regex` (`regexp`, `regexp_like`, `regexp_extract`, `regexp_count`,
   `regexp_instr`, `regexp_substr`, `regexp_replace`): Java patterns are
   translated to `fancy_regex` by `regex/java.rs` (ASCII `\d\w\s`, Java's
