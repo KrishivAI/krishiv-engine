@@ -351,7 +351,7 @@ fn run(mut cmd: Command, what: &str) -> Result<(), String> {
         .ok_or_else(|| format!("{what} failed"))
 }
 
-/// `xtask coverage [--no-branch] [--all-features] [--html]`: runs the suite
+/// `xtask coverage [--no-branch] [--all-features] [--html] [-p PACKAGE]...`: runs the suite
 /// under `cargo-llvm-cov`, writing `lcov.info` and `summary.json` (and an HTML
 /// report) under `<target>/coverage`. Branch coverage needs the nightly
 /// toolchain with `llvm-tools-preview`.
@@ -360,11 +360,14 @@ fn run(mut cmd: Command, what: &str) -> Result<(), String> {
 /// Returns an error for unknown flags or when a cargo step fails.
 pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
     let (mut branch, mut all, mut html) = (true, false, false);
-    for f in flags {
+    let mut packages: Vec<&str> = Vec::new();
+    let mut it = flags.iter();
+    while let Some(f) = it.next() {
         match *f {
             "--no-branch" => branch = false,
             "--all-features" => all = true,
             "--html" => html = true,
+            "-p" | "--package" => packages.push(it.next().ok_or("-p needs a package name")?),
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -383,13 +386,13 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
         c.args(["llvm-cov"]).args(sub).current_dir(root);
         c
     };
-    let mut test = base(&[
-        "nextest",
-        "--workspace",
-        "--locked",
-        "--no-tests=pass",
-        "--no-report",
-    ]);
+    let mut test = base(&["nextest", "--locked", "--no-tests=pass", "--no-report"]);
+    if packages.is_empty() {
+        test.arg("--workspace");
+    }
+    for p in &packages {
+        test.args(["-p", p]);
+    }
     if all {
         test.arg("--all-features");
     }

@@ -11,10 +11,10 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use xtask::precheck::{
-    Action, Changes, EXTERNAL_CI_CHECKS, Mapping, Opts, Outcome, Pkg, REQUIRED_CI_CHECKS, STEP_IDS,
-    Scope, Status, Step, cap_prefix, dependents_closure, failed, host_has_x86_64v3,
-    kernel_require_targets, mapping, memory_cap_error, parse_packages, plan, render_table,
-    tracked_files_cmd, tracked_files_cmd_literal,
+    ADVISORY_STEPS, Action, Changes, EXTERNAL_CI_CHECKS, Mapping, Opts, Outcome, Pkg,
+    REQUIRED_CI_CHECKS, STEP_IDS, Scope, Status, Step, cap_prefix, dependents_closure, failed,
+    host_has_x86_64v3, kernel_require_targets, mapping, memory_cap_error, parse_packages, plan,
+    render_table, tracked_files_cmd, tracked_files_cmd_literal,
 };
 
 fn pkg(name: &str, deps: &[&str]) -> Pkg {
@@ -395,15 +395,12 @@ fn fast_skips_both_coverage_gates() {
 }
 
 #[test]
-fn github_changes_run_workflow_lint_and_zizmor_only_then() {
+fn workflow_lint_always_runs_and_zizmor_only_for_github_changes() {
     let on = make_plan(&detect(&[".github/workflows/ci.yml"]), &opts(&[]), true);
     assert!(matches!(step(&on, "workflow-lint").action, Action::Run(_)));
     assert!(matches!(step(&on, "zizmor").action, Action::Run(_)));
     let off = make_plan(&detect(&["crates/exec/src/lib.rs"]), &opts(&[]), true);
-    assert_eq!(
-        skip_reason(&off, "workflow-lint"),
-        Some("no .github change")
-    );
+    assert!(matches!(step(&off, "workflow-lint").action, Action::Run(_)));
     assert_eq!(skip_reason(&off, "zizmor"), Some("no .github change"));
 }
 
@@ -721,7 +718,11 @@ fn every_step_backs_a_required_check() {
         })
         .flatten()
         .collect();
-    let all: BTreeSet<&str> = STEP_IDS.iter().copied().collect();
+    let all: BTreeSet<&str> = STEP_IDS
+        .iter()
+        .copied()
+        .filter(|s| !ADVISORY_STEPS.contains(s))
+        .collect();
     let unclaimed: Vec<&&str> = all.difference(&claimed).collect();
     assert!(
         unclaimed.is_empty(),
@@ -1107,4 +1108,64 @@ fn markdownlint_paths_are_passed_as_literal_paths() {
         cmds.iter()
             .all(|c| !c.args.iter().any(|a| a.contains("printf ':%s")))
     );
+}
+
+#[test]
+fn coverage_is_scoped_to_touched_crates_in_a_dedicated_target_dir() {
+    let steps = make_plan(&detect(&["crates/common/src/lib.rs"]), &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "diff-coverage").action else {
+        panic!("diff-coverage should run");
+    };
+    assert_eq!(cmds[0].args, ["coverage", "--no-branch", "-p", "common"]);
+    assert!(cmds[0].heavy);
+    for c in cmds {
+        assert!(
+            c.env
+                .iter()
+                .any(|(k, v)| k == "CARGO_TARGET_DIR" && v.contains("precheck-cov"))
+        );
+    }
+    let wide = make_plan(&detect(&["Cargo.toml"]), &opts(&[]), true);
+    let Action::Run(cmds) = &step(&wide, "diff-coverage").action else {
+        panic!("diff-coverage should run");
+    };
+    assert_eq!(cmds[0].args, ["coverage", "--no-branch"]);
+}
+
+#[test]
+fn staleness_and_attribution_are_checked_unless_allowed() {
+    let ch = detect(&["crates/common/src/lib.rs"]);
+    assert!(matches!(
+        step(&make_plan(&ch, &opts(&[]), true), "base-fresh").action,
+        Action::Run(_)
+    ));
+    assert_eq!(
+        skip_reason(
+            &make_plan(&ch, &opts(&["--allow-stale"]), true),
+            "base-fresh"
+        ),
+        Some("--allow-stale")
+    );
+    let steps = make_plan(&ch, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "policy").action else {
+        panic!("policy should run");
+    };
+    assert!(
+        cmds.iter()
+            .any(|c| c.args.iter().any(|a| a.contains("check-ai-attribution")))
+    );
+}
+
+#[test]
+fn python_wheel_tests_follow_python_and_the_bindings_crate() {
+    let none = make_plan(&detect(&["crates/common/src/lib.rs"]), &opts(&[]), true);
+    // `common` has no dependent named krishiv-python in the fixture workspace.
+    assert!(skip_reason(&none, "python-wheel-tests").is_some());
+    let py = make_plan(&detect(&["python/krishiv/a.py"]), &opts(&[]), true);
+    assert!(matches!(
+        step(&py, "python-wheel-tests").action,
+        Action::Run(_)
+    ));
+    let fast = make_plan(&detect(&["python/krishiv/a.py"]), &opts(&["--fast"]), true);
+    assert_eq!(skip_reason(&fast, "python-wheel-tests"), Some("--fast"));
 }
