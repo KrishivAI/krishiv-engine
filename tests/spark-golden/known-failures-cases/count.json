@@ -1,0 +1,21 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      2,
+      4,
+      8,
+      9,
+      10,
+      11,
+      12
+    ],
+    "legacy-configs": [
+      14,
+      16,
+      20
+    ]
+  },
+  "file": "count",
+  "format_version": 1
+}

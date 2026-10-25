@@ -18,10 +18,10 @@ use proptest::sample::Index;
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Cte, CteRef, DayTimeField, Expr, ExprNode,
     FrameBound, FrameUnits, FunctionCall, FunctionId, FunctionKind, Grouping, JoinCondition,
-    JoinKind, JoinStrategy, Literal, LogicalPlan, NullOrdering, Origin, Plan, PlanId, PlanNode,
-    ReadSource, ResolvedExpr, ResolvedFunction, Scan, SetOperation, SortDirection, SortOrder,
-    SourceId, Span, SqlArgs, Star, SubqueryKind, TableVersion, WindowExpr, WindowFrame, WindowSpec,
-    WindowSpecRef, YearMonthField,
+    JoinKind, JoinStrategy, Literal, LogicalPlan, NullOrdering, Origin, PivotValue, Plan, PlanId,
+    PlanNode, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SetOperation, SortDirection,
+    SortOrder, SourceId, Span, SqlArgs, Star, SubqueryKind, TableVersion, UnpivotColumnSet,
+    WindowExpr, WindowFrame, WindowSpec, WindowSpecRef, YearMonthField,
 };
 
 // ---- generator ------------------------------------------------------------
@@ -179,6 +179,7 @@ impl Gen<'_> {
             1 => ExprNode::Literal(self.literal()),
             2 => ExprNode::Star(Star {
                 qualifier: self.many(0, 1, Gen::name),
+                except: Vec::new(),
                 plan_id: self.plan_ref(),
             }),
             3 => ExprNode::Resolved(ResolvedExpr::Column(self.bound())),
@@ -334,7 +335,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 24 };
+        let kinds = if depth == 0 { 4 } else { 27 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -472,6 +473,29 @@ impl Gen<'_> {
                 input: self.input(d),
                 projections: self.many(1, 2, Gen::exprs),
                 output: self.many(0, 2, Gen::bound),
+            },
+            24 => PlanNode::InlineTable {
+                rows: self.many(1, 2, |g| g.many(1, 2, |h| Arc::new(h.expr(2)))),
+                columns: self.many(0, 2, Gen::name),
+            },
+            25 => PlanNode::Pivot {
+                input: self.input(d),
+                pivot_columns: self.exprs(),
+                values: self.many(0, 2, |g| PivotValue {
+                    exprs: g.exprs(),
+                    alias: g.flag().then(|| g.name()),
+                }),
+                aggregates: self.exprs(),
+            },
+            26 => PlanNode::Unpivot {
+                input: self.input(d),
+                value_columns: self.many(0, 2, Gen::name),
+                name_column: self.name(),
+                column_sets: self.many(0, 2, |g| UnpivotColumnSet {
+                    columns: g.exprs(),
+                    alias: g.flag().then(|| g.name()),
+                }),
+                include_nulls: self.flag(),
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -679,7 +703,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         ExprNode::Column(ColumnRef { name, .. }) => m_strings(name, w),
         ExprNode::Literal(v) => m_literal(v, w),
         ExprNode::TypedLiteral { value, .. } => m_string(value, w),
-        ExprNode::Star(Star { qualifier, .. }) => m_strings(qualifier, w),
+        ExprNode::Star(Star {
+            qualifier, except, ..
+        }) => m_strings(qualifier, w) || except.iter_mut().any(|path| m_strings(path, w)),
         ExprNode::Function(FunctionCall {
             name,
             args,
@@ -938,6 +964,58 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
                 || output.iter_mut().any(|c| m_bound(c, w))
                 || m_plan(input, w)
         }
+        PlanNode::Pivot {
+            input,
+            pivot_columns,
+            values,
+            aggregates,
+        } => {
+            site!(w, pivot_columns.push(Arc::new(Expr::column(["x"]))));
+            site!(
+                w,
+                values.push(PivotValue {
+                    exprs: Vec::new(),
+                    alias: None,
+                })
+            );
+            site!(w, aggregates.push(Arc::new(Expr::column(["x"]))));
+            m_exprs(pivot_columns, w)
+                || values.iter_mut().any(|v| {
+                    site!(w, v.alias = Some("x".to_owned()));
+                    m_exprs(&mut v.exprs, w)
+                })
+                || m_exprs(aggregates, w)
+                || m_plan(input, w)
+        }
+        PlanNode::Unpivot {
+            input,
+            value_columns,
+            name_column,
+            column_sets,
+            include_nulls,
+        } => {
+            site!(w, value_columns.push("x".to_owned()));
+            site!(w, name_column.push('x'));
+            site!(
+                w,
+                column_sets.push(UnpivotColumnSet {
+                    columns: Vec::new(),
+                    alias: None,
+                })
+            );
+            site!(w, *include_nulls = !*include_nulls);
+            m_strings(value_columns, w)
+                || column_sets.iter_mut().any(|s| {
+                    site!(w, s.alias = Some("x".to_owned()));
+                    m_exprs(&mut s.columns, w)
+                })
+                || m_plan(input, w)
+        }
+        PlanNode::InlineTable { rows, columns } => {
+            site!(w, rows.push(Vec::new()));
+            site!(w, columns.push("x".to_owned()));
+            rows.iter_mut().any(|r| m_exprs(r, w)) || m_strings(columns, w)
+        }
         PlanNode::SetOp {
             left,
             right,
@@ -962,13 +1040,15 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             site!(w, flip(kind, JoinKind::Inner, JoinKind::Cross));
             let other = match condition {
                 JoinCondition::None => JoinCondition::Using(vec!["x".to_owned()]),
-                JoinCondition::On(_) | JoinCondition::Using(_) => JoinCondition::None,
+                JoinCondition::On(_) | JoinCondition::Using(_) | JoinCondition::Natural => {
+                    JoinCondition::None
+                }
             };
             site!(w, *condition = other);
             let inside = match condition {
                 JoinCondition::On(e) => m_expr(e, w),
                 JoinCondition::Using(cols) => m_strings(cols, w),
-                JoinCondition::None => false,
+                JoinCondition::None | JoinCondition::Natural => false,
             };
             inside || m_plan(left, w) || m_plan(right, w)
         }

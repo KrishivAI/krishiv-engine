@@ -80,7 +80,7 @@ def main(argv=None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a suite on an engine, write JSON to $KRISHIV_DATA/results")
     r.add_argument("--engine", required=True, choices=[*ENGINES, "spark"])
-    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "memcap", *H2O_SUITES])
+    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "dsb", "memcap", *H2O_SUITES])
     add_h2o_args(r)
     r.add_argument("--sf", type=float, default=1)
     r.add_argument(

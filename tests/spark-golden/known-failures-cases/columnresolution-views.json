@@ -1,0 +1,19 @@
+{
+  "cases": {
+    "depends-on-command": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "sql-commands": [
+      8,
+      16
+    ]
+  },
+  "file": "columnresolution-views",
+  "format_version": 1
+}

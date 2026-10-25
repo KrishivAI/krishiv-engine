@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "dayofweek#1cb766f4a670/ansi_on",
+      "reason": "SELECT dayofweek(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#1cb766f4a670/ansi_off",
+      "reason": "SELECT dayofweek(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#47b613bea55d/ansi_on",
+      "reason": "SELECT dayofweek(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#47b613bea55d/ansi_off",
+      "reason": "SELECT dayofweek(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#70ae78b8fc6a/ansi_on",
+      "reason": "SELECT dayofweek(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#70ae78b8fc6a/ansi_off",
+      "reason": "SELECT dayofweek(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#b213f42da8ee/ansi_on",
+      "reason": "SELECT dayofweek(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#b213f42da8ee/ansi_off",
+      "reason": "SELECT dayofweek(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#cb4a7b0f9f60/ansi_on",
+      "reason": "SELECT dayofweek(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofweek#cb4a7b0f9f60/ansi_off",
+      "reason": "SELECT dayofweek(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "dayofweek"
+}

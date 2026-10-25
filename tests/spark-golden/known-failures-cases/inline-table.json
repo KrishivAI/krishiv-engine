@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "query-features": [
+      10,
+      14,
+      18,
+      22,
+      23
+    ]
+  },
+  "file": "inline-table",
+  "format_version": 1
+}

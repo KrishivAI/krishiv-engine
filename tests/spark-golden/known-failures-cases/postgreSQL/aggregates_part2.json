@@ -1,0 +1,21 @@
+{
+  "cases": {
+    "depends-on-command": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      13,
+      14,
+      15
+    ],
+    "generators": [
+      27
+    ]
+  },
+  "file": "postgreSQL/aggregates_part2",
+  "format_version": 1
+}

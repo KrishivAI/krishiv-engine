@@ -245,12 +245,16 @@ impl AggTable {
                 .iter()
                 .zip(&self.core.ranges)
                 .map(|(a, r)| {
-                    let at = if p.states {
-                        Some(r.start)
-                    } else {
-                        a.args().first().copied()
+                    // The value column, then (`max_by`/`min_by`) the key.
+                    let at = |n: usize| {
+                        let i = if p.states {
+                            Some(r.start + n)
+                        } else {
+                            a.args().get(n).copied()
+                        };
+                        i.and_then(|i| p.cols.get(i))
                     };
-                    a.projected(new, at.and_then(|i| p.cols.get(i)))
+                    a.projected(new, at(0), at(1))
                 })
                 .sum::<usize>()
     }

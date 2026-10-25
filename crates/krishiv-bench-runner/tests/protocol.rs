@@ -135,7 +135,21 @@ fn arguments() {
     );
     assert!(args("--data /d").unwrap().threads >= 1);
     assert_eq!(args("--data /d").unwrap().io_threads, None);
-    let sizes = |s: &str| args(s).unwrap().executor_config();
+    let sizes = |s: &str| args(s).unwrap().executor_config().unwrap();
+    // The I/O runtime's blocking threads come from `krishiv.io.blockingThreads`, validated.
+    assert_eq!(sizes("--data /d").io_blocking_threads, 8);
+    assert_eq!(
+        sizes("--data /d --conf krishiv.io.blockingThreads=3").io_blocking_threads,
+        3
+    );
+    for bad in ["0", "-1", "x"] {
+        let c = args(&format!(
+            "--data /d --conf krishiv.io.blockingThreads={bad}"
+        ))
+        .unwrap();
+        let e = c.executor_config().unwrap_err().to_string();
+        assert!(e.contains("krishiv.io.blockingThreads"), "{bad}: {e}");
+    }
     assert_eq!(
         sizes("--data /d --threads 3").io_threads,
         krishiv_exec::ExecutorConfig::default().io_threads
