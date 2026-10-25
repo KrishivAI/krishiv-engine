@@ -1,0 +1,121 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"DROP VIEW a.b\", \"DROP VIEW IF EXISTS a.b.c\",\n\"DROP VIEW IDENTIFIER('v')\", \"DROP VIEW IDENTIFIER('a.b.c')\",\n\"DROP VIEW global_temp.view_3\",])"
+---
+-- DROP VIEW a.b
+DropPermanentView(
+    DropPermanentView {
+        if_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "a",
+                        quoted: false,
+                        span: 10..11,
+                    },
+                    Ident {
+                        value: "b",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 10..13,
+            },
+        ),
+        span: 0..13,
+    },
+)
+-- DROP VIEW IF EXISTS a.b.c
+DropPermanentView(
+    DropPermanentView {
+        if_exists: true,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "a",
+                        quoted: false,
+                        span: 20..21,
+                    },
+                    Ident {
+                        value: "b",
+                        quoted: false,
+                        span: 22..23,
+                    },
+                    Ident {
+                        value: "c",
+                        quoted: false,
+                        span: 24..25,
+                    },
+                ],
+                span: 20..25,
+            },
+        ),
+        span: 0..25,
+    },
+)
+-- DROP VIEW IDENTIFIER('v')
+DropPermanentView(
+    DropPermanentView {
+        if_exists: false,
+        name: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Literal(
+                        String(
+                            "v",
+                        ),
+                    ),
+                    span: 21..24,
+                },
+                span: 10..25,
+            },
+        ),
+        span: 0..25,
+    },
+)
+-- DROP VIEW IDENTIFIER('a.b.c')
+DropPermanentView(
+    DropPermanentView {
+        if_exists: false,
+        name: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Literal(
+                        String(
+                            "a.b.c",
+                        ),
+                    ),
+                    span: 21..28,
+                },
+                span: 10..29,
+            },
+        ),
+        span: 0..29,
+    },
+)
+-- DROP VIEW global_temp.view_3
+DropPermanentView(
+    DropPermanentView {
+        if_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "global_temp",
+                        quoted: false,
+                        span: 10..21,
+                    },
+                    Ident {
+                        value: "view_3",
+                        quoted: false,
+                        span: 22..28,
+                    },
+                ],
+                span: 10..28,
+            },
+        ),
+        span: 0..28,
+    },
+)

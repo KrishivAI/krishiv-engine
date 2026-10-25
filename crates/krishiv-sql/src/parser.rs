@@ -15,6 +15,7 @@
 //! nested deeper than [`INLINE_NESTING`] brackets parses on a thread whose
 //! stack fits that depth.
 
+mod ddl;
 mod expr;
 mod types;
 
@@ -1311,6 +1312,45 @@ impl<'s> Parser<'s> {
             self.drop_command()?
         } else if self.kw_at(0, "USE") {
             self.use_command()?
+        } else if self.any_kw_at(
+            0,
+            &[
+                "ALTER", "SHOW", "DESC", "DESCRIBE", "INSERT", "DELETE", "UPDATE", "MERGE",
+                "TRUNCATE", "CACHE", "UNCACHE", "CLEAR", "REFRESH", "ANALYZE", "MSCK", "REPAIR",
+                "ADD", "LIST",
+            ],
+        ) {
+            self.command_statement()?
+        } else if self.kw_at(0, "FROM") {
+            // A multi-table insert, or a `FROM ... SELECT` query. The
+            // query runs first; only its syntax failure reads as an
+            // insert (a fatal error is the query's own). When both fail,
+            // the farther failure is reported.
+            let save = self.checkpoint();
+            match self.statement() {
+                Ok(query) => {
+                    self.commit(save);
+                    Statement::Query(Box::new(query))
+                }
+                Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                Err(Fail::Syntax) => {
+                    let (far, extra, missing, matched) =
+                        (self.far, self.extra, self.missing, self.matched);
+                    self.restore(save);
+                    match self.multi_insert_command() {
+                        Ok(statement) => statement,
+                        Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                        Err(Fail::Syntax) if self.far >= far => return self.fail(),
+                        Err(Fail::Syntax) => {
+                            self.far = far;
+                            self.extra = extra;
+                            self.missing = missing;
+                            self.matched = matched;
+                            return self.fail();
+                        }
+                    }
+                }
+            }
         } else {
             Statement::Query(Box::new(self.statement()?))
         };
@@ -1756,6 +1796,45 @@ impl<'s> Parser<'s> {
     /// a namespace. Anything else (`CREATE VIEW`, `CREATE FUNCTION`,
     /// `CREATE GLOBAL ...`, ...) fails where it stands, as in Spark.
     fn create_command(&mut self) -> PR<Statement> {
+        // The legacy shapes first (temporary views, tables, namespaces);
+        // a view-shaped statement the legacy reading rejects reads as a
+        // full view statement instead (a fatal error is the legacy
+        // reading's own).
+        if !self.create_is_view_shaped() {
+            return self.create_command_inner();
+        }
+        let start = self.start();
+        let save = self.checkpoint();
+        match self.create_command_inner() {
+            Ok(statement) => {
+                self.commit(save);
+                Ok(statement)
+            }
+            Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
+            Err(Fail::Syntax) => {
+                self.restore(save);
+                self.create_full_view_command(start)
+            }
+        }
+    }
+
+    /// Whether the statement at `CREATE` reads `CREATE [OR REPLACE]
+    /// [GLOBAL] [TEMP|TEMPORARY] VIEW`.
+    fn create_is_view_shaped(&self) -> bool {
+        let mut n = 1;
+        if self.kw_at(n, "OR") && self.kw_at(n + 1, "REPLACE") {
+            n += 2;
+        }
+        if self.kw_at(n, "GLOBAL") {
+            n += 1;
+        }
+        if self.kw_at(n, "TEMP") || self.kw_at(n, "TEMPORARY") {
+            n += 1;
+        }
+        self.kw_at(n, "VIEW")
+    }
+
+    fn create_command_inner(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("CREATE")?;
         let or_replace = if self.kw_at(0, "OR") && self.kw_at(1, "REPLACE") {
@@ -1879,8 +1958,31 @@ impl<'s> Parser<'s> {
     }
 
     /// `DROP ...`: a view, a table, a namespace, or a temporary variable.
-    /// Anything else fails where it stands, as in Spark.
+    /// Anything else fails where it stands, as in Spark. A `DROP VIEW`
+    /// the legacy reading rejects reads as a full view statement instead.
     fn drop_command(&mut self) -> PR<Statement> {
+        if !self.kw_at(1, "VIEW") {
+            return self.drop_command_inner();
+        }
+        let start = self.start();
+        let save = self.checkpoint();
+        match self.drop_command_inner() {
+            Ok(statement) => {
+                self.commit(save);
+                Ok(statement)
+            }
+            Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
+            Err(Fail::Syntax) => {
+                self.restore(save);
+                self.expect_kw("DROP")?;
+                self.drop_full_view_command(start)
+            }
+        }
+    }
+
+    /// `DROP ...`: a view, a table, a namespace, or a temporary variable.
+    /// Anything else fails where it stands, as in Spark.
+    fn drop_command_inner(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("DROP")?;
         if self.kw_at(0, "VIEW") {

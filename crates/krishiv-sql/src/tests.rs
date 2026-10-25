@@ -11,6 +11,7 @@ use super::ast::{BinaryOp, ExprKind, SetExprKind, Span};
 use super::lexer::{TokenKind, tokenize, unescape_string};
 use super::*;
 
+mod commands;
 mod probe;
 
 /// The tree of `sql`, without Spark's post-parse checks (tree shapes).
@@ -1496,15 +1497,13 @@ fn create_view_statements() {
             ("qualifier", "`a`".to_owned()),
         ]
     );
-    // Only temporary views: anything else fails where it stands.
+    // A permanent view without `AS` fails where the query would start.
     let fail = |sql: &str| parse_statement(sql, &d).unwrap_err();
-    let e = fail("CREATE VIEW v AS SELECT 1");
+    let e = fail("CREATE VIEW v SELECT 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 7..11);
-    let e = fail("CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1");
+    assert_eq!(e.span.range(), 14..20);
+    let e = fail("CREATE GLOBAL TEMPORARY VIEW v AS SELECT");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 7..13);
-    // `AS` is required, and the query follows it.
     let e = fail("CREATE TEMP VIEW v SELECT 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     assert_eq!(e.span.range(), 19..25);
@@ -2305,10 +2304,17 @@ fn parenthesized_ctas_forms() {
     // Clauses do not follow one: it ends the statement.
     let e = parse_statement("CREATE TABLE t (SELECT 1) USING parquet", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    // `OR REPLACE` with anything but a table fails where it stands.
-    let e = parse_statement("CREATE OR REPLACE VIEW v AS SELECT 1", &d).unwrap_err();
-    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 18..22);
+    // `OR REPLACE` with anything but a table or a view fails where it
+    // stands; a permanent view reads as a full view statement.
+    let v = match parse_statement("CREATE OR REPLACE VIEW v AS SELECT 1", &d).unwrap() {
+        Statement::CreatePermanentView(v) => v,
+        other => panic!("{other:?}"),
+    };
+    assert!(v.or_replace && !v.temporary && !v.global);
+    assert_eq!(
+        v.span.text("CREATE OR REPLACE VIEW v AS SELECT 1"),
+        "CREATE OR REPLACE VIEW v AS SELECT 1"
+    );
     // So does anything else.
     let e = parse_statement("CREATE TEMPORARY FOO", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);

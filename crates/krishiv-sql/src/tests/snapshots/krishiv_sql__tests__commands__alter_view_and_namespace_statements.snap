@@ -1,0 +1,531 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"ALTER VIEW v AS SELECT * FROM t\",\n\"ALTER VIEW v WITH SCHEMA BINDING\", \"ALTER VIEW v WITH SCHEMA EVOLUTION\",\n\"ALTER VIEW v WITH SCHEMA COMPENSATION\",\n\"ALTER VIEW v WITH SCHEMA TYPE EVOLUTION\",\n\"ALTER VIEW v SET TBLPROPERTIES ('yes' = 'no')\",\n\"ALTER VIEW v UNSET TBLPROPERTIES IF EXISTS ('yes')\",\n\"ALTER VIEW v RENAME TO v2\", \"ALTER VIEW IDENTIFIER('v') AS VALUES (2)\",\n\"ALTER SCHEMA s SET PROPERTIES (k = 'v')\",\n\"ALTER SCHEMA s SET LOCATION 'loc'\",\n\"ALTER SCHEMA s DEFAULT COLLATION UTF8_LCASE\",\n\"ALTER DATABASE d SET PROPERTIES (k = 'v')\",\n\"ALTER NAMESPACE n SET LOCATION 'loc'\",])"
+---
+-- ALTER VIEW v AS SELECT * FROM t
+AlterView(
+    AlterView {
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        action: SetQuery {
+            query: Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Wildcard {
+                                            qualifier: [],
+                                            except: [],
+                                        },
+                                        span: 23..24,
+                                    },
+                                    alias: None,
+                                    span: 23..24,
+                                },
+                            ],
+                            from: Some(
+                                FromClause {
+                                    relations: [
+                                        Relation {
+                                            lateral: false,
+                                            primary: TableFactor {
+                                                kind: Table {
+                                                    name: ObjectName {
+                                                        parts: [
+                                                            Ident {
+                                                                value: "t",
+                                                                quoted: false,
+                                                                span: 30..31,
+                                                            },
+                                                        ],
+                                                        span: 30..31,
+                                                    },
+                                                    temporal: None,
+                                                    options: [],
+                                                },
+                                                alias: None,
+                                                span: 30..31,
+                                            },
+                                            extensions: [],
+                                            span: 30..31,
+                                        },
+                                    ],
+                                    lateral_views: [],
+                                    pivot: None,
+                                    unpivot: None,
+                                    span: 25..31,
+                                },
+                            ),
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 16..31,
+                        },
+                    ),
+                    span: 16..31,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 16..31,
+            },
+            schema_binding: None,
+            span: 13..31,
+        },
+        span: 0..31,
+    },
+)
+-- ALTER VIEW v WITH SCHEMA BINDING
+AlterView(
+    AlterView {
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        action: SetSchemaBinding(
+            Binding,
+        ),
+        span: 0..32,
+    },
+)
+-- ALTER VIEW v WITH SCHEMA EVOLUTION
+AlterView(
+    AlterView {
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        action: SetSchemaBinding(
+            Evolution,
+        ),
+        span: 0..34,
+    },
+)
+-- ALTER VIEW v WITH SCHEMA COMPENSATION
+AlterView(
+    AlterView {
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        action: SetSchemaBinding(
+            Compensation,
+        ),
+        span: 0..37,
+    },
+)
+-- ALTER VIEW v WITH SCHEMA TYPE EVOLUTION
+AlterView(
+    AlterView {
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        action: SetSchemaBinding(
+            TypeEvolution,
+        ),
+        span: 0..39,
+    },
+)
+-- ALTER VIEW v SET TBLPROPERTIES ('yes' = 'no')
+AlterView(
+    AlterView {
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        action: SetTblProperties(
+            [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "yes",
+                                quoted: true,
+                                span: 32..37,
+                            },
+                        ],
+                        is_string: true,
+                        span: 32..37,
+                    },
+                    value: Some(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "no",
+                                ),
+                            ),
+                            span: 40..44,
+                        },
+                    ),
+                    span: 32..44,
+                },
+            ],
+        ),
+        span: 0..45,
+    },
+)
+-- ALTER VIEW v UNSET TBLPROPERTIES IF EXISTS ('yes')
+AlterView(
+    AlterView {
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        action: UnsetTblProperties {
+            if_exists: true,
+            keys: [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "yes",
+                                quoted: true,
+                                span: 44..49,
+                            },
+                        ],
+                        is_string: true,
+                        span: 44..49,
+                    },
+                    value: None,
+                    span: 44..49,
+                },
+            ],
+            span: 13..50,
+        },
+        span: 0..50,
+    },
+)
+-- ALTER VIEW v RENAME TO v2
+AlterView(
+    AlterView {
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        action: RenameTo {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "v2",
+                            quoted: false,
+                            span: 23..25,
+                        },
+                    ],
+                    span: 23..25,
+                },
+            ),
+            span: 13..25,
+        },
+        span: 0..25,
+    },
+)
+-- ALTER VIEW IDENTIFIER('v') AS VALUES (2)
+AlterView(
+    AlterView {
+        name: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Literal(
+                        String(
+                            "v",
+                        ),
+                    ),
+                    span: 22..25,
+                },
+                span: 11..26,
+            },
+        ),
+        action: SetQuery {
+            query: Query {
+                with: None,
+                body: SetExpr {
+                    kind: Values(
+                        Values {
+                            rows: [
+                                Expr {
+                                    kind: Nested(
+                                        Expr {
+                                            kind: Literal(
+                                                Number {
+                                                    text: "2",
+                                                    kind: Int,
+                                                },
+                                            ),
+                                            span: 38..39,
+                                        },
+                                    ),
+                                    span: 37..40,
+                                },
+                            ],
+                            alias: None,
+                            span: 30..40,
+                        },
+                    ),
+                    span: 30..40,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 30..40,
+            },
+            schema_binding: None,
+            span: 27..40,
+        },
+        span: 0..40,
+    },
+)
+-- ALTER SCHEMA s SET PROPERTIES (k = 'v')
+AlterNamespace(
+    AlterNamespace {
+        kind: Schema,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "s",
+                        quoted: false,
+                        span: 13..14,
+                    },
+                ],
+                span: 13..14,
+            },
+        ),
+        action: SetProperties(
+            [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "k",
+                                quoted: false,
+                                span: 31..32,
+                            },
+                        ],
+                        is_string: false,
+                        span: 31..32,
+                    },
+                    value: Some(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "v",
+                                ),
+                            ),
+                            span: 35..38,
+                        },
+                    ),
+                    span: 31..38,
+                },
+            ],
+        ),
+        span: 0..39,
+    },
+)
+-- ALTER SCHEMA s SET LOCATION 'loc'
+AlterNamespace(
+    AlterNamespace {
+        kind: Schema,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "s",
+                        quoted: false,
+                        span: 13..14,
+                    },
+                ],
+                span: 13..14,
+            },
+        ),
+        action: SetLocation(
+            "loc",
+        ),
+        span: 0..33,
+    },
+)
+-- ALTER SCHEMA s DEFAULT COLLATION UTF8_LCASE
+AlterNamespace(
+    AlterNamespace {
+        kind: Schema,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "s",
+                        quoted: false,
+                        span: 13..14,
+                    },
+                ],
+                span: 13..14,
+            },
+        ),
+        action: DefaultCollation(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "UTF8_LCASE",
+                        quoted: false,
+                        span: 33..43,
+                    },
+                ],
+                span: 33..43,
+            },
+        ),
+        span: 0..43,
+    },
+)
+-- ALTER DATABASE d SET PROPERTIES (k = 'v')
+AlterNamespace(
+    AlterNamespace {
+        kind: Database,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "d",
+                        quoted: false,
+                        span: 15..16,
+                    },
+                ],
+                span: 15..16,
+            },
+        ),
+        action: SetProperties(
+            [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "k",
+                                quoted: false,
+                                span: 33..34,
+                            },
+                        ],
+                        is_string: false,
+                        span: 33..34,
+                    },
+                    value: Some(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "v",
+                                ),
+                            ),
+                            span: 37..40,
+                        },
+                    ),
+                    span: 33..40,
+                },
+            ],
+        ),
+        span: 0..41,
+    },
+)
+-- ALTER NAMESPACE n SET LOCATION 'loc'
+AlterNamespace(
+    AlterNamespace {
+        kind: Namespace,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "n",
+                        quoted: false,
+                        span: 16..17,
+                    },
+                ],
+                span: 16..17,
+            },
+        ),
+        action: SetLocation(
+            "loc",
+        ),
+        span: 0..36,
+    },
+)

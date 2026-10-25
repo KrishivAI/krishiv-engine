@@ -1,0 +1,1802 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"CREATE VIEW v AS SELECT * FROM t\",\n\"CREATE OR REPLACE VIEW v AS SELECT 1\",\n\"CREATE VIEW IF NOT EXISTS v AS SELECT 1\",\n\"CREATE VIEW v (a COMMENT 'the a', b) AS SELECT 1, 2\",\n\"CREATE VIEW v COMMENT 'the view' TBLPROPERTIES ('p' = 'v') AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA BINDING AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA EVOLUTION AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA COMPENSATION AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA TYPE EVOLUTION AS SELECT 1\",\n\"CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1\",\n\"CREATE OR REPLACE GLOBAL TEMP VIEW v AS SELECT 1\",\n\"CREATE TEMPORARY VIEW v USING parquet\",\n\"CREATE TEMPORARY VIEW v (a) USING parquet OPTIONS (k = 'v')\",\n\"CREATE TEMPORARY VIEW v (e INT) USING parquet\",\n\"CREATE TEMPORARY VIEW v USING org.apache.spark.sql.sources.DDLScanSource OPTIONS (From '1', To '10', Table 'test1')\",\n\"CREATE TEMPORARY VIEW v DEFAULT COLLATION UNICODE AS SELECT CAST(c1 AS STRING)\",\n\"CREATE VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE OR REPLACE VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE TEMPORARY VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE VIEW v (IDENTIFIER('c1')) AS VALUES (1)\",\n\"CREATE VIEW db.v AS SELECT * FROM t\",])"
+---
+-- CREATE VIEW v AS SELECT * FROM t
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Wildcard {
+                                            qualifier: [],
+                                            except: [],
+                                        },
+                                        span: 24..25,
+                                    },
+                                    alias: None,
+                                    span: 24..25,
+                                },
+                            ],
+                            from: Some(
+                                FromClause {
+                                    relations: [
+                                        Relation {
+                                            lateral: false,
+                                            primary: TableFactor {
+                                                kind: Table {
+                                                    name: ObjectName {
+                                                        parts: [
+                                                            Ident {
+                                                                value: "t",
+                                                                quoted: false,
+                                                                span: 31..32,
+                                                            },
+                                                        ],
+                                                        span: 31..32,
+                                                    },
+                                                    temporal: None,
+                                                    options: [],
+                                                },
+                                                alias: None,
+                                                span: 31..32,
+                                            },
+                                            extensions: [],
+                                            span: 31..32,
+                                        },
+                                    ],
+                                    lateral_views: [],
+                                    pivot: None,
+                                    unpivot: None,
+                                    span: 26..32,
+                                },
+                            ),
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 17..32,
+                        },
+                    ),
+                    span: 17..32,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 17..32,
+            },
+        ),
+        span: 0..32,
+    },
+)
+-- CREATE OR REPLACE VIEW v AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: true,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 23..24,
+                    },
+                ],
+                span: 23..24,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 35..36,
+                                    },
+                                    alias: None,
+                                    span: 35..36,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 28..36,
+                        },
+                    ),
+                    span: 28..36,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 28..36,
+            },
+        ),
+        span: 0..36,
+    },
+)
+-- CREATE VIEW IF NOT EXISTS v AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: true,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 26..27,
+                    },
+                ],
+                span: 26..27,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 38..39,
+                                    },
+                                    alias: None,
+                                    span: 38..39,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 31..39,
+                        },
+                    ),
+                    span: 31..39,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 31..39,
+            },
+        ),
+        span: 0..39,
+    },
+)
+-- CREATE VIEW v (a COMMENT 'the a', b) AS SELECT 1, 2
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [
+            PermanentViewColumn {
+                name: Ident(
+                    Ident {
+                        value: "a",
+                        quoted: false,
+                        span: 15..16,
+                    },
+                ),
+                data_type: None,
+                comment: Some(
+                    "the a",
+                ),
+                span: 15..32,
+            },
+            PermanentViewColumn {
+                name: Ident(
+                    Ident {
+                        value: "b",
+                        quoted: false,
+                        span: 34..35,
+                    },
+                ),
+                data_type: None,
+                comment: None,
+                span: 34..35,
+            },
+        ],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 47..48,
+                                    },
+                                    alias: None,
+                                    span: 47..48,
+                                },
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "2",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 50..51,
+                                    },
+                                    alias: None,
+                                    span: 50..51,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 40..51,
+                        },
+                    ),
+                    span: 40..51,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 40..51,
+            },
+        ),
+        span: 0..51,
+    },
+)
+-- CREATE VIEW v COMMENT 'the view' TBLPROPERTIES ('p' = 'v') AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: Some(
+            "the view",
+        ),
+        tblproperties: [
+            TableOption {
+                key: OptionKey {
+                    parts: [
+                        Ident {
+                            value: "p",
+                            quoted: true,
+                            span: 48..51,
+                        },
+                    ],
+                    is_string: true,
+                    span: 48..51,
+                },
+                value: Some(
+                    Expr {
+                        kind: Literal(
+                            String(
+                                "v",
+                            ),
+                        ),
+                        span: 54..57,
+                    },
+                ),
+                span: 48..57,
+            },
+        ],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 69..70,
+                                    },
+                                    alias: None,
+                                    span: 69..70,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 62..70,
+                        },
+                    ),
+                    span: 62..70,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 62..70,
+            },
+        ),
+        span: 0..70,
+    },
+)
+-- CREATE VIEW v WITH SCHEMA BINDING AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: Some(
+            Binding,
+        ),
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 44..45,
+                                    },
+                                    alias: None,
+                                    span: 44..45,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 37..45,
+                        },
+                    ),
+                    span: 37..45,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 37..45,
+            },
+        ),
+        span: 0..45,
+    },
+)
+-- CREATE VIEW v WITH SCHEMA EVOLUTION AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: Some(
+            Evolution,
+        ),
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 46..47,
+                                    },
+                                    alias: None,
+                                    span: 46..47,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 39..47,
+                        },
+                    ),
+                    span: 39..47,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 39..47,
+            },
+        ),
+        span: 0..47,
+    },
+)
+-- CREATE VIEW v WITH SCHEMA COMPENSATION AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: Some(
+            Compensation,
+        ),
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 49..50,
+                                    },
+                                    alias: None,
+                                    span: 49..50,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 42..50,
+                        },
+                    ),
+                    span: 42..50,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 42..50,
+            },
+        ),
+        span: 0..50,
+    },
+)
+-- CREATE VIEW v WITH SCHEMA TYPE EVOLUTION AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: Some(
+            TypeEvolution,
+        ),
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 51..52,
+                                    },
+                                    alias: None,
+                                    span: 51..52,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 44..52,
+                        },
+                    ),
+                    span: 44..52,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 44..52,
+            },
+        ),
+        span: 0..52,
+    },
+)
+-- CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: true,
+        temporary: true,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 29..30,
+                    },
+                ],
+                span: 29..30,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 41..42,
+                                    },
+                                    alias: None,
+                                    span: 41..42,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 34..42,
+                        },
+                    ),
+                    span: 34..42,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 34..42,
+            },
+        ),
+        span: 0..42,
+    },
+)
+-- CREATE OR REPLACE GLOBAL TEMP VIEW v AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: true,
+        global: true,
+        temporary: true,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 35..36,
+                    },
+                ],
+                span: 35..36,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 47..48,
+                                    },
+                                    alias: None,
+                                    span: 47..48,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 40..48,
+                        },
+                    ),
+                    span: 40..48,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 40..48,
+            },
+        ),
+        span: 0..48,
+    },
+)
+-- CREATE TEMPORARY VIEW v USING parquet
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: true,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 22..23,
+                    },
+                ],
+                span: 22..23,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: Some(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "parquet",
+                        quoted: false,
+                        span: 30..37,
+                    },
+                ],
+                span: 30..37,
+            },
+        ),
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: None,
+        span: 0..37,
+    },
+)
+-- CREATE TEMPORARY VIEW v (a) USING parquet OPTIONS (k = 'v')
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: true,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 22..23,
+                    },
+                ],
+                span: 22..23,
+            },
+        ),
+        columns: [
+            PermanentViewColumn {
+                name: Ident(
+                    Ident {
+                        value: "a",
+                        quoted: false,
+                        span: 25..26,
+                    },
+                ),
+                data_type: None,
+                comment: None,
+                span: 25..26,
+            },
+        ],
+        collation: None,
+        using: Some(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "parquet",
+                        quoted: false,
+                        span: 34..41,
+                    },
+                ],
+                span: 34..41,
+            },
+        ),
+        options: [
+            TableOption {
+                key: OptionKey {
+                    parts: [
+                        Ident {
+                            value: "k",
+                            quoted: false,
+                            span: 51..52,
+                        },
+                    ],
+                    is_string: false,
+                    span: 51..52,
+                },
+                value: Some(
+                    Expr {
+                        kind: Literal(
+                            String(
+                                "v",
+                            ),
+                        ),
+                        span: 55..58,
+                    },
+                ),
+                span: 51..58,
+            },
+        ],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: None,
+        span: 0..59,
+    },
+)
+-- CREATE TEMPORARY VIEW v (e INT) USING parquet
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: true,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 22..23,
+                    },
+                ],
+                span: 22..23,
+            },
+        ),
+        columns: [
+            PermanentViewColumn {
+                name: Ident(
+                    Ident {
+                        value: "e",
+                        quoted: false,
+                        span: 25..26,
+                    },
+                ),
+                data_type: Some(
+                    DataTypeSpec {
+                        kind: Primitive {
+                            name: "int",
+                            args: [],
+                        },
+                        collation: None,
+                        span: 27..30,
+                    },
+                ),
+                comment: None,
+                span: 25..30,
+            },
+        ],
+        collation: None,
+        using: Some(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "parquet",
+                        quoted: false,
+                        span: 38..45,
+                    },
+                ],
+                span: 38..45,
+            },
+        ),
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: None,
+        span: 0..45,
+    },
+)
+-- CREATE TEMPORARY VIEW v USING org.apache.spark.sql.sources.DDLScanSource OPTIONS (From '1', To '10', Table 'test1')
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: true,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 22..23,
+                    },
+                ],
+                span: 22..23,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: Some(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "org",
+                        quoted: false,
+                        span: 30..33,
+                    },
+                    Ident {
+                        value: "apache",
+                        quoted: false,
+                        span: 34..40,
+                    },
+                    Ident {
+                        value: "spark",
+                        quoted: false,
+                        span: 41..46,
+                    },
+                    Ident {
+                        value: "sql",
+                        quoted: false,
+                        span: 47..50,
+                    },
+                    Ident {
+                        value: "sources",
+                        quoted: false,
+                        span: 51..58,
+                    },
+                    Ident {
+                        value: "DDLScanSource",
+                        quoted: false,
+                        span: 59..72,
+                    },
+                ],
+                span: 30..72,
+            },
+        ),
+        options: [
+            TableOption {
+                key: OptionKey {
+                    parts: [
+                        Ident {
+                            value: "From",
+                            quoted: false,
+                            span: 82..86,
+                        },
+                    ],
+                    is_string: false,
+                    span: 82..86,
+                },
+                value: Some(
+                    Expr {
+                        kind: Literal(
+                            String(
+                                "1",
+                            ),
+                        ),
+                        span: 87..90,
+                    },
+                ),
+                span: 82..90,
+            },
+            TableOption {
+                key: OptionKey {
+                    parts: [
+                        Ident {
+                            value: "To",
+                            quoted: false,
+                            span: 92..94,
+                        },
+                    ],
+                    is_string: false,
+                    span: 92..94,
+                },
+                value: Some(
+                    Expr {
+                        kind: Literal(
+                            String(
+                                "10",
+                            ),
+                        ),
+                        span: 95..99,
+                    },
+                ),
+                span: 92..99,
+            },
+            TableOption {
+                key: OptionKey {
+                    parts: [
+                        Ident {
+                            value: "Table",
+                            quoted: false,
+                            span: 101..106,
+                        },
+                    ],
+                    is_string: false,
+                    span: 101..106,
+                },
+                value: Some(
+                    Expr {
+                        kind: Literal(
+                            String(
+                                "test1",
+                            ),
+                        ),
+                        span: 107..114,
+                    },
+                ),
+                span: 101..114,
+            },
+        ],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: None,
+        span: 0..115,
+    },
+)
+-- CREATE TEMPORARY VIEW v DEFAULT COLLATION UNICODE AS SELECT CAST(c1 AS STRING)
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: true,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 22..23,
+                    },
+                ],
+                span: 22..23,
+            },
+        ),
+        columns: [],
+        collation: Some(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "UNICODE",
+                        quoted: false,
+                        span: 42..49,
+                    },
+                ],
+                span: 42..49,
+            },
+        ),
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Cast {
+                                            expr: Expr {
+                                                kind: Column(
+                                                    [
+                                                        Ident {
+                                                            value: "c1",
+                                                            quoted: false,
+                                                            span: 65..67,
+                                                        },
+                                                    ],
+                                                ),
+                                                span: 65..67,
+                                            },
+                                            data_type: DataTypeSpec {
+                                                kind: Primitive {
+                                                    name: "string",
+                                                    args: [],
+                                                },
+                                                collation: None,
+                                                span: 71..77,
+                                            },
+                                            try_cast: false,
+                                        },
+                                        span: 60..78,
+                                    },
+                                    alias: None,
+                                    span: 60..78,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 53..78,
+                        },
+                    ),
+                    span: 53..78,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 53..78,
+            },
+        ),
+        span: 0..78,
+    },
+)
+-- CREATE VIEW IDENTIFIER('v') (c1) AS VALUES (1)
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Literal(
+                        String(
+                            "v",
+                        ),
+                    ),
+                    span: 23..26,
+                },
+                span: 12..27,
+            },
+        ),
+        columns: [
+            PermanentViewColumn {
+                name: Ident(
+                    Ident {
+                        value: "c1",
+                        quoted: false,
+                        span: 29..31,
+                    },
+                ),
+                data_type: None,
+                comment: None,
+                span: 29..31,
+            },
+        ],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Values(
+                        Values {
+                            rows: [
+                                Expr {
+                                    kind: Nested(
+                                        Expr {
+                                            kind: Literal(
+                                                Number {
+                                                    text: "1",
+                                                    kind: Int,
+                                                },
+                                            ),
+                                            span: 44..45,
+                                        },
+                                    ),
+                                    span: 43..46,
+                                },
+                            ],
+                            alias: None,
+                            span: 36..46,
+                        },
+                    ),
+                    span: 36..46,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 36..46,
+            },
+        ),
+        span: 0..46,
+    },
+)
+-- CREATE OR REPLACE VIEW IDENTIFIER('v') (c1) AS VALUES (1)
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: true,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Literal(
+                        String(
+                            "v",
+                        ),
+                    ),
+                    span: 34..37,
+                },
+                span: 23..38,
+            },
+        ),
+        columns: [
+            PermanentViewColumn {
+                name: Ident(
+                    Ident {
+                        value: "c1",
+                        quoted: false,
+                        span: 40..42,
+                    },
+                ),
+                data_type: None,
+                comment: None,
+                span: 40..42,
+            },
+        ],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Values(
+                        Values {
+                            rows: [
+                                Expr {
+                                    kind: Nested(
+                                        Expr {
+                                            kind: Literal(
+                                                Number {
+                                                    text: "1",
+                                                    kind: Int,
+                                                },
+                                            ),
+                                            span: 55..56,
+                                        },
+                                    ),
+                                    span: 54..57,
+                                },
+                            ],
+                            alias: None,
+                            span: 47..57,
+                        },
+                    ),
+                    span: 47..57,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 47..57,
+            },
+        ),
+        span: 0..57,
+    },
+)
+-- CREATE TEMPORARY VIEW IDENTIFIER('v') (c1) AS VALUES (1)
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: true,
+        if_not_exists: false,
+        name: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Literal(
+                        String(
+                            "v",
+                        ),
+                    ),
+                    span: 33..36,
+                },
+                span: 22..37,
+            },
+        ),
+        columns: [
+            PermanentViewColumn {
+                name: Ident(
+                    Ident {
+                        value: "c1",
+                        quoted: false,
+                        span: 39..41,
+                    },
+                ),
+                data_type: None,
+                comment: None,
+                span: 39..41,
+            },
+        ],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Values(
+                        Values {
+                            rows: [
+                                Expr {
+                                    kind: Nested(
+                                        Expr {
+                                            kind: Literal(
+                                                Number {
+                                                    text: "1",
+                                                    kind: Int,
+                                                },
+                                            ),
+                                            span: 54..55,
+                                        },
+                                    ),
+                                    span: 53..56,
+                                },
+                            ],
+                            alias: None,
+                            span: 46..56,
+                        },
+                    ),
+                    span: 46..56,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 46..56,
+            },
+        ),
+        span: 0..56,
+    },
+)
+-- CREATE VIEW v (IDENTIFIER('c1')) AS VALUES (1)
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [
+            PermanentViewColumn {
+                name: Dynamic(
+                    DynamicName {
+                        expr: Expr {
+                            kind: Literal(
+                                String(
+                                    "c1",
+                                ),
+                            ),
+                            span: 26..30,
+                        },
+                        span: 15..31,
+                    },
+                ),
+                data_type: None,
+                comment: None,
+                span: 15..31,
+            },
+        ],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Values(
+                        Values {
+                            rows: [
+                                Expr {
+                                    kind: Nested(
+                                        Expr {
+                                            kind: Literal(
+                                                Number {
+                                                    text: "1",
+                                                    kind: Int,
+                                                },
+                                            ),
+                                            span: 44..45,
+                                        },
+                                    ),
+                                    span: 43..46,
+                                },
+                            ],
+                            alias: None,
+                            span: 36..46,
+                        },
+                    ),
+                    span: 36..46,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 36..46,
+            },
+        ),
+        span: 0..46,
+    },
+)
+-- CREATE VIEW db.v AS SELECT * FROM t
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "db",
+                        quoted: false,
+                        span: 12..14,
+                    },
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 15..16,
+                    },
+                ],
+                span: 12..16,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Wildcard {
+                                            qualifier: [],
+                                            except: [],
+                                        },
+                                        span: 27..28,
+                                    },
+                                    alias: None,
+                                    span: 27..28,
+                                },
+                            ],
+                            from: Some(
+                                FromClause {
+                                    relations: [
+                                        Relation {
+                                            lateral: false,
+                                            primary: TableFactor {
+                                                kind: Table {
+                                                    name: ObjectName {
+                                                        parts: [
+                                                            Ident {
+                                                                value: "t",
+                                                                quoted: false,
+                                                                span: 34..35,
+                                                            },
+                                                        ],
+                                                        span: 34..35,
+                                                    },
+                                                    temporal: None,
+                                                    options: [],
+                                                },
+                                                alias: None,
+                                                span: 34..35,
+                                            },
+                                            extensions: [],
+                                            span: 34..35,
+                                        },
+                                    ],
+                                    lateral_views: [],
+                                    pivot: None,
+                                    unpivot: None,
+                                    span: 29..35,
+                                },
+                            ),
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 20..35,
+                        },
+                    ),
+                    span: 20..35,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 20..35,
+            },
+        ),
+        span: 0..35,
+    },
+)

@@ -1,0 +1,1130 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"DESCRIBE t\", \"DESC t\", \"DESC TABLE t\", \"DESC EXTENDED t\",\n\"DESC FORMATTED t\", \"DESC t PARTITION (c = 'Us', d = 1)\",\n\"DESC FORMATTED t PARTITION (c = 'Us', d = 1)\",\n\"DESC TABLE EXTENDED f PARTITION (B = 'SPARK', C = TIMESTAMP '2018-11-17 13:33:33') AS JSON\",\n\"DESCRIBE EXTENDED t AS JSON\", \"DESCRIBE t b\", \"DESC FORMATTED t c\",\n\"DESC IDENTIFIER('test_desc')\", \"DESCRIBE FUNCTION f\",\n\"DESCRIBE FUNCTION EXTENDED f\",\n\"DESCRIBE FUNCTION IDENTIFIER('ident.' || 'myDoubleAvg')\",\n\"DESCRIBE SCHEMA s\", \"DESCRIBE SCHEMA EXTENDED test_schema\",\n\"DESCRIBE DATABASE d\", \"DESCRIBE NAMESPACE n\",\n\"DESCRIBE QUERY SELECT * FROM t\", \"DESC SELECT * FROM t\",\n\"DESC WITH s AS (SELECT 'hello' AS col1) SELECT * FROM s\",\n\"DESCRIBE QUERY WITH s AS (SELECT * FROM t) SELECT * FROM s\",])"
+---
+-- DESCRIBE t
+Describe(
+    Describe {
+        kind: Table {
+            mode: None,
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 9..10,
+                        },
+                    ],
+                    span: 9..10,
+                },
+            ),
+            partition: None,
+            column: None,
+            as_json: false,
+            span: 9..10,
+        },
+        span: 0..10,
+    },
+)
+-- DESC t
+Describe(
+    Describe {
+        kind: Table {
+            mode: None,
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 5..6,
+                        },
+                    ],
+                    span: 5..6,
+                },
+            ),
+            partition: None,
+            column: None,
+            as_json: false,
+            span: 5..6,
+        },
+        span: 0..6,
+    },
+)
+-- DESC TABLE t
+Describe(
+    Describe {
+        kind: Table {
+            mode: None,
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 11..12,
+                        },
+                    ],
+                    span: 11..12,
+                },
+            ),
+            partition: None,
+            column: None,
+            as_json: false,
+            span: 11..12,
+        },
+        span: 0..12,
+    },
+)
+-- DESC EXTENDED t
+Describe(
+    Describe {
+        kind: Table {
+            mode: Some(
+                Extended,
+            ),
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 14..15,
+                        },
+                    ],
+                    span: 14..15,
+                },
+            ),
+            partition: None,
+            column: None,
+            as_json: false,
+            span: 5..15,
+        },
+        span: 0..15,
+    },
+)
+-- DESC FORMATTED t
+Describe(
+    Describe {
+        kind: Table {
+            mode: Some(
+                Formatted,
+            ),
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 15..16,
+                        },
+                    ],
+                    span: 15..16,
+                },
+            ),
+            partition: None,
+            column: None,
+            as_json: false,
+            span: 5..16,
+        },
+        span: 0..16,
+    },
+)
+-- DESC t PARTITION (c = 'Us', d = 1)
+Describe(
+    Describe {
+        kind: Table {
+            mode: None,
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 5..6,
+                        },
+                    ],
+                    span: 5..6,
+                },
+            ),
+            partition: Some(
+                PartitionSpec {
+                    parts: [
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "c",
+                                quoted: false,
+                                span: 18..19,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "Us",
+                                        ),
+                                    ),
+                                    span: 22..26,
+                                },
+                            ),
+                            span: 18..26,
+                        },
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "d",
+                                quoted: false,
+                                span: 28..29,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        Number {
+                                            text: "1",
+                                            kind: Int,
+                                        },
+                                    ),
+                                    span: 32..33,
+                                },
+                            ),
+                            span: 28..33,
+                        },
+                    ],
+                    span: 7..34,
+                },
+            ),
+            column: None,
+            as_json: false,
+            span: 5..34,
+        },
+        span: 0..34,
+    },
+)
+-- DESC FORMATTED t PARTITION (c = 'Us', d = 1)
+Describe(
+    Describe {
+        kind: Table {
+            mode: Some(
+                Formatted,
+            ),
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 15..16,
+                        },
+                    ],
+                    span: 15..16,
+                },
+            ),
+            partition: Some(
+                PartitionSpec {
+                    parts: [
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "c",
+                                quoted: false,
+                                span: 28..29,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "Us",
+                                        ),
+                                    ),
+                                    span: 32..36,
+                                },
+                            ),
+                            span: 28..36,
+                        },
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "d",
+                                quoted: false,
+                                span: 38..39,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        Number {
+                                            text: "1",
+                                            kind: Int,
+                                        },
+                                    ),
+                                    span: 42..43,
+                                },
+                            ),
+                            span: 38..43,
+                        },
+                    ],
+                    span: 17..44,
+                },
+            ),
+            column: None,
+            as_json: false,
+            span: 5..44,
+        },
+        span: 0..44,
+    },
+)
+-- DESC TABLE EXTENDED f PARTITION (B = 'SPARK', C = TIMESTAMP '2018-11-17 13:33:33') AS JSON
+Describe(
+    Describe {
+        kind: Table {
+            mode: Some(
+                Extended,
+            ),
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "f",
+                            quoted: false,
+                            span: 20..21,
+                        },
+                    ],
+                    span: 20..21,
+                },
+            ),
+            partition: Some(
+                PartitionSpec {
+                    parts: [
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "B",
+                                quoted: false,
+                                span: 33..34,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "SPARK",
+                                        ),
+                                    ),
+                                    span: 37..44,
+                                },
+                            ),
+                            span: 33..44,
+                        },
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "C",
+                                quoted: false,
+                                span: 46..47,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        Typed {
+                                            type_name: Ident {
+                                                value: "TIMESTAMP",
+                                                quoted: false,
+                                                span: 50..59,
+                                            },
+                                            value: "2018-11-17 13:33:33",
+                                        },
+                                    ),
+                                    span: 50..81,
+                                },
+                            ),
+                            span: 46..81,
+                        },
+                    ],
+                    span: 22..82,
+                },
+            ),
+            column: None,
+            as_json: true,
+            span: 11..90,
+        },
+        span: 0..90,
+    },
+)
+-- DESCRIBE EXTENDED t AS JSON
+Describe(
+    Describe {
+        kind: Table {
+            mode: Some(
+                Extended,
+            ),
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                    ],
+                    span: 18..19,
+                },
+            ),
+            partition: None,
+            column: None,
+            as_json: true,
+            span: 9..27,
+        },
+        span: 0..27,
+    },
+)
+-- DESCRIBE t b
+Describe(
+    Describe {
+        kind: Table {
+            mode: None,
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 9..10,
+                        },
+                    ],
+                    span: 9..10,
+                },
+            ),
+            partition: None,
+            column: Some(
+                Ident(
+                    Ident {
+                        value: "b",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ),
+            ),
+            as_json: false,
+            span: 9..12,
+        },
+        span: 0..12,
+    },
+)
+-- DESC FORMATTED t c
+Describe(
+    Describe {
+        kind: Table {
+            mode: Some(
+                Formatted,
+            ),
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 15..16,
+                        },
+                    ],
+                    span: 15..16,
+                },
+            ),
+            partition: None,
+            column: Some(
+                Ident(
+                    Ident {
+                        value: "c",
+                        quoted: false,
+                        span: 17..18,
+                    },
+                ),
+            ),
+            as_json: false,
+            span: 5..18,
+        },
+        span: 0..18,
+    },
+)
+-- DESC IDENTIFIER('test_desc')
+Describe(
+    Describe {
+        kind: Table {
+            mode: None,
+            table: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Literal(
+                            String(
+                                "test_desc",
+                            ),
+                        ),
+                        span: 16..27,
+                    },
+                    span: 5..28,
+                },
+            ),
+            partition: None,
+            column: None,
+            as_json: false,
+            span: 5..28,
+        },
+        span: 0..28,
+    },
+)
+-- DESCRIBE FUNCTION f
+Describe(
+    Describe {
+        kind: Function {
+            extended: false,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "f",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                    ],
+                    span: 18..19,
+                },
+            ),
+            span: 9..19,
+        },
+        span: 0..19,
+    },
+)
+-- DESCRIBE FUNCTION EXTENDED f
+Describe(
+    Describe {
+        kind: Function {
+            extended: true,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "f",
+                            quoted: false,
+                            span: 27..28,
+                        },
+                    ],
+                    span: 27..28,
+                },
+            ),
+            span: 9..28,
+        },
+        span: 0..28,
+    },
+)
+-- DESCRIBE FUNCTION IDENTIFIER('ident.' || 'myDoubleAvg')
+Describe(
+    Describe {
+        kind: Function {
+            extended: false,
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "ident.",
+                                    ),
+                                ),
+                                span: 29..37,
+                            },
+                            Concat,
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "myDoubleAvg",
+                                    ),
+                                ),
+                                span: 41..54,
+                            },
+                        ),
+                        span: 29..54,
+                    },
+                    span: 18..55,
+                },
+            ),
+            span: 9..55,
+        },
+        span: 0..55,
+    },
+)
+-- DESCRIBE SCHEMA s
+Describe(
+    Describe {
+        kind: Namespace {
+            kind: Schema,
+            extended: false,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "s",
+                            quoted: false,
+                            span: 16..17,
+                        },
+                    ],
+                    span: 16..17,
+                },
+            ),
+            span: 9..17,
+        },
+        span: 0..17,
+    },
+)
+-- DESCRIBE SCHEMA EXTENDED test_schema
+Describe(
+    Describe {
+        kind: Namespace {
+            kind: Schema,
+            extended: true,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "test_schema",
+                            quoted: false,
+                            span: 25..36,
+                        },
+                    ],
+                    span: 25..36,
+                },
+            ),
+            span: 9..36,
+        },
+        span: 0..36,
+    },
+)
+-- DESCRIBE DATABASE d
+Describe(
+    Describe {
+        kind: Namespace {
+            kind: Database,
+            extended: false,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "d",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                    ],
+                    span: 18..19,
+                },
+            ),
+            span: 9..19,
+        },
+        span: 0..19,
+    },
+)
+-- DESCRIBE NAMESPACE n
+Describe(
+    Describe {
+        kind: Namespace {
+            kind: Namespace,
+            extended: false,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "n",
+                            quoted: false,
+                            span: 19..20,
+                        },
+                    ],
+                    span: 19..20,
+                },
+            ),
+            span: 9..20,
+        },
+        span: 0..20,
+    },
+)
+-- DESCRIBE QUERY SELECT * FROM t
+Describe(
+    Describe {
+        kind: Query {
+            query: Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Wildcard {
+                                            qualifier: [],
+                                            except: [],
+                                        },
+                                        span: 22..23,
+                                    },
+                                    alias: None,
+                                    span: 22..23,
+                                },
+                            ],
+                            from: Some(
+                                FromClause {
+                                    relations: [
+                                        Relation {
+                                            lateral: false,
+                                            primary: TableFactor {
+                                                kind: Table {
+                                                    name: ObjectName {
+                                                        parts: [
+                                                            Ident {
+                                                                value: "t",
+                                                                quoted: false,
+                                                                span: 29..30,
+                                                            },
+                                                        ],
+                                                        span: 29..30,
+                                                    },
+                                                    temporal: None,
+                                                    options: [],
+                                                },
+                                                alias: None,
+                                                span: 29..30,
+                                            },
+                                            extensions: [],
+                                            span: 29..30,
+                                        },
+                                    ],
+                                    lateral_views: [],
+                                    pivot: None,
+                                    unpivot: None,
+                                    span: 24..30,
+                                },
+                            ),
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 15..30,
+                        },
+                    ),
+                    span: 15..30,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 15..30,
+            },
+            span: 15..30,
+        },
+        span: 0..30,
+    },
+)
+-- DESC SELECT * FROM t
+Describe(
+    Describe {
+        kind: Query {
+            query: Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Wildcard {
+                                            qualifier: [],
+                                            except: [],
+                                        },
+                                        span: 12..13,
+                                    },
+                                    alias: None,
+                                    span: 12..13,
+                                },
+                            ],
+                            from: Some(
+                                FromClause {
+                                    relations: [
+                                        Relation {
+                                            lateral: false,
+                                            primary: TableFactor {
+                                                kind: Table {
+                                                    name: ObjectName {
+                                                        parts: [
+                                                            Ident {
+                                                                value: "t",
+                                                                quoted: false,
+                                                                span: 19..20,
+                                                            },
+                                                        ],
+                                                        span: 19..20,
+                                                    },
+                                                    temporal: None,
+                                                    options: [],
+                                                },
+                                                alias: None,
+                                                span: 19..20,
+                                            },
+                                            extensions: [],
+                                            span: 19..20,
+                                        },
+                                    ],
+                                    lateral_views: [],
+                                    pivot: None,
+                                    unpivot: None,
+                                    span: 14..20,
+                                },
+                            ),
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 5..20,
+                        },
+                    ),
+                    span: 5..20,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 5..20,
+            },
+            span: 5..20,
+        },
+        span: 0..20,
+    },
+)
+-- DESC WITH s AS (SELECT 'hello' AS col1) SELECT * FROM s
+Describe(
+    Describe {
+        kind: Query {
+            query: Query {
+                with: Some(
+                    With {
+                        recursive: false,
+                        ctes: [
+                            Cte {
+                                name: Ident {
+                                    value: "s",
+                                    quoted: false,
+                                    span: 10..11,
+                                },
+                                columns: [],
+                                max_recursion_level: None,
+                                query: Query {
+                                    with: None,
+                                    body: SetExpr {
+                                        kind: Select(
+                                            Select {
+                                                hints: [],
+                                                quantifier: None,
+                                                projection: [
+                                                    SelectItem {
+                                                        expr: Expr {
+                                                            kind: Literal(
+                                                                String(
+                                                                    "hello",
+                                                                ),
+                                                            ),
+                                                            span: 23..30,
+                                                        },
+                                                        alias: Some(
+                                                            Name(
+                                                                Ident {
+                                                                    value: "col1",
+                                                                    quoted: false,
+                                                                    span: 34..38,
+                                                                },
+                                                            ),
+                                                        ),
+                                                        span: 23..38,
+                                                    },
+                                                ],
+                                                from: None,
+                                                lateral_views: [],
+                                                selection: None,
+                                                group_by: None,
+                                                having: None,
+                                                windows: [],
+                                                qualify: None,
+                                                span: 16..38,
+                                            },
+                                        ),
+                                        span: 16..38,
+                                    },
+                                    order_by: [],
+                                    order_span: None,
+                                    cluster_by: [],
+                                    distribute_by: [],
+                                    sort_by: [],
+                                    windows: [],
+                                    limit: None,
+                                    offset: None,
+                                    span: 16..38,
+                                },
+                                span: 10..39,
+                            },
+                        ],
+                        span: 5..39,
+                    },
+                ),
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Wildcard {
+                                            qualifier: [],
+                                            except: [],
+                                        },
+                                        span: 47..48,
+                                    },
+                                    alias: None,
+                                    span: 47..48,
+                                },
+                            ],
+                            from: Some(
+                                FromClause {
+                                    relations: [
+                                        Relation {
+                                            lateral: false,
+                                            primary: TableFactor {
+                                                kind: Table {
+                                                    name: ObjectName {
+                                                        parts: [
+                                                            Ident {
+                                                                value: "s",
+                                                                quoted: false,
+                                                                span: 54..55,
+                                                            },
+                                                        ],
+                                                        span: 54..55,
+                                                    },
+                                                    temporal: None,
+                                                    options: [],
+                                                },
+                                                alias: None,
+                                                span: 54..55,
+                                            },
+                                            extensions: [],
+                                            span: 54..55,
+                                        },
+                                    ],
+                                    lateral_views: [],
+                                    pivot: None,
+                                    unpivot: None,
+                                    span: 49..55,
+                                },
+                            ),
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 40..55,
+                        },
+                    ),
+                    span: 40..55,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 5..55,
+            },
+            span: 5..55,
+        },
+        span: 0..55,
+    },
+)
+-- DESCRIBE QUERY WITH s AS (SELECT * FROM t) SELECT * FROM s
+Describe(
+    Describe {
+        kind: Query {
+            query: Query {
+                with: Some(
+                    With {
+                        recursive: false,
+                        ctes: [
+                            Cte {
+                                name: Ident {
+                                    value: "s",
+                                    quoted: false,
+                                    span: 20..21,
+                                },
+                                columns: [],
+                                max_recursion_level: None,
+                                query: Query {
+                                    with: None,
+                                    body: SetExpr {
+                                        kind: Select(
+                                            Select {
+                                                hints: [],
+                                                quantifier: None,
+                                                projection: [
+                                                    SelectItem {
+                                                        expr: Expr {
+                                                            kind: Wildcard {
+                                                                qualifier: [],
+                                                                except: [],
+                                                            },
+                                                            span: 33..34,
+                                                        },
+                                                        alias: None,
+                                                        span: 33..34,
+                                                    },
+                                                ],
+                                                from: Some(
+                                                    FromClause {
+                                                        relations: [
+                                                            Relation {
+                                                                lateral: false,
+                                                                primary: TableFactor {
+                                                                    kind: Table {
+                                                                        name: ObjectName {
+                                                                            parts: [
+                                                                                Ident {
+                                                                                    value: "t",
+                                                                                    quoted: false,
+                                                                                    span: 40..41,
+                                                                                },
+                                                                            ],
+                                                                            span: 40..41,
+                                                                        },
+                                                                        temporal: None,
+                                                                        options: [],
+                                                                    },
+                                                                    alias: None,
+                                                                    span: 40..41,
+                                                                },
+                                                                extensions: [],
+                                                                span: 40..41,
+                                                            },
+                                                        ],
+                                                        lateral_views: [],
+                                                        pivot: None,
+                                                        unpivot: None,
+                                                        span: 35..41,
+                                                    },
+                                                ),
+                                                lateral_views: [],
+                                                selection: None,
+                                                group_by: None,
+                                                having: None,
+                                                windows: [],
+                                                qualify: None,
+                                                span: 26..41,
+                                            },
+                                        ),
+                                        span: 26..41,
+                                    },
+                                    order_by: [],
+                                    order_span: None,
+                                    cluster_by: [],
+                                    distribute_by: [],
+                                    sort_by: [],
+                                    windows: [],
+                                    limit: None,
+                                    offset: None,
+                                    span: 26..41,
+                                },
+                                span: 20..42,
+                            },
+                        ],
+                        span: 15..42,
+                    },
+                ),
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Wildcard {
+                                            qualifier: [],
+                                            except: [],
+                                        },
+                                        span: 50..51,
+                                    },
+                                    alias: None,
+                                    span: 50..51,
+                                },
+                            ],
+                            from: Some(
+                                FromClause {
+                                    relations: [
+                                        Relation {
+                                            lateral: false,
+                                            primary: TableFactor {
+                                                kind: Table {
+                                                    name: ObjectName {
+                                                        parts: [
+                                                            Ident {
+                                                                value: "s",
+                                                                quoted: false,
+                                                                span: 57..58,
+                                                            },
+                                                        ],
+                                                        span: 57..58,
+                                                    },
+                                                    temporal: None,
+                                                    options: [],
+                                                },
+                                                alias: None,
+                                                span: 57..58,
+                                            },
+                                            extensions: [],
+                                            span: 57..58,
+                                        },
+                                    ],
+                                    lateral_views: [],
+                                    pivot: None,
+                                    unpivot: None,
+                                    span: 52..58,
+                                },
+                            ),
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 43..58,
+                        },
+                    ),
+                    span: 43..58,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 15..58,
+            },
+            span: 15..58,
+        },
+        span: 0..58,
+    },
+)

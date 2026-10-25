@@ -1,0 +1,1363 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"ALTER TABLE t ADD COLUMN c INT\",\n\"ALTER TABLE t ADD COLUMNS (a INT COMMENT 'the a', b STRING)\",\n\"ALTER TABLE t DROP COLUMN c\", \"ALTER TABLE t DROP COLUMNS (a, b)\",\n\"ALTER TABLE t RENAME COLUMN a TO b\", \"ALTER TABLE t RENAME a TO b\",\n\"ALTER TABLE t RENAME TO t2\", \"ALTER TABLE t CHANGE a TYPE STRING\",\n\"ALTER TABLE t CHANGE COLUMN a COMMENT 'the a'\",\n\"ALTER TABLE t CHANGE a FIRST\", \"ALTER TABLE t CHANGE a AFTER b\",\n\"ALTER TABLE t CHANGE a SET NOT NULL\", \"ALTER TABLE t CHANGE a DROP NOT NULL\",\n\"ALTER TABLE t ALTER COLUMN a COMMENT 'the a'\",\n\"ALTER TABLE t ALTER a SET NOT NULL\", \"ALTER TABLE t ALTER a DROP NOT NULL\",\n\"ALTER TABLE t ALTER a SET DEFAULT 1\", \"ALTER TABLE t ALTER a DROP DEFAULT\",\n\"ALTER TABLE t SET TBLPROPERTIES ('yes' = 'no')\",\n\"ALTER TABLE t UNSET TBLPROPERTIES ('yes')\",\n\"ALTER TABLE t UNSET TBLPROPERTIES IF EXISTS ('a', 'b')\",\n\"ALTER TABLE t SET SERDEPROPERTIES ('yes' = 'no')\",\n\"ALTER TABLE t SET LOCATION 'loc'\",\n\"ALTER TABLE t ADD PARTITION (c = 'Us', d = 1)\",\n\"ALTER TABLE t ADD IF NOT EXISTS PARTITION (c = 'Us') LOCATION 'loc1' PARTITION (d = 2)\",\n\"ALTER TABLE t DROP PARTITION (c = 'Us')\",\n\"ALTER TABLE t DROP IF EXISTS PARTITION (c = 'Us') PARTITION (d = 2) PURGE\",\n\"ALTER TABLE t PARTITION (c = 'Us') RENAME TO PARTITION (c = 'Them')\",\n\"ALTER TABLE t PARTITION (c = 'Us', d = 1) SET LOCATION 'loc2'\",\n\"ALTER TABLE t RECOVER PARTITIONS\",\n\"ALTER TABLE IDENTIFIER('ta' || 'b') ADD COLUMN c2 INT\",\n\"ALTER TABLE IDENTIFIER('tab') RENAME TO IDENTIFIER('tab_renamed')\",])"
+---
+-- ALTER TABLE t ADD COLUMN c INT
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AddColumns(
+            [
+                ColumnDef {
+                    name: Ident(
+                        Ident {
+                            value: "c",
+                            quoted: false,
+                            span: 25..26,
+                        },
+                    ),
+                    data_type: DataTypeSpec {
+                        kind: Primitive {
+                            name: "int",
+                            args: [],
+                        },
+                        collation: None,
+                        span: 27..30,
+                    },
+                    not_null: false,
+                    default: None,
+                    generated: None,
+                    comment: None,
+                    constraints: [],
+                    duplicate_descriptor: None,
+                    span: 25..30,
+                },
+            ],
+        ),
+        span: 0..30,
+    },
+)
+-- ALTER TABLE t ADD COLUMNS (a INT COMMENT 'the a', b STRING)
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AddColumns(
+            [
+                ColumnDef {
+                    name: Ident(
+                        Ident {
+                            value: "a",
+                            quoted: false,
+                            span: 27..28,
+                        },
+                    ),
+                    data_type: DataTypeSpec {
+                        kind: Primitive {
+                            name: "int",
+                            args: [],
+                        },
+                        collation: None,
+                        span: 29..32,
+                    },
+                    not_null: false,
+                    default: None,
+                    generated: None,
+                    comment: Some(
+                        "the a",
+                    ),
+                    constraints: [],
+                    duplicate_descriptor: None,
+                    span: 27..48,
+                },
+                ColumnDef {
+                    name: Ident(
+                        Ident {
+                            value: "b",
+                            quoted: false,
+                            span: 50..51,
+                        },
+                    ),
+                    data_type: DataTypeSpec {
+                        kind: Primitive {
+                            name: "string",
+                            args: [],
+                        },
+                        collation: None,
+                        span: 52..58,
+                    },
+                    not_null: false,
+                    default: None,
+                    generated: None,
+                    comment: None,
+                    constraints: [],
+                    duplicate_descriptor: None,
+                    span: 50..58,
+                },
+            ],
+        ),
+        span: 0..59,
+    },
+)
+-- ALTER TABLE t DROP COLUMN c
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: DropColumns(
+            [
+                Ident(
+                    Ident {
+                        value: "c",
+                        quoted: false,
+                        span: 26..27,
+                    },
+                ),
+            ],
+        ),
+        span: 0..27,
+    },
+)
+-- ALTER TABLE t DROP COLUMNS (a, b)
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: DropColumns(
+            [
+                Ident(
+                    Ident {
+                        value: "a",
+                        quoted: false,
+                        span: 28..29,
+                    },
+                ),
+                Ident(
+                    Ident {
+                        value: "b",
+                        quoted: false,
+                        span: 31..32,
+                    },
+                ),
+            ],
+        ),
+        span: 0..33,
+    },
+)
+-- ALTER TABLE t RENAME COLUMN a TO b
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: RenameColumn {
+            from: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 28..29,
+                },
+            ),
+            to: Ident(
+                Ident {
+                    value: "b",
+                    quoted: false,
+                    span: 33..34,
+                },
+            ),
+            span: 14..34,
+        },
+        span: 0..34,
+    },
+)
+-- ALTER TABLE t RENAME a TO b
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: RenameColumn {
+            from: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 21..22,
+                },
+            ),
+            to: Ident(
+                Ident {
+                    value: "b",
+                    quoted: false,
+                    span: 26..27,
+                },
+            ),
+            span: 14..27,
+        },
+        span: 0..27,
+    },
+)
+-- ALTER TABLE t RENAME TO t2
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: RenameTo {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t2",
+                            quoted: false,
+                            span: 24..26,
+                        },
+                    ],
+                    span: 24..26,
+                },
+            ),
+            span: 14..26,
+        },
+        span: 0..26,
+    },
+)
+-- ALTER TABLE t CHANGE a TYPE STRING
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: ChangeColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 21..22,
+                },
+            ),
+            action: Type(
+                DataTypeSpec {
+                    kind: Primitive {
+                        name: "string",
+                        args: [],
+                    },
+                    collation: None,
+                    span: 28..34,
+                },
+            ),
+            span: 14..34,
+        },
+        span: 0..34,
+    },
+)
+-- ALTER TABLE t CHANGE COLUMN a COMMENT 'the a'
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: ChangeColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 28..29,
+                },
+            ),
+            action: Comment(
+                "the a",
+            ),
+            span: 14..45,
+        },
+        span: 0..45,
+    },
+)
+-- ALTER TABLE t CHANGE a FIRST
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: ChangeColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 21..22,
+                },
+            ),
+            action: First,
+            span: 14..28,
+        },
+        span: 0..28,
+    },
+)
+-- ALTER TABLE t CHANGE a AFTER b
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: ChangeColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 21..22,
+                },
+            ),
+            action: After(
+                Ident(
+                    Ident {
+                        value: "b",
+                        quoted: false,
+                        span: 29..30,
+                    },
+                ),
+            ),
+            span: 14..30,
+        },
+        span: 0..30,
+    },
+)
+-- ALTER TABLE t CHANGE a SET NOT NULL
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: ChangeColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 21..22,
+                },
+            ),
+            action: SetNotNull,
+            span: 14..35,
+        },
+        span: 0..35,
+    },
+)
+-- ALTER TABLE t CHANGE a DROP NOT NULL
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: ChangeColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 21..22,
+                },
+            ),
+            action: DropNotNull,
+            span: 14..36,
+        },
+        span: 0..36,
+    },
+)
+-- ALTER TABLE t ALTER COLUMN a COMMENT 'the a'
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AlterColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 27..28,
+                },
+            ),
+            action: Comment(
+                "the a",
+            ),
+            span: 14..44,
+        },
+        span: 0..44,
+    },
+)
+-- ALTER TABLE t ALTER a SET NOT NULL
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AlterColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 20..21,
+                },
+            ),
+            action: SetNotNull,
+            span: 14..34,
+        },
+        span: 0..34,
+    },
+)
+-- ALTER TABLE t ALTER a DROP NOT NULL
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AlterColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 20..21,
+                },
+            ),
+            action: DropNotNull,
+            span: 14..35,
+        },
+        span: 0..35,
+    },
+)
+-- ALTER TABLE t ALTER a SET DEFAULT 1
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AlterColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 20..21,
+                },
+            ),
+            action: SetDefault(
+                Expr {
+                    kind: Literal(
+                        Number {
+                            text: "1",
+                            kind: Int,
+                        },
+                    ),
+                    span: 34..35,
+                },
+            ),
+            span: 14..35,
+        },
+        span: 0..35,
+    },
+)
+-- ALTER TABLE t ALTER a DROP DEFAULT
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AlterColumn {
+            name: Ident(
+                Ident {
+                    value: "a",
+                    quoted: false,
+                    span: 20..21,
+                },
+            ),
+            action: DropDefault,
+            span: 14..34,
+        },
+        span: 0..34,
+    },
+)
+-- ALTER TABLE t SET TBLPROPERTIES ('yes' = 'no')
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: SetTblProperties(
+            [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "yes",
+                                quoted: true,
+                                span: 33..38,
+                            },
+                        ],
+                        is_string: true,
+                        span: 33..38,
+                    },
+                    value: Some(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "no",
+                                ),
+                            ),
+                            span: 41..45,
+                        },
+                    ),
+                    span: 33..45,
+                },
+            ],
+        ),
+        span: 0..46,
+    },
+)
+-- ALTER TABLE t UNSET TBLPROPERTIES ('yes')
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: UnsetTblProperties {
+            if_exists: false,
+            keys: [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "yes",
+                                quoted: true,
+                                span: 35..40,
+                            },
+                        ],
+                        is_string: true,
+                        span: 35..40,
+                    },
+                    value: None,
+                    span: 35..40,
+                },
+            ],
+            span: 14..41,
+        },
+        span: 0..41,
+    },
+)
+-- ALTER TABLE t UNSET TBLPROPERTIES IF EXISTS ('a', 'b')
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: UnsetTblProperties {
+            if_exists: true,
+            keys: [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "a",
+                                quoted: true,
+                                span: 45..48,
+                            },
+                        ],
+                        is_string: true,
+                        span: 45..48,
+                    },
+                    value: None,
+                    span: 45..48,
+                },
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "b",
+                                quoted: true,
+                                span: 50..53,
+                            },
+                        ],
+                        is_string: true,
+                        span: 50..53,
+                    },
+                    value: None,
+                    span: 50..53,
+                },
+            ],
+            span: 14..54,
+        },
+        span: 0..54,
+    },
+)
+-- ALTER TABLE t SET SERDEPROPERTIES ('yes' = 'no')
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: SetSerdeProperties(
+            [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "yes",
+                                quoted: true,
+                                span: 35..40,
+                            },
+                        ],
+                        is_string: true,
+                        span: 35..40,
+                    },
+                    value: Some(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "no",
+                                ),
+                            ),
+                            span: 43..47,
+                        },
+                    ),
+                    span: 35..47,
+                },
+            ],
+        ),
+        span: 0..48,
+    },
+)
+-- ALTER TABLE t SET LOCATION 'loc'
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: SetLocation(
+            "loc",
+        ),
+        span: 0..32,
+    },
+)
+-- ALTER TABLE t ADD PARTITION (c = 'Us', d = 1)
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AddPartition {
+            if_not_exists: false,
+            parts: [
+                PartitionWithLocation {
+                    spec: PartitionSpec {
+                        parts: [
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "c",
+                                    quoted: false,
+                                    span: 29..30,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            String(
+                                                "Us",
+                                            ),
+                                        ),
+                                        span: 33..37,
+                                    },
+                                ),
+                                span: 29..37,
+                            },
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "d",
+                                    quoted: false,
+                                    span: 39..40,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 43..44,
+                                    },
+                                ),
+                                span: 39..44,
+                            },
+                        ],
+                        span: 18..45,
+                    },
+                    location: None,
+                    span: 18..45,
+                },
+            ],
+            span: 14..45,
+        },
+        span: 0..45,
+    },
+)
+-- ALTER TABLE t ADD IF NOT EXISTS PARTITION (c = 'Us') LOCATION 'loc1' PARTITION (d = 2)
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: AddPartition {
+            if_not_exists: true,
+            parts: [
+                PartitionWithLocation {
+                    spec: PartitionSpec {
+                        parts: [
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "c",
+                                    quoted: false,
+                                    span: 43..44,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            String(
+                                                "Us",
+                                            ),
+                                        ),
+                                        span: 47..51,
+                                    },
+                                ),
+                                span: 43..51,
+                            },
+                        ],
+                        span: 32..52,
+                    },
+                    location: Some(
+                        "loc1",
+                    ),
+                    span: 32..68,
+                },
+                PartitionWithLocation {
+                    spec: PartitionSpec {
+                        parts: [
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "d",
+                                    quoted: false,
+                                    span: 80..81,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "2",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 84..85,
+                                    },
+                                ),
+                                span: 80..85,
+                            },
+                        ],
+                        span: 69..86,
+                    },
+                    location: None,
+                    span: 69..86,
+                },
+            ],
+            span: 14..86,
+        },
+        span: 0..86,
+    },
+)
+-- ALTER TABLE t DROP PARTITION (c = 'Us')
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: DropPartition {
+            if_exists: false,
+            specs: [
+                PartitionSpec {
+                    parts: [
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "c",
+                                quoted: false,
+                                span: 30..31,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "Us",
+                                        ),
+                                    ),
+                                    span: 34..38,
+                                },
+                            ),
+                            span: 30..38,
+                        },
+                    ],
+                    span: 19..39,
+                },
+            ],
+            purge: false,
+            span: 14..39,
+        },
+        span: 0..39,
+    },
+)
+-- ALTER TABLE t DROP IF EXISTS PARTITION (c = 'Us') PARTITION (d = 2) PURGE
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: DropPartition {
+            if_exists: true,
+            specs: [
+                PartitionSpec {
+                    parts: [
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "c",
+                                quoted: false,
+                                span: 40..41,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "Us",
+                                        ),
+                                    ),
+                                    span: 44..48,
+                                },
+                            ),
+                            span: 40..48,
+                        },
+                    ],
+                    span: 29..49,
+                },
+                PartitionSpec {
+                    parts: [
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "d",
+                                quoted: false,
+                                span: 61..62,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        Number {
+                                            text: "2",
+                                            kind: Int,
+                                        },
+                                    ),
+                                    span: 65..66,
+                                },
+                            ),
+                            span: 61..66,
+                        },
+                    ],
+                    span: 50..67,
+                },
+            ],
+            purge: true,
+            span: 14..73,
+        },
+        span: 0..73,
+    },
+)
+-- ALTER TABLE t PARTITION (c = 'Us') RENAME TO PARTITION (c = 'Them')
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: RenamePartition {
+            from: PartitionSpec {
+                parts: [
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "c",
+                            quoted: false,
+                            span: 25..26,
+                        },
+                        value: Some(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "Us",
+                                    ),
+                                ),
+                                span: 29..33,
+                            },
+                        ),
+                        span: 25..33,
+                    },
+                ],
+                span: 14..34,
+            },
+            to: PartitionSpec {
+                parts: [
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "c",
+                            quoted: false,
+                            span: 56..57,
+                        },
+                        value: Some(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "Them",
+                                    ),
+                                ),
+                                span: 60..66,
+                            },
+                        ),
+                        span: 56..66,
+                    },
+                ],
+                span: 45..67,
+            },
+            span: 14..67,
+        },
+        span: 0..67,
+    },
+)
+-- ALTER TABLE t PARTITION (c = 'Us', d = 1) SET LOCATION 'loc2'
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: SetPartitionLocation {
+            partition: PartitionSpec {
+                parts: [
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "c",
+                            quoted: false,
+                            span: 25..26,
+                        },
+                        value: Some(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "Us",
+                                    ),
+                                ),
+                                span: 29..33,
+                            },
+                        ),
+                        span: 25..33,
+                    },
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "d",
+                            quoted: false,
+                            span: 35..36,
+                        },
+                        value: Some(
+                            Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "1",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 39..40,
+                            },
+                        ),
+                        span: 35..40,
+                    },
+                ],
+                span: 14..41,
+            },
+            location: "loc2",
+            span: 14..61,
+        },
+        span: 0..61,
+    },
+)
+-- ALTER TABLE t RECOVER PARTITIONS
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: RecoverPartitions,
+        span: 0..32,
+    },
+)
+-- ALTER TABLE IDENTIFIER('ta' || 'b') ADD COLUMN c2 INT
+AlterTable(
+    AlterTable {
+        table: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Binary(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "ta",
+                                ),
+                            ),
+                            span: 23..27,
+                        },
+                        Concat,
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "b",
+                                ),
+                            ),
+                            span: 31..34,
+                        },
+                    ),
+                    span: 23..34,
+                },
+                span: 12..35,
+            },
+        ),
+        action: AddColumns(
+            [
+                ColumnDef {
+                    name: Ident(
+                        Ident {
+                            value: "c2",
+                            quoted: false,
+                            span: 47..49,
+                        },
+                    ),
+                    data_type: DataTypeSpec {
+                        kind: Primitive {
+                            name: "int",
+                            args: [],
+                        },
+                        collation: None,
+                        span: 50..53,
+                    },
+                    not_null: false,
+                    default: None,
+                    generated: None,
+                    comment: None,
+                    constraints: [],
+                    duplicate_descriptor: None,
+                    span: 47..53,
+                },
+            ],
+        ),
+        span: 0..53,
+    },
+)
+-- ALTER TABLE IDENTIFIER('tab') RENAME TO IDENTIFIER('tab_renamed')
+AlterTable(
+    AlterTable {
+        table: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Literal(
+                        String(
+                            "tab",
+                        ),
+                    ),
+                    span: 23..28,
+                },
+                span: 12..29,
+            },
+        ),
+        action: RenameTo {
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Literal(
+                            String(
+                                "tab_renamed",
+                            ),
+                        ),
+                        span: 51..64,
+                    },
+                    span: 40..65,
+                },
+            ),
+            span: 30..65,
+        },
+        span: 0..65,
+    },
+)
