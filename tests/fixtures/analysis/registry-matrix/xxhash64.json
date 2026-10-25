@@ -169,14 +169,6 @@
       "reason": "SELECT xxhash64('Spark', array(123), CAST(2147483647 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
-      "id": "xxhash64#694a9f8ede1b/ansi_on",
-      "reason": "SELECT xxhash64('Spark', CAST(NULL AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "id": "xxhash64#694a9f8ede1b/ansi_off",
-      "reason": "SELECT xxhash64('Spark', CAST(NULL AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
       "id": "xxhash64#69b363904109/ansi_on",
       "reason": "SELECT xxhash64('1', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
@@ -250,11 +242,11 @@
     },
     {
       "id": "xxhash64#88be02abdc0a/ansi_on",
-      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#88be02abdc0a/ansi_off",
-      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#89b3d078d407/ansi_on",
@@ -338,11 +330,11 @@
     },
     {
       "id": "xxhash64#c9a780cf156a/ansi_on",
-      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#c9a780cf156a/ansi_off",
-      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#d38029db62a8/ansi_on",

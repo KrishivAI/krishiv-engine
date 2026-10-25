@@ -720,7 +720,7 @@ mod tests {
             .expect_err("syntax error");
         let shown = describe("xyz 1", 2, &parse);
         assert!(
-            shown.ends_with("(line 3, pos 0)\n\n== SQL ==\nxyz 1\n^^^"),
+            shown.ends_with(" (line 3, pos 0)\n\n== SQL ==\nxyz 1\n^^^\n"),
             "{shown}"
         );
     }
@@ -732,7 +732,7 @@ mod tests {
             .expect_err("syntax error");
         let shown = describe("xyz 1", 0, &e);
         assert!(
-            shown.ends_with("(line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^"),
+            shown.ends_with(" (line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^\n"),
             "{shown}"
         );
         assert_eq!(shown.matches("== SQL").count(), 1, "{shown}");

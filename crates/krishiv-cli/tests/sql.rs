@@ -117,7 +117,7 @@ fn syntax_error_exits_1_with_class_sqlstate_and_caret() {
     assert!(e.contains("[PARSE_SYNTAX_ERROR]"), "{e}");
     assert!(e.contains("SQLSTATE: 42601"), "{e}");
     assert!(
-        e.contains("(line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^"),
+        e.contains(" (line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^\n"),
         "{e}"
     );
 }

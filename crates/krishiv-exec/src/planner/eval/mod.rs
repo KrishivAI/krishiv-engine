@@ -27,6 +27,7 @@ mod cast;
 mod cond;
 mod func;
 mod logic;
+mod nested_cast;
 mod strings;
 
 use std::fmt;

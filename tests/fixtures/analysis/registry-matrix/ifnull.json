@@ -33,14 +33,6 @@
       "reason": "SELECT ifnull(true, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "ifnull#225c9e5d747a/ansi_on",
-      "reason": "SELECT ifnull(NULL, CAST(NULL AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "id": "ifnull#225c9e5d747a/ansi_off",
-      "reason": "SELECT ifnull(NULL, CAST(NULL AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
       "id": "ifnull#24f22a74561c/ansi_on",
       "reason": "SELECT ifnull(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -130,11 +122,11 @@
     },
     {
       "id": "ifnull#86e8390fb86e/ansi_on",
-      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "ifnull#86e8390fb86e/ansi_off",
-      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "ifnull#968ad8ccd489/ansi_on",
@@ -170,11 +162,11 @@
     },
     {
       "id": "ifnull#b2af6cfe400b/ansi_on",
-      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "ifnull#b2af6cfe400b/ansi_off",
-      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "ifnull#bfe8bb89a454/ansi_on",

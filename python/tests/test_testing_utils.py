@@ -518,7 +518,7 @@ def test_parse_exception_text_is_the_parse_layout(spark: SparkSession) -> None:
     # `str()` adds the `ParseException` position and the offending line, not a
     # query-context summary block.
     assert "== SQL (line" not in str(e)
-    assert str(e) == e.getMessage() + "\n(line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^"
+    assert str(e) == e.getMessage() + " (line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^\n"
 
 
 def test_capture_analysis_exception(spark: SparkSession) -> None:

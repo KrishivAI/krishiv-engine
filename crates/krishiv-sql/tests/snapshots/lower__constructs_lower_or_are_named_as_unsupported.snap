@@ -71,7 +71,7 @@ SELECT transform(a, x -> x) FROM t
 SELECT (a, b) FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature row and struct constructors is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..13
 SELECT a LIKE ANY ('x', 'y') FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature LIKE ANY, SOME and ALL is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..28
+  => Project [a LIKE ANY ('x', 'y')] | +- Read t | 
 SELECT ? FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature parameter markers is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..8
 SELECT INTERVAL 1 DAY FROM t
@@ -79,9 +79,9 @@ SELECT INTERVAL 1 DAY FROM t
 SELECT TIMESTAMP '2020-01-01 00:00:00' FROM t
   => Project [TIMESTAMP '2020-01-01 00:00:00'] | +- Read t | 
 SELECT db.f(a) FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature qualified function names is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..11
+  => Project [db.f(a)] | +- Read t | 
 SELECT f(x => 1) FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature named function arguments is not supported by Krishiv yet. SQLSTATE: 0A000 @ 9..15
+  => Project [f(x => 1)] | +- Read t | 
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature WITHIN GROUP is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..53
 SELECT sum(a) IGNORE NULLS FROM t

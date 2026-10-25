@@ -28,7 +28,9 @@ use crate::ast::Span;
 
 /// The `ParseException` suffix for `error` over the (redacted) text `sql`
 /// (`""` when `error` is not what parsing `sql` raises): Spark shows a
-/// parse error with its line, 0-based position and the offending line, not
+/// parse error as its `ParseException` does: ` (line N, pos M)` (0-based
+/// position) after the message, then the complete command with a `-` padded
+/// `^^^` marker under the offending line, not
 /// with a query-context summary (Spark's golden `PARSE_*` entries carry no
 /// `queryContext`). Both user surfaces (the `krishiv sql` command and the
 /// text of Python exceptions from `spark.sql`) use this for parse errors
@@ -53,20 +55,22 @@ pub fn parse_exception_suffix(sql: &str, line_offset: usize, error: &KrishivErro
     };
     let start = parse.span.start.min(sql.len());
     let before = &sql[..sql.floor_char_boundary(start)];
-    let line_no = line_offset + before.matches('\n').count() + 1;
+    let in_sql_line = before.matches('\n').count() + 1;
+    let line_no = line_offset + in_sql_line;
     let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-    let line = sql[line_start..].lines().next().unwrap_or("");
     let col = before[line_start..].chars().count();
-    let width = sql[before.len()..parse.span.end.max(start).min(sql.len())]
-        .chars()
-        .take_while(|c| *c != '\n')
-        .count()
-        .max(1);
-    format!(
-        "\n(line {line_no}, pos {col})\n\n== SQL ==\n{line}\n{}{}",
-        " ".repeat(col),
-        "^".repeat(width)
-    )
+    // Spark's layout: the position after the message, then the complete
+    // command with a `-` padded `^^^` marker under the offending line.
+    let mut out = format!(" (line {line_no}, pos {col})\n\n== SQL ==\n");
+    for (i, line) in sql.split('\n').enumerate() {
+        out.push_str(line);
+        out.push('\n');
+        if i + 1 == in_sql_line {
+            out.push_str(&"-".repeat(col));
+            out.push_str("^^^\n");
+        }
+    }
+    out
 }
 
 /// A statement Spark's parser would reject.

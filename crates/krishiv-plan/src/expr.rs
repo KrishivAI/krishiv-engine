@@ -133,8 +133,18 @@ pub struct Star {
 pub struct FunctionCall {
     /// The function name; operators use their canonical names.
     pub name: String,
+    /// The qualifier parts (`builtin` in `builtin.abs(x)`), outermost
+    /// first; empty for an unqualified call. The analyzer resolves
+    /// `builtin.` / `system.builtin.` (case-insensitively) to the builtin
+    /// function and reports any other qualifier as an unresolved routine.
+    pub qualifier: Vec<String>,
     /// The arguments.
     pub args: Vec<Arc<Expr>>,
+    /// The parameter name of each argument (`name => value`), if written;
+    /// `None` for a positional argument. Empty when every argument is
+    /// positional (as every front end but SQL lowering writes); otherwise
+    /// as long as [`Self::args`].
+    pub arg_names: Vec<Option<String>>,
     /// `f(DISTINCT ...)`.
     pub distinct: bool,
     /// `f(...) FILTER (WHERE filter)`.
@@ -420,7 +430,9 @@ impl Expr {
     pub fn function(name: impl Into<String>, args: Vec<Self>) -> Self {
         Self::new(ExprNode::Function(FunctionCall {
             name: name.into(),
+            qualifier: Vec::new(),
             args: args.into_iter().map(Arc::new).collect(),
+            arg_names: Vec::new(),
             distinct: false,
             filter: None,
         }))

@@ -279,7 +279,9 @@ impl Resolver<'_> {
                     return Ok(Arc::new(
                         Expr::new(ExprNode::Function(FunctionCall {
                             name: f.name.clone(),
+                            qualifier: f.qualifier.clone(),
                             args: vec![if_expr(cond, Arc::new(one), x.origin)],
+                            arg_names: Vec::new(),
                             distinct: f.distinct,
                             filter: f.filter.clone(),
                         }))
@@ -289,7 +291,7 @@ impl Resolver<'_> {
                 if !self.is_aggregate(&x) {
                     return Ok(x);
                 }
-                let args = if matches!(
+                let (args, arg_names) = if matches!(
                     f.name.to_ascii_lowercase().as_str(),
                     "first" | "last" | "first_value" | "last_value"
                 ) {
@@ -301,17 +303,37 @@ impl Resolver<'_> {
                                 .with_origin(x.origin),
                         ));
                     }
-                    args
+                    let arg_names = if f.arg_names.is_empty() {
+                        Vec::new()
+                    } else {
+                        let mut names = vec![f.arg_names.first().cloned().flatten(), None];
+                        names.truncate(args.len());
+                        if names.iter().all(Option::is_none) {
+                            Vec::new()
+                        } else {
+                            names
+                        }
+                    };
+                    (args, arg_names)
                 } else {
-                    f.args
+                    let args: Vec<Arc<Expr>> = f
+                        .args
                         .iter()
                         .map(|a| if_expr(cond, Arc::clone(a), x.origin))
-                        .collect()
+                        .collect();
+                    let arg_names = if f.arg_names.is_empty() {
+                        Vec::new()
+                    } else {
+                        f.arg_names.clone()
+                    };
+                    (args, arg_names)
                 };
                 Ok(Arc::new(
                     Expr::new(ExprNode::Function(FunctionCall {
                         name: f.name.clone(),
+                        qualifier: f.qualifier.clone(),
                         args,
+                        arg_names,
                         distinct: f.distinct,
                         filter: f.filter.clone(),
                     }))
@@ -352,7 +374,9 @@ struct Cond {
 fn if_expr(cond: &Cond, then: Arc<Expr>, origin: Origin) -> Arc<Expr> {
     let eq = Expr::new(ExprNode::Function(FunctionCall {
         name: Builtin::EqNullSafe.name().to_owned(),
+        qualifier: Vec::new(),
         args: vec![Arc::clone(&cond.pivot), Arc::clone(&cond.value)],
+        arg_names: Vec::new(),
         distinct: false,
         filter: None,
     }))
@@ -360,11 +384,13 @@ fn if_expr(cond: &Cond, then: Arc<Expr>, origin: Origin) -> Arc<Expr> {
     Arc::new(
         Expr::new(ExprNode::Function(FunctionCall {
             name: "if".to_owned(),
+            qualifier: Vec::new(),
             args: vec![
                 Arc::new(eq),
                 then,
                 Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(origin)),
             ],
+            arg_names: Vec::new(),
             distinct: false,
             filter: None,
         }))

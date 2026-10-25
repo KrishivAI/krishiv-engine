@@ -204,9 +204,6 @@ class Column:
         """Whether the string matches the pattern ignoring case, as
         ``pyspark.sql.Column.ilike``.
 
-        .. note:: The engine resolves ``ilike`` but cannot run it yet:
-            collecting fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-
         Examples
         --------
         >>> df = spark.createDataFrame([("Alice",), ("Bob",)], ["name"])
