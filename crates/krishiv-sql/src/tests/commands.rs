@@ -277,6 +277,72 @@ fn drop_full_view_statements() {
     assert_eq!(e.span.range(), 9..9);
 }
 
+/// Statement dispatch: the parser reads each ambiguous shape as exactly
+/// one statement kind.
+#[test]
+fn statement_dispatch_disambiguation() {
+    // `CREATE OR REPLACE VIEW` is a permanent view, not a table; `CREATE
+    // OR REPLACE TABLE` is a table, not a view.
+    let ast::Statement::CreatePermanentView(v) = checked("CREATE OR REPLACE VIEW v AS SELECT 1")
+    else {
+        panic!("not a permanent view")
+    };
+    assert!(v.or_replace && !v.temporary);
+    let ast::Statement::CreateTable(_) = checked("CREATE OR REPLACE TABLE t (a INT)") else {
+        panic!("not a table")
+    };
+    assert!(!matches!(
+        checked("CREATE OR REPLACE VIEW v AS SELECT 1"),
+        ast::Statement::CreateTable(_)
+    ));
+    assert!(!matches!(
+        checked("CREATE OR REPLACE TABLE t (a INT)"),
+        ast::Statement::CreatePermanentView(_)
+    ));
+    // `CREATE OR REPLACE TEMP VIEW` stays the legacy temporary view, not
+    // the full grammar.
+    assert!(matches!(
+        checked("CREATE OR REPLACE TEMP VIEW v AS SELECT 1"),
+        ast::Statement::CreateView(_)
+    ));
+    // A bare `DROP VIEW v` is the legacy drop; a qualified name is the
+    // full grammar.
+    assert!(matches!(
+        checked("DROP VIEW v"),
+        ast::Statement::DropView(_)
+    ));
+    assert!(!matches!(
+        checked("DROP VIEW v"),
+        ast::Statement::DropPermanentView(_)
+    ));
+    assert!(matches!(
+        checked("DROP VIEW a.b"),
+        ast::Statement::DropPermanentView(_)
+    ));
+    assert!(!matches!(
+        checked("DROP VIEW a.b"),
+        ast::Statement::DropView(_)
+    ));
+    // A `FROM`-led query is a query, not a multi-table insert; a
+    // `FROM`-led insert is an insert, not a query.
+    assert!(matches!(
+        checked("FROM t SELECT a"),
+        ast::Statement::Query(_)
+    ));
+    assert!(!matches!(
+        checked("FROM t SELECT a"),
+        ast::Statement::Insert(_)
+    ));
+    assert!(matches!(
+        checked("FROM s INSERT INTO a SELECT * FROM s"),
+        ast::Statement::Insert(_)
+    ));
+    assert!(!matches!(
+        checked("FROM s INSERT INTO a SELECT * FROM s"),
+        ast::Statement::Query(_)
+    ));
+}
+
 /// `INSERT` statements: single-table and multi-table.
 #[test]
 fn insert_statements() {
@@ -339,6 +405,19 @@ fn insert_errors() {
         e.error.error_class(),
         ErrorClass::ParseSyntaxError
     ));
+    // `REPLACE WHERE` comes before `BY NAME`: the reverse order fails at
+    // `REPLACE`.
+    let sql = "INSERT INTO t BY NAME REPLACE WHERE c > 0 SELECT * FROM s";
+    let e = err(sql);
+    assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    assert_eq!(e.span.text(sql), "REPLACE");
+    // The documented order parses.
+    let ast::Statement::Insert(i) =
+        checked("INSERT INTO t REPLACE WHERE c > 0 BY NAME SELECT * FROM s")
+    else {
+        panic!("not an insert")
+    };
+    assert!(i.clauses[0].replace_where.is_some() && i.clauses[0].by_name);
 }
 
 /// `DELETE`, `UPDATE`, `MERGE` and `TRUNCATE` statements.
@@ -385,6 +464,29 @@ fn delete_update_merge_truncate_errors() {
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     let e = err("MERGE INTO t USING s ON true WHEN MATCHED THEN UPSERT");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+    // A `MERGE` action Spark's grammar rejects for the `WHEN` kind fails
+    // at the action.
+    for sql in [
+        "MERGE INTO t USING s ON true WHEN MATCHED THEN INSERT *",
+        "MERGE INTO t USING s ON true WHEN MATCHED THEN INSERT (c1) VALUES (1)",
+        "MERGE INTO t USING s ON true WHEN NOT MATCHED THEN UPDATE SET c1 = 0",
+        "MERGE INTO t USING s ON true WHEN NOT MATCHED THEN DELETE",
+        "MERGE INTO t USING s ON true WHEN NOT MATCHED BY TARGET THEN UPDATE SET c1 = 0",
+        "MERGE INTO t USING s ON true WHEN NOT MATCHED BY TARGET THEN DELETE",
+        "MERGE INTO t USING s ON true WHEN NOT MATCHED BY SOURCE THEN INSERT *",
+        "MERGE INTO t USING s ON true WHEN NOT MATCHED BY SOURCE THEN INSERT (c1) VALUES (1)",
+    ] {
+        let e = err(sql);
+        assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError, "{sql}");
+        let action = if sql.contains("UPDATE") {
+            "UPDATE"
+        } else if sql.contains("DELETE") {
+            "DELETE"
+        } else {
+            "INSERT"
+        };
+        assert_eq!(e.span.text(sql), action, "{sql}");
+    }
     // Missing pieces fail where they stand.
     let e = err("DELETE t");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
@@ -392,6 +494,40 @@ fn delete_update_merge_truncate_errors() {
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     let e = err("TRUNCATE t");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
+}
+
+/// Every `WHEN` kind with every action Spark allows for it.
+#[test]
+fn merge_action_pairings() {
+    use ast::{MergeAction, MergeMatched};
+    let action_of = |sql: &str| {
+        let ast::Statement::Merge(m) = checked(sql) else {
+            panic!("{sql} is not a merge")
+        };
+        assert_eq!(m.clauses.len(), 1, "{sql}");
+        m.clauses.into_iter().next().unwrap()
+    };
+    let clause = action_of("MERGE INTO t USING s ON true WHEN MATCHED THEN UPDATE SET c1 = 0");
+    assert!(matches!(clause.matched, MergeMatched::Matched));
+    assert!(matches!(clause.action, MergeAction::Update(_)));
+    let clause = action_of("MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE");
+    assert!(matches!(clause.matched, MergeMatched::Matched));
+    assert!(matches!(clause.action, MergeAction::Delete));
+    let clause = action_of("MERGE INTO t USING s ON true WHEN NOT MATCHED THEN INSERT *");
+    assert!(matches!(clause.matched, MergeMatched::NotMatched));
+    assert!(matches!(clause.action, MergeAction::Insert(_)));
+    let clause = action_of(
+        "MERGE INTO t USING s ON true WHEN NOT MATCHED BY TARGET THEN INSERT (c1) VALUES (1)",
+    );
+    assert!(matches!(clause.matched, MergeMatched::NotMatchedByTarget));
+    assert!(matches!(clause.action, MergeAction::Insert(_)));
+    let clause =
+        action_of("MERGE INTO t USING s ON true WHEN NOT MATCHED BY SOURCE THEN UPDATE SET c1 = 0");
+    assert!(matches!(clause.matched, MergeMatched::NotMatchedBySource));
+    assert!(matches!(clause.action, MergeAction::Update(_)));
+    let clause = action_of("MERGE INTO t USING s ON true WHEN NOT MATCHED BY SOURCE THEN DELETE");
+    assert!(matches!(clause.matched, MergeMatched::NotMatchedBySource));
+    assert!(matches!(clause.action, MergeAction::Delete));
 }
 
 /// `SHOW` statements: every shape.

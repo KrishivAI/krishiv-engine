@@ -5,8 +5,8 @@
 //! legacy temporary-view parsers cannot express.
 //!
 //! Parsing only: every tree here is syntax (names resolved and literals
-//! checked in [`crate::validate`], like the rest), and lowering or
-//! execution answers `KRISHIV_UNSUPPORTED_FEATURE` naming the statement.
+//! checked in [`crate::validate`], like the rest); there is no lowering
+//! for these statements.
 //! Errors Spark raises while parsing (`PARSE_SYNTAX_ERROR`, the
 //! `DESCRIBE` classes, `_LEGACY_ERROR_TEMP_0035`, ...) are raised here or
 //! in validation with Spark's class and SQLSTATE.
@@ -1191,20 +1191,19 @@ impl<'s> Parser<'s> {
         } else {
             None
         };
-        // `REPLACE WHERE ...` and `BY NAME`, in either order.
-        let mut replace_where = None;
-        let mut by_name = false;
-        loop {
-            if self.kw_at(0, "REPLACE") && self.kw_at(1, "WHERE") {
-                self.pos += 2;
-                replace_where = Some(self.expr()?);
-            } else if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
-                self.pos += 2;
-                by_name = true;
-            } else {
-                break;
-            }
-        }
+        // `REPLACE WHERE ...` before `BY NAME`, as in Spark's grammar.
+        let replace_where = if self.kw_at(0, "REPLACE") && self.kw_at(1, "WHERE") {
+            self.pos += 2;
+            Some(self.expr()?)
+        } else {
+            None
+        };
+        let by_name = if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+            self.pos += 2;
+            true
+        } else {
+            false
+        };
         let query = match paren_query {
             Some(query) => query,
             None => {
@@ -1365,7 +1364,7 @@ impl<'s> Parser<'s> {
             None
         };
         self.expect_kw("THEN")?;
-        let action = self.merge_action()?;
+        let action = self.merge_action(matched)?;
         Ok(MergeClause {
             matched,
             condition,
@@ -1374,9 +1373,28 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// The action of a `WHEN ... THEN ...`. Any action reads after any
-    /// `WHEN` here.
-    fn merge_action(&mut self) -> PR<MergeAction> {
+    /// The action of a `WHEN ... THEN ...` for `matched`: Spark allows
+    /// only `UPDATE`/`DELETE` after `WHEN MATCHED` or `WHEN NOT MATCHED BY
+    /// SOURCE`, and only `INSERT` after `WHEN NOT MATCHED [BY TARGET]`.
+    /// Anything else is a `PARSE_SYNTAX_ERROR` at the action.
+    fn merge_action(&mut self, matched: MergeMatched) -> PR<MergeAction> {
+        let allow_update_delete = matches!(
+            matched,
+            MergeMatched::Matched | MergeMatched::NotMatchedBySource
+        );
+        let allow_insert = matches!(
+            matched,
+            MergeMatched::NotMatched | MergeMatched::NotMatchedByTarget
+        );
+        if self.kw_at(0, "UPDATE") && !allow_update_delete {
+            return self.fail();
+        }
+        if self.kw_at(0, "DELETE") && !allow_update_delete {
+            return self.fail();
+        }
+        if self.kw_at(0, "INSERT") && !allow_insert {
+            return self.fail();
+        }
         let start = self.start();
         if self.kw_at(0, "UPDATE") && self.kw_at(1, "SET") {
             self.pos += 2;
