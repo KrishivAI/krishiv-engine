@@ -723,7 +723,7 @@ pub struct AliasExpr {
     #[prost(message, optional, tag = "2")]
     pub output: ::core::option::Option<BoundColumn>,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Cast {
     #[prost(uint32, tag = "1")]
     pub expr: u32,
@@ -773,7 +773,7 @@ pub struct RegistryFunction {
     pub id: u32,
 }
 /// A Spark type.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DataType {
     #[prost(enumeration = "data_type::Kind", tag = "1")]
     pub kind: i32,
@@ -782,6 +782,11 @@ pub struct DataType {
     pub precision: u32,
     #[prost(uint32, tag = "3")]
     pub scale: u32,
+    /// feature: nested_types
+    /// `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+    /// (`DataType.json`), which keeps nullability and field metadata.
+    #[prost(string, tag = "4")]
+    pub json: ::prost::alloc::string::String,
 }
 /// Nested message and enum types in `DataType`.
 pub mod data_type {
@@ -813,6 +818,8 @@ pub mod data_type {
         Date = 12,
         Timestamp = 13,
         TimestampNtz = 14,
+        /// feature: nested_types
+        Nested = 15,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -836,6 +843,7 @@ pub mod data_type {
                 Self::Date => "KIND_DATE",
                 Self::Timestamp => "KIND_TIMESTAMP",
                 Self::TimestampNtz => "KIND_TIMESTAMP_NTZ",
+                Self::Nested => "KIND_NESTED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -856,6 +864,7 @@ pub mod data_type {
                 "KIND_DATE" => Some(Self::Date),
                 "KIND_TIMESTAMP" => Some(Self::Timestamp),
                 "KIND_TIMESTAMP_NTZ" => Some(Self::TimestampNtz),
+                "KIND_NESTED" => Some(Self::Nested),
                 _ => None,
             }
         }
@@ -907,7 +916,7 @@ pub mod literal {
         DayTime(super::DayTimeLiteral),
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NullLiteral {
     #[prost(message, optional, tag = "1")]
     pub data_type: ::core::option::Option<DataType>,

@@ -24,7 +24,7 @@ use krishiv_types::DataType;
 
 use super::AnalysisError;
 use super::catalog::quoted;
-use super::coerce::{Arg, wider_type};
+use super::coerce::{Arg, Rules, wider_type};
 use super::exprs::{Bound, pretty};
 use super::ops::{boolean_filter, col_expr, no_qual};
 use super::resolve::{Attr, Env, Rel, Resolver, Widen};
@@ -115,7 +115,10 @@ impl Resolver<'_> {
                 ));
             }
         }
-        let ansi = self.ctx.conf.ansi;
+        let rules = Rules {
+            ansi: self.ctx.conf.ansi,
+            case_sensitive: self.ctx.conf.case_sensitive,
+        };
         let used: HashSet<AttrId> = member_ids.iter().flatten().copied().collect();
         let kept: Vec<Attr> = c
             .out
@@ -141,7 +144,7 @@ impl Resolver<'_> {
                         nullable: members[i].ty.nullable,
                         literal: None,
                     },
-                    ansi,
+                    rules,
                 );
                 match next {
                     Some(t) => acc = t,
@@ -232,6 +235,7 @@ impl Resolver<'_> {
         let filter_cx = Self::cx(&expanded.out, &rels, env, "Filter");
         let coalesce = Expr::new(ExprNode::Function(FunctionCall {
             name: "coalesce".to_owned(),
+            qualifier: Vec::new(),
             args: value_columns
                 .iter()
                 .map(|name| {
@@ -244,13 +248,16 @@ impl Resolver<'_> {
                     )
                 })
                 .collect(),
+            arg_names: Vec::new(),
             distinct: false,
             filter: None,
         }))
         .with_origin(p.origin);
         let predicate = Expr::new(ExprNode::Function(FunctionCall {
             name: Builtin::IsNotNull.name().to_owned(),
+            qualifier: Vec::new(),
             args: vec![Arc::new(coalesce)],
+            arg_names: Vec::new(),
             distinct: false,
             filter: None,
         }))

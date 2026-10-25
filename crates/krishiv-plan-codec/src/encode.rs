@@ -3,6 +3,7 @@
 //! expressions and explain nodes are collected in post-order with an
 //! explicit stack, and each is written after the entries it refers to.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -26,7 +27,8 @@ use krishiv_types::DataType;
 
 use crate::arrow::{schema_bytes, type_bytes};
 use crate::error::{CodecError, Result};
-use crate::features::{legacy_level, plan_features};
+use crate::features::arrow_type_is_nested;
+use crate::features::{Feature, legacy_level, plan_features};
 use crate::proto as pb;
 use crate::{EPOCH, FORMAT_VERSION};
 
@@ -57,6 +59,19 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         e.table.push(message);
     }
     let root = e.node_index(plan.root())?;
+    if plan
+        .schema()
+        .fields()
+        .iter()
+        .any(|f| arrow_type_is_nested(f.data_type()))
+    {
+        e.nested.set(true);
+    }
+    if e.nested.get() != features.contains(&Feature::NestedTypes) {
+        return Err(CodecError::Unsupported(
+            "nested types where the feature header does not list them (an engine bug)".to_owned(),
+        ));
+    }
     let explain_order = post_order(plan.explain(), |n| n.children.iter().collect());
     let mut explain = Vec::with_capacity(explain_order.len());
     let mut explain_ids: HashMap<*const ExplainNode, u32> = HashMap::new();
@@ -129,6 +144,9 @@ struct Encoder {
     /// The index of each written expression, by `Arc` identity, so a
     /// shared subexpression is written once.
     expr_ids: HashMap<*const Expr, u32>,
+    /// Whether a nested type was written: checked against the header,
+    /// which [`plan_features`] derives from the plan on its own.
+    nested: Cell<bool>,
 }
 
 fn layout(layout: &[AttrId]) -> Vec<u64> {
@@ -156,7 +174,7 @@ impl Encoder {
                 functions: window
                     .functions
                     .iter()
-                    .map(window_function)
+                    .map(|f| window_function(f, &self.nested))
                     .collect::<Result<_>>()?,
             }),
             PhysNode::WindowGroupLimit { input, limit } => {
@@ -282,7 +300,7 @@ impl Encoder {
                         SubqueryValueKind::Scalar => pb::SubqueryValueKind::Scalar,
                         SubqueryValueKind::Exists => pb::SubqueryValueKind::Exists,
                     } as i32,
-                    data_type: type_bytes(&s.data_type),
+                    data_type: arrow_bytes(&s.data_type, &self.nested),
                     plan: self.node_index(&s.plan)?,
                 })
             })
@@ -316,7 +334,7 @@ impl Encoder {
             aggregates: plan
                 .aggregates
                 .iter()
-                .map(aggregate_expr)
+                .map(|a| aggregate_expr(a, &self.nested))
                 .collect::<Result<_>>()?,
             distinct: plan.distinct.clone(),
             output: match plan.output {
@@ -392,11 +410,18 @@ impl Encoder {
         Ok(pb::ScanNode {
             id: node.id.0,
             source: Some(read_source(source)?),
-            output: output.iter().map(bound_column).collect::<Result<_>>()?,
+            output: output
+                .iter()
+                .map(|c| bound_column(c, &self.nested))
+                .collect::<Result<_>>()?,
             version: version.map(|v| v.0),
             projection: node.projection.iter().map(column_path).collect(),
             filter,
-            runtime_filters: node.runtime_filters.iter().map(scan_filter).collect(),
+            runtime_filters: node
+                .runtime_filters
+                .iter()
+                .map(|f| scan_filter(f, &self.nested))
+                .collect(),
             row_stage: Some(row_stage(&node.row_stage)),
         })
     }
@@ -430,10 +455,10 @@ impl Encoder {
     fn expr_message(&self, e: &Expr) -> Result<pb::Expr> {
         use pb::expr::Kind;
         let kind = match &e.node {
-            ExprNode::Literal(l) => Kind::Literal(literal(l)?),
+            ExprNode::Literal(l) => Kind::Literal(literal(l, &self.nested)?),
             ExprNode::Cast { expr, to, mode } => Kind::Cast(pb::Cast {
                 expr: self.child(expr),
-                to: Some(spark_type(to)?),
+                to: Some(spark_type(to, &self.nested)?),
                 mode: match mode {
                     CastMode::Legacy => pb::CastMode::Legacy,
                     CastMode::Ansi => pb::CastMode::Ansi,
@@ -441,13 +466,17 @@ impl Encoder {
                     _ => return Err(unresolved("a cast without a mode")),
                 } as i32,
             }),
-            ExprNode::Resolved(ResolvedExpr::Column(c)) => Kind::Column(bound_column(c)?),
-            ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => Kind::OuterColumn(bound_column(c)?),
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                Kind::Column(bound_column(c, &self.nested)?)
+            }
+            ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
+                Kind::OuterColumn(bound_column(c, &self.nested)?)
+            }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => Kind::Function(self.function(f)?),
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
                 Kind::Alias(pb::AliasExpr {
                     expr: self.child(expr),
-                    output: Some(bound_column(output)?),
+                    output: Some(bound_column(output, &self.nested)?),
                 })
             }
             ExprNode::Column(_) => return Err(unresolved("an unresolved column")),
@@ -484,7 +513,7 @@ impl Encoder {
             args: f.args.iter().map(|a| self.child(a)).collect(),
             distinct: f.distinct,
             filter: f.filter.as_ref().map(|a| self.child(a)),
-            data_type: Some(spark_type(&f.data_type)?),
+            data_type: Some(spark_type(&f.data_type, &self.nested)?),
             nullable: f.nullable,
             deterministic: f.deterministic,
         })
@@ -508,11 +537,11 @@ fn origin(o: Origin) -> Option<pb::Origin> {
     })
 }
 
-fn bound_column(c: &BoundColumn) -> Result<pb::BoundColumn> {
+fn bound_column(c: &BoundColumn, nested: &Cell<bool>) -> Result<pb::BoundColumn> {
     Ok(pb::BoundColumn {
         id: c.id.0,
         name: c.name.clone(),
-        data_type: Some(spark_type(&c.data_type)?),
+        data_type: Some(spark_type(&c.data_type, nested)?),
         nullable: c.nullable,
     })
 }
@@ -591,11 +620,11 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
     }
 }
 
-fn scan_filter(f: &ScanRuntimeFilter) -> pb::ScanRuntimeFilter {
+fn scan_filter(f: &ScanRuntimeFilter, nested: &Cell<bool>) -> pb::ScanRuntimeFilter {
     pb::ScanRuntimeFilter {
         id: f.id.0,
         column: Some(column_path(&f.column)),
-        key_type: type_bytes(&f.key_type),
+        key_type: arrow_bytes(&f.key_type, nested),
     }
 }
 
@@ -606,7 +635,7 @@ fn row_stage(s: &RowStageSettings) -> pb::RowStageSettings {
     }
 }
 
-fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
+fn window_function(f: &WindowFunctionPlan, nested: &Cell<bool>) -> Result<pb::WindowFunctionPlan> {
     use pb::window_function_plan::Function;
     let function = match &f.function {
         WindowFunction::RowNumber => Function::RowNumber(pb::Empty {}),
@@ -615,7 +644,7 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
         WindowFunction::PercentRank => Function::PercentRank(pb::Empty {}),
         WindowFunction::CumeDist => Function::CumeDist(pb::Empty {}),
         WindowFunction::Ntile(buckets) => Function::Ntile(*buckets),
-        WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a)?),
+        WindowFunction::Aggregate(a) => Function::Aggregate(aggregate_expr(a, nested)?),
         WindowFunction::Offset {
             input,
             offset,
@@ -627,7 +656,7 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
             offset: *offset,
             default: default.map(|c| c as u64),
             ignore_nulls: *ignore_nulls,
-            data_type: type_bytes(data_type),
+            data_type: arrow_bytes(data_type, nested),
         }),
         WindowFunction::NthValue {
             input,
@@ -638,7 +667,7 @@ fn window_function(f: &WindowFunctionPlan) -> Result<pb::WindowFunctionPlan> {
             input: *input as u64,
             n: *n,
             ignore_nulls: *ignore_nulls,
-            data_type: type_bytes(data_type),
+            data_type: arrow_bytes(data_type, nested),
         }),
     };
     let offset = |b: FrameBound| match b {
@@ -676,7 +705,7 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
     }
 }
 
-fn aggregate_expr(a: &AggregateExpr) -> Result<pb::AggregateExpr> {
+fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
     let (function, ignore_nulls) = match a.function {
         AggregateFunction::Count => (pb::AggregateFunction::Count, false),
         AggregateFunction::Sum => (pb::AggregateFunction::Sum, false),
@@ -702,7 +731,7 @@ fn aggregate_expr(a: &AggregateExpr) -> Result<pb::AggregateExpr> {
             AggInput::Raw => pb::AggregateInput::Raw,
             AggInput::State => pb::AggregateInput::State,
         } as i32,
-        arg_type: type_bytes(&a.arg_type),
+        arg_type: arrow_bytes(&a.arg_type, nested),
         name: a.name.clone(),
     })
 }
@@ -764,8 +793,34 @@ fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
     Ok(pb::OptionValue { kind: Some(kind) })
 }
 
-fn spark_type(t: &DataType) -> Result<pb::DataType> {
+/// The IPC bytes of the Arrow type `t`; `nested` is set when it is or holds an
+/// array, map or struct.
+fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
+    if arrow_type_is_nested(t) {
+        nested.set(true);
+    }
+    type_bytes(t)
+}
+
+/// `t`; `nested` is set when it is an array, map or struct.
+fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
     use pb::data_type::Kind;
+    if t.is_nested() {
+        nested.set(true);
+        // Spark's JSON form keeps nullability and metadata; its depth is
+        // what a reader accepts.
+        if t.nesting_depth() > DataType::MAX_NESTING_DEPTH {
+            return Err(CodecError::Unsupported(format!(
+                "a type nested more than {} levels deep",
+                DataType::MAX_NESTING_DEPTH
+            )));
+        }
+        return Ok(pb::DataType {
+            kind: Kind::Nested as i32,
+            json: t.json(),
+            ..pb::DataType::default()
+        });
+    }
     let (kind, precision, scale) = match t {
         DataType::Null => (Kind::Null, 0, 0),
         DataType::Boolean => (Kind::Boolean, 0, 0),
@@ -795,14 +850,15 @@ fn spark_type(t: &DataType) -> Result<pb::DataType> {
         kind: kind as i32,
         precision,
         scale,
+        json: String::new(),
     })
 }
 
-fn literal(l: &Literal) -> Result<pb::Literal> {
+fn literal(l: &Literal, nested: &Cell<bool>) -> Result<pb::Literal> {
     use pb::literal::Kind;
     let kind = match l {
         Literal::Null(t) => Kind::Null(pb::NullLiteral {
-            data_type: t.as_ref().map(spark_type).transpose()?,
+            data_type: t.as_ref().map(|t| spark_type(t, nested)).transpose()?,
         }),
         Literal::Boolean(v) => Kind::Boolean(*v),
         Literal::Byte(v) => Kind::Byte(i32::from(*v)),
@@ -816,7 +872,7 @@ fn literal(l: &Literal) -> Result<pb::Literal> {
             data_type,
         } => Kind::Decimal(pb::DecimalLiteral {
             unscaled: unscaled.to_le_bytes().to_vec(),
-            data_type: Some(spark_type(&DataType::Decimal(*data_type))?),
+            data_type: Some(spark_type(&DataType::Decimal(*data_type), nested)?),
         }),
         Literal::String(v) => Kind::String(v.clone()),
         Literal::Binary(v) => Kind::Binary(v.clone()),

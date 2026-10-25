@@ -29,6 +29,7 @@ use krishiv_common::error::{
     InvalidInlineTableCannotEvaluateExpressionInInlineTable,
     InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
+    UnsupportedFeatureSetOperationOnMapType,
 };
 use krishiv_types::DataType;
 
@@ -159,10 +160,15 @@ impl Resolver<'_> {
             for row in &bound {
                 let here = row.get(c).and_then(|b| b.ty.data_type.clone());
                 let (x, y) = (arg(acc.as_ref()), arg(here.as_ref()));
+                let case_sensitive = self.ctx.conf.case_sensitive;
                 let wider = if self.ctx.conf.ansi {
-                    coerce::wider_type(&x, &y, true)
+                    let rules = coerce::Rules {
+                        ansi: true,
+                        case_sensitive,
+                    };
+                    coerce::wider_type(&x, &y, rules)
                 } else {
-                    coerce::wider_type_without_string_promotion(&x, &y)
+                    coerce::wider_type_without_string_promotion(&x, &y, case_sensitive)
                 };
                 match wider {
                     Some(t) => acc = t,
@@ -354,10 +360,28 @@ impl Resolver<'_> {
         let mut types = Vec::with_capacity(width);
         for c in 0..width {
             let mut acc = first.out[c].col.data_type.clone();
+            // A union whose inputs agree but for field names and nullability
+            // needs no cast: it keeps the first input's names and metadata,
+            // with nulls from any input (`Union.output`, `unionLikeMerge`).
+            if operator == "UNION"
+                && kids
+                    .iter()
+                    .all(|k| k.out[c].col.data_type.equals_structurally(&acc, true))
+            {
+                for k in &kids[1..] {
+                    acc = acc.union_like_merge(&k.out[c].col.data_type);
+                }
+                types.push(acc);
+                continue;
+            }
             for (i, k) in kids.iter().enumerate().skip(1) {
                 let here = &k.out[c].col.data_type;
                 let ansi = self.ctx.conf.ansi;
-                let wider = coerce::wider_type(&arg(Some(&acc)), &arg(Some(here)), ansi);
+                let rules = coerce::Rules {
+                    ansi,
+                    case_sensitive: self.ctx.conf.case_sensitive,
+                };
+                let wider = coerce::wider_type(&arg(Some(&acc)), &arg(Some(here)), rules);
                 acc = wider.map(|t| t.unwrap_or(DataType::Null)).ok_or_else(|| {
                     AnalysisError::new(
                         IncompatibleColumnType {
@@ -374,6 +398,9 @@ impl Resolver<'_> {
             }
             types.push(acc);
         }
+        // A column whose type differs only in field names or nullability is
+        // cast too: the cast relabels it, so every input reaches the
+        // operator with the same physical type.
         kids.iter().map(|k| self.cast_columns(k, &types)).collect()
     }
 
@@ -504,6 +531,7 @@ impl Resolver<'_> {
         }
         let kids = self.widen_inputs(&[l, r], op.sql(all), o)?;
         let (l, r) = (&kids[0], &kids[1]);
+        no_map_columns(l, o)?;
         let rel = if all {
             self.set_op_all(l, r, op, env)?
         } else {
@@ -613,6 +641,8 @@ impl Resolver<'_> {
         for (name, tag) in ["l", "r"].into_iter().zip(&u.out[n..]) {
             let sum = Arc::new(Expr::new(ExprNode::Function(FunctionCall {
                 name: "sum".to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args: vec![col_expr(&tag.col, Origin::UNKNOWN)],
                 distinct: false,
                 filter: None,
@@ -705,6 +735,7 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
+        no_map_columns(&c, p.origin)?;
         Ok(self.distinct_rel(p.origin, &c))
     }
 
@@ -882,6 +913,21 @@ fn alias(e: Arc<Expr>, name: &str) -> Arc<Expr> {
 /// `COLUMN_ALREADY_EXISTS` for a name `k` outputs twice (compared as the
 /// session compares names; Spark reports it in lower case unless names
 /// are case-sensitive).
+/// Spark's check that no column of a `DISTINCT`, `INTERSECT` or `EXCEPT`
+/// holds a map (`UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE`).
+fn no_map_columns(k: &Rel, origin: Origin) -> Result<(), AnalysisError> {
+    match k.out.iter().find(|a| !coerce::orderable(&a.col.data_type)) {
+        Some(a) => Err(AnalysisError::new(
+            UnsupportedFeatureSetOperationOnMapType {
+                col_name: quoted(std::slice::from_ref(&a.col.name)),
+                data_type: quoted_type(Some(&a.col.data_type)),
+            },
+            origin,
+        )),
+        None => Ok(()),
+    }
+}
+
 fn no_duplicates(k: &Rel, cs: bool) -> Result<(), AnalysisError> {
     for (i, a) in k.out.iter().enumerate() {
         if k.out[..i]

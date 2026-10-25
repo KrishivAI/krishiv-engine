@@ -9,14 +9,18 @@ The `Batch` newtype (`batch.rs`): Arrow `RecordBatch` + `Weights` (`Const(c)` | 
 
 ## Key files
 Paths are relative to this crate.
-- `src/data_type.rs` Spark data types; `src/arrow.rs` mapping to Arrow
+- `src/data_type.rs` Spark data types and their renderings; `src/arrow.rs` mapping to Arrow
+- `src/nested.rs` `ArrayType`, `MapType`, `StructType`/`StructField`/`Metadata`, Spark's looser equalities
+- `src/json.rs` Spark's JSON form of a type (`DataType.json` / `fromJson`)
 - `src/ddl.rs` type-string parsing used by `krishiv-sql`
 - `src/batch.rs` the `Batch` newtype with `Weights` (`Const` or Int64 column)
 - `src/error.rs` error type with Spark classes
 - `tests/spark_type_strings.rs` type-string golden tests; `benches/batch_filter.rs` filter bench
 
 ## Extension points
-- New Spark type: a variant in `src/data_type.rs`, its Arrow mapping in `src/arrow.rs`, and its string form in `src/ddl.rs`.
+- New Spark type: a variant in `src/data_type.rs`, its Arrow mapping in `src/arrow.rs`, its string form in `src/ddl.rs`
+  and its JSON form in `src/json.rs`; `DataType` is `#[non_exhaustive]`, so other crates' wildcard arms need a
+  review too (skill `krishiv-add-type`).
 
 ## Invariants
 - Type mapping and precision/scale rules follow Spark exactly per supported version.
@@ -24,6 +28,8 @@ Paths are relative to this crate.
 - `Batch`: no selection vector, no encoding enum; copy-on-filter. `Const(c)` never becomes a column except in
   `concat` of differing constants; operators route `Const(1)` to the no-weight path. A weight column has the row
   count and no nulls.
+- Types from outside (type strings, Arrow, JSON, Spark Connect, plans) nest at most `DataType::MAX_NESTING_DEPTH`
+  (32) levels, so the recursive walks over a type stay within the stack.
 - `#![forbid(unsafe_code)]`.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
