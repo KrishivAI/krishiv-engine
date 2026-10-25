@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "tanh#054342254ba1/ansi_on",
-      "reason": "SELECT tanh(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "tanh#054342254ba1/ansi_off",
-      "reason": "SELECT tanh(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "tanh#bbec36e28d72/ansi_on",
       "reason": "SELECT tanh(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

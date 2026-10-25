@@ -26,11 +26,11 @@
     },
     {
       "id": "nvl#13de9ce1fe22/ansi_on",
-      "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#13de9ce1fe22/ansi_off",
-      "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#18036545751d/ansi_on",
@@ -215,14 +215,6 @@
     {
       "id": "nvl#f89a839e7d85/ansi_off",
       "reason": "SELECT nvl(NULL, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#fd2b816559e6/ansi_on",
-      "reason": "SELECT nvl(NULL, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "nvl#fd2b816559e6/ansi_off",
-      "reason": "SELECT nvl(NULL, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     }
   ],
   "format_version": 1,

@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "date_diff#05942e933fcc/ansi_on",
-      "reason": "SELECT date_diff(map('a', 1), '2009-07-30') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_diff#05942e933fcc/ansi_off",
-      "reason": "SELECT date_diff(map('a', 1), '2009-07-30') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "date_diff#06d2c47693d1/ansi_on",
       "reason": "SELECT date_diff(array(1, 2), '2009-07-30') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -55,14 +47,6 @@
     {
       "id": "date_diff#7612d4b942ab/ansi_off",
       "reason": "SELECT date_diff('2009-07-31', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_diff#9afec0436340/ansi_on",
-      "reason": "SELECT date_diff('2009-07-31', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_diff#9afec0436340/ansi_off",
-      "reason": "SELECT date_diff('2009-07-31', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_diff#d030945d4990/ansi_on",

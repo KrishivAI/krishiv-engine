@@ -9,14 +9,6 @@
       "reason": "SELECT abs(CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
     },
     {
-      "id": "abs#259f8171392f/ansi_on",
-      "reason": "SELECT abs(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "abs#259f8171392f/ansi_off",
-      "reason": "SELECT abs(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "abs#482fd6fb3fb5/ansi_on",
       "reason": "SELECT abs(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

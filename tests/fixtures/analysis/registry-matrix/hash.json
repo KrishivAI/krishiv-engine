@@ -162,11 +162,11 @@
     },
     {
       "id": "hash#51a176d3611e/ansi_on",
-      "reason": "SELECT hash('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT hash('Spark', map('a', 1), 2) | resolves to int where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "hash#51a176d3611e/ansi_off",
-      "reason": "SELECT hash('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT hash('Spark', map('a', 1), 2) | resolves to int where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "hash#5556de897838/ansi_on",
@@ -218,11 +218,11 @@
     },
     {
       "id": "hash#68ccd0f7afcd/ansi_on",
-      "reason": "SELECT hash(map('a', 1), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT hash(map('a', 1), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "hash#68ccd0f7afcd/ansi_off",
-      "reason": "SELECT hash(map('a', 1), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT hash(map('a', 1), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "hash#7d1796847464/ansi_on",

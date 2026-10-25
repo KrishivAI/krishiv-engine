@@ -120,6 +120,7 @@ registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
+    (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
@@ -430,6 +431,9 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
 #[must_use]
 pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     let mut out = BTreeSet::new();
+    if plan.env().map_key_dedup_last_win {
+        out.insert(Feature::MapKeyDedupPolicy);
+    }
     let mut stack = vec![plan.root()];
     while let Some(node) = stack.pop() {
         constructs_of(node, &mut |c| out.extend(feature_of(c)));

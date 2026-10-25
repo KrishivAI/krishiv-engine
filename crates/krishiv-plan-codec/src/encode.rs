@@ -130,6 +130,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: env.user.to_string(),
+        map_key_dedup_last_win: env.map_key_dedup_last_win.then_some(true),
     }
 }
 

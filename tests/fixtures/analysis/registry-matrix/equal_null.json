@@ -53,14 +53,6 @@
       "reason": "SELECT equal_null(1, CAST(X'C328FF' AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "equal_null#9426b8bc9b87/ansi_on",
-      "reason": "SELECT equal_null(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "equal_null#9426b8bc9b87/ansi_off",
-      "reason": "SELECT equal_null(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "equal_null#95f45a171b1c/ansi_off",
       "reason": "SELECT equal_null('1', 3) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -83,14 +75,6 @@
     {
       "id": "equal_null#b1fc9a5c815a/ansi_off",
       "reason": "SELECT equal_null(1, CAST(NULL AS string)) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "equal_null#b43d593f7fd6/ansi_on",
-      "reason": "SELECT equal_null(3, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "equal_null#b43d593f7fd6/ansi_off",
-      "reason": "SELECT equal_null(3, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "equal_null#cff9dbd80a51/ansi_on",

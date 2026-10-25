@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "contains#1399b878e567/ansi_on",
-      "reason": "SELECT contains('Spark SQL', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "contains#1399b878e567/ansi_off",
-      "reason": "SELECT contains('Spark SQL', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "contains#4b1b8fa21e9e/ansi_on",
       "reason": "SELECT contains(INTERVAL '1 02:03:04' DAY TO SECOND, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -71,14 +63,6 @@
     {
       "id": "contains#dcebc7ca8e0a/ansi_off",
       "reason": "SELECT contains(named_struct('a', 1, 'b', 'x'), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "contains#ebccf89c15c8/ansi_on",
-      "reason": "SELECT contains(map('a', 1), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "contains#ebccf89c15c8/ansi_off",
-      "reason": "SELECT contains(map('a', 1), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

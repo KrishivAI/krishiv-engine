@@ -33,14 +33,6 @@
       "reason": "SELECT date_trunc(array(1, 2), '2015-03-05T09:32:05.359') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "date_trunc#ab8944d5b81e/ansi_on",
-      "reason": "SELECT date_trunc(map('a', 1), '2015-03-05T09:32:05.359') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_trunc#ab8944d5b81e/ansi_off",
-      "reason": "SELECT date_trunc(map('a', 1), '2015-03-05T09:32:05.359') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "date_trunc#b60f1d3d4024/ansi_on",
       "reason": "SELECT date_trunc('YEAR', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -55,14 +47,6 @@
     {
       "id": "date_trunc#bbab69ebe047/ansi_off",
       "reason": "SELECT date_trunc(INTERVAL '1 02:03:04' DAY TO SECOND, '2015-03-05T09:32:05.359') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "date_trunc#ce274ba1d399/ansi_on",
-      "reason": "SELECT date_trunc('YEAR', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_trunc#ce274ba1d399/ansi_off",
-      "reason": "SELECT date_trunc('YEAR', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_trunc#de483f214493/ansi_on",

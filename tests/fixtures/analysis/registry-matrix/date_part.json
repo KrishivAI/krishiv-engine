@@ -10,11 +10,11 @@
     },
     {
       "id": "date_part#0a4ee947f0cd/ansi_on",
-      "reason": "SELECT date_part(map('a', 1), TIMESTAMP '2019-08-12 01:00:00.123456') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has NON_FOLDABLE_ARGUMENT"
+      "reason": "SELECT date_part(map('a', 1), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
     },
     {
       "id": "date_part#0a4ee947f0cd/ansi_off",
-      "reason": "SELECT date_part(map('a', 1), TIMESTAMP '2019-08-12 01:00:00.123456') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has NON_FOLDABLE_ARGUMENT"
+      "reason": "SELECT date_part(map('a', 1), TIMESTAMP '2019-08-12 01:00:00.123456') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has NON_FOLDABLE_ARGUMENT"
     },
     {
       "id": "date_part#186144d07620/ansi_on",
@@ -23,14 +23,6 @@
     {
       "id": "date_part#186144d07620/ansi_off",
       "reason": "SELECT date_part(named_struct('a', 1, 'b', 'x'), TIMESTAMP '2019-08-12 01:00:00.123456') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "date_part#2d8e71c6a7e2/ansi_on",
-      "reason": "SELECT date_part('YEAR', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_part#2d8e71c6a7e2/ansi_off",
-      "reason": "SELECT date_part('YEAR', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_part#4e04c424a4c6/ansi_on",
