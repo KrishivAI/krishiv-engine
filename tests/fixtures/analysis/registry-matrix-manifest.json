@@ -1,5 +1,5 @@
 {
-  "cases": 12566,
+  "cases": 12784,
   "entries": [
     {
       "id": "&#3c1a16bec609/ansi_off",
@@ -504,6 +504,46 @@
     {
       "id": "acosh#de074fcfa8d3/ansi_on",
       "reason": "SELECT acosh(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "any_value#04ba50b0a41d/ansi_off",
+      "reason": "SELECT any_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#04ba50b0a41d/ansi_on",
+      "reason": "SELECT any_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#6188e23671f4/ansi_off",
+      "reason": "SELECT any_value(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#6188e23671f4/ansi_on",
+      "reason": "SELECT any_value(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#94942fcbfe3e/ansi_off",
+      "reason": "SELECT any_value(col, array(1, 2)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#94942fcbfe3e/ansi_on",
+      "reason": "SELECT any_value(col, array(1, 2)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#a4824560fdf2/ansi_off",
+      "reason": "SELECT any_value(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#a4824560fdf2/ansi_on",
+      "reason": "SELECT any_value(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#ba624a02fb3a/ansi_off",
+      "reason": "SELECT any_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#ba624a02fb3a/ansi_on",
+      "reason": "SELECT any_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
     },
     {
       "id": "asin#31dfa83e35e0/ansi_off",
@@ -5610,6 +5650,206 @@
       "reason": "SELECT ltrim(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
+      "id": "max_by#05512ce12f17/ansi_off",
+      "reason": "SELECT max_by(x, y, 1.5D) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#05512ce12f17/ansi_on",
+      "reason": "SELECT max_by(x, y, 1.5D) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#0e50ca5bcb18/ansi_off",
+      "reason": "SELECT max_by(x, y, 1L) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#0e50ca5bcb18/ansi_on",
+      "reason": "SELECT max_by(x, y, 1L) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#127d584c1fa6/ansi_off",
+      "reason": "SELECT max_by(x, y, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#127d584c1fa6/ansi_on",
+      "reason": "SELECT max_by(x, y, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#14dbc2514ae8/ansi_off",
+      "reason": "SELECT max_by(x, y, NULL) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#14dbc2514ae8/ansi_on",
+      "reason": "SELECT max_by(x, y, NULL) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#1b47195e7fd6/ansi_off",
+      "reason": "SELECT max_by(x, y, '1') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#1b47195e7fd6/ansi_on",
+      "reason": "SELECT max_by(x, y, '1') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#3463d4380cb1/ansi_off",
+      "reason": "SELECT max_by(x, y, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#3463d4380cb1/ansi_on",
+      "reason": "SELECT max_by(x, y, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#3910f72903d7/ansi_off",
+      "reason": "SELECT max_by(x, y, CAST(1 AS SMALLINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#3910f72903d7/ansi_on",
+      "reason": "SELECT max_by(x, y, CAST(1 AS SMALLINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#3f96e614e136/ansi_off",
+      "reason": "SELECT max_by(x, y, CAST(1.5 AS FLOAT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#3f96e614e136/ansi_on",
+      "reason": "SELECT max_by(x, y, CAST(1.5 AS FLOAT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#44dca1a0228a/ansi_off",
+      "reason": "SELECT max_by(x, y, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#44dca1a0228a/ansi_on",
+      "reason": "SELECT max_by(x, y, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#4e7242e71dee/ansi_off",
+      "reason": "SELECT max_by(x, y, 'abc') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#4e7242e71dee/ansi_on",
+      "reason": "SELECT max_by(x, y, 'abc') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#6d9fa4bae78f/ansi_off",
+      "reason": "SELECT max_by(x, y, CAST(NULL AS int)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#6d9fa4bae78f/ansi_on",
+      "reason": "SELECT max_by(x, y, CAST(NULL AS int)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#7f4914ee361a/ansi_off",
+      "reason": "SELECT max_by(x, y, 1) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#7f4914ee361a/ansi_on",
+      "reason": "SELECT max_by(x, y, 1) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#86fc166ee8e0/ansi_off",
+      "reason": "SELECT max_by(x, y, X'01') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#86fc166ee8e0/ansi_on",
+      "reason": "SELECT max_by(x, y, X'01') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#9207124931b4/ansi_off",
+      "reason": "SELECT max_by(x, y, CAST(2147483647 AS INT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#9207124931b4/ansi_on",
+      "reason": "SELECT max_by(x, y, CAST(2147483647 AS INT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#95f7fc49eca2/ansi_off",
+      "reason": "SELECT max_by(x, y, CAST(-2147483648 AS INT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#95f7fc49eca2/ansi_on",
+      "reason": "SELECT max_by(x, y, CAST(-2147483648 AS INT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "max_by#99ec05fac0e5/ansi_off",
+      "reason": "SELECT max_by(x, y, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#99ec05fac0e5/ansi_on",
+      "reason": "SELECT max_by(x, y, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#9df2dec34beb/ansi_off",
+      "reason": "SELECT max_by(x, y, CAST(1 AS TINYINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#9df2dec34beb/ansi_on",
+      "reason": "SELECT max_by(x, y, CAST(1 AS TINYINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#bc01ee66b357/ansi_off",
+      "reason": "SELECT max_by(x, y, named_struct('a', 1, 'b', 'x')) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#bc01ee66b357/ansi_on",
+      "reason": "SELECT max_by(x, y, named_struct('a', 1, 'b', 'x')) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#c45683d91f90/ansi_off",
+      "reason": "SELECT max_by(x, y, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#c45683d91f90/ansi_on",
+      "reason": "SELECT max_by(x, y, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#c55f1e8b3e18/ansi_off",
+      "reason": "SELECT max_by(x, y, map('a', 1)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#c55f1e8b3e18/ansi_on",
+      "reason": "SELECT max_by(x, y, map('a', 1)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#d67b46ca8103/ansi_off",
+      "reason": "SELECT max_by(x, y, DATE'2024-02-29') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#d67b46ca8103/ansi_on",
+      "reason": "SELECT max_by(x, y, DATE'2024-02-29') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#e2de8c6a8128/ansi_off",
+      "reason": "SELECT max_by(x, y, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#e2de8c6a8128/ansi_on",
+      "reason": "SELECT max_by(x, y, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#ea6e2bbfc9e7/ansi_off",
+      "reason": "SELECT max_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#ea6e2bbfc9e7/ansi_on",
+      "reason": "SELECT max_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "max_by#f0872159688c/ansi_off",
+      "reason": "SELECT max_by(x, y, array(1, 2)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#f0872159688c/ansi_on",
+      "reason": "SELECT max_by(x, y, array(1, 2)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#ff115f23cf8f/ansi_off",
+      "reason": "SELECT max_by(x, y, true) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "max_by#ff115f23cf8f/ansi_on",
+      "reason": "SELECT max_by(x, y, true) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
       "id": "md5#494fc1423cbf/ansi_off",
       "reason": "SELECT md5(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -5648,6 +5888,206 @@
     {
       "id": "md5#fd708175c7a6/ansi_on",
       "reason": "SELECT md5(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#110479e28bf2/ansi_off",
+      "reason": "SELECT min_by(x, y, map('a', 1)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#110479e28bf2/ansi_on",
+      "reason": "SELECT min_by(x, y, map('a', 1)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#1db3db810285/ansi_off",
+      "reason": "SELECT min_by(x, y, CAST(NULL AS int)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "min_by#1db3db810285/ansi_on",
+      "reason": "SELECT min_by(x, y, CAST(NULL AS int)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "min_by#1e60613841d9/ansi_off",
+      "reason": "SELECT min_by(x, y, CAST(1 AS TINYINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#1e60613841d9/ansi_on",
+      "reason": "SELECT min_by(x, y, CAST(1 AS TINYINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#24ee45e7bda4/ansi_off",
+      "reason": "SELECT min_by(x, y, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#24ee45e7bda4/ansi_on",
+      "reason": "SELECT min_by(x, y, CAST(1.5 AS DECIMAL(10,2))) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#25cff7efd50b/ansi_off",
+      "reason": "SELECT min_by(x, y, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#25cff7efd50b/ansi_on",
+      "reason": "SELECT min_by(x, y, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#337188cc2002/ansi_off",
+      "reason": "SELECT min_by(x, y, CAST(1.5 AS FLOAT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#337188cc2002/ansi_on",
+      "reason": "SELECT min_by(x, y, CAST(1.5 AS FLOAT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#38f797b62e71/ansi_off",
+      "reason": "SELECT min_by(x, y, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#38f797b62e71/ansi_on",
+      "reason": "SELECT min_by(x, y, TIMESTAMP'2024-02-29 12:34:56.123456') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#446282845e4c/ansi_off",
+      "reason": "SELECT min_by(x, y, 1) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#446282845e4c/ansi_on",
+      "reason": "SELECT min_by(x, y, 1) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#5863f1218462/ansi_off",
+      "reason": "SELECT min_by(x, y, 1L) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#5863f1218462/ansi_on",
+      "reason": "SELECT min_by(x, y, 1L) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#5f34f8cd49c2/ansi_off",
+      "reason": "SELECT min_by(x, y, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#5f34f8cd49c2/ansi_on",
+      "reason": "SELECT min_by(x, y, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#676312ae136e/ansi_off",
+      "reason": "SELECT min_by(x, y, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#676312ae136e/ansi_on",
+      "reason": "SELECT min_by(x, y, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#80d0ca30807a/ansi_off",
+      "reason": "SELECT min_by(x, y, array(1, 2)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#80d0ca30807a/ansi_on",
+      "reason": "SELECT min_by(x, y, array(1, 2)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#897e17cdfb93/ansi_off",
+      "reason": "SELECT min_by(x, y, 1.5D) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#897e17cdfb93/ansi_on",
+      "reason": "SELECT min_by(x, y, 1.5D) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#8f53d124656c/ansi_off",
+      "reason": "SELECT min_by(x, y, CAST(1 AS SMALLINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#8f53d124656c/ansi_on",
+      "reason": "SELECT min_by(x, y, CAST(1 AS SMALLINT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#9f369d142638/ansi_off",
+      "reason": "SELECT min_by(x, y, X'01') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#9f369d142638/ansi_on",
+      "reason": "SELECT min_by(x, y, X'01') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#9fbbe5ee2d5b/ansi_off",
+      "reason": "SELECT min_by(x, y, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#9fbbe5ee2d5b/ansi_on",
+      "reason": "SELECT min_by(x, y, CAST(1.5 AS DECIMAL(38,18))) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#a4dd19d714cf/ansi_off",
+      "reason": "SELECT min_by(x, y, true) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#a4dd19d714cf/ansi_on",
+      "reason": "SELECT min_by(x, y, true) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#b0ca70d894fe/ansi_off",
+      "reason": "SELECT min_by(x, y, '1') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#b0ca70d894fe/ansi_on",
+      "reason": "SELECT min_by(x, y, '1') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#c283a1906ffa/ansi_off",
+      "reason": "SELECT min_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#c283a1906ffa/ansi_on",
+      "reason": "SELECT min_by(x, y, 2) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#c5734adff05f/ansi_off",
+      "reason": "SELECT min_by(x, y, NULL) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "min_by#c5734adff05f/ansi_on",
+      "reason": "SELECT min_by(x, y, NULL) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "min_by#dca05b6fd08d/ansi_off",
+      "reason": "SELECT min_by(x, y, named_struct('a', 1, 'b', 'x')) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#dca05b6fd08d/ansi_on",
+      "reason": "SELECT min_by(x, y, named_struct('a', 1, 'b', 'x')) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#e72b3df6398f/ansi_off",
+      "reason": "SELECT min_by(x, y, DATE'2024-02-29') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#e72b3df6398f/ansi_on",
+      "reason": "SELECT min_by(x, y, DATE'2024-02-29') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "min_by#ecbbd72e0aa5/ansi_off",
+      "reason": "SELECT min_by(x, y, CAST(-2147483648 AS INT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "min_by#ecbbd72e0aa5/ansi_on",
+      "reason": "SELECT min_by(x, y, CAST(-2147483648 AS INT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "min_by#f239b696d6ea/ansi_off",
+      "reason": "SELECT min_by(x, y, 'abc') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "min_by#f239b696d6ea/ansi_on",
+      "reason": "SELECT min_by(x, y, 'abc') FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array)"
+    },
+    {
+      "id": "min_by#f4262cb06090/ansi_off",
+      "reason": "SELECT min_by(x, y, CAST(2147483647 AS INT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
+    },
+    {
+      "id": "min_by#f4262cb06090/ansi_on",
+      "reason": "SELECT min_by(x, y, CAST(2147483647 AS INT)) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y) | KRISHIV_UNSUPPORTED_FEATURE: max_by and min_by with a third argument (they return an array) where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
       "id": "mod#05114d19d1a3/ansi_off",
@@ -11585,6 +12025,16 @@
       "pass": 40
     },
     {
+      "cases": 10,
+      "function": "any",
+      "pass": 10
+    },
+    {
+      "cases": 54,
+      "function": "any_value",
+      "pass": 44
+    },
+    {
       "cases": 52,
       "function": "asin",
       "pass": 42
@@ -11633,6 +12083,16 @@
       "cases": 100,
       "function": "bit_get",
       "pass": 80
+    },
+    {
+      "cases": 10,
+      "function": "bool_and",
+      "pass": 10
+    },
+    {
+      "cases": 10,
+      "function": "bool_or",
+      "pass": 10
     },
     {
       "cases": 106,
@@ -11703,6 +12163,11 @@
       "cases": 12,
       "function": "count",
       "pass": 12
+    },
+    {
+      "cases": 10,
+      "function": "count_if",
+      "pass": 10
     },
     {
       "cases": 54,
@@ -11803,6 +12268,11 @@
       "cases": 118,
       "function": "equal_null",
       "pass": 86
+    },
+    {
+      "cases": 10,
+      "function": "every",
+      "pass": 10
     },
     {
       "cases": 50,
@@ -11975,6 +12445,11 @@
       "pass": 8
     },
     {
+      "cases": 52,
+      "function": "max_by",
+      "pass": 2
+    },
+    {
       "cases": 54,
       "function": "md5",
       "pass": 44
@@ -11988,6 +12463,11 @@
       "cases": 8,
       "function": "min",
       "pass": 8
+    },
+    {
+      "cases": 52,
+      "function": "min_by",
+      "pass": 2
     },
     {
       "cases": 100,
@@ -12215,6 +12695,11 @@
       "pass": 40
     },
     {
+      "cases": 10,
+      "function": "some",
+      "pass": 10
+    },
+    {
       "cases": 50,
       "function": "sqrt",
       "pass": 40
@@ -12345,5 +12830,5 @@
       "pass": 40
     }
   ],
-  "pass": 9681
+  "pass": 9789
 }

@@ -330,3 +330,137 @@ fn min_max_on_decimal64() {
         assert_eq!(v.as_primitive::<Decimal64Type>().value(0), want);
     }
 }
+
+/// Keys of the `max_by`/`min_by` merge test: NaN (the largest), the
+/// infinities, and `-0.0 = 0.0` (a tie).
+const KEYS: [f64; 7] = [
+    f64::NAN,
+    f64::NEG_INFINITY,
+    -1.0,
+    -0.0,
+    0.0,
+    1.0,
+    f64::INFINITY,
+];
+
+/// `(group, value, key)`: a NULL value is legal, a NULL key skips the row.
+type ByRow = (u32, Option<i64>, Option<u8>);
+
+/// The value and key columns of `rows`, as strings (`strings`) or as
+/// `bigint`/`double` (keys by their index in strings, so ties stay ties).
+fn by_columns(rows: &[ByRow], strings: (bool, bool)) -> Vec<ArrayRef> {
+    let x: ArrayRef = if strings.0 {
+        Arc::new(StringViewArray::from_iter(
+            rows.iter().map(|r| r.1.map(|v| format!("v{v:03}"))),
+        ))
+    } else {
+        Arc::new(Int64Array::from_iter(rows.iter().map(|r| r.1)))
+    };
+    let y: ArrayRef = if strings.1 {
+        Arc::new(StringViewArray::from_iter(
+            rows.iter().map(|r| r.2.map(|k| format!("k{k}"))),
+        ))
+    } else {
+        Arc::new(Float64Array::from_iter(
+            rows.iter().map(|r| r.2.map(|k| KEYS[usize::from(k)])),
+        ))
+    };
+    vec![x, y]
+}
+
+fn by_expr(f: AggregateFunction, strings: (bool, bool)) -> AggregateExpr {
+    let x = if strings.0 {
+        DataType::Utf8View
+    } else {
+        DataType::Int64
+    };
+    let y = if strings.1 {
+        DataType::Utf8View
+    } else {
+        DataType::Float64
+    };
+    match f {
+        AggregateFunction::MaxBy | AggregateFunction::MinBy => {
+            AggregateExpr::by(f, (0, 1), (x, y), "b")
+        }
+        _ => AggregateExpr::new(f, 0, x, "a"),
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    /// `max_by`, `min_by` and `any_value`: the input cut anywhere into
+    /// consecutive parts, each part's partial states merged in order (also
+    /// through a second level), give the single pass's states and result,
+    /// ties and NULLs included.
+    #[test]
+    fn by_merge_differential(
+        rows in proptest::collection::vec(
+            (0..4_u32, proptest::option::of(0..40_i64), proptest::option::of(0..7_u8)),
+            0..60,
+        ),
+        cuts in proptest::collection::vec(0..61_usize, 0..4),
+        strings in (any::<bool>(), any::<bool>()),
+    ) {
+        let groups = 4_u32;
+        let ids: Vec<u32> = (0..groups).collect();
+        let mut cuts: Vec<usize> = cuts.into_iter().map(|c| c.min(rows.len())).collect();
+        cuts.push(0);
+        cuts.push(rows.len());
+        cuts.sort_unstable();
+        let fold = |range: &[ByRow]| {
+            (range.iter().map(|r| r.0).collect::<Vec<u32>>(), by_columns(range, strings))
+        };
+        for f in [
+            AggregateFunction::MaxBy,
+            AggregateFunction::MinBy,
+            AggregateFunction::AnyValue { ignore_nulls: false },
+            AggregateFunction::AnyValue { ignore_nulls: true },
+        ] {
+            let expr = by_expr(f, strings);
+            let new = || {
+                let mut a = Accumulator::new(&expr, true).unwrap();
+                a.resize(groups as usize);
+                a
+            };
+            let mut single = new();
+            let (g, cols) = fold(&rows);
+            single.update(&g, &cols, &Weights::Const(1)).unwrap();
+            let partials: Vec<Vec<ArrayRef>> = cuts
+                .windows(2)
+                .map(|w| {
+                    let mut a = new();
+                    let (g, cols) = fold(&rows[w[0]..w[1]]);
+                    a.update(&g, &cols, &Weights::Const(1)).unwrap();
+                    a.state(&ids).unwrap()
+                })
+                .collect();
+            let mut flat = new();
+            for st in &partials {
+                flat.merge(&ids, st).unwrap();
+            }
+            // Two levels: the halves merged apart, then together.
+            let half = partials.len() / 2;
+            let mut top = new();
+            for part in [&partials[..half], &partials[half..]] {
+                let mut mid = new();
+                for st in part {
+                    mid.merge(&ids, st).unwrap();
+                }
+                top.merge(&ids, &mid.state(&ids).unwrap()).unwrap();
+            }
+            let want = (single.state(&ids).unwrap(), single.evaluate(&ids).unwrap());
+            for merged in [&flat, &top] {
+                prop_assert_eq!(
+                    &(merged.state(&ids).unwrap(), merged.evaluate(&ids).unwrap()),
+                    &want
+                );
+            }
+        }
+    }
+}

@@ -781,3 +781,70 @@ fn an_exchange_without_a_partitioning_kind_is_corrupt() {
     e.partitioning = Some(pb::Partitioning { kind: None });
     corrupt(&m, "partitioning kind is missing");
 }
+
+/// `any_value`, `max_by` and `min_by` have no ids in the format yet: a plan
+/// holding one is refused with the typed error (not encoded as another
+/// function), in an aggregate node and as a window function.
+#[test]
+fn aggregates_the_format_does_not_know_are_refused() {
+    use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
+    use krishiv_exec::physical::AggregatePlan;
+    use krishiv_exec::window::{WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan};
+    let exprs = [
+        AggregateExpr::new(
+            AggregateFunction::AnyValue { ignore_nulls: true },
+            0,
+            arrow_schema::DataType::Int32,
+            "a",
+        ),
+        AggregateExpr::by(
+            AggregateFunction::MaxBy,
+            (0, 1),
+            (
+                arrow_schema::DataType::Utf8View,
+                arrow_schema::DataType::Int64,
+            ),
+            "b",
+        ),
+        AggregateExpr::by(
+            AggregateFunction::MinBy,
+            (0, 1),
+            (
+                arrow_schema::DataType::Int32,
+                arrow_schema::DataType::Float64,
+            ),
+            "c",
+        ),
+    ];
+    for e in exprs {
+        let refused = |plan: &PhysicalPlan| {
+            let err = encode(plan).unwrap_err();
+            assert!(
+                matches!(&err, CodecError::Unsupported(m) if m.contains("aggregate function")),
+                "{err:?}"
+            );
+        };
+        refused(&plan_of(PhysNode::Aggregate {
+            input: Box::new(inventory::scan()),
+            aggregate: AggregatePlan {
+                group_by: vec![0],
+                aggregates: vec![e.clone()],
+                distinct: vec![false],
+                output: AggregateOutput::Final,
+            },
+        }));
+        refused(&plan_of(PhysNode::Window {
+            input: Box::new(inventory::scan()),
+            window: WindowPlan {
+                partition_by: Vec::new(),
+                order_by: Vec::new(),
+                functions: vec![WindowFunctionPlan {
+                    function: WindowFunction::Aggregate(e),
+                    frame: WindowFrame::whole(krishiv_exec::window::FrameUnits::Rows),
+                    filter: None,
+                    name: "w".to_owned(),
+                }],
+            },
+        }));
+    }
+}

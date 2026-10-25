@@ -477,6 +477,11 @@ fn reference(
                             let s = vals.iter().fold(0.0, |s, v| s + *v as f64);
                             format!("{:?}", s / to_f(vals.len()))
                         }
+                        AggregateFunction::AnyValue { .. }
+                        | AggregateFunction::MaxBy
+                        | AggregateFunction::MinBy => {
+                            unreachable!("no window test aggregates with this function")
+                        }
                     }
                 }
             }

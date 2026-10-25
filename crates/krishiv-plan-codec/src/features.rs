@@ -238,7 +238,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::Min
             | AggregateFunction::Max
             | AggregateFunction::First { .. }
-            | AggregateFunction::Last { .. } => None,
+            | AggregateFunction::Last { .. }
+            | AggregateFunction::AnyValue { .. }
+            | AggregateFunction::MaxBy
+            | AggregateFunction::MinBy => None,
         },
     }
 }
