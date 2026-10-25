@@ -25,6 +25,13 @@
 //!   abort the query furthest above its fair share, waiting for aborted
 //!   queries to release before aborting another.
 //!
+//! - **Resident-set guard.** With a probe installed
+//!   ([`set_resident_probe`], by the program that owns the allocator), a
+//!   limited root samples the process's resident set and cuts what it holds
+//!   above the reservations plus an [`allowance`] from what ordinary grants
+//!   may take, so consumers spill allocator overhead too. The cut never
+//!   fails or aborts a query (see the `resident` module).
+//!
 //! # Driver protocol
 //! Each pipeline driver has a [`SpillOwner`] and registers every consumer
 //! it owns with a signal from [`SpillOwner::signal`]. At every batch
@@ -71,6 +78,7 @@ mod limit;
 mod pool;
 mod release;
 mod reservation;
+mod resident;
 mod rounds;
 mod spill;
 mod spillfile;
@@ -86,6 +94,9 @@ pub use release::{
     set_release_hook,
 };
 pub use reservation::Reservation;
+pub use resident::{
+    ALLOWANCE_BASE, SAMPLE_INTERVAL, allowance, process_resident_bytes, set_resident_probe,
+};
 pub use spill::{OwnerId, SpillOwner, SpillService, SpillSignal, SpillTicket, Spillable};
 pub use spillfile::{
     SpillCodec, SpillConfig, SpillError, SpillFile, SpillManager, SpillReader, SpillScope,

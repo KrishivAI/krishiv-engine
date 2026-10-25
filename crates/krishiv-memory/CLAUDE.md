@@ -10,6 +10,7 @@ Memory management: pools, reservations, the memory arbitrator and spill accounti
 Paths are relative to this crate.
 - `src/lib.rs` public surface: pools, reservations, release hook
 - `src/pool.rs` memory pools; `src/reservation.rs` reservation handles; `src/consumer.rs` memory consumers
+- `src/resident.rs` resident-set guard: with a probe installed, cuts what the process holds above the reservations plus an allowance from the root's limit for ordinary grants (never fails or aborts a query)
 - `src/arbitrate.rs` memory arbitrator; `src/limit.rs` memory-limit detection (cgroup and meminfo fixtures)
 - `src/spill.rs` spill scopes and spill accounting
 - `src/spillfile/format.rs` on-disk spill format; `src/spillfile/writer.rs` and `reader.rs` frame I/O

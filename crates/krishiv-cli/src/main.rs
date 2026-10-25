@@ -63,7 +63,14 @@ fn main() {
     // configured limit that is not generous, mimalloc also purges promptly
     // (set before `main`, see `krishiv_alloc`).
     #[cfg(feature = "mimalloc")]
-    krishiv_memory::set_release_hook(krishiv_alloc::install());
+    {
+        krishiv_memory::set_release_hook(krishiv_alloc::install());
+        // Under that bounded policy the resident set follows the pools, and
+        // the pools keep it within their reservations plus an allowance.
+        if krishiv_alloc::bounded() {
+            krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
+        }
+    }
     run();
 }
 

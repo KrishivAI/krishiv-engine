@@ -208,6 +208,7 @@ mod init {
         if is_generous(limit) {
             return;
         }
+        super::BOUNDED.store(true, std::sync::atomic::Ordering::Relaxed);
         for &(var, option, value) in &LIMITED_OPTIONS {
             if !is_set(var) {
                 // SAFETY: only stores the value in mimalloc's option table;
@@ -241,8 +242,26 @@ mod init {
                 )
             };
             assert_eq!(got, (1000, 1, 0));
+            assert!(
+                !crate::bounded(),
+                "no limit: the memory-bound policy is off"
+            );
         }
     }
+}
+
+/// Set by the constructor when it applied [`LIMITED_OPTIONS`].
+static BOUNDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the process started under a limit below [`GENEROUS_MIN`], so
+/// mimalloc runs with [`LIMITED_OPTIONS`] and returns freed memory within
+/// milliseconds. Then the binary also installs the resident-set guard's
+/// probe (`krishiv_memory::set_resident_probe`): the resident set tracks
+/// the memory pools closely enough for the guard to act on it. With
+/// mimalloc's defaults (a generous limit) freed memory stays resident for a
+/// second, and the guard would spill for memory about to be returned.
+pub fn bounded() -> bool {
+    BOUNDED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Returns the calling thread's freed memory to the OS: the pressure
