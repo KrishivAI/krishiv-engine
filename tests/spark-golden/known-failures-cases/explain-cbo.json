@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "depends-on-command": [
+      4
+    ],
+    "sql-commands": [
+      0,
+      1,
+      2,
+      3,
+      5,
+      6
+    ]
+  },
+  "file": "explain-cbo",
+  "format_version": 1
+}

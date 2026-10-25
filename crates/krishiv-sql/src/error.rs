@@ -17,10 +17,11 @@
 //! not a string (an unquoted password value) has its parameters redacted.
 
 use krishiv_common::error::{
-    CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, InvalidIdentifier,
-    InvalidResetCommandFormat, InvalidSetSyntax, InvalidStatementOrClause, InvalidTempObjQualifier,
-    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0053, ParseEmptyStatement,
-    ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot, UnclosedBracketedComment,
+    CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
+    InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidStatementOrClause,
+    InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0053,
+    ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
+    UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
@@ -93,6 +94,22 @@ pub(crate) fn invalid_identifier(ident: &str, span: Span) -> ParseError {
     at(
         InvalidIdentifier {
             ident: ident.to_owned(),
+        },
+        span,
+    )
+}
+
+/// `IDENTIFIER_TOO_MANY_NAME_PARTS`: an identifier literal naming more than
+/// `limit` parts.
+pub(crate) fn identifier_too_many_name_parts(
+    identifier: String,
+    limit: usize,
+    span: Span,
+) -> ParseError {
+    at(
+        IdentifierTooManyNameParts {
+            identifier,
+            limit: limit.to_string(),
         },
         span,
     )

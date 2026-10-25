@@ -50,6 +50,7 @@ use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
+use crate::variables::SessionVariables;
 
 /// The store id of the local file system.
 const LOCAL_STORE: &str = "file";
@@ -95,6 +96,7 @@ impl fmt::Debug for Session {
 pub(crate) struct SessionState {
     pub(crate) conf: Arc<ConfStore>,
     pub(crate) catalog: Arc<SessionCatalog>,
+    pub(crate) variables: Arc<SessionVariables>,
     profile: SparkProfile,
     principal: Arc<Principal>,
     functions: Arc<dyn FunctionRegistry>,
@@ -225,7 +227,7 @@ impl SessionBuilder {
         let (config, _) = Config::from_pairs(self.pairs)?;
         let executor: Arc<dyn Executor> = match self.executor {
             Some(e) => e,
-            None => TokioExecutor::new(&ExecutorConfig::default())?,
+            None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
         let memory: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::from_config(&config));
         let io =
@@ -243,6 +245,7 @@ impl SessionBuilder {
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
                 catalog: Arc::new(SessionCatalog::default()),
+                variables: Arc::new(SessionVariables::default()),
                 profile: self.profile,
                 principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
                 functions: self
@@ -352,10 +355,13 @@ impl Session {
                 Ok(df)
             }
             Statement::Explain(e) => self.explain_statement(&e).await,
-            Statement::Set(s) => self.exec_set(&s).await,
+            Statement::Set(s) => self.exec_set(&s, &redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
             Statement::DropView(v) => self.exec_drop_view(&v).await,
+            Statement::DeclareVariable(v) => self.exec_declare(&v, query, &redacted).await,
+            Statement::SetVariable(v) => self.exec_set_variable(&v, query, &redacted).await,
+            Statement::DropVariable(v) => self.exec_drop_variable(&v, &redacted).await,
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
@@ -590,6 +596,9 @@ impl Session {
             ResolutionConf::from_conf(|k| values.get(k).map(String::as_str))
         };
         let parser = parser_options(&config);
+        // One snapshot of the variables per query, like the configuration
+        // snapshot: every reference in the query reads the same values.
+        let variables = self.state.variables.snapshot();
         let analysis = AnalysisContext {
             profile: self.state.profile,
             conf: resolution,
@@ -599,6 +608,7 @@ impl Session {
             functions: Arc::clone(&self.state.functions),
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(files),
+            variables: Arc::clone(&variables),
         };
         // The epoch the query's catalog reads at: entries it loads are at
         // least as new.
@@ -610,6 +620,7 @@ impl Session {
             catalog,
             conf_version,
             catalog_epoch,
+            variables_version: variables.version,
         }
     }
 
@@ -944,7 +955,7 @@ fn job_uuid() -> String {
 }
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-const PARSER_KEYS: [&str; 7] = [
+const PARSER_KEYS: [&str; 9] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -952,6 +963,8 @@ const PARSER_KEYS: [&str; 7] = [
     "spark.sql.parser.escapedStringLiterals",
     "spark.sql.legacy.bangEqualsNot",
     "spark.sql.legacy.identifierClause",
+    "spark.sql.sources.bucketing.maxBuckets",
+    "spark.sql.parser.singleCharacterPipeOperator.enabled",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
@@ -970,7 +983,12 @@ fn empty_redacted() -> RedactedSql {
 
 /// `error` with the SQL span `start..end` of `text` attached as its
 /// query context (`stop` is inclusive, as Spark reports it).
-fn sql_context(error: KrishivError, text: &RedactedSql, start: usize, end: usize) -> KrishivError {
+pub(crate) fn sql_context(
+    error: KrishivError,
+    text: &RedactedSql,
+    start: usize,
+    end: usize,
+) -> KrishivError {
     error.with_query_context(ErrorQueryContext::sql(
         text.fragment(start..end),
         start,
@@ -1029,6 +1047,9 @@ pub(crate) struct QueryEnv {
     pub(crate) catalog: Arc<QueryCatalog>,
     pub(crate) conf_version: u64,
     pub(crate) catalog_epoch: u64,
+    /// The variable version the query's snapshot was taken at: a cached
+    /// resolved plan is reused only while it is unchanged.
+    pub(crate) variables_version: u64,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

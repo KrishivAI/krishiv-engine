@@ -153,13 +153,27 @@ pub(crate) fn decimal(unscaled: i128, scale: u32) -> String {
 /// `DATE 'yyyy-MM-dd'` with a `+` before years past 9999.
 #[must_use]
 pub(crate) fn date(days: i32) -> String {
+    format!("DATE '{}'", date_value(days))
+}
+
+/// `yyyy-MM-dd`, as a cast to string renders a date.
+#[must_use]
+pub(crate) fn date_value(days: i32) -> String {
     let (y, m, d) = civil_from_days(i64::from(days));
-    format!("DATE '{}'", year_month_day(y, m, d))
+    year_month_day(y, m, d)
 }
 
 /// `TIMESTAMP 'yyyy-MM-dd HH:mm:ss[.ffffff]'`, or the `_NTZ` spelling.
 #[must_use]
 pub(crate) fn timestamp(micros: i64, ntz: bool) -> String {
+    let keyword = if ntz { "TIMESTAMP_NTZ" } else { "TIMESTAMP" };
+    format!("{keyword} '{}'", timestamp_value(micros))
+}
+
+/// `yyyy-MM-dd HH:mm:ss[.ffffff]`, as a cast to string renders a
+/// timestamp.
+#[must_use]
+pub(crate) fn timestamp_value(micros: i64) -> String {
     const DAY: i64 = 86_400_000_000;
     let days = micros.div_euclid(DAY);
     let mut rest = micros.rem_euclid(DAY);
@@ -186,8 +200,7 @@ pub(crate) fn timestamp(micros: i64, ntz: bool) -> String {
         out.push('.');
         out.push_str(&digits);
     }
-    let keyword = if ntz { "TIMESTAMP_NTZ" } else { "TIMESTAMP" };
-    format!("{keyword} '{out}'")
+    out
 }
 
 /// `yyyy-MM-dd` with a `+` before years past 9999 (`-` keeps its sign).

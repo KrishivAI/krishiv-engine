@@ -395,6 +395,7 @@ fn positive_ints_reject_zero_and_negatives() {
         "spark.sql.files.minPartitionNum",
         "spark.sql.files.maxPartitionNum",
         "spark.sql.leafNodeDefaultParallelism",
+        "spark.sql.sources.bucketing.maxBuckets",
     ] {
         let mut c = Config::new();
         for bad in ["0", "-3", "x"] {
@@ -419,4 +420,21 @@ fn unset_restores_defaults() {
     c.unset("my.app.flag");
     c.unset("never.set");
     assert_eq!(c, Config::new());
+}
+
+#[test]
+fn io_blocking_threads_parses_and_defaults() {
+    let mut c = Config::new();
+    let get = |c: &Config| c.get(&IO_BLOCKING_THREADS).and_then(ConfigValue::as_int);
+    assert_eq!(get(&c), Some(8));
+    c.set("krishiv.io.blockingThreads", "3").unwrap();
+    assert_eq!(get(&c), Some(3));
+    for bad in ["0", "-1", "two", "1.5"] {
+        let e = c.set("krishiv.io.blockingThreads", bad).unwrap_err();
+        assert!(
+            e.to_string().contains("krishiv.io.blockingThreads"),
+            "{bad}: {e}"
+        );
+    }
+    assert_eq!(get(&c), Some(3), "a rejected value leaves the setting");
 }

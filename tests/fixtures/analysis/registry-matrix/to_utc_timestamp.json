@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "to_utc_timestamp#17f2cb149df7/ansi_on",
+      "reason": "SELECT to_utc_timestamp(INTERVAL '1-2' YEAR TO MONTH, 'Asia/Seoul') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#17f2cb149df7/ansi_off",
+      "reason": "SELECT to_utc_timestamp(INTERVAL '1-2' YEAR TO MONTH, 'Asia/Seoul') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#18b601a625bc/ansi_on",
+      "reason": "SELECT to_utc_timestamp(INTERVAL '1 02:03:04' DAY TO SECOND, 'Asia/Seoul') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#18b601a625bc/ansi_off",
+      "reason": "SELECT to_utc_timestamp(INTERVAL '1 02:03:04' DAY TO SECOND, 'Asia/Seoul') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#1e2ecc93ecec/ansi_on",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#1e2ecc93ecec/ansi_off",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#4007b97e1f30/ansi_on",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_utc_timestamp#4007b97e1f30/ansi_off",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_utc_timestamp#6e393f2bd812/ansi_on",
+      "reason": "SELECT to_utc_timestamp(array(1, 2), 'Asia/Seoul') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#6e393f2bd812/ansi_off",
+      "reason": "SELECT to_utc_timestamp(array(1, 2), 'Asia/Seoul') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#78b01f86bbd7/ansi_on",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#78b01f86bbd7/ansi_off",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#9ec1404ab832/ansi_on",
+      "reason": "SELECT to_utc_timestamp(map('a', 1), 'Asia/Seoul') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#9ec1404ab832/ansi_off",
+      "reason": "SELECT to_utc_timestamp(map('a', 1), 'Asia/Seoul') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#a0a1d553b4b8/ansi_on",
+      "reason": "SELECT to_utc_timestamp(named_struct('a', 1, 'b', 'x'), 'Asia/Seoul') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#a0a1d553b4b8/ansi_off",
+      "reason": "SELECT to_utc_timestamp(named_struct('a', 1, 'b', 'x'), 'Asia/Seoul') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#c1b7816ed698/ansi_on",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#c1b7816ed698/ansi_off",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_utc_timestamp#fd6dc008f49b/ansi_on",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_utc_timestamp#fd6dc008f49b/ansi_off",
+      "reason": "SELECT to_utc_timestamp('2016-08-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_utc_timestamp"
+}
