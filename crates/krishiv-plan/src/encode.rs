@@ -813,6 +813,44 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 rows.iter().for_each(|r| self.exprs(r));
                 self.strs(columns);
             }
+            PlanNode::Pivot {
+                pivot_columns,
+                values,
+                aggregates,
+                ..
+            } => {
+                self.u8(26);
+                self.exprs(pivot_columns);
+                self.len(values.len());
+                for v in values {
+                    self.exprs(&v.exprs);
+                    self.u8(u8::from(v.alias.is_some()));
+                    if let Some(alias) = &v.alias {
+                        self.str(alias);
+                    }
+                }
+                self.exprs(aggregates);
+            }
+            PlanNode::Unpivot {
+                value_columns,
+                name_column,
+                column_sets,
+                include_nulls,
+                ..
+            } => {
+                self.u8(27);
+                self.strs(value_columns);
+                self.str(name_column);
+                self.len(column_sets.len());
+                for s in column_sets {
+                    self.exprs(&s.columns);
+                    self.u8(u8::from(s.alias.is_some()));
+                    if let Some(alias) = &s.alias {
+                        self.str(alias);
+                    }
+                }
+                self.u8(u8::from(*include_nulls));
+            }
         }
     }
 

@@ -12,6 +12,7 @@ use super::lexer::{TokenKind, tokenize, unescape_string};
 use super::*;
 
 mod probe;
+mod tail;
 
 /// The tree of `sql`, without Spark's post-parse checks (tree shapes).
 fn ok(sql: &str) -> ast::Query {
