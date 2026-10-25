@@ -117,18 +117,26 @@ fn gappy_coalesced_ranges_are_copied_out() {
                 .await
                 .unwrap();
         assert_eq!(got[0].as_ptr().wrapping_add(1_000), got[1].as_ptr());
-        // One request with 98% gap bytes: each range is its own copy, so the
-        // request's buffer is not kept alive by them.
+        // One request with 97% gap bytes (a small gap, so still merged):
+        // each range is its own copy, so the request's buffer is not kept
+        // alive by them.
         let got =
-            s.io.get_ranges(&f, &[0..1_000, 99_000..100_000])
+            s.io.get_ranges(&f, &[0..1_000, 60_000..61_000])
                 .await
                 .unwrap();
         assert_eq!(s.fault.stats().gets, 2);
-        assert_ne!(got[0].as_ptr().wrapping_add(99_000), got[1].as_ptr());
+        assert_ne!(got[0].as_ptr().wrapping_add(60_000), got[1].as_ptr());
         let expected = |r: std::ops::Range<usize>| -> Vec<u8> {
             r.map(|i| u8::try_from(i % 251).unwrap()).collect()
         };
         assert_eq!(got[0].as_ref(), expected(0..1_000).as_slice());
+        assert_eq!(got[1].as_ref(), expected(60_000..61_000).as_slice());
+        // A large gap is not read at all: two requests.
+        let got =
+            s.io.get_ranges(&f, &[0..1_000, 99_000..100_000])
+                .await
+                .unwrap();
+        assert_eq!(s.fault.stats().gets, 4);
         assert_eq!(got[1].as_ref(), expected(99_000..100_000).as_slice());
     });
 }

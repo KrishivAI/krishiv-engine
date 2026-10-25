@@ -615,7 +615,9 @@ pub static IO_COALESCE_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.io.coalesceBytes",
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(MIB)),
-    doc: "Byte ranges of one file closer than this are fetched with one request.",
+    doc: "Byte ranges of one file closer than this are fetched with one request, as long as \
+          the request reads at most 1/16 of its bytes (or 64 KiB) outside the ranges: the bytes \
+          between them are held until the ranges are copied out, and nothing reserves them.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
