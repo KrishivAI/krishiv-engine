@@ -2,11 +2,11 @@
   "entries": [
     {
       "id": "nvl#0460fbe2242f/ansi_on",
-      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#0460fbe2242f/ansi_off",
-      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#07bf6900cb48/ansi_on",
@@ -73,14 +73,6 @@
       "reason": "SELECT nvl(CAST(1 AS SMALLINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "nvl#41a41efe1197/ansi_on",
-      "reason": "SELECT nvl(NULL, CAST(NULL AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
-      "id": "nvl#41a41efe1197/ansi_off",
-      "reason": "SELECT nvl(NULL, CAST(NULL AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
-    },
-    {
       "id": "nvl#57346bea4d30/ansi_on",
       "reason": "SELECT nvl(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -114,11 +106,11 @@
     },
     {
       "id": "nvl#880ab25c6d7a/ansi_on",
-      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#880ab25c6d7a/ansi_off",
-      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | parse: KRISHIV_UNSUPPORTED_FEATURE: nested data types (\"ARRAY\")"
+      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#90bda17a241c/ansi_on",

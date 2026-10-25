@@ -15,9 +15,6 @@ use serde_json::Value;
 /// Spark types that parse in Spark but are out of scope here; Krishiv
 /// rejects them with `KRISHIV_UNSUPPORTED_FEATURE`.
 const OUT_OF_SCOPE: &[&str] = &[
-    "array<int>",
-    "map<string,int>",
-    "struct<a:int>",
     "char(5)",
     "varchar(10)",
     "interval year to month",
@@ -28,7 +25,17 @@ const OUT_OF_SCOPE: &[&str] = &[
     // Spark treats this as plain `string` but prints the collation; all
     // collations are out of scope for now.
     "string collate utf8_binary",
+    "array<string collate utf8_lcase>",
+    "array<interval year>",
+    "array<char(3)>",
+    "struct<a:variant>",
 ];
+
+/// Inputs Spark parses that nest deeper than `DataType::MAX_NESTING_DEPTH`;
+/// Krishiv refuses them with `FAILED_TO_PARSE_TOO_COMPLEX`.
+fn too_deep(input: &str) -> bool {
+    input.matches('<').count() > DataType::MAX_NESTING_DEPTH
+}
 
 /// Inputs where Spark fails without an error class; Krishiv raises the
 /// class named here instead.
@@ -69,8 +76,13 @@ fn assert_renders(t: &DataType, case: &Value) {
     assert_eq!(t.catalog_string(), text(case, "catalog_string"), "{case}");
     assert_eq!(t.sql(), text(case, "sql"), "{case}");
     assert_eq!(t.type_name(), text(case, "type_name"), "{case}");
+    assert_eq!(t.json(), text(case, "json"), "{case}");
+    assert_eq!(DataType::from_json(&t.json()).as_ref(), Ok(t), "{case}");
+    // A simpleString parses back unless it lists too few fields or a field
+    // name that needs quoting.
+    let reparses = case.get("simple_string_reparses").and_then(Value::as_bool);
     let reparsed = parse_data_type(text(case, "simple_string"));
-    assert_eq!(reparsed.as_ref(), Ok(t), "{case}");
+    assert_eq!(Some(reparsed.as_ref() == Ok(t)), reparses, "{case}");
 }
 
 /// Our error matches Spark's class, SQLSTATE and message parameters.
@@ -117,6 +129,9 @@ fn ddl_strings_match_spark() {
                 assert_renders(t, case);
                 in_scope.insert(t.simple_string());
             }
+            (None, Err(e)) if too_deep(input) => {
+                assert_eq!(e.error_class(), ErrorClass::FailedToParseTooComplex);
+            }
             (None, Err(e)) => {
                 assert!(OUT_OF_SCOPE.contains(&input), "{input:?}: {e}");
                 assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -149,6 +164,14 @@ fn ddl_strings_match_spark() {
         "date",
         "timestamp",
         "timestamp_ntz",
+        "array<int>",
+        "array<array<array<array<int>>>>",
+        "map<string,array<double>>",
+        "struct<>",
+        "struct<a:int,b:string>",
+        "array<struct<a:int,b:map<string,array<double>>>>",
+        "map<string,struct<a:array<map<int,struct<b:int>>>>>",
+        "struct<a:struct<b:struct<c:struct<d:int>>>>",
     ] {
         assert!(in_scope.contains(t), "{t} missing from fixture");
     }

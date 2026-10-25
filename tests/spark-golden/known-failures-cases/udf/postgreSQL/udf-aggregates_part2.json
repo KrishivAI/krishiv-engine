@@ -3,10 +3,7 @@
     "depends-on-command": [
       2,
       3,
-      4,
-      9,
-      10,
-      11
+      4
     ],
     "test-udfs": [
       12,

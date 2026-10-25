@@ -189,7 +189,9 @@ impl Gen<'_> {
                 let (args, distinct, filter) = self.args(d);
                 ExprNode::Function(FunctionCall {
                     name,
+                    qualifier: Vec::new(),
                     args,
+                    arg_names: Vec::new(),
                     distinct,
                     filter,
                 })
@@ -210,7 +212,11 @@ impl Gen<'_> {
             },
             8 => {
                 let id = if self.flag() {
-                    FunctionId::Builtin(Builtin::ALL[usize::from(self.pick(25))])
+                    FunctionId::Builtin(
+                        Builtin::ALL[usize::from(
+                            self.pick(u8::try_from(Builtin::ALL.len()).unwrap_or(u8::MAX)),
+                        )],
+                    )
                 } else {
                     FunctionId::Registry {
                         name: self.name(),
@@ -563,6 +569,20 @@ fn m_string(s: &mut String, w: &mut Walk) -> bool {
     false
 }
 
+/// Names the last of `nargs` arguments, the rest positional. Skipped when
+/// there are no arguments: `arg_names` is empty then, and any entry would
+/// break the empty-or-as-long-as-`args` invariant.
+fn m_arg_names(v: &mut Vec<Option<String>>, nargs: usize, w: &mut Walk) -> bool {
+    if nargs == 0 {
+        return false;
+    }
+    site!(w, {
+        *v = vec![None; nargs];
+        v[nargs - 1] = Some("x".to_owned());
+    });
+    false
+}
+
 /// Rewrites one element, or pushes one.
 fn m_strings(v: &mut Vec<String>, w: &mut Walk) -> bool {
     site!(w, v.push("x".to_owned()));
@@ -708,13 +728,18 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         }) => m_strings(qualifier, w) || except.iter_mut().any(|path| m_strings(path, w)),
         ExprNode::Function(FunctionCall {
             name,
+            qualifier,
             args,
+            arg_names,
             distinct,
             filter,
         }) => {
             site!(w, name.push('x'));
             site!(w, *distinct = !*distinct);
-            m_exprs(args, w) || m_filter(filter, w)
+            m_strings(qualifier, w)
+                || m_arg_names(arg_names, args.len(), w)
+                || m_exprs(args, w)
+                || m_filter(filter, w)
         }
         ExprNode::Cast { expr, to, mode } => {
             site!(w, flip(mode, CastMode::Try, CastMode::Ansi));

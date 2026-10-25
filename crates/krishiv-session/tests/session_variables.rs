@@ -260,7 +260,8 @@ const CASES: &[(&str, Expect)] = &[
         "SET VARIABLE title = 'Dropped struct variable -- field access vs qualified name'",
         E,
     ),
-    // Struct values are unsupported, so the declaration fails; the field
+    // Struct values cannot be built yet (the STRUCT type parses, but no
+    // struct constructor is registered), so the declaration fails; the field
     // access then has no variable to resolve against, and the drop has
     // nothing to drop. Each asserts the engine's exact error, so adding
     // struct support must update this case.
@@ -268,7 +269,7 @@ const CASES: &[(&str, Expect)] = &[
         "DECLARE OR REPLACE VARIABLE session STRUCT<a INT> = NAMED_STRUCT('a', 1)",
         Err {
             class: ErrorClass::KrishivUnsupportedFeature,
-            params: &[("feature", "nested data types (\"STRUCT\")")],
+            params: &[("feature", "function NAMED_STRUCT")],
         },
     ),
     (

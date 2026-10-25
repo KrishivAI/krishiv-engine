@@ -1,4 +1,8 @@
 ---
 source: crates/krishiv-connect/tests/goldens.rs
 ---
-[KRISHIV_UNSUPPORTED_FEATURE] The feature nested data types ("ARRAY") is not supported by Krishiv yet. SQLSTATE: 0A000
+Project [CAST(a AS ARRAY<INT>)]
++- Read parquet [/data/t.parquet]
+-- plan ids --
+Project plan_id=1
+  Read plan_id=0

@@ -28,7 +28,7 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DecimalType, parse_data_type};
 
 pub(crate) fn env() -> ExprEnv {
     ExprEnv {
@@ -844,6 +844,51 @@ pub(crate) fn expressions() -> PhysNode {
     }
 }
 
+/// Array, map and struct types (depth 4, nullability, a comment) in a
+/// scan column, a cast, a typed NULL, a function and an alias.
+pub(crate) fn nested_types() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let deep = t("array<struct<a:int not null comment 'c',b:map<string,array<double>>>>");
+    let map = t("map<string,struct<a:array<map<int,struct<b:timestamp_ntz>>>>>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(3, "n", deep.clone(), true));
+    }
+    let n = col(3, "n", deep.clone());
+    let items = vec![
+        ProjectItemPlan::Expr {
+            name: "cast".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&n),
+                to: t("array<struct<a:bigint,b:map<string,array<double>>>>"),
+                mode: CastMode::Ansi,
+            })),
+        },
+        ProjectItemPlan::Expr {
+            name: "null".to_owned(),
+            expr: lit(Literal::Null(Some(map))),
+        },
+        ProjectItemPlan::Expr {
+            name: "f".to_owned(),
+            expr: call(Builtin::Concat, vec![Arc::clone(&n)], deep),
+        },
+        ProjectItemPlan::Expr {
+            name: "alias".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: n,
+                output: column(11, "alias", t("struct<>"), true),
+            }))),
+        },
+    ];
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3)],
+        items,
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// The named plans the inventory test, the error tests and the golden
 /// files share.
 pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
@@ -852,5 +897,6 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .map(|(name, node)| (name.to_owned(), plan_of(node)))
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
+    out.push(("nested_types".to_owned(), plan_of(nested_types())));
     out
 }

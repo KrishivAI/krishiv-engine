@@ -103,9 +103,6 @@ fn unsupported_and_unset_kinds() {
         Kind::Null(dt::Null::default()),
         Kind::Char(dt::Char::default()),
         Kind::VarChar(dt::VarChar::default()),
-        Kind::Array(Box::default()),
-        Kind::Struct(dt::Struct::default()),
-        Kind::Map(Box::default()),
         Kind::Variant(dt::Variant::default()),
         Kind::CalendarInterval(dt::CalendarInterval::default()),
         Kind::YearMonthInterval(dt::YearMonthInterval::default()),
@@ -122,3 +119,81 @@ fn unsupported_and_unset_kinds() {
 }
 
 use crate::proto::v4_2::DataType as DataTypeProto;
+
+/// `array<struct<a:int not null comment 'c', b:map<string,array<double>>>>`
+/// exactly as pyspark-client 4.2 sends it
+/// (`pyspark_types_to_proto_types`): metadata as JSON with spaces, absent
+/// when empty, and the default flags (false) left out.
+#[test]
+fn nested_types_map_as_pyspark_sends_them() {
+    let boxed = |kind| Some(Box::new(proto_type(kind)));
+    let string = Kind::String(dt::String {
+        collation: "UTF8_BINARY".to_owned(),
+        ..dt::String::default()
+    });
+    let map = Kind::Map(Box::new(dt::Map {
+        key_type: boxed(string),
+        value_type: boxed(Kind::Array(Box::new(dt::Array {
+            element_type: boxed(Kind::Double(dt::Double::default())),
+            ..dt::Array::default()
+        }))),
+        ..dt::Map::default()
+    }));
+    let fields = vec![
+        dt::StructField {
+            name: "a".to_owned(),
+            data_type: Some(proto_type(Kind::Integer(dt::Integer::default()))),
+            nullable: false,
+            metadata: Some(r#"{"comment": "c"}"#.to_owned()),
+        },
+        dt::StructField {
+            name: "b".to_owned(),
+            data_type: Some(proto_type(map)),
+            nullable: true,
+            metadata: None,
+        },
+    ];
+    let proto = proto_type(Kind::Array(Box::new(dt::Array {
+        element_type: boxed(Kind::Struct(dt::Struct {
+            fields,
+            ..dt::Struct::default()
+        })),
+        ..dt::Array::default()
+    })));
+    let t = data_type(&proto).expect("maps");
+    assert_eq!(
+        t.json(),
+        r#"{"type":"array","elementType":{"type":"struct","fields":[{"name":"a","type":"integer","nullable":false,"metadata":{"comment":"c"}},{"name":"b","type":{"type":"map","keyType":"string","valueType":{"type":"array","elementType":"double","containsNull":false},"valueContainsNull":false},"nullable":true,"metadata":{}}]},"containsNull":false}"#
+    );
+    // An unset element type is an unset kind; bad metadata is not JSON.
+    let e = data_type(&proto_type(Kind::Array(Box::default()))).expect_err("unset");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
+    );
+    let bad = proto_type(Kind::Struct(dt::Struct {
+        fields: vec![dt::StructField {
+            name: "a".to_owned(),
+            data_type: Some(proto_type(Kind::Integer(dt::Integer::default()))),
+            nullable: true,
+            metadata: Some("[1]".to_owned()),
+        }],
+        ..dt::Struct::default()
+    }));
+    assert_eq!(
+        data_type(&bad).expect_err("metadata").error_class(),
+        ErrorClass::InvalidJsonDataType
+    );
+    // Nesting is bounded.
+    let mut deep = proto_type(Kind::Integer(dt::Integer::default()));
+    for _ in 0..=DataType::MAX_NESTING_DEPTH {
+        deep = proto_type(Kind::Array(Box::new(dt::Array {
+            element_type: Some(Box::new(deep)),
+            ..dt::Array::default()
+        })));
+    }
+    assert_eq!(
+        data_type(&deep).expect_err("deep").error_class(),
+        ErrorClass::FailedToParseTooComplex
+    );
+}
