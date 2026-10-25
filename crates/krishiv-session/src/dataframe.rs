@@ -1331,6 +1331,18 @@ impl DataFrameReader {
     pub fn parquet<S: AsRef<str>>(self, paths: impl IntoIterator<Item = S>) -> DataFrame {
         self.format("parquet").load(paths)
     }
+
+    /// Reads Avro files (PySpark's `read.format("avro").load`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// let df = s.read().avro(["/data/t"]);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn avro<S: AsRef<str>>(self, paths: impl IntoIterator<Item = S>) -> DataFrame {
+        self.format("avro").load(paths)
+    }
 }
 
 /// Writes a DataFrame's rows to files ([`DataFrame::write`]; PySpark's
@@ -1442,6 +1454,25 @@ impl DataFrameWriter {
     /// As [`Self::save`].
     pub async fn parquet(self, path: &str) -> Result<(), KrishivError> {
         self.format("parquet").save(path).await
+    }
+
+    /// Writes the rows as Avro files under `path` (PySpark's
+    /// `write.format("avro").save`).
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// # let dir = tempfile::tempdir().unwrap();
+    /// # let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![arrow_schema::Field::new("a", arrow_schema::DataType::Int32, false)]));
+    /// # s.register_batches("t", schema, vec![])?;
+    /// let out = dir.path().join("t");
+    /// futures::executor::block_on(s.table("t").write().avro(out.to_str().unwrap()))?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::save`].
+    pub async fn avro(self, path: &str) -> Result<(), KrishivError> {
+        self.format("avro").save(path).await
     }
 }
 

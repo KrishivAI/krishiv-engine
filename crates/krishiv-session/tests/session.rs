@@ -1009,7 +1009,7 @@ fn writes_follow_spark_save_modes() {
         ErrorClass::InvalidSaveMode
     );
     assert_eq!(
-        class(block_on(people.write().format("avro").save(&out))),
+        class(block_on(people.write().format("orc").save(&out))),
         ErrorClass::KrishivUnsupportedFeature
     );
     assert_eq!(count(), 1);
@@ -1049,6 +1049,49 @@ fn writes_follow_spark_save_modes() {
     assert_eq!(
         class(block_on(s.table("missing").write().parquet(&out))),
         ErrorClass::TableOrViewNotFound
+    );
+}
+
+#[test]
+fn avro_writes_read_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let out = out.to_str().unwrap().to_owned();
+    let s = session();
+    let people = s.table("people");
+    // `format("avro")` writes `.avro` files with a `_SUCCESS` marker.
+    block_on(people.write().format("avro").save(&out)).unwrap();
+    assert!(dir.path().join("out/_SUCCESS").exists());
+    let names: Vec<String> = std::fs::read_dir(dir.path().join("out"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(names.iter().any(|n| n.ends_with(".avro")), "{names:?}");
+    // ... and they read back as they were written.
+    let back = block_on(s.read().format("avro").load([out.as_str()]).collect()).unwrap();
+    assert_eq!(back[0].schema().field(1).name(), "name");
+    let mut got = ids(&back);
+    got.sort_unstable();
+    assert_eq!(got, [1, 2, 3]);
+    assert_eq!(
+        block_on(s.read().format("avro").load([out.as_str()]).count()).unwrap(),
+        3
+    );
+    // The `avro` convenience methods agree.
+    let out2 = dir.path().join("out2");
+    let out2 = out2.to_str().unwrap().to_owned();
+    block_on(people.write().avro(&out2)).unwrap();
+    assert_eq!(block_on(s.read().avro([out2.as_str()]).count()).unwrap(), 3);
+    // Options flow through: an unknown codec fails before any task runs.
+    assert_eq!(
+        class(block_on(
+            people
+                .write()
+                .format("avro")
+                .option("compression", "lz4")
+                .save(&out2)
+        )),
+        ErrorClass::KrishivInvalidFormatOptionValue
     );
 }
 

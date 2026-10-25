@@ -28,6 +28,7 @@ use krishiv_exec::{
     ExecConfig, Executor, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler,
     TokioExecutor, WorkloadClass,
 };
+use krishiv_io::AvroFormat;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
@@ -255,7 +256,7 @@ impl SessionBuilder {
                 memory,
                 spill: Mutex::new(None),
                 io,
-                formats: vec![Arc::new(ParquetFormat)],
+                formats: vec![Arc::new(ParquetFormat), Arc::new(AvroFormat)],
                 cwd,
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),

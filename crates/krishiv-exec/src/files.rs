@@ -411,6 +411,7 @@ fn hidden(name: &str) -> bool {
 fn display_name(format: &str) -> String {
     match format {
         "parquet" => "Parquet".to_owned(),
+        "avro" => "Avro".to_owned(),
         "orc" => "ORC".to_owned(),
         "json" => "JSON".to_owned(),
         "csv" => "CSV".to_owned(),
