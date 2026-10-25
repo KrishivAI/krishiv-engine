@@ -120,6 +120,14 @@ pub enum Statement {
     DropNamespace(DropNamespace),
     /// `USE name` or `USE DATABASE|SCHEMA|NAMESPACE name`.
     Use(Use),
+    /// `DECLARE [OR REPLACE] [VARIABLE | VAR] name [, ...] [type]
+    /// [{DEFAULT | =} expr]`.
+    DeclareVariable(DeclareVariable),
+    /// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
+    /// (query)`.
+    SetVariable(SetVariable),
+    /// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name`.
+    DropVariable(DropVariable),
 }
 
 impl Statement {
@@ -139,6 +147,9 @@ impl Statement {
             Self::CreateNamespace(n) => n.span,
             Self::DropNamespace(n) => n.span,
             Self::Use(u) => u.span,
+            Self::DeclareVariable(d) => d.span,
+            Self::SetVariable(s) => s.span,
+            Self::DropVariable(d) => d.span,
         }
     }
 }
@@ -246,8 +257,8 @@ pub struct Reset {
     pub span: Span,
 }
 
-/// `CREATE [OR REPLACE] TEMPORARY VIEW name [(columns)] AS query`
-/// (`TEMP` for `TEMPORARY`).
+/// `CREATE [OR REPLACE] TEMPORARY VIEW name [(columns)] [DEFAULT COLLATION
+/// name] AS query` (`TEMP` for `TEMPORARY`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateView {
     /// `OR REPLACE`.
@@ -258,6 +269,8 @@ pub struct CreateView {
     pub name: Ident,
     /// The declared column aliases; empty for none.
     pub columns: Vec<ViewColumn>,
+    /// `DEFAULT COLLATION name`.
+    pub collation: Option<Ident>,
     /// The query.
     pub query: Box<Query>,
     /// Source text, from `CREATE` to the end of the statement.
@@ -286,7 +299,8 @@ pub struct DropView {
     pub span: Span,
 }
 
-/// A table, namespace or `USE` name in a DDL statement: dotted parts or
+/// A table, namespace or `USE` name in a DDL statement, or the table of a
+/// `TABLE(...)` argument (Spark's `identifierReference`): dotted parts or
 /// `IDENTIFIER(expr)`, which Spark resolves when it analyzes the plan.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -295,6 +309,17 @@ pub enum DdlName {
     Parts(ObjectName),
     /// `IDENTIFIER(expr)`, kept as written.
     Dynamic(DynamicName),
+}
+
+impl DdlName {
+    /// Source text.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Parts(n) => n.span,
+            Self::Dynamic(d) => d.span,
+        }
+    }
 }
 
 /// `IDENTIFIER(expr)`: a name computed from an expression.
@@ -731,6 +756,74 @@ pub struct DropTable {
     pub span: Span,
 }
 
+/// `DECLARE [OR REPLACE] [VARIABLE | VAR] name [, ...] [type] [{DEFAULT
+/// | =} expr]`: one or several session variables sharing a type and a
+/// default (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeclareVariable {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// The variable names (each 1-3 parts: `v`, `session.v` or
+    /// `system.session.v`).
+    pub names: Vec<ObjectName>,
+    /// The declared type, if written.
+    pub data_type: Option<DataTypeSpec>,
+    /// The default (`DEFAULT expr` or `= expr`), if written.
+    pub default: Option<Expr>,
+    /// Source text, from `DECLARE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `SET VAR[IABLE] v = expr [, ...]` or `SET VAR[IABLE] (v, ...) =
+/// (query)` (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SetVariable {
+    /// What it is.
+    pub kind: SetVariableKind,
+    /// Source text, from `SET` to the end of the statement.
+    pub span: Span,
+}
+
+/// The kinds of [`SetVariable`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SetVariableKind {
+    /// `v = expr [, ...]`.
+    Single {
+        /// The assignments, in order.
+        assignments: Vec<SetAssignment>,
+    },
+    /// `(v, ...) = (query)`.
+    Row {
+        /// The target variables, in order.
+        targets: Vec<ObjectName>,
+        /// The query whose single row is assigned.
+        query: Box<Query>,
+    },
+}
+
+/// `v = expr` in a [`SetVariableKind::Single`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SetAssignment {
+    /// The target variable.
+    pub name: ObjectName,
+    /// The value (`DEFAULT` reads the variable's default).
+    pub value: Expr,
+    /// Source text, from the name to the end of the expression.
+    pub span: Span,
+}
+
+/// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name` (`VAR` for `VARIABLE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropVariable {
+    /// `IF EXISTS`.
+    pub if_exists: bool,
+    /// The variable name (`v`, `session.v` or `system.session.v`).
+    pub name: ObjectName,
+    /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
+}
+
 /// `DATABASE`, `SCHEMA` or `NAMESPACE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -919,6 +1012,200 @@ pub enum SetExprKind {
     Values(Values),
     /// `TABLE name`.
     Table(ObjectName),
+    /// `TABLE IDENTIFIER(expr)`.
+    DynamicTable(DynamicName),
+    /// `input |> operator |> ...`.
+    Pipe(Pipe),
+    /// `SELECT TRANSFORM (...) USING 'script' ...`, `MAP ...` or `REDUCE ...`.
+    Transform(Box<TransformSelect>),
+}
+
+/// A script transformation, parsed and not run: `SELECT TRANSFORM (inputs)
+/// [ROW FORMAT ...] [RECORDWRITER 'class'] USING 'script' [AS output]
+/// [ROW FORMAT ...] [RECORDREADER 'class'] [FROM ...] [WHERE ...] ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TransformSelect {
+    /// Which keyword introduced it.
+    pub kind: TransformKind,
+    /// `DISTINCT` or `ALL`, which Spark parses and rejects.
+    pub quantifier: Option<SetQuantifier>,
+    /// How rows are written to the script.
+    pub input_format: Option<RowFormat>,
+    /// `RECORDWRITER 'class'`.
+    pub record_writer: Option<String>,
+    /// The script, `USING 'script'`.
+    pub script: String,
+    /// `AS (columns)`: names, or names with types.
+    pub output: Option<TransformOutput>,
+    /// How rows are read from the script.
+    pub output_format: Option<RowFormat>,
+    /// `RECORDREADER 'class'`.
+    pub record_reader: Option<String>,
+    /// The inputs as the select list (no aliases), with the `FROM` clause
+    /// and the filtering and grouping clauses after the transform.
+    pub select: Select,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The keyword that starts a [`TransformSelect`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
+pub enum TransformKind {
+    SelectTransform,
+    Map,
+    Reduce,
+}
+
+/// The `AS` clause of a [`TransformSelect`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TransformOutput {
+    /// Column names; the columns are strings.
+    Names(Vec<Ident>),
+    /// Column names with types.
+    Columns(Vec<StructField>),
+}
+
+/// A query term followed by pipe operators (`|>`, or `|` before an
+/// operator keyword). Operators apply left to right, each to the result of
+/// the one before; a set operation or a further pipe over the result is a
+/// new node around this one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Pipe {
+    /// The query the operators start from.
+    pub input: Box<SetExpr>,
+    /// The operators, in source order (never empty).
+    pub ops: Vec<PipeOp>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// One pipe operator, from its `|>` to its last token.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeOp {
+    /// What it is.
+    pub kind: PipeOpKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`PipeOp`] (Spark's `operatorPipeRightSide`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PipeOpKind {
+    /// `SELECT ... [GROUP BY ...] [WINDOW ...]`.
+    Select(Box<PipeSelect>),
+    /// `EXTEND expr [AS name], ...`.
+    Extend(Vec<SelectItem>),
+    /// `SET name = expr, ...`.
+    Set(Vec<PipeAssignment>),
+    /// `DROP name, ...`.
+    Drop(Vec<ObjectName>),
+    /// `AS name`.
+    As(Ident),
+    /// `WHERE condition`.
+    Where(PipeWhere),
+    /// `PIVOT (...)`, with the `UNPIVOT` Spark parses after it and rejects.
+    Pivot(Box<Pivot>, Option<Box<Unpivot>>),
+    /// `UNPIVOT (...)`, with the `PIVOT` Spark parses after it and rejects.
+    Unpivot(Box<Unpivot>, Option<Box<Pivot>>),
+    /// `TABLESAMPLE (...)`.
+    Sample(TableSample),
+    /// `[type] JOIN right [ON ... | USING (...) | NEAREST BY ...]`.
+    Join(Box<Join>),
+    /// `UNION | EXCEPT | MINUS | INTERSECT [ALL | DISTINCT] right`; the
+    /// right side is a query primary.
+    SetOp {
+        /// The operator.
+        op: SetOperator,
+        /// `ALL` or `DISTINCT`, if written.
+        quantifier: Option<SetQuantifier>,
+        /// The right input.
+        right: Box<SetExpr>,
+    },
+    /// `ORDER BY`, `LIMIT`, ... (possibly none: the operator is then bare).
+    Organization(QueryOrganization),
+    /// `AGGREGATE [aggregates] [GROUP BY ...]`.
+    Aggregate(Box<PipeAggregate>),
+}
+
+/// The `SELECT` of a pipe operator.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeSelect {
+    /// `/*+ ... */` hints.
+    pub hints: Vec<Hint>,
+    /// `DISTINCT` or `ALL`.
+    pub quantifier: Option<SetQuantifier>,
+    /// The select list.
+    pub projection: Vec<SelectItem>,
+    /// `GROUP BY`.
+    pub group_by: Option<GroupBy>,
+    /// `WINDOW`.
+    pub windows: Vec<NamedWindow>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `name = expr` of a pipe `SET`. Spark's grammar reads a dotted key and
+/// rejects it afterwards.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeAssignment {
+    /// The key's parts (one for a valid key).
+    pub key: Vec<Ident>,
+    /// The new value.
+    pub value: Expr,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `WHERE condition` of a pipe operator, with the `WINDOW` clause Spark
+/// parses after it and rejects.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeWhere {
+    /// The condition.
+    pub condition: Expr,
+    /// The (invalid) `WINDOW` clause.
+    pub windows: Vec<NamedWindow>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `AGGREGATE [aggregates] [GROUP BY items]`: grouping items may carry
+/// aliases ([`GroupItemKind::Named`]).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PipeAggregate {
+    /// The aggregate expressions.
+    pub aggregates: Vec<SelectItem>,
+    /// `GROUP BY`.
+    pub group_by: Option<GroupBy>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// Spark's `queryOrganization`: the trailing clauses of a query, or the
+/// body of a pipe operator that starts with one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QueryOrganization {
+    /// `ORDER BY`.
+    pub order_by: Vec<SortItem>,
+    /// The `ORDER BY` clause, as Spark's errors cite the sort.
+    pub order_span: Option<Span>,
+    /// `CLUSTER BY`.
+    pub cluster_by: Vec<Expr>,
+    /// `DISTRIBUTE BY`.
+    pub distribute_by: Vec<Expr>,
+    /// `SORT BY`.
+    pub sort_by: Vec<SortItem>,
+    /// `WINDOW`.
+    pub windows: Vec<NamedWindow>,
+    /// `LIMIT`.
+    pub limit: Option<Limit>,
+    /// `OFFSET`.
+    pub offset: Option<Expr>,
+    /// Source text (the operator's `|>` when no clause is written).
+    pub span: Span,
 }
 
 /// `VALUES row, ... [alias]`.
@@ -1065,6 +1352,8 @@ pub enum GroupItemKind {
     GroupingSets(Vec<GroupItem>),
     /// A grouping set inside `GROUPING SETS`.
     Set(GroupingSet),
+    /// `expr [AS] alias`, in the `GROUP BY` of a pipe `AGGREGATE`.
+    Named(SelectItem),
 }
 
 /// `(a, b)`, `()` or a single expression.
@@ -1227,6 +1516,8 @@ pub struct TableAlias {
 pub struct TableFactor {
     /// What it is.
     pub kind: TableFactorKind,
+    /// `TABLESAMPLE`, after a table, a subquery or a parenthesized relation.
+    pub sample: Option<TableSample>,
     /// The alias.
     pub alias: Option<TableAlias>,
     /// Source text.
@@ -1246,6 +1537,15 @@ pub enum TableFactorKind {
         /// `WITH (key = value, ...)`.
         options: Vec<TableOption>,
     },
+    /// A table or view named `IDENTIFIER(expr)`.
+    DynamicTable {
+        /// The name expression.
+        name: DynamicName,
+        /// `VERSION AS OF` / `TIMESTAMP AS OF`.
+        temporal: Option<TemporalClause>,
+        /// `WITH (key = value, ...)`.
+        options: Vec<TableOption>,
+    },
     /// `(query)`.
     Subquery(Box<Query>),
     /// `(relation)`.
@@ -1256,9 +1556,83 @@ pub enum TableFactorKind {
     TableFunction {
         /// The function name.
         name: ObjectName,
-        /// The arguments.
+        /// `IDENTIFIER(expr)` written as the name, which `name` then holds
+        /// as the word `IDENTIFIER`.
+        dynamic_name: Option<DynamicName>,
+        /// The arguments (`TABLE(...)` ones included).
         args: Vec<FunctionArg>,
     },
+}
+
+/// `TABLESAMPLE [SYSTEM | BERNOULLI] ([method]) [REPEATABLE (seed)]`, as a
+/// relation suffix or a pipe operator. Spark's builder rejects an empty
+/// method, `SYSTEM` with `REPEATABLE` or with any method but a percentage,
+/// and the byte and column forms; the tree keeps what it needs to say so.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableSample {
+    /// `SYSTEM` or `BERNOULLI`, if written.
+    pub sample_type: Option<SampleType>,
+    /// What to sample; `None` for `TABLESAMPLE ()`.
+    pub method: Option<SampleMethod>,
+    /// The `REPEATABLE` seed, as written.
+    pub seed: Option<String>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The sampling type keyword.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
+pub enum SampleType {
+    System,
+    Bernoulli,
+}
+
+/// The method inside `TABLESAMPLE (...)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SampleMethod {
+    /// What it is.
+    pub kind: SampleMethodKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`SampleMethod`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SampleMethodKind {
+    /// `[-] number PERCENT`.
+    Percent {
+        /// A leading `-`.
+        negative: bool,
+        /// The integer or decimal, as written.
+        value: String,
+    },
+    /// `expr ROWS`.
+    Rows(Expr),
+    /// `BUCKET numerator OUT OF denominator [ON column | ON function()]`.
+    Bucket {
+        /// The numerator, as written.
+        numerator: String,
+        /// The denominator, as written.
+        denominator: String,
+        /// The `ON` target.
+        on: Option<BucketOn>,
+    },
+    /// A bare expression, which Spark reads as a byte length (`10M`) and
+    /// rejects.
+    Bytes(Expr),
+}
+
+/// The target of `BUCKET ... ON`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum BucketOn {
+    /// A column.
+    Column(Ident),
+    /// `name()`.
+    Function(ObjectName),
 }
 
 /// What a time-travel clause selects by.
@@ -1335,6 +1709,32 @@ pub enum JoinConstraint {
     On(Expr),
     /// `USING (columns)`.
     Using(Vec<Ident>),
+    /// `[APPROX | EXACT] NEAREST [k] BY DISTANCE | SIMILARITY expr`.
+    NearestBy(NearestBy),
+}
+
+/// The ranking clause of a top-k join.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct NearestBy {
+    /// `APPROX` (`true`) or `EXACT`.
+    pub approx: bool,
+    /// The number of matches per left row, as written (one if absent).
+    pub num_results: Option<String>,
+    /// `DISTANCE` (smaller is nearer) or `SIMILARITY` (larger is nearer).
+    pub direction: NearestDirection,
+    /// The ranking expression.
+    pub ranking: Expr,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The direction of a [`NearestBy`] ranking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[expect(missing_docs, reason = "each variant is the keyword named")]
+#[non_exhaustive]
+pub enum NearestDirection {
+    Distance,
+    Similarity,
 }
 
 /// `[NATURAL] kind JOIN [LATERAL] right [constraint]`.
@@ -1412,6 +1812,38 @@ pub struct LateralView {
     pub columns: Vec<Ident>,
     /// Source text.
     pub span: Span,
+}
+
+/// The path after the `:` of a variant extraction.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VariantPath {
+    /// The parts, in order (never empty).
+    pub parts: Vec<VariantPathPart>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// One part of a [`VariantPath`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct VariantPathPart {
+    /// What it is.
+    pub kind: VariantPathPartKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`VariantPathPart`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum VariantPathPartKind {
+    /// A field name: the first part, or `.name`.
+    Field(Ident),
+    /// `['key']`.
+    Key(String),
+    /// `[0]`.
+    Index(String),
+    /// `[name]`, after the first part.
+    Name(Ident),
 }
 
 /// The type suffix of a numeric literal.
@@ -1653,6 +2085,9 @@ pub struct Function {
     pub null_treatment: Option<NullTreatment>,
     /// `OVER window`.
     pub over: Option<WindowRef>,
+    /// `IDENTIFIER(expr)` written as the function's name, which `name`
+    /// then holds as the word `IDENTIFIER`.
+    pub dynamic_name: Option<DynamicName>,
     /// Source text.
     pub span: Span,
 }
@@ -1701,6 +2136,10 @@ pub enum ExprKind {
     },
     /// `expr.field`.
     Field(Box<Expr>, Ident),
+    /// `expr COLLATE name`.
+    Collate(Box<Expr>, ObjectName),
+    /// `expr:path` on a variant (`v:a.b[0]`, `v:['key']`).
+    VariantGet(Box<Expr>, Box<VariantPath>),
     /// `expr[index]`.
     Subscript(Box<Expr>, Box<Expr>),
     /// A unary operator.
@@ -1845,4 +2284,176 @@ pub enum ExprKind {
     Struct(Vec<SelectItem>),
     /// `(expr)`.
     Nested(Box<Expr>),
+    /// `TABLE(...)`, an argument of a table-valued function.
+    TableArgument(Box<TableArgument>),
+}
+
+/// `TABLE(name)` or `TABLE(query)` with an optional partitioning, an
+/// argument of a table-valued function.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableArgument {
+    /// The relation passed.
+    pub source: TableArgumentSource,
+    /// Written `TABLE name`, which Spark rejects: the name needs
+    /// parentheses.
+    pub unparenthesized: bool,
+    /// `WITH SINGLE PARTITION`, `PARTITION BY ...`, ...
+    pub partitioning: Option<TableArgumentPartitioning>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// What a [`TableArgument`] passes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TableArgumentSource {
+    /// A table or view.
+    Table(DdlName),
+    /// A query.
+    Query(Box<Query>),
+}
+
+/// `WITH SINGLE PARTITION | (PARTITION | DISTRIBUTE) BY ... [(ORDER | SORT)
+/// BY ...]` after a [`TableArgument`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TableArgumentPartitioning {
+    /// `WITH SINGLE PARTITION`.
+    pub single: bool,
+    /// `DISTRIBUTE BY` rather than `PARTITION BY`.
+    pub distribute: bool,
+    /// The partitioning expressions.
+    pub partition_by: Vec<Expr>,
+    /// The first expression of an unparenthesized list of several, which
+    /// Spark parses and rejects.
+    pub extra_partition: Option<Span>,
+    /// `SORT BY` rather than `ORDER BY`.
+    pub sort: bool,
+    /// The ordering.
+    pub order_by: Vec<SortItem>,
+    /// The first item of an unparenthesized list of several, which Spark
+    /// parses and rejects.
+    pub extra_order: Option<Span>,
+    /// Source text.
+    pub span: Span,
+}
+
+impl Expr {
+    /// Calls `f` on each direct child expression, in order. Subquery plans
+    /// are not expressions and are not visited; window specifications after
+    /// `OVER` are visited (their partitioning, ordering and frame-offset
+    /// expressions).
+    pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Self)) {
+        match &self.kind {
+            ExprKind::Literal(_)
+            | ExprKind::Parameter(_)
+            | ExprKind::Keyword(_)
+            | ExprKind::Column(_)
+            | ExprKind::Wildcard { .. }
+            | ExprKind::Exists(_)
+            | ExprKind::Subquery(_) => {}
+            ExprKind::Field(inner, _)
+            | ExprKind::Collate(inner, _)
+            | ExprKind::VariantGet(inner, _)
+            | ExprKind::Unary(_, inner)
+            | ExprKind::Not(inner)
+            | ExprKind::Nested(inner)
+            | ExprKind::IsNull { expr: inner, .. }
+            | ExprKind::IsTruth { expr: inner, .. }
+            | ExprKind::Cast { expr: inner, .. }
+            | ExprKind::Lambda { body: inner, .. } => f(inner),
+            ExprKind::Subscript(first, second) | ExprKind::Binary(first, _, second) => {
+                f(first);
+                f(second);
+            }
+            ExprKind::IsDistinctFrom { left, right, .. } => {
+                f(left);
+                f(right);
+            }
+            ExprKind::Between {
+                expr, low, high, ..
+            } => {
+                f(expr);
+                f(low);
+                f(high);
+            }
+            ExprKind::InList { expr, list, .. } => {
+                f(expr);
+                list.iter().for_each(&mut *f);
+            }
+            ExprKind::InSubquery { expr, .. } => f(expr),
+            ExprKind::Like { expr, pattern, .. } | ExprKind::RLike { expr, pattern, .. } => {
+                f(expr);
+                f(pattern);
+            }
+            ExprKind::LikeQuantified { expr, patterns, .. } => {
+                f(expr);
+                patterns.iter().for_each(&mut *f);
+            }
+            ExprKind::Case {
+                operand,
+                branches,
+                else_result,
+            } => {
+                if let Some(inner) = operand {
+                    f(inner);
+                }
+                for branch in branches {
+                    f(&branch.condition);
+                    f(&branch.result);
+                }
+                if let Some(inner) = else_result {
+                    f(inner);
+                }
+            }
+            ExprKind::Function(function) => {
+                for arg in &function.args {
+                    f(&arg.expr);
+                }
+                if let Some(inner) = function.filter.as_ref() {
+                    f(inner);
+                }
+                for item in &function.within_group {
+                    f(&item.expr);
+                }
+                if let Some(over) = &function.over {
+                    for_each_window_expr(over, f);
+                }
+            }
+            ExprKind::Row(items) | ExprKind::Struct(items) => {
+                for item in items {
+                    f(&item.expr);
+                }
+            }
+            ExprKind::TableArgument(t) => {
+                if let Some(p) = &t.partitioning {
+                    for e in &p.partition_by {
+                        f(e);
+                    }
+                    for s in &p.order_by {
+                        f(&s.expr);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Calls `f` on each expression of the inline window specification `window`
+/// (a named window holds none).
+fn for_each_window_expr<'a>(window: &'a WindowRef, f: &mut impl FnMut(&'a Expr)) {
+    let WindowRef::Spec(spec) = window else {
+        return;
+    };
+    spec.partition_by.iter().for_each(&mut *f);
+    for item in &spec.order_by {
+        f(&item.expr);
+    }
+    if let Some(frame) = &spec.frame {
+        for bound in [&frame.start].into_iter().chain(frame.end.as_ref()) {
+            match &bound.kind {
+                FrameBoundKind::Preceding(expr) | FrameBoundKind::Following(expr) => f(expr),
+                _ => {}
+            }
+        }
+    }
 }

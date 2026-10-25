@@ -732,6 +732,81 @@ fn edit_distance(a: &str, b: &str) -> Result<usize, KernelError> {
     Ok(prev.get(short.len()).copied().unwrap_or(0))
 }
 
+/// The edit distance between `a` and `b` in characters capped at
+/// `threshold`, or `threshold + 1` when the distance exceeds it: Ukkonen's
+/// banded dynamic program, exact for distances within the threshold.
+///
+/// `a` and `b` are the rows' characters; the caller guarantees their length
+/// gap does not exceed `threshold`.
+///
+/// # Errors
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the working rows do not fit memory.
+fn edit_distance_capped(a: &[char], b: &[char], threshold: usize) -> Result<usize, KernelError> {
+    let (short, long) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    let (m, n) = (short.len(), long.len());
+    // The caller checks the length gap, so this is a defensive early exit.
+    if n.saturating_sub(m) > threshold {
+        return Ok(threshold.saturating_add(1));
+    }
+    if m == 0 {
+        return Ok(n);
+    }
+    let cap = threshold.saturating_add(1);
+    let mut prev = Vec::new();
+    prev.try_reserve(m.saturating_add(1))
+        .map_err(|_| KernelError::out_of_memory(m.saturating_add(1)))?;
+    prev.resize(m.saturating_add(1), cap);
+    for (j, slot) in prev.iter_mut().enumerate().take(m.saturating_add(1)) {
+        if j <= threshold {
+            *slot = j;
+        }
+    }
+    let mut cur = Vec::new();
+    cur.try_reserve(m.saturating_add(1))
+        .map_err(|_| KernelError::out_of_memory(m.saturating_add(1)))?;
+    cur.resize(m.saturating_add(1), cap);
+    for (i, lc) in long.iter().enumerate() {
+        let row = i.saturating_add(1);
+        for slot in cur.iter_mut() {
+            *slot = cap;
+        }
+        if row <= threshold {
+            cur[0] = row;
+        }
+        let lo = row.saturating_sub(threshold).max(1);
+        let hi = (row.saturating_add(threshold)).min(m);
+        if lo > hi {
+            return Ok(cap);
+        }
+        let mut row_min = cap;
+        for j in lo..=hi {
+            let cost = usize::from(short.get(j.saturating_sub(1)) != Some(lc));
+            let best = prev
+                .get(j.saturating_sub(1))
+                .copied()
+                .unwrap_or(cap)
+                .saturating_add(cost)
+                .min(prev.get(j).copied().unwrap_or(cap).saturating_add(1))
+                .min(
+                    cur.get(j.saturating_sub(1))
+                        .copied()
+                        .unwrap_or(cap)
+                        .saturating_add(1),
+                )
+                .min(cap);
+            if let Some(slot) = cur.get_mut(j) {
+                *slot = best;
+            }
+            row_min = row_min.min(best);
+        }
+        if row_min > threshold {
+            return Ok(cap);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    Ok(prev.get(m).copied().unwrap_or(cap).min(cap))
+}
+
 /// `levenshtein(a, b[, threshold])`: the edit distance in characters; with
 /// a `threshold`, -1 when the distance exceeds it (always -1 for a negative
 /// threshold; a NULL threshold counts as 0, as in Spark).
@@ -746,6 +821,14 @@ pub fn levenshtein<O: OffsetSizeTrait>(
 ) -> Result<Int32Array, KernelError> {
     let slots: [&dyn Slot; 2] = [&left, &right];
     let rows = row_count(&slots)?;
+    if let Some(Operand::Array(t)) = threshold
+        && t.len() != rows
+    {
+        return Err(KernelError::internal(format!(
+            "string operands differ in length: {rows} vs {}",
+            t.len()
+        )));
+    }
     let mut out = Vec::new();
     out.try_reserve(rows)
         .map_err(|_| KernelError::out_of_memory(rows))?;
@@ -754,13 +837,36 @@ pub fn levenshtein<O: OffsetSizeTrait>(
             out.push(None);
             continue;
         }
-        let d = i32::try_from(edit_distance(left.at(i), right.at(i))?).unwrap_or(i32::MAX);
         // A NULL threshold reads as 0 (Scala's `null.asInstanceOf[Int]`).
-        let limit = threshold.map(|t| if t.is_valid(i) { int_at(t, i) } else { 0 });
-        out.push(Some(if limit.is_some_and(|limit| d > limit) {
+        let Some(limit) = threshold.map(|t| if t.is_valid(i) { int_at(t, i) } else { 0 }) else {
+            let d = i32::try_from(edit_distance(left.at(i), right.at(i))?).unwrap_or(i32::MAX);
+            out.push(Some(d));
+            continue;
+        };
+        if limit < 0 {
+            out.push(Some(-1));
+            continue;
+        }
+        let bound = usize::try_from(limit).unwrap_or(0);
+        let (a, b) = (left.at(i), right.at(i));
+        let (an, bn) = (a.chars().count(), b.chars().count());
+        if an.saturating_sub(bn).max(bn.saturating_sub(an)) > bound {
+            out.push(Some(-1));
+            continue;
+        }
+        let mut av = Vec::new();
+        av.try_reserve(an)
+            .map_err(|_| KernelError::out_of_memory(a.len()))?;
+        av.extend(a.chars());
+        let mut bv = Vec::new();
+        bv.try_reserve(bn)
+            .map_err(|_| KernelError::out_of_memory(b.len()))?;
+        bv.extend(b.chars());
+        let d = edit_distance_capped(&av, &bv, bound)?;
+        out.push(Some(if d > bound {
             -1
         } else {
-            d
+            i32::try_from(d).unwrap_or(i32::MAX)
         }));
     }
     Ok(out.into_iter().collect())

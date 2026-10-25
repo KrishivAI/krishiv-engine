@@ -137,6 +137,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::InlineTable { .. }
                 | PlanNode::Distinct { .. } => false,
                 PlanNode::Union { by_name, .. } => !by_name,
                 PlanNode::Join { condition, .. } => match condition {
@@ -273,6 +274,9 @@ impl Teardown {
             } => {
                 self.plans.push(input);
                 self.exprs.extend(projections.into_iter().flatten());
+            }
+            PlanNode::InlineTable { rows, .. } => {
+                self.exprs.extend(rows.into_iter().flatten());
             }
             PlanNode::Aggregate {
                 input,

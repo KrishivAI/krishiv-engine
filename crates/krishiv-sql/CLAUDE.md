@@ -22,7 +22,7 @@ Paths are relative to this crate.
 - `src/parser.rs` statement parser (recursive descent); `src/parser/expr.rs` precedence climbing
 - `src/parser/types.rs` type strings (`parse_data_type`, `parse_table_schema`, `parse_ddl_type`)
 - `src/ast.rs` spanned AST; `src/error.rs` parser errors with Spark classes
-- `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`)
+- `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`; `pipe.rs`, `sample.rs`, `relation.rs`, `transform.rs` for the query-syntax tail)
 - `src/lower.rs` AST to unresolved `krishiv_plan::Plan`; `src/redact.rs` `redact_sql` to `RedactedSql`
 
 ## Extension points
@@ -44,6 +44,10 @@ Paths are relative to this crate.
 - Type errors follow ANTLR's prediction: a complex type whose `<...>` fails falls back to the bare
   type when that reads on (error at the `<`; after `::` the statement is re-parsed with the bare
   type when the complex one fails later); optional type parts are taken only when complete.
+- Spark 4.2's query-syntax tail parses into the tree and lowers to `KRISHIV_UNSUPPORTED_FEATURE`: pipe operators
+  (`SetExprKind::Pipe`: input plus a flat `PipeOp` list; pipes bind below set operators), `COLLATE`, `TABLESAMPLE`,
+  `NEAREST BY`, `TABLE(...)` arguments, `IDENTIFIER(...)` (names, function names, identifier literals unless
+  `legacy_identifier_clause`), variant paths and `TRANSFORM`. Their `AstBuilder` errors are in `validate/`.
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,

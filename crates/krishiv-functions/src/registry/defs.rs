@@ -5,8 +5,9 @@
 
 use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchValueOutOfRange, InvalidExtractField, KrishivError, LegacyErrorTemp1210,
-    NonFoldableArgument, SecondFunctionArgumentNotInteger,
+    DatatypeMismatchValueOutOfRange, InvalidExtractField, InvalidParameterValueBoolean,
+    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210, NonFoldableArgument,
+    SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -457,8 +458,32 @@ fn last(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     pick(c, "last")
 }
 
+fn any_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    pick(c, "any_value")
+}
+
+/// `bool_and`, `bool_or` and their aliases: `boolean`, NULL for no non-NULL
+/// input.
+fn nullable_boolean(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Boolean, true))
+}
+
+/// `max_by(x, y)`, `min_by(x, y)`: the type of `x`. The three-argument
+/// form (`max_by(x, y, k)`) returns an array of up to `k` values, which
+/// this engine has no type for yet.
+fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.args().len() > 2 {
+        return Err(KrishivUnsupportedFeature {
+            feature: "max_by and min_by with a third argument (they return an array)".to_owned(),
+        }
+        .into());
+    }
+    min_max(c)
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
+    let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
     vec![
         aggregate("count", Inputs::Any, count, Aggregate::Count),
         aggregate("sum", numeric(), sum, Aggregate::Sum),
@@ -470,6 +495,16 @@ fn aggregates() -> Vec<Spec> {
         aggregate("first_value", Inputs::Any, first, Aggregate::First),
         aggregate("last", Inputs::Any, last, Aggregate::Last),
         aggregate("last_value", Inputs::Any, last, Aggregate::Last),
+        aggregate("any_value", Inputs::Any, any_value, Aggregate::AnyValue),
+        // Spark runs these as `count`, `min` and `max` of a rewritten argument.
+        aggregate("count_if", boolean_arg(), count, Aggregate::Count),
+        aggregate("bool_and", boolean_arg(), nullable_boolean, Aggregate::Min),
+        aggregate("every", boolean_arg(), nullable_boolean, Aggregate::Min),
+        aggregate("bool_or", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("some", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("any", boolean_arg(), nullable_boolean, Aggregate::Max),
+        aggregate("max_by", Inputs::Any, by, Aggregate::MaxBy),
+        aggregate("min_by", Inputs::Any, by, Aggregate::MinBy),
     ]
 }
 
@@ -547,8 +582,81 @@ fn ntile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     }
 }
 
+/// The `ignoreNulls` flag (argument `i`) of `name`, when given, must be a
+/// boolean literal (`INVALID_PARAMETER_VALUE.BOOLEAN`, Spark's builder).
+fn null_flag(c: &CallTypes<'_>, i: usize, name: &str) -> Result<(), KrishivError> {
+    if c.args().len() > i && !matches!(c.constant(i), Some(Constant::Boolean(_))) {
+        return Err(InvalidParameterValueBoolean {
+            function_name: format!("`{name}`"),
+            parameter: "`ignoreNulls`".to_owned(),
+            invalid_value: format!("\"{}\"", c.sql(i).unwrap_or_default()),
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// `lag`/`lead(input, offset, default[, ignoreNulls])` (the parser fills
+/// `offset` 1 and `default` NULL): the input's type, nullable. The offset
+/// and the default are checked with the window (the frame they make).
+fn offset_value(c: &CallTypes<'_>, name: &str) -> Result<ArgType, KrishivError> {
+    null_flag(c, 3, name)?;
+    Ok(ArgType::new(
+        c.data_type(0).cloned().unwrap_or(DataType::Null),
+        true,
+    ))
+}
+
+fn lag(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    offset_value(c, "lag")
+}
+
+fn lead(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    offset_value(c, "lead")
+}
+
+/// `nth_value(input, offset[, ignoreNulls])`: the input's type, nullable.
+/// Spark's `NthValue` checks, in its order: `offset` foldable, then its
+/// value (implicitly an `INT`) above 0 (a NULL reads as 0).
+fn nth_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    null_flag(c, 2, "nth_value")?;
+    let sql = |i: usize| c.sql(i).unwrap_or_default();
+    let call = format!("\"nth_value({}, {})\"", sql(0), sql(1));
+    let Some(offset) = c.constant(1) else {
+        return Err(DatatypeMismatchNonFoldableInput {
+            sql_expr: call,
+            input_name: "`offset`".to_owned(),
+            input_type: "\"INT\"".to_owned(),
+            input_expr: format!("\"{}\"", sql(1)),
+        }
+        .into());
+    };
+    let value = match offset {
+        Constant::Integral(v) | Constant::Fractional(v) => *v,
+        Constant::String(t) => t.trim().parse::<i64>().unwrap_or(0),
+        Constant::Error(e) => return Err(e.clone()),
+        _ => 0,
+    };
+    if value <= 0 {
+        return Err(DatatypeMismatchValueOutOfRange {
+            sql_expr: call,
+            expr_name: "offset".to_owned(),
+            value_range: format!("(0, {}]", i64::MAX),
+            current_value: format!("{value}L"),
+        }
+        .into());
+    }
+    Ok(ArgType::new(
+        c.data_type(0).cloned().unwrap_or(DataType::Null),
+        true,
+    ))
+}
+
 fn windows() -> Vec<Spec> {
     vec![
+        window("lag", lag),
+        window("lead", lead),
+        window("nth_value", nth_value),
         window("row_number", rank_like),
         window("rank", rank_like),
         window("dense_rank", rank_like),

@@ -67,6 +67,12 @@ pub enum Aggregate {
     First,
     /// `last` / `last_value`; `ignoreNulls` is the second argument.
     Last,
+    /// `any_value`; `ignoreNulls` is the second argument.
+    AnyValue,
+    /// `max_by(x, y)`.
+    MaxBy,
+    /// `min_by(x, y)`.
+    MinBy,
 }
 
 /// A built-in function.

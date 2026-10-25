@@ -275,6 +275,84 @@ pub(crate) fn window_aggregates() -> WindowPlan {
     }
 }
 
+/// Frames with offsets and to the partition's end.
+pub(crate) fn window_frames() -> WindowPlan {
+    let aggs = aggregate_exprs();
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::Aggregate(aggs[0].clone()),
+                rows(FrameBound::Offset(-2), FrameBound::Offset(3)),
+                "sliding",
+            ),
+            window_function(
+                WindowFunction::Aggregate(aggs[3].clone()),
+                WindowFrame {
+                    units: FrameUnits::Range,
+                    lower: FrameBound::CurrentRow,
+                    upper: FrameBound::UnboundedFollowing,
+                },
+                "rest",
+            ),
+        ],
+    }
+}
+
+/// `lag`/`lead` (with and without a default) and `nth_value`, over their
+/// offset frames.
+pub(crate) fn window_offset_values() -> WindowPlan {
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::Offset {
+                    input: 2,
+                    offset: -1,
+                    default: Some(0),
+                    ignore_nulls: true,
+                    data_type: arrow_schema::DataType::Int64,
+                },
+                rows(FrameBound::Offset(-1), FrameBound::Offset(-1)),
+                "lag",
+            ),
+            window_function(
+                WindowFunction::Offset {
+                    input: 2,
+                    offset: 2,
+                    default: None,
+                    ignore_nulls: false,
+                    data_type: arrow_schema::DataType::Utf8View,
+                },
+                rows(FrameBound::Offset(2), FrameBound::Offset(2)),
+                "lead",
+            ),
+            window_function(
+                WindowFunction::NthValue {
+                    input: 1,
+                    n: 3,
+                    ignore_nulls: true,
+                    data_type: arrow_schema::DataType::Float64,
+                },
+                rows(FrameBound::UnboundedPreceding, FrameBound::Offset(1)),
+                "nth",
+            ),
+        ],
+    }
+}
+
 pub(crate) fn residual() -> Residual {
     Residual {
         layout: vec![AttrId(1), AttrId(2), AttrId(3)],
@@ -481,6 +559,20 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Window {
                 input: boxed(scan()),
                 window: window_ranking(),
+            },
+        ),
+        (
+            "window_frames",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_frames(),
+            },
+        ),
+        (
+            "window_offset_values",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_offset_values(),
             },
         ),
         (
