@@ -24,10 +24,20 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
-/// Cases of a later part of P2-T055 (frames with value bounds, frames
-/// ending past the current row): they fail with
-/// `KRISHIV_UNSUPPORTED_FEATURE` until then.
-const PENDING: [&str; 3] = ["rows_sliding", "range_offset", "rows_current_to_end"];
+/// Cases of a later part of P2-T055 (`RANGE` frames with value bounds):
+/// they fail with `KRISHIV_UNSUPPORTED_FEATURE` until then.
+const PENDING: [&str; 1] = ["range_offset"];
+
+/// Known gaps outside window functions, with the error they give until
+/// fixed. The fixture's tables are temporary views in Spark, which
+/// qualifies their columns by the view's name (`t.v`); this session
+/// registers them as tables of the session catalog
+/// (`spark_catalog.default.t.v`), so an error that prints a qualified
+/// column differs in the qualifier only.
+const GAPS: [(&str, &str); 2] = [
+    ("lag_not_ordered", "WINDOW_FUNCTION_FRAME_NOT_ORDERED"),
+    ("nth_value_not_ordered", "WINDOW_FUNCTION_FRAME_NOT_ORDERED"),
+];
 
 fn fixture() -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -121,7 +131,8 @@ fn session(g: &Value) -> Session {
 
 /// A result value as the fixture writes it, by Spark type `t`.
 fn text(a: &ArrayRef, i: usize) -> Value {
-    if a.is_null(i) {
+    // A `VOID` column is all NULL (its nulls are logical, not in a bitmap).
+    if a.is_null(i) || a.data_type() == &DataType::Null {
         return Value::Null;
     }
     let s = match a.data_type() {
@@ -225,6 +236,15 @@ fn check(s: &Session, tables: &[&str], case: &Value) -> String {
         conf.unset(k).unwrap();
     }
     let id = case["id"].as_str().unwrap();
+    if let Some((_, class)) = GAPS.iter().find(|(g, _)| *g == id) {
+        match result {
+            Err(e) if e.error_class().name() == *class => {}
+            other => {
+                let _ = writeln!(out, "{id}: known gap changed (update GAPS): {other:?}");
+            }
+        }
+        return out;
+    }
     if PENDING.contains(&id) {
         match result {
             Err(e) if e.error_class().name() == "KRISHIV_UNSUPPORTED_FEATURE" => {}
@@ -351,6 +371,12 @@ fn window_functions_match_spark() {
     for class in [
         "DATATYPE_MISMATCH.RANGE_FRAME_WITHOUT_ORDER",
         "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_INVALID_BOUND",
+        "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_UNACCEPTED_TYPE",
+        "DATATYPE_MISMATCH.SPECIFIED_WINDOW_FRAME_WRONG_COMPARISON",
+        "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+        "FAILED_FUNCTION_CALL",
+        "INVALID_PARAMETER_VALUE.BOOLEAN",
+        "_LEGACY_ERROR_TEMP_1035",
         "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
         "DATATYPE_MISMATCH.NON_FOLDABLE_INPUT",
         "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
@@ -464,4 +490,63 @@ fn a_dataframe_filter_sees_the_window_output_and_having_does_not() {
         err.error_class().name(),
         "UNRESOLVED_COLUMN.WITH_SUGGESTION"
     );
+}
+
+/// `lag`/`lead` take any foldable `INT` offset, as Spark 4.2.0 does
+/// (`1 + 1`, `abs(-2)`, `-(-1)`); another type of offset is a frame Spark
+/// refuses as the user's (`_LEGACY_ERROR_TEMP_1035`). Values from the
+/// Spark 4.2.0 oracle over `(o, v)` = `(1, 10) .. (4, 40)`.
+#[test]
+fn lag_and_lead_take_any_foldable_int_offset() {
+    let s = Session::new().unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("o", DataType::Int32, false),
+        Field::new("v", DataType::Int32, false),
+    ]));
+    let column = |v: [i32; 4]| -> arrow_array::ArrayRef { Arc::new(Int32Array::from(v.to_vec())) };
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![column([1, 2, 3, 4]), column([10, 20, 30, 40])],
+    )
+    .unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    let run = |f: &str, offset: &str| {
+        let sql = format!("SELECT {f}(v, {offset}) OVER (ORDER BY o) AS x FROM t ORDER BY o");
+        block_on(async { s.sql(&sql).await?.collect().await }).map(|batches| {
+            batches
+                .iter()
+                .flat_map(|b| {
+                    let c = b.column(0);
+                    (0..b.num_rows())
+                        .map(|i| (!c.is_null(i)).then(|| c.as_primitive::<Int32Type>().value(i)))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    for offset in ["1 + 1", "abs(-2)", "2 * 1"] {
+        assert_eq!(
+            run("lag", offset).unwrap(),
+            [None, None, Some(10), Some(20)],
+            "{offset}"
+        );
+        assert_eq!(
+            run("lead", offset).unwrap(),
+            [Some(30), Some(40), None, None],
+            "{offset}"
+        );
+    }
+    assert_eq!(
+        run("lag", "-(-1)").unwrap(),
+        [None, Some(10), Some(20), Some(30)]
+    );
+    for offset in ["CAST(2 AS BIGINT)", "2L", "CAST(1.5 AS DOUBLE)", "NULL"] {
+        let e = run("lag", offset).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "_LEGACY_ERROR_TEMP_1035",
+            "{offset}: {e}"
+        );
+        assert!(e.to_string().contains("lag"), "{offset}: {e}");
+    }
 }

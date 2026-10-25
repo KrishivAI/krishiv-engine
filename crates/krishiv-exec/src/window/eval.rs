@@ -213,6 +213,20 @@ fn function(f: &WindowFunctionPlan, u: &Unit<'_>, ansi: bool) -> Result<ArrayRef
             Arc::new(Int32Array::from(v))
         }
         WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi)?,
+        WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+            let part = |i: usize| u.parts[u.part_of[i] as usize];
+            let peers = |i: usize| u.peers[u.peer_of[i] as usize];
+            let rows = super::frames::Rows {
+                part: &part,
+                peers: &peers,
+                n: u.rows,
+            };
+            if matches!(f.function, WindowFunction::Offset { .. }) {
+                super::frames::offset_value(f, u.slices, &rows)?
+            } else {
+                super::frames::nth_value(f, u.slices, &rows)?
+            }
+        }
     })
 }
 
@@ -294,6 +308,17 @@ fn aggregate(
     ansi: bool,
 ) -> Result<ArrayRef> {
     let shape = f.shape()?;
+    if shape == Shape::Frame {
+        let part = |i: usize| u.parts[u.part_of[i] as usize];
+        let peers = |i: usize| u.peers[u.peer_of[i] as usize];
+        let rows = super::frames::Rows {
+            part: &part,
+            peers: &peers,
+            n: u.rows,
+        };
+        let frames = super::frames::frames(f.frame, &rows)?;
+        return super::frames::aggregate(a, f, u.slices, &frames, ansi);
+    }
     if exact_decimal(a) {
         return decimal_aggregate(a, f, shape, u, ansi);
     }
@@ -333,6 +358,7 @@ fn aggregate(
             let values = acc.evaluate(&ids)?;
             take(&values, &u.part_of)
         }
+        Shape::Frame => Err(internal("a window frame evaluated above".to_owned())),
         Shape::RunningRows | Shape::RunningPeers => {
             // Group `p` folds partition `p`; group `parts + 1 + k` keeps the
             // state after segment `k` (a row or a peer group).
@@ -435,7 +461,7 @@ fn decimal_aggregate(
     // (what `cost` reserves): one state per segment.
     let segments = match shape {
         Shape::Whole => u.parts.len(),
-        Shape::RunningRows => u.rows,
+        Shape::RunningRows | Shape::Frame => u.rows,
         Shape::RunningPeers => u.peers.len(),
     };
     let mut states: Vec<(i256, i64)> = Vec::with_capacity(segments);
@@ -462,7 +488,7 @@ fn decimal_aggregate(
             }
             let end = match shape {
                 Shape::Whole => u.parts[u.part_of[row] as usize].1,
-                Shape::RunningRows => row + 1,
+                Shape::RunningRows | Shape::Frame => row + 1,
                 Shape::RunningPeers => u.peers[u.peer_of[row] as usize].1,
             };
             if row + 1 == end {
@@ -475,7 +501,7 @@ fn decimal_aggregate(
     for row in 0..u.rows {
         let k = match shape {
             Shape::Whole => u.part_of[row] as usize,
-            Shape::RunningRows => row,
+            Shape::RunningRows | Shape::Frame => row,
             Shape::RunningPeers => u.peer_of[row] as usize,
         };
         seg_of.push(id(k)?);
@@ -596,7 +622,7 @@ fn segment(shape: Shape, u: &Unit<'_>, row: usize) -> (usize, usize) {
             let p = u.part_of[row] as usize;
             (u.parts[p].1, p)
         }
-        Shape::RunningRows => (row + 1, row),
+        Shape::RunningRows | Shape::Frame => (row + 1, row),
         Shape::RunningPeers => {
             let p = u.peer_of[row] as usize;
             (u.peers[p].1, p)
@@ -694,7 +720,7 @@ pub(super) fn replaces<'v>(
 }
 
 /// Bytes an array of `rows` values of `t` takes (validity included).
-fn width(t: &DataType, rows: usize) -> usize {
+pub(super) fn width(t: &DataType, rows: usize) -> usize {
     let value = t.primitive_width().unwrap_or(16);
     rows * value + rows.div_ceil(8)
 }
@@ -717,11 +743,17 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
             | WindowFunction::CumeDist => width(&out, rows),
             // The ranks, then the result.
             WindowFunction::PercentRank => rows * 4 + width(&out, rows),
+            WindowFunction::Offset { .. } | WindowFunction::NthValue { .. } => {
+                super::frames::offset_cost(f, rows)?
+            }
+            WindowFunction::Aggregate(a) if f.shape()? == Shape::Frame => {
+                super::frames::cost(a, f, rows)?
+            }
             WindowFunction::Aggregate(a) => {
                 let shape = f.shape()?;
                 let segments = match shape {
                     Shape::Whole => parts,
-                    Shape::RunningRows => rows,
+                    Shape::RunningRows | Shape::Frame => rows,
                     Shape::RunningPeers => peers,
                 };
                 // The gathered output and its indices.

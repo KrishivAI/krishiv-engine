@@ -12,7 +12,7 @@ use parquet::file::properties::WriterProperties;
 
 use super::tests::{Env, rows, write};
 use crate::request::{
-    CmpOp, Collation, ColumnPath, PushdownExpr, RowFilterPolicy, ScalarValue, ScanRequest,
+    CmpOp, Collation, ColumnPath, PushdownExpr, RowFilterPolicy, RowLevel, ScalarValue, ScanRequest,
 };
 use crate::{FormatOptions, MetadataNeeds};
 
@@ -52,6 +52,15 @@ fn file(env: &Env) -> (crate::FileRef, FormatOptions, Arc<Schema>) {
 }
 
 fn scan(env: &Env, policy: RowFilterPolicy, predicate: PushdownExpr) -> Vec<RecordBatch> {
+    scan_rows(env, policy, predicate, RowLevel::Full)
+}
+
+fn scan_rows(
+    env: &Env,
+    policy: RowFilterPolicy,
+    predicate: PushdownExpr,
+    row_level: RowLevel,
+) -> Vec<RecordBatch> {
     let (f, o, _) = file(env);
     let schema = env
         .rt
@@ -64,6 +73,7 @@ fn scan(env: &Env, policy: RowFilterPolicy, predicate: PushdownExpr) -> Vec<Reco
     let mut req = ScanRequest::new(schema, vec![ColumnPath::new("k"), ColumnPath::new("v")]);
     req.predicate = Some(predicate);
     req.row_filter = policy;
+    req.row_level = row_level;
     env.scan(&f, &req, &o).unwrap()
 }
 
@@ -149,6 +159,27 @@ fn forced_policies() {
     let env = Env::new();
     assert_eq!(rows(&scan(&env, RowFilterPolicy::On, k_is_zero())), 36);
     assert_eq!(rows(&scan(&env, RowFilterPolicy::Off, k_is_zero())), 15_000);
+}
+
+/// A request that allows only a prefix of its predicate at row level (a
+/// later conjunct above the scan may raise) drops rows by that prefix
+/// only, however selective the whole predicate is.
+#[test]
+fn the_row_filter_evaluates_only_what_the_row_level_allows() {
+    let env = Env::new();
+    let on = RowFilterPolicy::On;
+    let none = scan_rows(&env, on, k_is_zero(), RowLevel::Prefix(None));
+    assert_eq!(rows(&none), 15_000);
+    // The prefix `k = 0 OR k IS NULL` (never NULL itself).
+    let prefix = PushdownExpr::Or(vec![
+        k_is_zero(),
+        PushdownExpr::IsNull(ColumnPath::new("k")),
+    ]);
+    let k_is_one = PushdownExpr::cmp(ColumnPath::new("k"), CmpOp::Eq, ScalarValue::Int32(1));
+    // The predicate keeps no row; the prefix keeps its 36.
+    let both = PushdownExpr::And(vec![k_is_zero(), k_is_one]);
+    let out = scan_rows(&env, on, both, RowLevel::Prefix(Some(prefix)));
+    assert_eq!(rows(&out), 36);
 }
 
 /// A batch the filter keeps more than 1% of passes whole: decoding the
@@ -321,6 +352,13 @@ fn runtime_filter_keys_filter_while_decoding() {
     assert_eq!(
         keys_of(&env.scan(&file, &request(&early), &o).unwrap()),
         [3, 17_001]
+    );
+    // Not at row level when the request allows only a prefix.
+    let mut prefixed = request(&early);
+    prefixed.row_level = RowLevel::Prefix(None);
+    assert_eq!(
+        rows(&env.scan(&file, &prefixed, &o).unwrap()),
+        usize::try_from(n).unwrap()
     );
 
     let late = Arc::new(RuntimeFilter::new(

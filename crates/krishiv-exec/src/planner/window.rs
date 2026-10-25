@@ -255,6 +255,37 @@ impl Planner<'_> {
                 "percent_rank" => WindowFunction::PercentRank,
                 "cume_dist" => WindowFunction::CumeDist,
                 "ntile" => WindowFunction::Ntile(ntile_buckets(c.f)?),
+                "lag" | "lead" => {
+                    // The analyzer made the offset the frame: `ROWS BETWEEN
+                    // k FOLLOWING AND k FOLLOWING`.
+                    let Bound::Offset(offset) = c.frame.lower else {
+                        return Err(internal("lag/lead without its offset frame"));
+                    };
+                    WindowFunction::Offset {
+                        input: *args
+                            .first()
+                            .ok_or_else(|| internal("lag/lead without input"))?,
+                        offset,
+                        default: args.get(1).copied(),
+                        ignore_nulls: flag(c.f, 3),
+                        data_type: c.output.data_type.to_arrow(),
+                    }
+                }
+                "nth_value" => WindowFunction::NthValue {
+                    input: *args
+                        .first()
+                        .ok_or_else(|| internal("nth_value without input"))?,
+                    n: match c.f.args.get(1).map(|a| &a.node) {
+                        Some(ExprNode::Literal(krishiv_plan::Literal::Integer(n))) => i64::from(*n),
+                        _ => {
+                            return Err(unsupported(
+                                "nth_value with an offset that is not an int literal",
+                            ));
+                        }
+                    },
+                    ignore_nulls: flag(c.f, 2),
+                    data_type: c.output.data_type.to_arrow(),
+                },
                 other => return Err(unsupported(&format!("the window function {other}"))),
             });
         }
@@ -298,7 +329,14 @@ fn call(e: &Expr) -> Result<Call<'_>> {
         FrameBound::UnboundedPreceding => Ok(Bound::UnboundedPreceding),
         FrameBound::CurrentRow => Ok(Bound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(Bound::UnboundedFollowing),
-        _ => Err(unsupported("window frames with value bounds")),
+        // The analyzer leaves a checked offset as an `int` literal.
+        FrameBound::Offset(e) => match &e.node {
+            ExprNode::Literal(krishiv_plan::Literal::Integer(v)) => {
+                Ok(Bound::Offset(i64::from(*v)))
+            }
+            _ => Err(unsupported("window frame bounds that are not int literals")),
+        },
+        _ => Err(unsupported("this window frame bound")),
     };
     let frame = WindowFrame {
         units: match frame.units {
@@ -315,9 +353,27 @@ fn call(e: &Expr) -> Result<Call<'_>> {
 /// functions read none (their arguments are constants).
 fn arguments(f: &krishiv_plan::ResolvedFunction) -> Vec<Arc<Expr>> {
     if f.kind == FunctionKind::Window {
-        return Vec::new();
+        // `lag`/`lead` read their input and default, `nth_value` its input.
+        return match f.id.name() {
+            "lag" | "lead" => [f.args.first(), f.args.get(2)]
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect(),
+            "nth_value" => f.args.first().into_iter().cloned().collect(),
+            _ => Vec::new(),
+        };
     }
     lower(f).map(|l| l.args).unwrap_or_default()
+}
+
+/// Whether argument `i` of `f` is the literal `true` (an `IGNORE NULLS`
+/// flag).
+fn flag(f: &krishiv_plan::ResolvedFunction, i: usize) -> bool {
+    matches!(
+        f.args.get(i).map(|a| &a.node),
+        Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
+    )
 }
 
 /// `ntile(n)`'s bucket count: the analyzer checked it is an `int` literal

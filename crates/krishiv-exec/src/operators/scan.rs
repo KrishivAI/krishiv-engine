@@ -17,7 +17,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use arrow_schema::SchemaRef;
 use futures::future::BoxFuture;
 use krishiv_io::{
-    ColumnPath, FieldMapping, FileRef, MetadataCols, PushdownExpr, RowSelection, ScanFilter,
+    ColumnPath, FieldMapping, FileRef, MetadataCols, PushdownExpr, RowLevel, RowSelection,
+    ScanFilter,
 };
 use krishiv_types::batch::Batch;
 
@@ -53,6 +54,11 @@ pub struct PushedFilter {
     /// The same filter as a typed predicate over the table's columns, if it
     /// can be expressed as one.
     pub expr: Option<PushdownExpr>,
+    /// What the scan may drop rows by before the filter evaluates them:
+    /// all of `expr` and the runtime filters, or, when a conjunct of the
+    /// filter may raise, only the conjuncts written before it
+    /// ([`RowLevel::Prefix`]).
+    pub rows: RowLevel,
 }
 
 impl PushedFilter {
@@ -62,6 +68,7 @@ impl PushedFilter {
         Self {
             predicate,
             expr: None,
+            rows: RowLevel::Full,
         }
     }
 
@@ -71,6 +78,7 @@ impl PushedFilter {
         Self {
             predicate,
             expr: Some(expr),
+            rows: RowLevel::Full,
         }
     }
 }
@@ -148,8 +156,9 @@ pub trait ScanPushdown: Send + Sync {
 /// never reads more than one such batch past its limit. Pushed filters are
 /// applied before the projection and honoured exactly; nested projections
 /// prune struct fields; a pushed limit stops the scan once that many rows
-/// were returned. Runtime filters drop rows before the projection (the
-/// row stage, with its adaptive switch-off); field mapping does not apply
+/// were returned. Runtime filters drop rows after the pushed filters and
+/// before the projection (the row stage, with its adaptive switch-off);
+/// field mapping does not apply
 /// to in-memory data; row selections and `_metadata` columns are refused.
 ///
 /// One piece is returned per call, possibly with no rows after a pushed
@@ -288,14 +297,19 @@ impl MemoryScan {
         }
         self.rows_read.fetch_add(take as u64, Ordering::Relaxed);
         let mut piece = piece;
-        if let Some(mask) = local.rows.mask(piece.data())? {
-            piece = piece.filter(&mask)?;
-        }
         for filter in &self.filters {
             if piece.num_rows() == 0 {
                 break;
             }
             let mask = filter.evaluate(piece.data())?;
+            piece = piece.filter(&mask)?;
+        }
+        // After the pushed filters, as Spark evaluates a runtime filter
+        // last: a row it drops would never reach a filter conjunct that
+        // may raise.
+        if piece.num_rows() > 0
+            && let Some(mask) = local.rows.mask(piece.data())?
+        {
             piece = piece.filter(&mask)?;
         }
         match &self.projection {

@@ -1289,7 +1289,7 @@ impl crate::analyzer::FunctionRegistry for Epoch<crate::analyzer::BuiltinFunctio
 fn every_context_input_changes_the_key() {
     use crate::analyzer::BuiltinFunctions;
     use crate::analyzer::testing::OneCatalog;
-    use crate::analyzer::{PrincipalKind, fingerprint};
+    use crate::analyzer::{PrincipalKind, SessionVariable, VariableSnapshot, fingerprint};
     let digest = |c: &AnalysisContext, epochs: &[(&str, u64)]| {
         let e = epochs.iter().map(|(n, v)| ((*n).to_owned(), *v)).collect();
         fingerprint(c, e).digest()
@@ -1348,6 +1348,20 @@ fn every_context_input_changes_the_key() {
         c.principal = Arc::new(p);
     });
     v("policy", &|c| c.policy = Arc::new(DenyOne(String::new())));
+    v("variables", &|c| {
+        c.variables = Arc::new(VariableSnapshot {
+            variables: [(
+                "v".to_owned(),
+                SessionVariable {
+                    data_type: DataType::Integer,
+                    value: Literal::Integer(1),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            version: 1,
+        });
+    });
     let key = digest(&base, &[("spark_catalog", 1)]);
     assert_ne!(
         key,
@@ -1587,6 +1601,85 @@ fn missing_references_come_before_outer_ones() {
     // a semi join on it.
     let outer = shown("b");
     assert!(outer.contains("Join LeftSemi, (CAST(b#1 "), "{outer}");
+}
+
+/// Session variables resolve after columns and outer references: a name
+/// a column has is the column, a qualified `session.v` skips the columns,
+/// and anything else stays an unresolved column.
+#[test]
+fn session_variables_resolve_after_columns() {
+    use crate::analyzer::{SessionVariable, VariableSnapshot};
+    use std::collections::BTreeMap;
+    let catalog = || {
+        MemoryCatalog::new("spark_catalog").with_table(
+            &["default"],
+            "t",
+            vec![TableColumn {
+                name: "var1".to_owned(),
+                data_type: DataType::String,
+                nullable: true,
+            }],
+            None,
+        )
+    };
+    let variables = || {
+        let mut ctx = context(catalog(), ResolutionConf::default());
+        ctx.variables = Arc::new(VariableSnapshot {
+            variables: BTreeMap::from([(
+                "var1".to_owned(),
+                SessionVariable {
+                    data_type: DataType::Integer,
+                    value: Literal::Integer(1),
+                },
+            )]),
+            version: 3,
+        });
+        ctx
+    };
+    // A name a column has is the column, even when a variable has it too.
+    let plan = LogicalPlan::table(["t"]).project(vec![c("var1")]);
+    let a = run(plan, &variables()).unwrap();
+    assert_eq!(a.output[0].data_type, DataType::String);
+    // A qualified `session.v` skips the columns for the variable.
+    for name in ["session.var1", "system.session.var1", "SESSION.VAR1"] {
+        let plan = LogicalPlan::table(["t"]).project(vec![c(name)]);
+        let a = run(plan, &variables()).unwrap();
+        assert_eq!(a.output[0].data_type, DataType::Integer, "{name}");
+    }
+    // Anything else stays an unresolved column, never a variable error.
+    // (Outer references before variables are covered end to end, where a
+    // correlated `EXISTS` reads the outer column.)
+    for name in ["nope", "ses.var1", "b.ses.var1", "var1.var1"] {
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![c(name)]);
+        assert_eq!(
+            class(&run(plan, &variables())),
+            "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+            "{name}"
+        );
+    }
+}
+
+/// A changed variable version changes the context fingerprint, so a
+/// cached resolved plan is never reused after a variable changed.
+#[test]
+fn variable_versions_change_the_fingerprint() {
+    use crate::analyzer::{SessionVariable, VariableSnapshot, fingerprint};
+    use std::collections::BTreeMap;
+    let digest = |c: &AnalysisContext| fingerprint(c, BTreeMap::new()).digest();
+    let base = ctx();
+    let key = digest(&base);
+    let mut changed = base.clone();
+    changed.variables = Arc::new(VariableSnapshot {
+        variables: BTreeMap::from([(
+            "var1".to_owned(),
+            SessionVariable {
+                data_type: DataType::Integer,
+                value: Literal::Integer(1),
+            },
+        )]),
+        version: base.variables.version + 1,
+    });
+    assert_ne!(key, digest(&changed));
 }
 
 /// A subexpression shared through `Arc` inside a lateral alias item and a

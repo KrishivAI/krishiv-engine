@@ -18,6 +18,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_AGG_ROW_LAYOUT,
     &EXEC_JOIN_ROW_LAYOUT,
     &EXEC_JOIN_RADIX_BITS,
+    &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
     &NETWORK_TIMEOUT,
     &MEMORY_LIMIT,
@@ -38,6 +39,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &FILES_MAX_PARTITION_NUM,
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
+    &IO_BLOCKING_THREADS,
     &IO_COALESCE_BYTES,
     &IO_MAX_REQUEST_BYTES,
     &IO_PREFETCH_BYTES,
@@ -82,6 +84,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
+    ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
@@ -89,6 +92,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
+    ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
@@ -286,6 +290,19 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
           table that switches by size between a flat and a salted directory. Results are \
           the same either way; joins whose key types have no row encoding keep the \
           default path.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Hash buckets of a sort below a window (P2-T055).
+pub static EXEC_SORT_HASH_BUCKETS: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.sort.hashBuckets",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: the sort below a window with a PARTITION BY splits its rows into buckets by \
+          the hash of the partitioning keys and sorts, merges and evaluates the buckets in \
+          parallel. Results are the same either way.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
@@ -549,7 +566,24 @@ pub static IO_MAX_CONCURRENT_REQUESTS: ConfigEntry = ConfigEntry {
     key: "krishiv.io.maxConcurrentRequests",
     value_type: ValueType::Int,
     default: Some(ConfigValue::Int(64)),
-    doc: "Most object-store requests in flight at once per store, over all queries of the process.",
+    doc: "Most object-store requests in flight at once per store, over all queries of the process. \
+          The local file store also runs each request on a blocking thread of the I/O runtime, so \
+          at most `krishiv.io.blockingThreads` of them run at once.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.blockingThreads`.
+pub static IO_BLOCKING_THREADS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.blockingThreads",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(8)),
+    doc: "Most blocking threads of the I/O runtime, where local-file reads and writes run: at most \
+          this many local-file requests run at once per executor (`krishiv.io.maxConcurrentRequests` \
+          still bounds those in flight). Each such thread keeps freed read buffers in its own \
+          allocator cache, so the bound also bounds that memory. Read when the session starts its \
+          executor.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,

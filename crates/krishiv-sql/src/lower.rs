@@ -1211,22 +1211,42 @@ impl Lowerer {
                     }
                     args.push(self.arg(&a.expr)?);
                 }
+                // Spark's builder of `lag` and `lead`: `input` NULL, `offset`
+                // 1 and `default` NULL when not given.
+                let lname = name.value.to_ascii_lowercase();
+                if matches!(lname.as_str(), "lag" | "lead") && args.len() < 3 {
+                    let fill = [
+                        IrLiteral::Null(None),
+                        IrLiteral::Integer(1),
+                        IrLiteral::Null(None),
+                    ];
+                    for v in fill.into_iter().skip(args.len()) {
+                        args.push(arc(self.ex(ExprNode::Literal(v), sp)));
+                    }
+                }
                 // `first(x) IGNORE NULLS` is `first(x, true)` and `RESPECT
-                // NULLS` is `first(x, false)`, whatever flag was written;
-                // a flag that is not a literal stays for the analyzer to
+                // NULLS` is `first(x, false)`, whatever flag was written
+                // (`lag`/`lead`'s fourth argument, `nth_value`'s third); a
+                // flag that is not a literal stays for the analyzer to
                 // refuse, as Spark does.
+                let flag_at = match lname.as_str() {
+                    "lag" | "lead" => 3,
+                    "nth_value" => 2,
+                    _ => 1,
+                };
                 if let Some(t) = f.null_treatment {
                     let flag = t == NullTreatment::Ignore;
-                    match args.get(1).map(|a| &a.node) {
+                    match args.get(flag_at).map(|a| &a.node) {
                         None | Some(ExprNode::Literal(IrLiteral::Boolean(_))) => {
                             let flag =
                                 arc(self.ex(ExprNode::Literal(IrLiteral::Boolean(flag)), sp));
-                            // Only the flag slot is replaced: surplus arguments
-                            // stay for the analyzer's arity error.
-                            if args.len() == 1 {
+                            // Only the flag slot is replaced: surplus (or
+                            // missing) arguments stay for the analyzer's
+                            // arity error.
+                            if args.len() == flag_at {
                                 args.push(flag);
-                            } else {
-                                args[1] = flag;
+                            } else if args.len() > flag_at {
+                                args[flag_at] = flag;
                             }
                         }
                         Some(_) => {}
@@ -1284,9 +1304,18 @@ impl Lowerer {
 /// The aggregates that take `IGNORE NULLS` / `RESPECT NULLS` (as their
 /// `ignoreNulls` argument).
 fn takes_null_treatment(name: &str) -> bool {
-    ["first", "last", "first_value", "last_value", "any_value"]
-        .iter()
-        .any(|n| name.eq_ignore_ascii_case(n))
+    [
+        "first",
+        "last",
+        "first_value",
+        "last_value",
+        "any_value",
+        "lag",
+        "lead",
+        "nth_value",
+    ]
+    .iter()
+    .any(|n| name.eq_ignore_ascii_case(n))
 }
 
 /// A path written as a quoted name part (`parquet.`s3://b/k``).
