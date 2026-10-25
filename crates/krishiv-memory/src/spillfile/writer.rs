@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Writing a spill file: atomic (temp file, then rename), capped, cancellable.
 
-use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -32,10 +31,11 @@ const BUF_BYTES: usize = 64 << 10;
 /// Batches go to `<n>.spill.tmp`; [`finish`](Self::finish) writes the footer
 /// and renames it to `<n>.spill`. A `.spill` file is therefore always
 /// complete, and a writer that is dropped, fails or is cancelled leaves
-/// nothing behind. Nothing is `fsync`ed, on purpose: spill files are scratch
-/// data that is only meaningful to the process that wrote them. After a
-/// crash they are deleted at the next start, never read, so durability would
-/// cost latency for no benefit. Errors that surface only at `close` are not
+/// nothing behind. Durability is not a goal: spill files are scratch data
+/// that is only meaningful to the process that wrote them, and after a crash
+/// they are deleted at the next start, never read. The `fdatasync` at
+/// `finish` (with drop-behind on) is for memory, not durability: it makes
+/// the file's pages clean so they can be dropped from the page cache. Errors that surface only at `close` are not
 /// observable on a local file system, which is why a network one is refused.
 ///
 /// # Accounting
@@ -59,8 +59,7 @@ const BUF_BYTES: usize = 64 << 10;
 /// The I/O is blocking: call it from `spawn_blocking`. Each writer holds one
 /// file descriptor until it finishes or drops. That includes waiting for the
 /// disk: the drop-behind (`krishiv.spill.dropBehindBytes`, see the module
-/// docs) waits for each window's writeback one window later, and for the
-/// rest at `finish`.
+/// docs) syncs the file at `finish`.
 #[derive(Debug)]
 pub struct SpillWriter {
     scope: Arc<ScopeInner>,
@@ -79,8 +78,6 @@ pub struct SpillWriter {
     window: u64,
     /// Bytes whose writeback was started.
     started: u64,
-    /// Ranges whose writeback was started and that are still cached.
-    behind: VecDeque<(u64, u64)>,
     committed: bool,
     failed: bool,
 }
@@ -114,7 +111,6 @@ impl SpillWriter {
             max_read: 0,
             window,
             started: 0,
-            behind: VecDeque::new(),
             committed: false,
             failed: false,
         };
@@ -292,39 +288,28 @@ impl SpillWriter {
     /// drive its cgroup into the OOM killer with memory it no longer needs.
     ///
     /// Each time a window of bytes (`krishiv.spill.dropBehindBytes`) has
-    /// been written, writeback of the new window starts without waiting,
-    /// and the window started [`LAG`] windows earlier, whose writeback has
-    /// had a window's time to finish, is waited for and dropped from the
-    /// cache: at most about `LAG + 1` windows per writer stay cached. At
-    /// `finish` the rest is written back and dropped. Only complete frames
-    /// are covered (their headers are patched in place before), so no byte
-    /// is written after its range was dropped. The calls are advisory: a
-    /// failure is logged and the write goes on.
+    /// been written, the file so far is advised `DONTNEED`: that starts
+    /// writeback of what is dirty and drops what earlier calls had started
+    /// writing back (clean by now). At `finish` the file is synced and
+    /// dropped. Spill files are mostly smaller than a window, so for most
+    /// files only the `finish` step runs. Only complete frames are covered
+    /// (their headers are patched in place before), so no byte is written
+    /// after its range was dropped. The calls are advisory: a failure is
+    /// logged and the write goes on.
     fn drop_behind(&mut self, finish: bool) -> Result<(), SpillError> {
         let end = self.charged;
         if self.window == 0 || (!finish && end.saturating_sub(self.started) < self.window) {
             return Ok(());
         }
-        let Some(out) = self.file.as_mut() else {
-            return Ok(());
-        };
-        out.flush()
-            .map_err(|e| SpillError::io("write to", &self.tmp, e))?;
-        let file = out.get_ref();
-        if end > self.started {
-            advisory(
-                &self.tmp,
-                cache::start_writeback(file, self.started, end - self.started),
-            );
-            self.behind.push_back((self.started, end));
+        if let Some(out) = self.file.as_mut() {
+            out.flush()
+                .map_err(|e| SpillError::io("write to", &self.tmp, e))?;
+            let file = out.get_ref();
+            if finish {
+                advisory(&self.tmp, cache::sync(file));
+            }
+            advisory(&self.tmp, cache::drop_range(file, 0, end));
             self.started = end;
-        }
-        let keep = if finish { 0 } else { LAG };
-        while self.behind.len() > keep {
-            let Some((from, to)) = self.behind.pop_front() else {
-                break;
-            };
-            advisory(&self.tmp, cache::drop_range(file, from, to - from, true));
         }
         Ok(())
     }
@@ -421,13 +406,12 @@ impl Drop for SpillWriter {
     }
 }
 
-/// How many windows behind the newest the drop-behind waits for and drops
-/// (see [`SpillWriter::drop_behind`]).
-const LAG: usize = 1;
+/// Set once a failed page-cache call was logged as a warning.
+static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Logs a failed page-cache call once per process; the spill goes on.
+/// Logs a failed page-cache call (a warning once per process, then at debug
+/// level); the spill goes on.
 fn advisory(tmp: &Path, result: std::io::Result<()>) {
-    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if let Err(e) = result {
         if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
             tracing::warn!(
@@ -554,5 +538,21 @@ impl Write for Sink<'_> {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod drop_behind_tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_page_cache_call_is_logged_and_never_an_error() {
+        let tmp = Path::new("/nonexistent/x.spill.tmp");
+        advisory(tmp, Ok(()));
+        advisory(tmp, Err(io::Error::from_raw_os_error(9)));
+        assert!(WARNED.load(std::sync::atomic::Ordering::Relaxed));
+        // Later failures are logged at debug level only.
+        advisory(tmp, Err(io::Error::from_raw_os_error(9)));
+        assert!(WARNED.load(std::sync::atomic::Ordering::Relaxed));
     }
 }

@@ -62,8 +62,10 @@
 //! `krishiv.spill.dropBehindBytes`, read by [`SpillConfig::from_config`].
 //!
 //! # Page cache
-//! A writer writes its file back and drops it from the page cache as it
-//! goes (every `krishiv.spill.dropBehindBytes`, and at `finish`; Linux).
+//! A writer advises the kernel to write its file back and drop it from the
+//! page cache every `krishiv.spill.dropBehindBytes`, and syncs and drops it
+//! at `finish` (Linux, through `rustix`). Most spill files are smaller than
+//! the window, so for them only the `finish` step runs.
 //! Dirty spill pages count against a memory cgroup and cannot be reclaimed
 //! until they are written back: left to the kernel's writeback, a spilling
 //! query can hold hundreds of MiB of them and push its cgroup to its limit,
