@@ -9,14 +9,6 @@
       "reason": "SELECT substring('Spark SQL', 5, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "substring#07e5d6cbbf49/ansi_on",
-      "reason": "SELECT substring(encode('Spark SQL', 'utf-8'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "substring#07e5d6cbbf49/ansi_off",
-      "reason": "SELECT substring(encode('Spark SQL', 'utf-8'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
       "id": "substring#0adf3efa005d/ansi_on",
       "reason": "SELECT substring('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

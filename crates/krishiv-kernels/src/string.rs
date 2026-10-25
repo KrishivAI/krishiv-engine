@@ -3,7 +3,9 @@
 //! Spark defines the function on binary): `upper`/`lower`, `length`, the
 //! `trim` family, `startswith`/`endswith`/`contains`, `replace`,
 //! `lpad`/`rpad`, `substring`, `concat`, `like` ([`like()`]) and a literal
-//! `split` ([`split_literal`]).
+//! `split` ([`split_literal`]), plus the character-level functions of
+//! `chars.rs` (`right`, `repeat`, `translate`, `locate`, `mask`, ...) and the
+//! encodings of `codec.rs` (`base64`, `to_binary`, `encode`, `url_encode`, ...).
 //!
 //! `STRING` is valid UTF-8 (validated at the edges), so a "character" is a
 //! Unicode scalar value (Spark counts code points) and every slice a kernel
@@ -12,8 +14,28 @@
 //! NULL row is never evaluated. Work is per valid row and depends on the
 //! row's content, so these kernels have no has-nulls axis (they skip NULL
 //! rows) and ASCII rows take byte-wise fast paths.
+//!
+//! Known approximations (Spark's defaults apply; the switches are not read):
+//! - `initcap` and `mask` classify non-ASCII characters with the toolchain's
+//!   Unicode data, not a version-keyed table like [`upper`]/[`lower`] (see
+//!   `case_table.rs`). The divergent code points (Greek letters with an iota
+//!   subscript, modifier/circled/Roman-numeral letters, Georgian) are pinned
+//!   by `toolchain_unicode_is_pinned`.
+//! - `encode`/`decode` take Spark's seven default charsets; the
+//!   `spark.sql.legacy.javaCharsets` and `spark.sql.legacy.codingErrorAction`
+//!   switches are not read.
+//! - `base64` always writes MIME chunking (a CRLF every 76 symbols), Spark's
+//!   default; `spark.sql.chunkBase64String.enabled` is not read.
+//! - `split_part` and `substring_index` with `Int.MIN` return what Spark's
+//!   algorithm would (the whole string / the empty string); the JVM raises an
+//!   unclassified exception there.
+//! - `unbase64` of text Java's MIME decoder rejects is
+//!   `KRISHIV_INVALID_BASE64_INPUT`; Spark raises an unclassified
+//!   `IllegalArgumentException`.
 
 mod case_table;
+mod chars;
+mod codec;
 mod like;
 mod mask_table;
 mod split;
@@ -26,6 +48,15 @@ use arrow_array::{
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 
+pub use chars::{
+    ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set, initcap, levenshtein, locate,
+    luhn_check, overlay, overlay_binary, quote, repeat, reverse, reverse_binary, right, soundex,
+    space, split_part, substring_index, translate,
+};
+pub use codec::{
+    base64, decode, encode, is_valid_utf8, make_valid_utf8, to_binary, unbase64, url_decode,
+    url_encode, validate_utf8,
+};
 pub use like::{LikePattern, like};
 pub use split::{literal_delimiter, split_literal};
 

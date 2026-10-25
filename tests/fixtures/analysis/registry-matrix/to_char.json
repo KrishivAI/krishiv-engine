@@ -25,14 +25,6 @@
       "reason": "SELECT to_char(454, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "to_char#6710535d81b4/ansi_on",
-      "reason": "SELECT to_char(encode('abc', 'utf-8'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "to_char#6710535d81b4/ansi_off",
-      "reason": "SELECT to_char(encode('abc', 'utf-8'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
       "id": "to_char#7c77983e5a32/ansi_on",
       "reason": "SELECT to_char(INTERVAL '1 02:03:04' DAY TO SECOND, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

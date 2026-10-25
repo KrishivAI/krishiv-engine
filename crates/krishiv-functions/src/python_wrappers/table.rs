@@ -22,10 +22,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("bool_and", "no PySpark function"),
     ("bool_or", "no PySpark function"),
     ("count_if", "no PySpark function"),
+    ("chr", "no PySpark function; use `char`"),
     ("every", "no PySpark function"),
+    ("len", "no PySpark function; use `length`"),
+    ("luhn_check", "no PySpark function"),
     ("max_by", "no PySpark function"),
     ("min_by", "no PySpark function"),
     ("some", "no PySpark function"),
+    ("space", "no PySpark function"),
     (
         "mean",
         "an alias of `avg`; the exported `mean` is a row that sends `avg`",
@@ -75,14 +79,18 @@ pub(super) fn rows() -> Vec<Row> {
         "abs",
         "acos",
         "acosh",
+        "ascii",
         "asin",
         "asinh",
         "atan",
         "atanh",
         "avg",
+        "base64",
         "bin",
         "bit_count",
+        "bit_length",
         "cbrt",
+        "char",
         "cos",
         "cosh",
         "cot",
@@ -98,6 +106,7 @@ pub(super) fn rows() -> Vec<Row> {
         "expm1",
         "hex",
         "hour",
+        "initcap",
         "isnan",
         "isnotnull",
         "isnull",
@@ -115,9 +124,12 @@ pub(super) fn rows() -> Vec<Row> {
         "monthname",
         "negative",
         "nullifzero",
+        "octet_length",
         "positive",
         "quarter",
+        "quote",
         "radians",
+        "reverse",
         "rint",
         "sec",
         "second",
@@ -127,10 +139,12 @@ pub(super) fn rows() -> Vec<Row> {
         "signum",
         "sin",
         "sinh",
+        "soundex",
         "sqrt",
         "sum",
         "tan",
         "tanh",
+        "unbase64",
         "unhex",
         "unix_date",
         "upper",
@@ -142,6 +156,17 @@ pub(super) fn rows() -> Vec<Row> {
         rows.push(Row::new(name, C));
     }
     for name in ["char_length", "character_length", "lcase", "ucase"] {
+        rows.push(Row::new(name, S));
+    }
+    for name in [
+        "is_valid_utf8",
+        "make_valid_utf8",
+        "try_url_decode",
+        "try_validate_utf8",
+        "url_decode",
+        "url_encode",
+        "validate_utf8",
+    ] {
         rows.push(Row::new(name, S));
     }
     for name in ["bit_get", "getbit"] {
@@ -275,6 +300,51 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("sha2", "col: ColumnOrName, numBits: int")
             .one_of("numBits", &[0, 224, 256, 384, 512]),
         Row::new("startswith", "str: ColumnOrName, prefix: ColumnOrName"),
+        Row::new(
+            "concat_ws",
+            "sep: str, *cols: ColumnOrName",
+        ),
+        Row::new("decode", "col: ColumnOrName, charset: str"),
+        Row::new("elt", "*inputs: ColumnOrName"),
+        Row::new("encode", "col: ColumnOrName, charset: str"),
+        Row::new("find_in_set", "str: ColumnOrName, str_array: ColumnOrName"),
+        Row::new("instr", "str: ColumnOrName, substr: str | Column"),
+        Row::new("left", "str: ColumnOrName, len: ColumnOrName"),
+        Row::new(
+            "levenshtein",
+            "left: ColumnOrName, right: ColumnOrName, threshold: int | Column = None",
+        ),
+        Row::new("locate", "substr: str, str: ColumnOrName, pos: int = 1"),
+        Row::new(
+            "overlay",
+            "src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int = -1",
+        ),
+        Row::new(
+            "position",
+            "substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName = None",
+        ),
+        Row::new("repeat", "col: ColumnOrName, n: ColumnOrName | int"),
+        Row::new("right", "str: ColumnOrName, len: ColumnOrName"),
+        Row::new(
+            "split_part",
+            "src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName",
+        ),
+        Row::new(
+            "substring_index",
+            "str: ColumnOrName, delim: str, count: int",
+        ),
+        Row::new(
+            "to_binary",
+            "col: ColumnOrName, format: ColumnOrName = None",
+        ),
+        Row::new(
+            "translate",
+            "srcCol: ColumnOrName, matching: str, replace: str",
+        ),
+        Row::new(
+            "try_to_binary",
+            "col: ColumnOrName, format: ColumnOrName = None",
+        ),
         Row::new(
             "substr",
             "str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName = None",

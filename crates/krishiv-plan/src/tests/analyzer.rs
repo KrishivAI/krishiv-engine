@@ -610,6 +610,31 @@ fn resolution_errors_and_names_match_spark() {
     }
 }
 
+/// `mask` quotes the expanded call (with the omitted defaults materialized)
+/// in input-type errors, as Spark does (`mask(b, a, x, n, NULL)`).
+#[test]
+fn mask_errors_quote_the_expanded_call() {
+    let r = run(
+        LogicalPlan::table(["t"]).project(vec![f("mask", vec![c("b"), c("a")])]),
+        &ctx(),
+    );
+    let e = r.unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    );
+    let p: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), v.clone()))
+        .collect();
+    // `a` is an `int`, not a `STRING`; the error quotes the call with the
+    // defaults for `lowerChar`, `digitChar` and `otherChar`.
+    assert_eq!(p["sqlExpr"], "\"mask(b, a, x, n, NULL)\"");
+    assert_eq!(p["inputSql"], "\"a\"");
+}
+
 /// `e = e + e` 30 times (2^30 leaves as a tree): bound, validated and
 /// named in time linear in its 31 distinct nodes; the generated name is
 /// bounded.
