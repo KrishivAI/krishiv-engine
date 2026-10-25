@@ -295,9 +295,12 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             // A feature added after the freeze: above every frozen version.
             "window_group_limit" | "nested_types" => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
-            "exchange_hash_key_group" | "window_frames" | "window_offset_values" => {
-                POST_MIGRATION_READER_VERSION
-            }
+            "hash_join_existence"
+            | "hash_join_single_match"
+            | "nested_loop_existence"
+            | "exchange_hash_key_group"
+            | "window_frames"
+            | "window_offset_values" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");
@@ -469,6 +472,85 @@ fn joins_that_build_their_preserved_side_are_a_feature() {
             "{name}"
         );
     }
+}
+
+/// The existence join type and the single-match flag are two semantic
+/// features (no equivalent plan exists without either), each refused by
+/// name by a reader without it; `distinct_build` needs none.
+#[test]
+fn existence_joins_and_single_match_are_features() {
+    for (name, feature) in [
+        ("hash_join_existence", Feature::ExistenceJoin),
+        ("nested_loop_existence", Feature::ExistenceJoin),
+        ("hash_join_single_match", Feature::JoinSingleMatch),
+    ] {
+        assert_eq!(feature.kind(), FeatureKind::Semantic);
+        let m = message(name);
+        assert_eq!(m.features, [feature.id()], "{name}");
+        assert_eq!(
+            m.min_reader_version, POST_MIGRATION_READER_VERSION,
+            "{name}"
+        );
+        // A reader without the feature refuses the plan, naming it.
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        let bytes = encode(&plan).unwrap();
+        let reader = ReaderFeatures::only([Feature::LimitOffset]);
+        let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+        assert_eq!(
+            err,
+            CodecError::UnsupportedFeatures {
+                missing: vec![feature.id().to_owned()]
+            },
+            "{name}"
+        );
+        // A reader with every feature reads it back exactly.
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+    assert_eq!(Feature::ExistenceJoin.to_string(), "existence_join");
+    assert_eq!(Feature::JoinSingleMatch.to_string(), "join_single_match");
+}
+
+/// `distinct_build` is only legal where the build's rows are never output
+/// nor read beyond their keys; anywhere else the plan is corrupt.
+#[test]
+fn a_misplaced_distinct_build_flag_is_corrupt() {
+    use pb::node::Kind;
+    // `hash_join` is an inner join with a residual condition.
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.distinct_build = true;
+    corrupt(
+        &m,
+        "a distinct build on a join that outputs or reads build rows",
+    );
+    // An existence join with a residual condition reads build columns.
+    let mut m = message("hash_join");
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.join_type = pb::JoinType::Existence as i32;
+    j.distinct_build = true;
+    m.features = vec!["existence_join".to_owned()];
+    corrupt(
+        &m,
+        "a distinct build on a join that outputs or reads build rows",
+    );
+}
+
+/// A single match on a join that is not left outer is corrupt.
+#[test]
+fn a_misplaced_single_match_flag_is_corrupt() {
+    use pb::node::Kind;
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.single_match = true;
+    corrupt(&m, "single match");
 }
 
 #[test]

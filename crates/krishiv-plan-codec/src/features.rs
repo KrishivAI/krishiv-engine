@@ -117,8 +117,10 @@ macro_rules! registry {
 // The registry: one line per feature, kept alphabetically sorted by id.
 // (id, variant, legacy level, kind, meaning)
 registry! {
+    (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
+    (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
@@ -200,6 +202,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
     match construct {
         Construct::Node(node) => match node {
             PhysNode::Limit { offset, .. } => (*offset != 0).then_some(Feature::LimitOffset),
+            PhysNode::HashJoin(j) => j.single_match.then_some(Feature::JoinSingleMatch),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
@@ -211,7 +214,6 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::Sort { .. }
             | PhysNode::TopN { .. }
             | PhysNode::Aggregate { .. }
-            | PhysNode::HashJoin(_)
             | PhysNode::NestedLoopJoin(_)
             | PhysNode::Union { .. }
             | PhysNode::WriteFiles { .. }
@@ -227,6 +229,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::NullAwareAnti => None,
+            JoinType::Existence => Some(Feature::ExistenceJoin),
             JoinType::RightSemi | JoinType::RightAnti | JoinType::RightOuter => {
                 Some(Feature::JoinBuildPreserved)
             }

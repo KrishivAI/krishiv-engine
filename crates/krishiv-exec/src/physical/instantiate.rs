@@ -824,6 +824,17 @@ pub(crate) fn hash_join(
     spill: Option<SpillScope>,
     cell: &mut dyn FnMut(FilterId) -> Result<Arc<RuntimeFilter>>,
 ) -> Result<HashJoin> {
+    if j.distinct_build && !j.distinct_build_allowed() {
+        return Err(internal(format!(
+            "a distinct build on a {:?} join{}",
+            j.join_type,
+            if j.residual.is_some() {
+                " with a residual condition"
+            } else {
+                ""
+            }
+        )));
+    }
     let join = HashJoin::try_new(JoinSpec {
         join_type: j.join_type,
         probe_schema: Arc::clone(probe),
@@ -832,6 +843,7 @@ pub(crate) fn hash_join(
         build_keys: j.build_keys.clone(),
         null_safe: j.null_safe.clone(),
         filter: residual(probe, build, j.residual.as_ref(), env)?,
+        single_match: j.single_match,
         spill,
     })?;
     if j.runtime_filters.is_empty() {
