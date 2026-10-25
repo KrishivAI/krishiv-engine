@@ -611,8 +611,16 @@ pub fn mask<O: OffsetSizeTrait>(
                     MaskClass::Other => (o, 1),
                 }
             };
-            for _ in 0..units {
-                scratch.push(replacement.unwrap_or(c));
+            match replacement {
+                Some(r) => {
+                    for _ in 0..units {
+                        scratch.push(r);
+                    }
+                }
+                // A NULL replacement retains the character: Spark works on
+                // UTF-16 units, so both surrogate units stay as the one
+                // scalar instead of duplicating it.
+                None => scratch.push(c),
             }
         }
         sink.push(&scratch)?;

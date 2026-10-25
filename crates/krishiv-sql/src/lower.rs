@@ -1304,6 +1304,9 @@ impl Lowerer {
                     ];
                     for v in fill.into_iter().skip(args.len()) {
                         args.push(arc(self.ex(ExprNode::Literal(v), sp)));
+                        if !arg_names.is_empty() {
+                            arg_names.push(None);
+                        }
                     }
                 }
                 // `first(x) IGNORE NULLS` is `first(x, true)` and `RESPECT
@@ -1327,6 +1330,9 @@ impl Lowerer {
                             // arity error.
                             if args.len() == flag_at {
                                 args.push(flag);
+                                if !arg_names.is_empty() {
+                                    arg_names.push(None);
+                                }
                             } else if args.len() > flag_at {
                                 args[flag_at] = flag;
                             }

@@ -606,4 +606,15 @@ fn mask_classifies_like_spark_beyond_ascii() {
         rows(&out),
         [Some("Ulodoooo".to_owned()), Some("looloo".to_owned())]
     );
+    // A NULL `otherChar` retains the character: Spark keeps both UTF-16
+    // units, which is the one scalar, not two copies of it.
+    let out = mask(
+        S::Array(&strs(&[Some("a\u{1F600}")])),
+        S::Scalar(Some("U")),
+        S::Scalar(Some("l")),
+        S::Scalar(Some("d")),
+        S::Scalar(None),
+    )
+    .unwrap();
+    assert_eq!(rows(&out), [Some("l\u{1F600}".to_owned())]);
 }

@@ -1471,11 +1471,12 @@ impl Resolver<'_> {
                     }
                 };
                 let data_type = literal_type(&literal);
+                let nullable = matches!(literal, Literal::Null(_));
                 reordered.push(Bound {
                     expr: Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(origin)),
                     ty: ArgType {
                         data_type,
-                        nullable: true,
+                        nullable,
                     },
                     agg: None,
                     win: None,

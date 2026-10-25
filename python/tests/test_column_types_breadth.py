@@ -119,12 +119,7 @@ def test_like(df: DataFrame) -> None:
 def test_rlike_ilike(df: DataFrame) -> None:
     # PySpark's docstring examples.
     assert df.filter(df.name.rlike("ice$")).collect() == [Row(age=2, name="Alice")]
-    # The engine cannot run `ilike` yet; the DataFrame form fails as the SQL form does.
-    assert df.filter(df.name.ilike("%ICE")).columns == df.columns
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        _ = df.filter(df.name.ilike("%ICE")).collect()
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "ilike" in str(bad.value)
+    assert df.filter(df.name.ilike("%ICE")).collect() == [Row(age=2, name="Alice")]
     with pytest.raises(errors.PySparkTypeError):
         df.name.rlike(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError):
