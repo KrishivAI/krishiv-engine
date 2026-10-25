@@ -58,7 +58,7 @@ pub use redact::redact_sql;
 pub const MAX_DEPTH: usize = 1000;
 
 /// The Spark session configs that change how SQL parses.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParserOptions {
     /// `spark.sql.ansi.enabled` and `spark.sql.ansi.enforceReservedKeywords`:
     /// reserved keywords are never identifiers.
@@ -85,6 +85,17 @@ pub struct ParserOptions {
     /// `spark.sql.timestampType = TIMESTAMP_NTZ`: a `TIMESTAMP '...'`
     /// literal without a zone is a `TIMESTAMP_NTZ`.
     pub timestamp_ntz: bool,
+    /// `spark.sql.parser.singleCharacterPipeOperator.enabled` (on by
+    /// default): `|` followed by a pipe operator keyword is the pipe
+    /// operator `|>`, never a bitwise or.
+    pub single_character_pipe_operator: bool,
+}
+
+impl Default for ParserOptions {
+    /// Spark 4.2's defaults.
+    fn default() -> Self {
+        Self::from_conf(|_| None)
+    }
 }
 
 impl ParserOptions {
@@ -105,6 +116,10 @@ impl ParserOptions {
             legacy_interval: on("spark.sql.legacy.interval.enabled", false),
             timestamp_ntz: conf("spark.sql.timestampType")
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
+            single_character_pipe_operator: on(
+                "spark.sql.parser.singleCharacterPipeOperator.enabled",
+                true,
+            ),
         }
     }
 }

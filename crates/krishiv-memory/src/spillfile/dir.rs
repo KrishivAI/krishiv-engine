@@ -44,7 +44,13 @@ use crate::Reservation;
 
 const PREFIX: &str = "krishiv-spill-";
 const LOCK_SUFFIX: &str = ".lock";
-const ID_ATTEMPTS: u32 = 16;
+/// Ids are unique per attempt, so a failed attempt only means a concurrent
+/// start reclaimed the lock file in the window between its creation and our
+/// lock. Each such loss is another process making progress, so the number of
+/// consecutive losses is bounded by how many starters run at once; this many
+/// attempts covers a heavily loaded host (a CI runner starting four
+/// processes on two cores lost 16 in a row once).
+const ID_ATTEMPTS: u32 = 256;
 
 /// Where and how to spill.
 #[derive(Debug, Clone, PartialEq, Eq)]

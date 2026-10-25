@@ -50,6 +50,7 @@ mod explain;
 pub mod functions;
 mod profile;
 mod session;
+mod variables;
 
 pub use column::Column;
 pub use conf::RuntimeConf;

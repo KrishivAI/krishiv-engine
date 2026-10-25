@@ -10,6 +10,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use krishiv_functions::registry::{Lookup, builtins};
+use krishiv_functions::signature::SparkProfile;
 use krishiv_plan::{
     AttrId, BoundColumn, Expr, ExprNode, FunctionId, FunctionKind, Grouping, ResolvedExpr,
     ResolvedFunction,
@@ -48,75 +50,24 @@ impl Planner<'_> {
         // Step 1: keys, then each call's arguments.
         let mut wanted: Vec<Arc<Expr>> = keys.clone();
         let mut arg_at = Vec::with_capacity(calls.len());
+        let mut lowered = Vec::with_capacity(calls.len());
         for c in &calls {
-            let args: Vec<&Arc<Expr>> =
-                c.f.args
-                    .iter()
-                    .take(if picks(c.f.id.name()).is_some() {
-                        1
-                    } else {
-                        usize::MAX
-                    })
-                    .filter(|a| !non_null_literal(a) || c.f.id.name() != "count")
-                    .collect();
-            arg_at.push(wanted.len()..wanted.len() + args.len());
-            wanted.extend(args.into_iter().cloned());
+            let l = lower(&c.f)
+                .ok_or_else(|| unsupported(&format!("the aggregate function {}", c.f.id.name())))?;
+            arg_at.push(wanted.len()..wanted.len() + l.args.len());
+            wanted.extend(l.args.iter().cloned());
+            lowered.push(l.function);
         }
         let (input, columns) = self.with_columns(input, &wanted)?;
         let k = keys.len();
         let mut aggregates = Vec::with_capacity(calls.len());
         let mut distinct = Vec::with_capacity(calls.len());
-        for (c, at) in calls.iter().zip(&arg_at) {
-            let function = match c.f.id.name() {
-                "count" => AggregateFunction::Count,
-                "sum" => AggregateFunction::Sum,
-                "avg" => AggregateFunction::Avg,
-                "min" => AggregateFunction::Min,
-                "max" => AggregateFunction::Max,
-                // `first(x, ignoreNulls)`: the analyzer checked the flag is a
-                // boolean literal.
-                name if picks(name).is_some() => {
-                    let ignore_nulls = matches!(
-                        c.f.args.get(1).map(|a| &a.node),
-                        Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
-                    );
-                    if picks(name) == Some(true) {
-                        AggregateFunction::Last { ignore_nulls }
-                    } else {
-                        AggregateFunction::First { ignore_nulls }
-                    }
-                }
-                other => {
-                    return Err(unsupported(&format!("the aggregate function {other}")));
-                }
-            };
+        for ((c, at), function) in calls.iter().zip(&arg_at).zip(lowered) {
             if c.f.filter.is_some() {
                 return Err(unsupported("aggregate FILTER (WHERE ...) clauses"));
             }
             let args: Vec<usize> = columns[at.clone()].to_vec();
-            if function != AggregateFunction::Count && args.len() != 1 {
-                return Err(internal("an aggregate of several arguments"));
-            }
-            // Spark's STRING and BINARY are views here whatever carrier a
-            // registered table uses; the accumulators read any carrier.
-            let arg_type = args.first().map_or(arrow_schema::DataType::Null, |a| {
-                match input.schema.field(*a).data_type() {
-                    arrow_schema::DataType::Utf8 | arrow_schema::DataType::LargeUtf8 => {
-                        arrow_schema::DataType::Utf8View
-                    }
-                    arrow_schema::DataType::Binary | arrow_schema::DataType::LargeBinary => {
-                        arrow_schema::DataType::BinaryView
-                    }
-                    t => t.clone(),
-                }
-            });
-            let agg = AggregateExpr {
-                function,
-                args,
-                input: crate::aggregate::AggInput::Raw,
-                arg_type,
-                name: c.key.clone(),
-            };
+            let agg = aggregate_expr(function, args, &input.schema, c.key.clone())?;
             let want = c.f.data_type.to_arrow();
             if agg.result_type()? != want {
                 return Err(internal(&format!(
@@ -264,16 +215,127 @@ fn replace(
     })
 }
 
-/// `Some(true)` for `last`/`last_value`, `Some(false)` for `first`/
-/// `first_value`: the aggregates that pick a row's value.
-pub(super) fn picks(name: &str) -> Option<bool> {
-    match name {
-        "first" | "first_value" => Some(false),
-        "last" | "last_value" => Some(true),
-        _ => None,
-    }
+/// An aggregate call as the executor runs it: the function and the
+/// argument expressions it reads (`first(x, flag)` reads `x`; `count(1)`
+/// reads none). The one place that maps registry functions to executor
+/// ones, for aggregates and window aggregates alike. Some aggregates are
+/// defined by another, whose accumulator they reuse (the output keeps their
+/// own name): `count_if(c)` is `count(nullif(c, false))`, `bool_and` and
+/// `every` are `min`, `bool_or`, `some` and `any` are `max` (the registry
+/// types their argument as `boolean`).
+pub(super) struct Lowered {
+    pub(super) function: AggregateFunction,
+    pub(super) args: Vec<Arc<Expr>>,
 }
 
-pub(super) fn non_null_literal(e: &Expr) -> bool {
+/// `None` for a function the executor does not run as an aggregate.
+pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
+    // `first(x, ignoreNulls)`: the analyzer checked the flag is a boolean
+    // literal.
+    let ignore_nulls = matches!(
+        f.args.get(1).map(|a| &a.node),
+        Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
+    );
+    let value: Vec<Arc<Expr>> = f.args.iter().take(1).cloned().collect();
+    let (function, args) = match f.id.name() {
+        "count" => (
+            AggregateFunction::Count,
+            f.args
+                .iter()
+                .filter(|a| !non_null_literal(a))
+                .cloned()
+                .collect(),
+        ),
+        "count_if" => (
+            AggregateFunction::Count,
+            vec![null_if_false(f.args.first()?)?],
+        ),
+        "sum" => (AggregateFunction::Sum, f.args.clone()),
+        "avg" | "mean" => (AggregateFunction::Avg, f.args.clone()),
+        "min" | "bool_and" | "every" => (AggregateFunction::Min, f.args.clone()),
+        "max" | "bool_or" | "some" | "any" => (AggregateFunction::Max, f.args.clone()),
+        "first" | "first_value" => (AggregateFunction::First { ignore_nulls }, value),
+        "last" | "last_value" => (AggregateFunction::Last { ignore_nulls }, value),
+        "any_value" => (AggregateFunction::AnyValue { ignore_nulls }, value),
+        "max_by" if f.args.len() == 2 => (AggregateFunction::MaxBy, f.args.clone()),
+        "min_by" if f.args.len() == 2 => (AggregateFunction::MinBy, f.args.clone()),
+        _ => return None,
+    };
+    Some(Lowered { function, args })
+}
+
+/// `nullif(c, false)`: `c` where it is true, else NULL, so `count` of it
+/// counts the rows where `c` is true.
+fn null_if_false(c: &Arc<Expr>) -> Option<Arc<Expr>> {
+    let profile = SparkProfile::ALL.into_iter().max()?;
+    let Lookup::Found(def) = builtins().lookup("nullif", profile) else {
+        return None;
+    };
+    Some(Arc::new(Expr::new(ExprNode::Resolved(
+        ResolvedExpr::Function(ResolvedFunction {
+            id: FunctionId::Registry {
+                name: def.name.to_owned(),
+                id: def.id,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![
+                Arc::clone(c),
+                Arc::new(Expr::literal(krishiv_plan::Literal::Boolean(false))),
+            ],
+            distinct: false,
+            filter: None,
+            data_type: krishiv_types::DataType::Boolean,
+            nullable: true,
+            deterministic: true,
+        }),
+    ))))
+}
+
+/// The executor's aggregate `function` over columns `args` of `schema`.
+/// Spark's STRING and BINARY are views here whatever carrier a registered
+/// table uses; the accumulators read any carrier.
+pub(super) fn aggregate_expr(
+    function: AggregateFunction,
+    args: Vec<usize>,
+    schema: &arrow_schema::Schema,
+    name: String,
+) -> Result<AggregateExpr> {
+    let typed = |a: &usize| match schema.field(*a).data_type() {
+        arrow_schema::DataType::Utf8 | arrow_schema::DataType::LargeUtf8 => {
+            arrow_schema::DataType::Utf8View
+        }
+        arrow_schema::DataType::Binary | arrow_schema::DataType::LargeBinary => {
+            arrow_schema::DataType::BinaryView
+        }
+        t => t.clone(),
+    };
+    if matches!(
+        function,
+        AggregateFunction::MaxBy | AggregateFunction::MinBy
+    ) {
+        let [value, key] = args[..] else {
+            return Err(internal("max_by without a value and a key"));
+        };
+        return Ok(AggregateExpr::by(
+            function,
+            (value, key),
+            (typed(&value), typed(&key)),
+            name,
+        ));
+    }
+    if function != AggregateFunction::Count && args.len() != 1 {
+        return Err(internal("an aggregate of several arguments"));
+    }
+    let arg_type = args.first().map_or(arrow_schema::DataType::Null, typed);
+    Ok(AggregateExpr {
+        function,
+        args,
+        input: crate::aggregate::AggInput::Raw,
+        arg_type,
+        name,
+    })
+}
+
+fn non_null_literal(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Literal(l) if !matches!(l, krishiv_plan::Literal::Null(_)))
 }
