@@ -403,6 +403,188 @@ CASES: list[tuple[str, str, dict[str, str]]] = [
 ]
 
 
+# ---- P2-T055 part 2: ROWS frames with offsets, frames to the partition's end ----
+# Every aggregate shape (exact decimals, strings by bytes, doubles) over each frame, ordered totally.
+FRAME_AGGREGATES = (
+    "sum(d) OVER w, avg(d) OVER w, count(s) OVER w, min(s) OVER w, max(s) OVER w, first(s) OVER w,"
+    " last(s, true) OVER w, sum(x) OVER w, min(x) OVER w"
+)
+ROWS_FRAMES = [
+    ("rows_around", "1 PRECEDING", "1 FOLLOWING"),
+    ("rows_ahead", "2 FOLLOWING", "3 FOLLOWING"),
+    ("rows_before", "UNBOUNDED PRECEDING", "1 PRECEDING"),
+    ("rows_to_end", "1 PRECEDING", "UNBOUNDED FOLLOWING"),
+    ("rows_rest", "CURRENT ROW", "UNBOUNDED FOLLOWING"),
+    ("rows_negative_preceding", "-1 PRECEDING", "1 FOLLOWING"),
+    ("rows_empty", "1 FOLLOWING", "CURRENT ROW"),
+    ("rows_huge", "2147483647 PRECEDING", "2147483647 FOLLOWING"),
+]
+CASES += [
+    (
+        case_id,
+        f"SELECT k, s, {FRAME_AGGREGATES} FROM e"
+        f" WINDOW w AS (PARTITION BY k ORDER BY s ROWS BETWEEN {lower} AND {upper})",
+        {},
+    )
+    for case_id, lower, upper in ROWS_FRAMES
+]
+ROWS_1_1 = "ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING"
+CASES += [
+    ("rows_shorthand", "SELECT o, v, sum(v) OVER (ORDER BY o, p, v ROWS 2 PRECEDING) FROM t", {}),
+    (
+        "rows_cast_int",
+        "SELECT o, v, sum(v) OVER (ORDER BY o, p, v ROWS BETWEEN CAST(1 AS INT) PRECEDING AND CURRENT ROW) FROM t",
+        {},
+    ),
+    (
+        "rows_decimal_back",
+        "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW),"
+        " avg(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM m",
+        NO_ANSI,
+    ),
+    (
+        "rows_decimal_back_ansi",
+        "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM m",
+        {},
+    ),
+    ("rows_long_wrap", f"SELECT i, sum(x) OVER (ORDER BY i {ROWS_1_1}) FROM l", NO_ANSI),
+    ("rows_long_ansi", f"SELECT i, sum(x) OVER (ORDER BY i {ROWS_1_1}) FROM l", {}),
+    (
+        "rows_long_ansi_cancels",
+        "SELECT i, sum(x) OVER (ORDER BY i ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM l",
+        {},
+    ),
+    (
+        "rows_doubles",
+        "SELECT i, sum(x) OVER w, avg(x) OVER w, min(x) OVER w, max(x) OVER w FROM f"
+        f" WINDOW w AS (ORDER BY i {ROWS_1_1})",
+        {},
+    ),
+    (
+        "range_rest",
+        "SELECT o, count(*) OVER w, sum(v) OVER w, max(v) OVER w FROM t"
+        " WINDOW w AS (ORDER BY o RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)",
+        {},
+    ),
+    (
+        "range_rest_partitioned",
+        "SELECT p, o, sum(v) OVER (PARTITION BY p ORDER BY o RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM t",
+        {},
+    ),
+]
+FRAME_ERRORS = [
+    ("frame_decimal_bound", "ROWS BETWEEN 1.5 PRECEDING AND CURRENT ROW", "sum(v)"),
+    ("frame_bigint_bound", "ROWS BETWEEN 1L PRECEDING AND CURRENT ROW", "sum(v)"),
+    ("frame_string_bound", "ROWS BETWEEN 'a' PRECEDING AND CURRENT ROW", "sum(v)"),
+    ("frame_smallint_bound", "ROWS BETWEEN CAST(1 AS SMALLINT) PRECEDING AND CURRENT ROW", "sum(v)"),
+    ("frame_upper_bigint", "ROWS BETWEEN 2 FOLLOWING AND 1L FOLLOWING", "sum(v)"),
+    ("frame_wrong_order", "ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING", "sum(v)"),
+    ("frame_wrong_order_2", "ROWS BETWEEN 1 FOLLOWING AND 1 PRECEDING", "sum(v)"),
+    ("frame_wrong_order_distinct", "ROWS BETWEEN 2 FOLLOWING AND 1 FOLLOWING", "sum(DISTINCT v)"),
+    ("frame_column_bound", "ROWS BETWEEN o PRECEDING AND CURRENT ROW", "sum(v)"),
+]
+CASES += [(case_id, f"SELECT {call} OVER (ORDER BY o {frame}) FROM t", {}) for case_id, frame, call in FRAME_ERRORS]
+CASES += [
+    (
+        "frame_folded_bound",
+        "SELECT sum(v) OVER (ORDER BY o, p, v ROWS BETWEEN 1 + 1 PRECEDING AND CURRENT ROW) FROM t",
+        {},
+    ),
+]
+
+
+# ---- P2-T055 part 2: lag, lead, nth_value ----
+TOTAL = "ORDER BY o, p, v"
+CASES += [
+    (
+        "lag_lead",
+        f"SELECT o, v, lag(v) OVER ({TOTAL}), lead(v) OVER ({TOTAL}), lag(v, 2) OVER ({TOTAL}),"
+        f" lead(v, 2, -1) OVER ({TOTAL}) FROM t",
+        {},
+    ),
+    (
+        "lag_partitioned_default",
+        "SELECT p, o, v, lag(v, 1, 0) OVER (PARTITION BY p ORDER BY o, v) FROM t",
+        {},
+    ),
+    (
+        "lag_negative_and_zero",
+        f"SELECT o, v, lag(v, -1) OVER ({TOTAL}), lead(v, 0) OVER ({TOTAL}), lag(v, 0) OVER ({TOTAL}) FROM t",
+        {},
+    ),
+    (
+        "lag_ignore_nulls",
+        f"SELECT o, v, lag(v) IGNORE NULLS OVER ({TOTAL}), lead(v, 1) IGNORE NULLS OVER ({TOTAL}),"
+        f" lag(v, 2, 99) IGNORE NULLS OVER ({TOTAL}), lag(v, 1, NULL, true) OVER ({TOTAL}),"
+        f" lead(v, -2) IGNORE NULLS OVER ({TOTAL}), lag(v, 0) IGNORE NULLS OVER ({TOTAL}) FROM t",
+        {},
+    ),
+    ("lag_respect_nulls", f"SELECT o, v, lag(v, 1, 0) RESPECT NULLS OVER ({TOTAL}) FROM t", {}),
+    (
+        "lag_strings_decimals",
+        "SELECT k, s, lag(s, 1, 'z') OVER w, lead(d, 1, 0) OVER w, lag(d) OVER w, lag(d, 1, 7.123) OVER w"
+        " FROM e WINDOW w AS (PARTITION BY k ORDER BY s)",
+        {},
+    ),
+    ("lag_default_column", f"SELECT o, v, lag(v, 1, o) OVER ({TOTAL}) FROM t", {}),
+    (
+        "lag_huge_offsets",
+        f"SELECT o, lag(v, 2147483647) OVER ({TOTAL}), lead(v, -2147483648) OVER ({TOTAL}) FROM t",
+        {},
+    ),
+    (
+        "nth_value_frames",
+        f"SELECT o, v, nth_value(v, 2) OVER ({TOTAL}),"
+        f" nth_value(v, 2) OVER ({TOTAL} ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING),"
+        f" nth_value(v, 1, true) OVER ({TOTAL} ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),"
+        f" nth_value(v, 2) IGNORE NULLS OVER ({TOTAL}) FROM t",
+        {},
+    ),
+    (
+        "nth_value_strings",
+        "SELECT k, s, nth_value(s, 2) OVER (PARTITION BY k ORDER BY s ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING),"
+        " nth_value(d, 1, true) OVER (PARTITION BY k ORDER BY s ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING)"
+        " FROM e",
+        {},
+    ),
+    (
+        "nth_value_offsets",
+        f"SELECT o, nth_value(v, 1.5) OVER ({TOTAL}), nth_value(v, '2') OVER ({TOTAL}),"
+        f" nth_value(v, 2L) OVER ({TOTAL}) FROM t",
+        {},
+    ),
+    (
+        "nth_value_partition_whole",
+        "SELECT p, o, nth_value(v, 3) OVER (PARTITION BY p ORDER BY o, v"
+        " RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t",
+        {},
+    ),
+    ("lag_no_arguments", f"SELECT o, lag() OVER ({TOTAL}) FROM t", {}),
+]
+OFFSET_ERRORS = [
+    ("lag_bigint_offset", "lag(v, 1L) OVER (ORDER BY o)"),
+    ("lag_decimal_offset", "lag(v, 1.0) OVER (ORDER BY o)"),
+    ("lag_smallint_offset", "lag(v, CAST(1 AS SMALLINT)) OVER (ORDER BY o)"),
+    ("lag_null_offset", "lag(v, NULL) OVER (ORDER BY o)"),
+    ("lag_string_offset", "lag(v, '1') OVER (ORDER BY o)"),
+    ("lag_column_offset", "lag(v, o) OVER (ORDER BY o)"),
+    ("lead_column_offset", "lead(v, o) OVER (ORDER BY o)"),
+    ("lag_framed", "lag(v) OVER (ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"),
+    ("lag_framed_same", "lag(v) OVER (ORDER BY o ROWS BETWEEN 1 PRECEDING AND 1 PRECEDING)"),
+    ("lag_not_ordered", "lag(v) OVER (PARTITION BY p)"),
+    ("lag_flag_not_boolean", "lag(v, 1, 2, 3) OVER (ORDER BY o)"),
+    ("lag_distinct", "lag(DISTINCT v) OVER (ORDER BY o)"),
+    ("lag_without_over", "lag(v)"),
+    ("nth_value_not_ordered", "nth_value(v, 3) OVER (PARTITION BY p)"),
+    ("nth_value_zero", "nth_value(v, 0) OVER (ORDER BY o)"),
+    ("nth_value_null", "nth_value(v, NULL) OVER (ORDER BY o)"),
+    ("nth_value_column", "nth_value(v, o) OVER (ORDER BY o)"),
+    ("nth_value_flag_string", "nth_value(v, 1, 'x') OVER (ORDER BY o)"),
+    ("nth_value_one_argument", "nth_value(v) OVER (ORDER BY o)"),
+]
+CASES += [(case_id, f"SELECT o, {call} FROM t", {}) for case_id, call in OFFSET_ERRORS]
+
+
 def view_sql(name: str, columns: str, rows: list[tuple[str | None, ...]]) -> str:
     cols = [c.strip().split(" ", 1) for c in columns.split(", ")]
 

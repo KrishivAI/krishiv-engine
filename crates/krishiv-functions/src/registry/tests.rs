@@ -922,6 +922,87 @@ fn first_and_last_take_a_boolean_literal_flag() {
     assert_eq!(r.data_type, None);
 }
 
+/// `count_if` and the boolean aggregates run as `count`, `min` and `max`
+/// (Spark rewrites them so); `max_by(x, y, k)` returns an array, which
+/// Krishiv has no type for, so only the two-argument form types.
+#[test]
+fn simple_aggregates() {
+    for (name, agg) in [
+        ("count_if", Aggregate::Count),
+        ("bool_and", Aggregate::Min),
+        ("every", Aggregate::Min),
+        ("bool_or", Aggregate::Max),
+        ("some", Aggregate::Max),
+        ("any", Aggregate::Max),
+        ("any_value", Aggregate::AnyValue),
+        ("max_by", Aggregate::MaxBy),
+        ("min_by", Aggregate::MinBy),
+    ] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
+        assert!(d.deterministic, "{name}");
+    }
+    let boolean = Some(vec![InputType::Exact(DataType::Boolean)]);
+    let expects = |name: &str| def(name).inputs.expected(&CallTypes::new(&[], &[]));
+    let bool_result = ArgType::new(DataType::Boolean, true);
+    for name in ["count_if", "bool_and", "every", "bool_or", "some", "any"] {
+        assert_eq!(expects(name), boolean, "{name}");
+        assert!(def(name).arity.accepts(1) && !def(name).arity.accepts(2));
+    }
+    let x = ty(DataType::Boolean);
+    // `count_if` is `bigint` and never NULL; the others are nullable
+    // `boolean`s whatever their argument.
+    assert_eq!(
+        result("count_if", std::slice::from_ref(&x), &[]).unwrap(),
+        ArgType::new(DataType::Long, false)
+    );
+    for name in ["bool_and", "every", "bool_or", "some", "any"] {
+        assert_eq!(
+            result(name, std::slice::from_ref(&x), &[]).unwrap(),
+            bool_result
+        );
+    }
+    // `max_by(x, y)` has the type of `x`, nullable.
+    let (v, k) = (ty(DataType::String), ty(DataType::Integer));
+    for name in ["max_by", "min_by"] {
+        let d = def(name);
+        assert!(d.arity.accepts(2) && d.arity.accepts(3) && !d.arity.accepts(1));
+        assert_eq!(
+            result(name, &[v.clone(), k.clone()], &[]).unwrap(),
+            ArgType::new(DataType::String, true)
+        );
+        let err = result(name, &[v.clone(), k.clone(), ty(DataType::Integer)], &[]).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    }
+    // `any_value(x [, ignoreNulls])` takes the flag as `first` does.
+    let nullable = ArgType::new(DataType::Integer, true);
+    assert_eq!(
+        result("any_value", &[ty(DataType::Integer)], &[]).unwrap(),
+        nullable
+    );
+    let err = result(
+        "any_value",
+        &[ty(DataType::Integer), ty(DataType::Boolean)],
+        &[None, None],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "The second argument in any_value should be a boolean literal."
+    );
+    // The aggregates that return arrays stay known-unsupported.
+    for name in ["collect_list", "collect_set", "array_agg"] {
+        assert!(
+            matches!(
+                builtins().lookup(name, SparkProfile::V4_2),
+                Lookup::KnownUnsupported
+            ),
+            "{name}"
+        );
+    }
+}
+
 #[test]
 fn session_and_clock_functions() {
     for name in ["current_user", "user", "session_user"] {

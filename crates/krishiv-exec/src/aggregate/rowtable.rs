@@ -719,7 +719,7 @@ impl RowTable {
             .map(|(part, n)| {
                 part.accs
                     .iter()
-                    .map(|a| a.projected(n, None))
+                    .map(|a| a.projected(n, None, None))
                     .sum::<usize>()
             })
             .sum();
@@ -728,12 +728,16 @@ impl RowTable {
                 .iter()
                 .zip(&self.core.ranges)
                 .map(|(a, r)| {
-                    let at = match fold {
-                        Fold::States { offset } => r.start.checked_sub(offset),
-                        Fold::Raw => a.args().first().copied(),
+                    // The value column, then (`max_by`/`min_by`) the key.
+                    let at = |n: usize| {
+                        let i = match fold {
+                            Fold::States { offset } => r.start.checked_sub(offset).map(|i| i + n),
+                            Fold::Raw => a.args().get(n).copied(),
+                        };
+                        i.and_then(|i| cols.get(i))
                     };
-                    let col = at.and_then(|i| cols.get(i));
-                    a.projected(0, col).saturating_sub(a.projected(0, None))
+                    a.projected(0, at(0), at(1))
+                        .saturating_sub(a.projected(0, None, None))
                 })
                 .sum()
         });

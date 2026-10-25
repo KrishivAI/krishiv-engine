@@ -18,9 +18,10 @@
 //! - a `UNION ALL` fans in: [`fan_in`](PipelineBuilder::fan_in) builds each
 //!   input into a pipeline of its own ending in the current pipeline's
 //!   sink, and the operators pushed after it go into every one of them
-//!   (DuckDB's union pipelines). The executor starts these pipelines
-//!   together and runs them as one: one sink state, finalized once, and
-//!   one flush barrier per shared operator.
+//!   (DuckDB's union pipelines). The executor runs these pipelines one
+//!   after another, in pipeline order, when none of their shared operators
+//!   needs a cross-driver flush, and together otherwise: one sink state,
+//!   finalized once, and one flush barrier per shared operator either way.
 //!
 //! A pipeline starts once every child pipeline it depends on has
 //! finalized. The executor owns breaker state: it keeps each finalized
