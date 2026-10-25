@@ -318,6 +318,23 @@ pub enum PlanNode {
         /// `INCLUDE NULLS`.
         include_nulls: bool,
     },
+    /// An unresolved inline table (`VALUES ...`, Spark's
+    /// `UnresolvedInlineTable`): each row's expressions over no input.
+    /// Unresolved plans only: the analyzer resolves the expressions and
+    /// rewrites the node into a [`PlanNode::Project`] over
+    /// [`PlanNode::OneRowRelation`] for a single row, or into a
+    /// [`PlanNode::Expand`] over [`PlanNode::OneRowRelation`] with one
+    /// projection per row otherwise (row order is the projections'
+    /// order, so a downstream `LIMIT` without a sort keeps the first
+    /// rows; Spark's `ResolveInlineTables`).
+    InlineTable {
+        /// One expression per column per row; row aliases (`VALUES (1 AS
+        /// a)`) are stripped at lowering, the schema comes from `columns`.
+        rows: Vec<Vec<Arc<Expr>>>,
+        /// Output column names (`col1`, ... unless the table alias renames
+        /// them).
+        columns: Vec<String>,
+    },
 }
 
 /// One value of a [`PlanNode::Pivot`]: one expression per pivot column,
@@ -645,6 +662,7 @@ impl LogicalPlan {
             | PlanNode::Sql { .. }
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
+            | PlanNode::InlineTable { .. }
             | PlanNode::OneRowRelation => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
@@ -681,6 +699,7 @@ impl LogicalPlan {
             | PlanNode::Sql { .. }
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
+            | PlanNode::InlineTable { .. }
             | PlanNode::OneRowRelation => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
@@ -773,6 +792,7 @@ impl LogicalPlan {
                 .iter()
                 .flat_map(|s| s.columns.iter())
                 .for_each(f),
+            PlanNode::InlineTable { rows, .. } => rows.iter().flatten().for_each(f),
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -853,6 +873,9 @@ impl LogicalPlan {
                 .iter_mut()
                 .flat_map(|s| s.columns.iter_mut())
                 .for_each(f),
+            PlanNode::InlineTable { rows, .. } => {
+                rows.iter_mut().flatten().for_each(f);
+            }
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -990,6 +1013,7 @@ impl LogicalPlan {
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
+                | PlanNode::InlineTable { .. }
                 | PlanNode::Distinct { .. } => {
                     return None;
                 }

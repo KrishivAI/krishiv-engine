@@ -11,10 +11,9 @@ use krishiv_plan::{
     SortDirection, SortOrder, WindowSpecRef,
 };
 
-use super::aggregate::{non_null_literal, picks};
+use super::aggregate::{aggregate_expr, lower};
 use super::build::{Planned, Planner, internal, list, orders, unsupported};
 use super::properties::Distribution;
-use crate::aggregate::{AggInput, AggregateExpr, AggregateFunction};
 use crate::error::Result;
 use crate::operator::Source;
 use crate::operators::SortKey;
@@ -66,9 +65,9 @@ impl Planner<'_> {
         for c in &calls {
             let args = arguments(c.f);
             let start = wanted.len();
-            wanted.extend(args.iter().map(|a| Arc::clone(a)));
-            wanted.extend(c.f.filter.iter().cloned());
             arg_at.push((start, args.len()));
+            wanted.extend(args);
+            wanted.extend(c.f.filter.iter().cloned());
         }
         let (input, columns) = self.with_columns(input, &wanted)?;
         let np = partition_by.len();
@@ -256,56 +255,54 @@ impl Planner<'_> {
                 "percent_rank" => WindowFunction::PercentRank,
                 "cume_dist" => WindowFunction::CumeDist,
                 "ntile" => WindowFunction::Ntile(ntile_buckets(c.f)?),
+                "lag" | "lead" => {
+                    // The analyzer made the offset the frame: `ROWS BETWEEN
+                    // k FOLLOWING AND k FOLLOWING`.
+                    let Bound::Offset(offset) = c.frame.lower else {
+                        return Err(internal("lag/lead without its offset frame"));
+                    };
+                    WindowFunction::Offset {
+                        input: *args
+                            .first()
+                            .ok_or_else(|| internal("lag/lead without input"))?,
+                        offset,
+                        default: args.get(1).copied(),
+                        ignore_nulls: flag(c.f, 3),
+                        data_type: c.output.data_type.to_arrow(),
+                    }
+                }
+                "nth_value" => WindowFunction::NthValue {
+                    input: *args
+                        .first()
+                        .ok_or_else(|| internal("nth_value without input"))?,
+                    n: match c.f.args.get(1).map(|a| &a.node) {
+                        Some(ExprNode::Literal(krishiv_plan::Literal::Integer(n))) => i64::from(*n),
+                        _ => {
+                            return Err(unsupported(
+                                "nth_value with an offset that is not an int literal",
+                            ));
+                        }
+                    },
+                    ignore_nulls: flag(c.f, 2),
+                    data_type: c.output.data_type.to_arrow(),
+                },
                 other => return Err(unsupported(&format!("the window function {other}"))),
             });
         }
-        let function = match name {
-            "count" => AggregateFunction::Count,
-            "sum" => AggregateFunction::Sum,
-            "avg" | "mean" => AggregateFunction::Avg,
-            "min" => AggregateFunction::Min,
-            "max" => AggregateFunction::Max,
-            name if picks(name).is_some() => {
-                let ignore_nulls = matches!(
-                    c.f.args.get(1).map(|a| &a.node),
-                    Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
-                );
-                if picks(name) == Some(true) {
-                    AggregateFunction::Last { ignore_nulls }
-                } else {
-                    AggregateFunction::First { ignore_nulls }
-                }
-            }
-            other => return Err(unsupported(&format!("the window aggregate {other}"))),
-        };
+        let function = lower(c.f)
+            .ok_or_else(|| unsupported(&format!("the window aggregate {name}")))?
+            .function;
         // The analyzer rejects `count(DISTINCT x) OVER (...)` as Spark does;
         // a plan that still holds one must not be computed as `count(x)`.
         if c.f.distinct {
             return Err(unsupported("DISTINCT window aggregates"));
         }
-        if function != AggregateFunction::Count && args.len() != 1 {
-            return Err(internal("a window aggregate of several arguments"));
-        }
-        // Spark's STRING and BINARY are views here whatever carrier the
-        // input uses; the accumulators read any carrier.
-        let arg_type = args.first().map_or(arrow_schema::DataType::Null, |a| {
-            match input.schema.field(*a).data_type() {
-                arrow_schema::DataType::Utf8 | arrow_schema::DataType::LargeUtf8 => {
-                    arrow_schema::DataType::Utf8View
-                }
-                arrow_schema::DataType::Binary | arrow_schema::DataType::LargeBinary => {
-                    arrow_schema::DataType::BinaryView
-                }
-                t => t.clone(),
-            }
-        });
-        Ok(WindowFunction::Aggregate(AggregateExpr {
+        Ok(WindowFunction::Aggregate(aggregate_expr(
             function,
-            args: args.to_vec(),
-            input: AggInput::Raw,
-            arg_type,
-            name: c.output.name.clone(),
-        }))
+            args.to_vec(),
+            &input.schema,
+            c.output.name.clone(),
+        )?))
     }
 }
 
@@ -332,7 +329,14 @@ fn call(e: &Expr) -> Result<Call<'_>> {
         FrameBound::UnboundedPreceding => Ok(Bound::UnboundedPreceding),
         FrameBound::CurrentRow => Ok(Bound::CurrentRow),
         FrameBound::UnboundedFollowing => Ok(Bound::UnboundedFollowing),
-        _ => Err(unsupported("window frames with value bounds")),
+        // The analyzer leaves a checked offset as an `int` literal.
+        FrameBound::Offset(e) => match &e.node {
+            ExprNode::Literal(krishiv_plan::Literal::Integer(v)) => {
+                Ok(Bound::Offset(i64::from(*v)))
+            }
+            _ => Err(unsupported("window frame bounds that are not int literals")),
+        },
+        _ => Err(unsupported("this window frame bound")),
     };
     let frame = WindowFrame {
         units: match frame.units {
@@ -345,19 +349,31 @@ fn call(e: &Expr) -> Result<Call<'_>> {
     Ok(Call { f, frame, output })
 }
 
-/// The argument expressions an aggregate reads: `first(x, flag)` reads
-/// `x`; `count(1)` (a non-NULL literal) reads none. Window functions read
-/// none (their arguments are constants).
-fn arguments(f: &krishiv_plan::ResolvedFunction) -> Vec<&Arc<Expr>> {
+/// The argument expressions an aggregate reads (see [`lower`]). Window
+/// functions read none (their arguments are constants).
+fn arguments(f: &krishiv_plan::ResolvedFunction) -> Vec<Arc<Expr>> {
     if f.kind == FunctionKind::Window {
-        return Vec::new();
+        // `lag`/`lead` read their input and default, `nth_value` its input.
+        return match f.id.name() {
+            "lag" | "lead" => [f.args.first(), f.args.get(2)]
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect(),
+            "nth_value" => f.args.first().into_iter().cloned().collect(),
+            _ => Vec::new(),
+        };
     }
-    let name = f.id.name();
-    f.args
-        .iter()
-        .take(if picks(name).is_some() { 1 } else { usize::MAX })
-        .filter(|a| !non_null_literal(a) || name != "count")
-        .collect()
+    lower(f).map(|l| l.args).unwrap_or_default()
+}
+
+/// Whether argument `i` of `f` is the literal `true` (an `IGNORE NULLS`
+/// flag).
+fn flag(f: &krishiv_plan::ResolvedFunction, i: usize) -> bool {
+    matches!(
+        f.args.get(i).map(|a| &a.node),
+        Some(ExprNode::Literal(krishiv_plan::Literal::Boolean(true)))
+    )
 }
 
 /// `ntile(n)`'s bucket count: the analyzer checked it is an `int` literal

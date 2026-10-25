@@ -79,6 +79,7 @@ mod subquery;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 mod unpivot;
+mod variables;
 mod windows;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -98,6 +99,7 @@ pub use catalog::{
     PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend,
     TableColumn, TableIdent, TableKind, TableMeta,
 };
+pub use variables::{SessionVariable, VariableSnapshot, variable_name};
 
 use crate::{BoundColumn, Origin, Plan, StructuralHash, TableVersion};
 
@@ -229,6 +231,9 @@ pub struct AnalysisContext {
     /// [`FileSchemaResolver`]); without it such reads are
     /// `KRISHIV_UNSUPPORTED_FEATURE`.
     pub files: Option<Arc<dyn FileSchemaResolver>>,
+    /// The session variables the query resolves, taken once per query
+    /// (see [`VariableSnapshot`]).
+    pub variables: Arc<VariableSnapshot>,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,
@@ -256,6 +261,9 @@ pub struct ContextFingerprint {
     pub policy: PolicyVersion,
     /// Whether files can be read by path (a [`FileSchemaResolver`]).
     pub files: bool,
+    /// [`VariableSnapshot::version`]: a resolved plan is never reused
+    /// after a variable changed.
+    pub variables: u64,
 }
 
 impl ContextFingerprint {
@@ -313,6 +321,7 @@ impl ContextFingerprint {
         }
         text(&mut b, &self.principal);
         num(&mut b, self.policy.0);
+        num(&mut b, self.variables);
         XxHash3_128::oneshot(&b)
     }
 }
@@ -472,6 +481,7 @@ pub(crate) fn fingerprint(
         principal: ctx.principal.id(),
         policy: ctx.policy.version(),
         files: ctx.files.is_some(),
+        variables: ctx.variables.version,
     }
 }
 

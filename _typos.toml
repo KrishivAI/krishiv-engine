@@ -21,6 +21,7 @@ extend-exclude = [
 extend-ignore-re = [
     '"(ECT|IST)"',         # Java's short time-zone IDs (Europe/Paris, Asia/Kolkata)
     'spark\.implicits\._', # Spark's implicit-conversions import
+    '"Bash\([^"]*\)"',     # command patterns in agent permission rules (bundled git options like -nam)
 ]
 
 [default.extend-identifiers]
@@ -32,3 +33,5 @@ TraficSourceID = "TraficSourceID"
 nd = "nd"                   # "nondeterministic" shorthand in the function-matrix generator
 unparseable = "unparseable" # key in committed function-matrix manifest
 ba = "ba"
+sesion = "sesion"           # invalid qualifier in the session-variable golden (`system.sesion.var1`)
+sesson = "sesson"           # invalid qualifier in the session-variable golden (`b.sesson.var1`)

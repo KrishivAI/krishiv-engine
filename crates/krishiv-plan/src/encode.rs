@@ -70,7 +70,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 4;
+pub const ENCODING_VERSION: u16 = 5;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -806,13 +806,19 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
             }
+            PlanNode::InlineTable { rows, columns } => {
+                self.u8(25);
+                self.len(rows.len());
+                rows.iter().for_each(|r| self.exprs(r));
+                self.strs(columns);
+            }
             PlanNode::Pivot {
                 pivot_columns,
                 values,
                 aggregates,
                 ..
             } => {
-                self.u8(25);
+                self.u8(26);
                 self.exprs(pivot_columns);
                 self.len(values.len());
                 for v in values {
@@ -831,7 +837,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 include_nulls,
                 ..
             } => {
-                self.u8(26);
+                self.u8(27);
                 self.strs(value_columns);
                 self.str(name_column);
                 self.len(column_sets.len());

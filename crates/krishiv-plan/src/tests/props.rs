@@ -334,7 +334,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 26 };
+        let kinds = if depth == 0 { 4 } else { 27 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -473,7 +473,11 @@ impl Gen<'_> {
                 projections: self.many(1, 2, Gen::exprs),
                 output: self.many(0, 2, Gen::bound),
             },
-            24 => PlanNode::Pivot {
+            24 => PlanNode::InlineTable {
+                rows: self.many(1, 2, |g| g.many(1, 2, |h| Arc::new(h.expr(2)))),
+                columns: self.many(0, 2, Gen::name),
+            },
+            25 => PlanNode::Pivot {
                 input: self.input(d),
                 pivot_columns: self.exprs(),
                 values: self.many(0, 2, |g| PivotValue {
@@ -482,7 +486,7 @@ impl Gen<'_> {
                 }),
                 aggregates: self.exprs(),
             },
-            25 => PlanNode::Unpivot {
+            26 => PlanNode::Unpivot {
                 input: self.input(d),
                 value_columns: self.many(0, 2, Gen::name),
                 name_column: self.name(),
@@ -1003,6 +1007,11 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
                     m_exprs(&mut s.columns, w)
                 })
                 || m_plan(input, w)
+        }
+        PlanNode::InlineTable { rows, columns } => {
+            site!(w, rows.push(Vec::new()));
+            site!(w, columns.push("x".to_owned()));
+            rows.iter_mut().any(|r| m_exprs(r, w)) || m_strings(columns, w)
         }
         PlanNode::SetOp {
             left,

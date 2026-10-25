@@ -1865,6 +1865,37 @@ impl Resolver<'_> {
                 ));
             }
         }
+        // A name no column or outer reference has may be a session
+        // variable (`v`, `session.v` or `system.session.v`): Spark
+        // resolves columns and outer references first, then variables. A
+        // name of another shape, or one naming no variable, stays an
+        // unresolved column. The reference becomes the variable's current
+        // value as a typed literal, so no physical, executor or plan-codec
+        // change is needed; the expression keeps the spelling it was
+        // written with for names and errors.
+        if let Some(var) = self.ctx.variables.get(&c.name) {
+            let Some(name) = c.name.last() else {
+                debug_assert!(false, "a variable name is never empty");
+                return Err(unresolved(&c.name, cx.scope, origin));
+            };
+            let col = BoundColumn {
+                id: self.fresh(),
+                name: name.clone(),
+                data_type: var.data_type.clone(),
+                nullable: matches!(var.value, Literal::Null(_)),
+            };
+            return Ok(Bound {
+                expr: Arc::new(Expr::new(ExprNode::Literal(var.value.clone())).with_origin(origin)),
+                ty: column(&col),
+                agg: None,
+                win: None,
+                outer: None,
+                lateral: Vec::new(),
+                shown: Some(Arc::new(
+                    Expr::new(ExprNode::Column(c.clone())).with_origin(origin),
+                )),
+            });
+        }
         Err(unresolved(&c.name, cx.scope, origin))
     }
 
@@ -2224,6 +2255,26 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         ExprNode::Function(FunctionCall { name, distinct, .. }) => {
             call(name, Builtin::from_name(name), *distinct, k, None)
         }
+        // Spark's `lag`/`lead` show `input, offset, default`, and
+        // `nth_value` `input, offset` then ` ignore nulls` when set.
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Window
+                && matches!(f.id.name(), "lag" | "lead" | "nth_value")
+                && f.filter.is_none() =>
+        {
+            let shown = if f.id.name() == "nth_value" { 2 } else { 3 };
+            let n = shown.min(k.len());
+            let text = call(f.id.name(), None, f.distinct, &k[..n], Some(&f.data_type));
+            let ignore = matches!(
+                f.args.get(shown).map(|a| &a.node),
+                Some(ExprNode::Literal(Literal::Boolean(true)))
+            );
+            if ignore && f.id.name() == "nth_value" {
+                format!("{text} ignore nulls")
+            } else {
+                text
+            }
+        }
         ExprNode::Resolved(ResolvedExpr::Function(f)) => {
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),
@@ -2445,7 +2496,7 @@ fn call(
         // Spark's name of `first(x, ignoreNulls)` leaves the flag out.
         _ if k.len() == 2
             && matches!(k[1], "true" | "false")
-            && ["first", "last", "first_value", "last_value"]
+            && ["first", "last", "first_value", "last_value", "any_value"]
                 .iter()
                 .any(|n| name.eq_ignore_ascii_case(n)) =>
         {

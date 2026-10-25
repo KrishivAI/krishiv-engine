@@ -139,6 +139,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::SetOp { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
+                | PlanNode::InlineTable { .. }
                 | PlanNode::Distinct { .. } => false,
                 PlanNode::Union { by_name, .. } => !by_name,
                 PlanNode::Join { condition, .. } => match condition {
@@ -294,6 +295,9 @@ impl Teardown {
                 self.plans.push(input);
                 self.exprs
                     .extend(column_sets.into_iter().flat_map(|s| s.columns.into_iter()));
+            }
+            PlanNode::InlineTable { rows, .. } => {
+                self.exprs.extend(rows.into_iter().flatten());
             }
             PlanNode::Aggregate {
                 input,

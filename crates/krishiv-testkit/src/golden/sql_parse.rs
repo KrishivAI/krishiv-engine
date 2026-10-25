@@ -11,11 +11,7 @@
 //!
 //! [`in_dql_scope`] selects the query statements the DQL parser covers.
 //! Excluded are statements that are not queries (DDL, DML, commands) and
-//! queries using syntax that later parser work covers: the pipe operator
-//! `|>` and `COLLATE`; `TRANSFORM` scripts, variant paths and named
-//! parameters (`:`), `IDENTIFIER(...)`, `TABLE(...)` arguments,
-//! `TABLESAMPLE` and `NEAREST BY`; streaming relations (`STREAM`,
-//! `WATERMARK`, `CHANGES`).
+//! queries using streaming relations (`STREAM`, `WATERMARK`, `CHANGES`).
 
 use std::collections::HashMap;
 
@@ -114,26 +110,19 @@ pub fn in_dql_scope(sql: &str) -> bool {
             .is_some_and(|t| t.kind == TokenKind::Word && t.span.text(sql).eq_ignore_ascii_case(kw))
     };
     let sym = |i: usize, s: Sym| tokens.get(i).is_some_and(|t| t.kind == TokenKind::Sym(s));
-    let starts_query = ["SELECT", "WITH", "VALUES", "TABLE", "FROM"]
+    let starts_query = ["SELECT", "WITH", "VALUES", "TABLE", "FROM", "MAP", "REDUCE"]
         .iter()
         .any(|k| word(0, k))
         || sym(0, Sym::LParen);
     if !starts_query {
         return false;
     }
-    let (mut depth, mut type_depth) = (0_i32, 0_i32);
+    let mut depth = 0_i32;
     for (i, t) in tokens.iter().enumerate() {
         match t.kind {
             TokenKind::Sym(Sym::LParen) => depth += 1,
             TokenKind::Sym(Sym::RParen) => depth -= 1,
-            TokenKind::Sym(Sym::Lt) if i > 0 && word(i - 1, "STRUCT") => type_depth += 1,
-            TokenKind::Sym(Sym::Gt) if type_depth > 0 => type_depth -= 1,
-            TokenKind::Sym(Sym::PipeGt) | TokenKind::Unrecognized => return false,
-            // `|` as the pipe operator (`singleCharacterPipeOperator`).
-            TokenKind::Sym(Sym::Pipe) if PIPE_OPERATORS.iter().any(|k| word(i + 1, k)) => {
-                return false;
-            }
-            TokenKind::Sym(Sym::Colon) if type_depth == 0 => return false,
+            TokenKind::Unrecognized => return false,
             TokenKind::Word if out_of_scope_word(sql, &tokens, i, depth) => return false,
             _ => {}
         }
@@ -141,48 +130,14 @@ pub fn in_dql_scope(sql: &str) -> bool {
     true
 }
 
-/// Words that start the right side of a pipe operator.
-const PIPE_OPERATORS: &[&str] = &[
-    "AGGREGATE",
-    "AS",
-    "DROP",
-    "EXCEPT",
-    "EXTEND",
-    "INTERSECT",
-    "JOIN",
-    "LIMIT",
-    "ORDER",
-    "PIVOT",
-    "SELECT",
-    "SET",
-    "TABLESAMPLE",
-    "UNION",
-    "UNPIVOT",
-    "WHERE",
-    "WINDOW",
-];
-
 fn out_of_scope_word(sql: &str, tokens: &[Token], i: usize, depth: i32) -> bool {
     let word = |j: usize, kw: &str| {
         tokens
             .get(j)
             .is_some_and(|t| t.kind == TokenKind::Word && t.span.text(sql).eq_ignore_ascii_case(kw))
     };
-    let next = tokens.get(i + 1).map(|t| t.kind);
     let w = word;
-    ([
-        "COLLATE",
-        "TABLESAMPLE",
-        "WATERMARK",
-        "STREAM",
-        "CHANGES",
-        "NEAREST",
-    ]
-    .iter()
-    .any(|k| w(i, k)))
-        || ((w(i, "IDENTIFIER") || (w(i, "TABLE") && i > 0))
-            && next == Some(TokenKind::Sym(Sym::LParen)))
-        || (w(i, "USING") && next == Some(TokenKind::String))
+    (["WATERMARK", "STREAM", "CHANGES"].iter().any(|k| w(i, k)))
         || (depth == 0
             && ["INSERT", "UPDATE", "DELETE", "MERGE"]
                 .iter()
@@ -203,6 +158,16 @@ mod tests {
             "VALUES 1",
             "SELECT a | b FROM t",
             "SELECT CAST(x AS STRUCT<a: INT>)",
+            "SELECT a COLLATE utf8_lcase FROM t",
+            "SELECT * FROM t TABLESAMPLE (1 ROWS)",
+            "FROM t |> SELECT a",
+            "TABLE t | SELECT a",
+            "SELECT * FROM IDENTIFIER('t')",
+            "SELECT * FROM f(TABLE(t))",
+            "SELECT * FROM a JOIN b APPROX NEAREST 2 BY DISTANCE x",
+            "SELECT v:a.b[0]::INT FROM t",
+            "SELECT TRANSFORM(a) USING 'cat' FROM t",
+            "MAP a USING 'cat' FROM t",
         ] {
             assert!(in_dql_scope(sql), "{sql}");
         }
@@ -210,15 +175,7 @@ mod tests {
             "CREATE TABLE t (a INT)",
             "INSERT INTO t VALUES 1",
             "WITH t AS (SELECT 1) INSERT INTO u SELECT * FROM t",
-            "FROM t |> SELECT a",
-            "SELECT a COLLATE utf8_lcase FROM t",
-            "SELECT v:a FROM t",
-            "SELECT * FROM IDENTIFIER('t')",
-            "SELECT * FROM f(TABLE(t))",
-            "SELECT TRANSFORM(a) USING 'cat' FROM t",
-            "SELECT * FROM t TABLESAMPLE (1 ROWS)",
             "SELECT $1",
-            "TABLE t | SELECT a",
         ] {
             assert!(!in_dql_scope(sql), "{sql}");
         }
