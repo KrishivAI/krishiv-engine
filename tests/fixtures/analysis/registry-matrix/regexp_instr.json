@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "regexp_instr#1580670d40c3/ansi_on",
+      "reason": "SELECT regexp_instr(INTERVAL '1 02:03:04' DAY TO SECOND, r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#1580670d40c3/ansi_off",
+      "reason": "SELECT regexp_instr(INTERVAL '1 02:03:04' DAY TO SECOND, r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#1fdeb48d1ede/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#1fdeb48d1ede/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#2e41d5a7fabc/ansi_on",
+      "reason": "SELECT regexp_instr(named_struct('a', 1, 'b', 'x'), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#2e41d5a7fabc/ansi_off",
+      "reason": "SELECT regexp_instr(named_struct('a', 1, 'b', 'x'), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#2faa36b849a1/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#2faa36b849a1/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#782bd946f194/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#782bd946f194/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#92709d4e5bb3/ansi_on",
+      "reason": "SELECT regexp_instr(INTERVAL '1-2' YEAR TO MONTH, r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#92709d4e5bb3/ansi_off",
+      "reason": "SELECT regexp_instr(INTERVAL '1-2' YEAR TO MONTH, r\"^\\\\abc$\") | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#a177fdc18858/ansi_on",
+      "reason": "SELECT regexp_instr(map('a', 1), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#a177fdc18858/ansi_off",
+      "reason": "SELECT regexp_instr(map('a', 1), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#d1b7ae971b09/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#d1b7ae971b09/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#e495063cde68/ansi_on",
+      "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#e495063cde68/ansi_off",
+      "reason": "SELECT regexp_instr(r\"\\abc\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_instr#eb546ff0ffa5/ansi_on",
+      "reason": "SELECT regexp_instr(array(1, 2), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_instr#eb546ff0ffa5/ansi_off",
+      "reason": "SELECT regexp_instr(array(1, 2), r\"^\\\\abc$\") | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "regexp_instr"
+}

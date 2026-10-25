@@ -739,6 +739,12 @@ pub struct CreateTableLike {
     pub location: Option<String>,
     /// `TBLPROPERTIES (...)`.
     pub tblproperties: Vec<TableOption>,
+    /// The first clause written more than once, in the order Spark checks
+    /// them (`PROVIDER` for `USING`, `STORED AS/BY`, `ROW FORMAT`,
+    /// `LOCATION`, `TBLPROPERTIES`): the statement then fails with
+    /// `DUPLICATE_CLAUSES`. Repeated clauses are merged above (lists
+    /// appended, the later single value kept).
+    pub duplicate_clause: Option<&'static str>,
     /// Source text, from `CREATE` to the end of the statement.
     pub span: Span,
 }
