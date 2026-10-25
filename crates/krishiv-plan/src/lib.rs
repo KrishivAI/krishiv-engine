@@ -83,6 +83,7 @@
 //! | `PlanNode::SetOp` | U | - | - |
 //! | `PlanNode::ReplicateRows` | R | - | - |
 //! | `PlanNode::Expand` | R | - | - |
+//! | `PlanNode::InlineTable` | U | - | - |
 //! | `PlanNode::Window` | R | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
 //! | `ExprNode::Literal` | U, R | all | `lit` |
@@ -113,6 +114,7 @@ pub mod function;
 mod literal;
 mod origin;
 mod plan;
+mod raises;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
@@ -131,4 +133,5 @@ pub use plan::{
     Cte, CteRef, Grouping, IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, Plan,
     PlanNode, ReadSource, Scan, SetOperation, SqlArgs, TableVersion,
 };
+pub use raises::{conjuncts, may_raise};
 pub use walk::{MAX_DEPTH, check_depth};

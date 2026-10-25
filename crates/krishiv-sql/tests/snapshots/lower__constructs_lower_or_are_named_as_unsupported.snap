@@ -11,9 +11,9 @@ SELECT /*+ BROADCAST(t) */ a FROM t
 SELECT a FROM t UNION SELECT a FROM u
   => Distinct | +- Union |    :- Project [a] |    :  +- Read t |    +- Project [a] |       +- Read u | 
 VALUES (1)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature VALUES is not supported by Krishiv yet. SQLSTATE: 0A000 @ 0..10
+  => InlineTable [col1] (1 rows) | 
 SELECT * FROM VALUES (1) AS v(a)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature VALUES is not supported by Krishiv yet. SQLSTATE: 0A000 @ 14..32
+  => Project [*] | +- SubqueryAlias v (a) |    +- InlineTable [a] (1 rows) | 
 SELECT * FROM range(3)
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature table-valued functions is not supported by Krishiv yet. SQLSTATE: 0A000 @ 14..22
 SELECT a FROM t LATERAL VIEW explode(b) x AS y

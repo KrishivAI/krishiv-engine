@@ -51,6 +51,12 @@ impl FunctionRegistry for BuiltinFunctions {
         }
     }
 
+    fn spark_deterministic(&self, name: &str) -> Option<bool> {
+        self.0
+            .spark_function(&name.to_ascii_lowercase())?
+            .deterministic
+    }
+
     fn version(&self) -> u64 {
         self.0.version()
     }

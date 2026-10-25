@@ -618,6 +618,7 @@ impl Resolver<'_> {
                 op,
                 all,
             } => self.set_op(p, left, right, *op, *all, env),
+            PlanNode::InlineTable { rows, columns } => self.inline_table(p, rows, columns, env),
             PlanNode::WithColumns { input, columns } => self.with_columns(p, input, columns, env),
             PlanNode::Limit { input, limit } => self.limit_node(p, input, limit, false, env),
             PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
@@ -759,6 +760,7 @@ impl Resolver<'_> {
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::InlineTable { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
     }

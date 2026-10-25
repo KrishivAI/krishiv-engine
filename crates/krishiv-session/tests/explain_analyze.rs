@@ -28,6 +28,7 @@ fn session(threads: usize) -> Session {
         compute_threads: threads,
         io_threads: 1,
         blocking_threads: threads,
+        io_blocking_threads: 2,
     })
     .unwrap();
     let s = Session::builder().executor(executor).build().unwrap();

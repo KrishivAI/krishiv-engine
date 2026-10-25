@@ -806,6 +806,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
             }
+            PlanNode::InlineTable { rows, columns } => {
+                self.u8(25);
+                self.len(rows.len());
+                rows.iter().for_each(|r| self.exprs(r));
+                self.strs(columns);
+            }
         }
     }
 

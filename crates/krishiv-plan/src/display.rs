@@ -329,6 +329,16 @@ impl Display for NodeLine<'_> {
                 }
                 f.write_str("]")
             }
+            // Spark's `LocalRelation [col1, col2]`, which an inline table
+            // becomes; the row count tells single-row tables apart.
+            PlanNode::InlineTable { rows, columns } => {
+                write!(
+                    f,
+                    "InlineTable [{}] ({} rows)",
+                    columns.join(", "),
+                    rows.len()
+                )
+            }
         }
     }
 }

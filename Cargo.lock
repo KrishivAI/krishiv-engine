@@ -1779,6 +1779,7 @@ dependencies = [
  "krishiv-kernels",
  "krishiv-memory",
  "krishiv-plan",
+ "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
  "object_store",

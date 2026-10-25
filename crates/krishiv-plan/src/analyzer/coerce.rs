@@ -247,6 +247,19 @@ pub(super) fn wider_type(a: &Arg<'_>, b: &Arg<'_>, ansi: bool) -> Option<Option<
     common_all(&[*a, *b], ansi)
 }
 
+/// The type two inline-table values meet at without ANSI
+/// (`findWiderTypeWithoutStringPromotion`): the set-operation rules, except
+/// that a string never meets another type.
+pub(super) fn wider_type_without_string_promotion(
+    a: &Arg<'_>,
+    b: &Arg<'_>,
+) -> Option<Option<DataType>> {
+    match (a.ty, b.ty) {
+        (Some(x), Some(y)) if (x == &DataType::String) != (y == &DataType::String) => None,
+        _ => common_in(a, b, false, false),
+    }
+}
+
 /// The cast to `to` an argument of type `from` needs, if any.
 pub(super) fn cast_to(from: Option<&DataType>, to: Option<&DataType>) -> Option<DataType> {
     match to {
