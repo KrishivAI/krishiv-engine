@@ -243,11 +243,16 @@ impl Parser<'_> {
     }
 
     /// Whether the `NOT` here is a column, as Spark reads `SELECT NOT`,
-    /// `NOT = 1` and `NOT.x`: no operand can follow it. `+` and `-` do
+    /// `NOT = 1`, `NOT.x`, `NOT::INT` and `NOT[0]`: no operand can follow
+    /// it (a postfix operator does instead). `+` and `-` do
     /// (`NOT + 1` is `NOT (+1)`).
     fn not_is_column(&self) -> bool {
         let operand_sign = self.sym_at(1, Sym::Plus) || self.sym_at(1, Sym::Minus);
-        !operand_sign && (self.reserved_as_column() || self.sym_at(1, Sym::Dot))
+        !operand_sign
+            && (self.reserved_as_column()
+                || self.sym_at(1, Sym::Dot)
+                || self.sym_at(1, Sym::DoubleColon)
+                || self.sym_at(1, Sym::LBracket))
     }
 
     fn exists_follows(&self) -> bool {

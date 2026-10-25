@@ -35,6 +35,10 @@ fn render(e: &Expr) -> String {
         ExprKind::Unary(op, x) => format!("{op:?}({})", render(x)),
         ExprKind::Binary(l, op, r) => format!("({} {op:?} {})", render(l), render(r)),
         ExprKind::Nested(x) => render(x),
+        ExprKind::Cast { expr, .. } => format!("cast({})", render(expr)),
+        ExprKind::Subscript(base, index) => {
+            format!("subscript({}, {})", render(base), render(index))
+        }
         other => format!("{other:?}").chars().take(24).collect(),
     }
 }
@@ -75,6 +79,8 @@ fn not_is_a_column_when_no_operand_follows() {
         ("SELECT a AND NOT", "(col(a) And col(NOT))"),
         ("SELECT a OR NOT", "(col(a) Or col(NOT))"),
         ("SELECT -NOT", "Minus(col(NOT))"),
+        ("SELECT NOT::INT", "cast(col(NOT))"),
+        ("SELECT NOT[0]", "subscript(col(NOT), lit)"),
     ] {
         assert_eq!(shape(sql).as_deref(), Ok(want), "{sql}");
     }
@@ -82,9 +88,21 @@ fn not_is_a_column_when_no_operand_follows() {
 
 #[test]
 fn not_followed_by_nothing_valid_is_a_syntax_error() {
-    for sql in ["SELECT NOT )", "SELECT !", "SELECT 1/NOT 2"] {
-        let e = shape(sql).unwrap_err();
-        assert!(e.contains("PARSE_SYNTAX_ERROR"), "{sql}: {e}");
+    for (sql, want) in [
+        (
+            "SELECT NOT )",
+            "[PARSE_SYNTAX_ERROR] Syntax error at or near ')': extra input ')'. SQLSTATE: 42601",
+        ),
+        (
+            "SELECT !",
+            "[PARSE_SYNTAX_ERROR] Syntax error at or near end of input. SQLSTATE: 42601",
+        ),
+        (
+            "SELECT 1/NOT 2",
+            "[PARSE_SYNTAX_ERROR] Syntax error at or near '2': extra input '2'. SQLSTATE: 42601",
+        ),
+    ] {
+        assert_eq!(shape(sql).unwrap_err(), want, "{sql}");
     }
 }
 
