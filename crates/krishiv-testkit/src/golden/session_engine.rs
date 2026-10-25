@@ -382,9 +382,14 @@ fn fixture_batch(table: &Table) -> Result<Option<(Arc<Schema>, RecordBatch)>, En
     let mut fields = Vec::with_capacity(table.columns.len());
     let mut types = Vec::with_capacity(table.columns.len());
     for c in &table.columns {
+        // Nested columns parse now, but building their arrays from fixture
+        // cells is not done, so such a table is not registered.
         let Ok(ty) = krishiv_types::parse_data_type(&c.spark_type) else {
             return Ok(None);
         };
+        if ty.is_nested() {
+            return Ok(None);
+        }
         fields.push(ty.to_arrow_field(&c.name, c.nullable));
         types.push(ty);
     }
@@ -717,7 +722,7 @@ mod tests {
             .execute("SELECT sum(a), max(b) FROM aggtest")
             .map_err(err)?;
         assert_eq!(out.rows, [["198", "324.78"]]);
-        // `arraydata` has array columns, which the session cannot hold yet.
+        // `arraydata` has array columns, which the harness does not build yet.
         let got = e.execute("SELECT * FROM arraydata").map(drop).unwrap_err();
         assert_eq!(got.class.as_deref(), Some("TABLE_OR_VIEW_NOT_FOUND"));
         Ok(())
