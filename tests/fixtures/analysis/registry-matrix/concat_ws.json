@@ -2,19 +2,19 @@
   "entries": [
     {
       "id": "concat_ws#05e80bea960a/ansi_on",
-      "reason": "SELECT concat_ws(' ', 'Spark', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws(' ', 'Spark', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#05e80bea960a/ansi_off",
-      "reason": "SELECT concat_ws(' ', 'Spark', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws(' ', 'Spark', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#0f4e2555c55a/ansi_on",
-      "reason": "SELECT concat_ws('/', 'foo', array(1, 2), 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws('/', 'foo', array(1, 2), 'bar') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#0f4e2555c55a/ansi_off",
-      "reason": "SELECT concat_ws('/', 'foo', array(1, 2), 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws('/', 'foo', array(1, 2), 'bar') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#151017c6073a/ansi_on",
@@ -74,11 +74,11 @@
     },
     {
       "id": "concat_ws#25e479259845/ansi_on",
-      "reason": "SELECT concat_ws('/', array(1, 2), null, 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws('/', array(1, 2), null, 'bar') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#25e479259845/ansi_off",
-      "reason": "SELECT concat_ws('/', array(1, 2), null, 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws('/', array(1, 2), null, 'bar') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#2616ec8f1364/ansi_on",
@@ -113,14 +113,6 @@
       "reason": "SELECT concat_ws(' ', INTERVAL '1 02:03:04' DAY TO SECOND, 'SQL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "concat_ws#46ee656eee52/ansi_on",
-      "reason": "SELECT concat_ws(array(1, 2), 'foo', null, 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#46ee656eee52/ansi_off",
-      "reason": "SELECT concat_ws(array(1, 2), 'foo', null, 'bar') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "concat_ws#4a51a9f372e8/ansi_on",
       "reason": "SELECT concat_ws('/', 'foo', INTERVAL '1 02:03:04' DAY TO SECOND, 'bar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -151,14 +143,6 @@
     {
       "id": "concat_ws#6ab0510eaa1f/ansi_off",
       "reason": "SELECT concat_ws(INTERVAL '1 02:03:04' DAY TO SECOND, 'Spark', 'SQL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "concat_ws#6ec143f5d2bf/ansi_on",
-      "reason": "SELECT concat_ws(array(1, 2), 'Spark', 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#6ec143f5d2bf/ansi_off",
-      "reason": "SELECT concat_ws(array(1, 2), 'Spark', 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#7029d64723a3/ansi_on",
@@ -226,11 +210,11 @@
     },
     {
       "id": "concat_ws#b38eed07ec95/ansi_on",
-      "reason": "SELECT concat_ws(' ', array(1, 2), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws(' ', array(1, 2), 'SQL') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#b38eed07ec95/ansi_off",
-      "reason": "SELECT concat_ws(' ', array(1, 2), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws(' ', array(1, 2), 'SQL') | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#b85f1de35755/ansi_on",
@@ -290,19 +274,11 @@
     },
     {
       "id": "concat_ws#dd860c605aab/ansi_on",
-      "reason": "SELECT concat_ws('/', 'foo', null, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT concat_ws('/', 'foo', null, array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#dd860c605aab/ansi_off",
-      "reason": "SELECT concat_ws('/', 'foo', null, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "concat_ws#e36ae892bd1e/ansi_on",
-      "reason": "SELECT concat_ws(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "concat_ws#e36ae892bd1e/ansi_off",
-      "reason": "SELECT concat_ws(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT concat_ws('/', 'foo', null, array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "concat_ws#eb7e37628cc8/ansi_on",

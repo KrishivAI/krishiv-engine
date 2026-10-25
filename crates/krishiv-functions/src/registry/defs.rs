@@ -830,5 +830,6 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
     out.extend(super::text::specs());
+    out.extend(super::hof::specs());
     out
 }

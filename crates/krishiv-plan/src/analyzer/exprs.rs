@@ -595,9 +595,9 @@ fn is_special(value: &str) -> bool {
 /// `sum(x)` in `sum(x) OVER w` is a window aggregate, not an aggregate of
 /// the operator).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Ctx {
-    agg: bool,
-    window_fn: bool,
+pub(super) struct Ctx {
+    pub(super) agg: bool,
+    pub(super) window_fn: bool,
 }
 
 enum Step {
@@ -611,14 +611,27 @@ impl Resolver<'_> {
     /// Binds `e` in `cx`, post-order with an explicit stack; a node shared
     /// within the expression is bound once.
     pub(super) fn expr(&mut self, e: &Arc<Expr>, cx: &Cx<'_>) -> Result<Bound, AnalysisError> {
-        let mut done: HashMap<(usize, Ctx), Bound> = HashMap::new();
-        // Rewritten calls stay alive for the pass: `done` is keyed by
-        // address.
-        let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
         let top = Ctx {
             agg: false,
             window_fn: false,
         };
+        self.expr_in(top, e, cx)
+    }
+
+    /// Binds `e` in `cx` under the step context `top` (see [`Self::expr`]).
+    /// Higher-order calls bind their children through this with each
+    /// child's own context, so names inside lambdas resolve as the generic
+    /// path would resolve them.
+    pub(super) fn expr_in(
+        &mut self,
+        top: Ctx,
+        e: &Arc<Expr>,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let mut done: HashMap<(usize, Ctx), Bound> = HashMap::new();
+        // Rewritten calls stay alive for the pass: `done` is keyed by
+        // address.
+        let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
         let mut stack = vec![Step::Enter(Arc::clone(e), top)];
         while let Some(step) = stack.pop() {
             match step {
@@ -630,6 +643,36 @@ impl Resolver<'_> {
                         rewritten_calls.push(Arc::clone(&rewritten));
                         stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
                         stack.push(Step::Enter(rewritten, ctx));
+                        continue;
+                    }
+                    // A lambda binds where it is used: a higher-order
+                    // call binds its array and lambda children itself
+                    // (see `hof`), while a lambda anywhere else is no
+                    // higher-order call's argument.
+                    if let ExprNode::Function(f) = &x.node
+                        && (super::hof::Hof::of(&f.name).is_some()
+                            || super::hof::has_direct_lambda(f))
+                    {
+                        let Some(h) = super::hof::Hof::of(&f.name) else {
+                            return Err(super::hof::not_higher_order(&f.name, x.origin));
+                        };
+                        let kids = self.child_ctx(&x, ctx);
+                        for (key, bound) in self.hof_children(&x, h, &kids, cx)? {
+                            let step = kids
+                                .iter()
+                                .find(|(c, _)| addr(&**c) == key)
+                                .map(|(_, k)| *k)
+                                .unwrap_or(ctx);
+                            done.insert((key, step), bound);
+                        }
+                        stack.push(Step::Exit(Arc::clone(&x), ctx));
+                        let lambda = addr(&*f.args[1]);
+                        stack.extend(
+                            kids.into_iter()
+                                .rev()
+                                .filter(|(c, _)| addr(&**c) != lambda)
+                                .map(|(c, k)| Step::Enter(c, k)),
+                        );
                         continue;
                     }
                     stack.push(Step::Exit(Arc::clone(&x), ctx));
@@ -992,6 +1035,15 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
+            // A lambda outside a higher-order function's argument list:
+            // lambdas in argument position are bound by the higher-order
+            // call itself (see `hof`), never here.
+            ExprNode::Lambda { .. } => {
+                return Err(unsupported(
+                    "lambda functions outside a higher-order function",
+                    e.origin,
+                ));
+            }
             ExprNode::Function(f) => {
                 let n = f.args.len();
                 if let Some(filter) = kids.get(n)
@@ -1250,7 +1302,9 @@ impl Resolver<'_> {
             }
             ExprNode::Window(w) => self.window(e, w, kids, cx)?,
             ExprNode::Resolved(r) => keep(match r {
-                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => column(c),
+                ResolvedExpr::Column(c)
+                | ResolvedExpr::OuterColumn(c)
+                | ResolvedExpr::LambdaVar(c) => column(c),
                 ResolvedExpr::Alias { output, .. } => column(output),
                 ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
             }),
@@ -2478,6 +2532,19 @@ impl Resolver<'_> {
             col.name.clone_from(&parts[used - 1]);
             col
         };
+        if c.plan_id.is_none()
+            && let [name] = &c.name[..]
+            && let Some(var) = self.lambda_var(name)
+        {
+            // A lambda variable shadows the enclosing query's columns.
+            let mut col = var;
+            col.name.clone_from(name);
+            return Ok(bound(
+                ExprNode::Resolved(ResolvedExpr::LambdaVar(col.clone())),
+                &col,
+                None,
+            ));
+        }
         if let Some(id) = c.plan_id {
             let a = self.plan_column(id, &c.name, cx, origin)?;
             self.used(&a);
@@ -3076,6 +3143,14 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             }
         }
         ExprNode::Star(_) => "*".to_owned(),
+        // Spark's `lambdafunction(body, arg1, ...)`: the variables render
+        // as `namedlambdavariable()` when hidden (see `hof`).
+        ExprNode::Lambda { params, .. } => {
+            let mut args = vec![k[0].to_owned()];
+            args.extend(params.iter().cloned());
+            format!("lambdafunction({})", args.join(", "))
+        }
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => c.name.clone(),
         ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall {
             name,

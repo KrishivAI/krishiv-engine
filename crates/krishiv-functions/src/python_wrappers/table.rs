@@ -38,6 +38,22 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "pow",
         "an alias of `power`; the exported `pow` is a row that sends `power`",
     ),
+    (
+        "transform",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "filter",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "exists",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "forall",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
 ];
 
 /// Registry names whose wrapper is written by hand in `functions.py`.
@@ -232,7 +248,7 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, ignoreNulls: bool | Column = None",
         ));
     }
-    for name in ["coalesce", "hash", "xxhash64"] {
+    for name in ["array", "coalesce", "hash", "xxhash64"] {
         rows.push(Row::new(name, "*cols: ColumnOrName"));
     }
     for name in ["lpad", "rpad"] {

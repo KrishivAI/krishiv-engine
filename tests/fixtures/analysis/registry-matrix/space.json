@@ -31,14 +31,6 @@
     {
       "id": "space#f1e7bf7e4c85/ansi_off",
       "reason": "SELECT concat(space(named_struct('a', 1, 'b', 'x')), '1') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "space#f96215b69d43/ansi_on",
-      "reason": "SELECT concat(space(array(1, 2)), '1') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "space#f96215b69d43/ansi_off",
-      "reason": "SELECT concat(space(array(1, 2)), '1') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

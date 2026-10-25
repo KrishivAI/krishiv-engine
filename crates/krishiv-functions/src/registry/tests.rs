@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{ArrayType, DataType, DecimalType};
 
 use super::{Aggregate, Execution, FunctionDef, Lookup, builtins};
 use crate::scalar::scalar_names;
@@ -1517,6 +1517,80 @@ fn regex_signatures() {
     assert_eq!(r, ArgType::new(DataType::Boolean, true));
     let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
     assert_eq!(r, ArgType::new(DataType::Integer, true));
+}
+
+#[test]
+fn hof_signatures() {
+    use DataType::{Array, Boolean, Integer};
+    let array = |e: DataType, contains_null: bool, nullable: bool| {
+        ArgType::new(Array(ArrayType::new(e, contains_null).into()), nullable)
+    };
+    let i = || ty(Integer);
+    let b = || ty(Boolean);
+    // `array(...)`: the common element type; untyped `NULL` is `VOID`,
+    // no arguments an empty `VOID` array.
+    assert_eq!(
+        result("array", &[i(), i()], &[]).unwrap(),
+        array(Integer, false, false)
+    );
+    assert_eq!(
+        result("array", &[ArgType::new(Integer, true), i()], &[]).unwrap(),
+        array(Integer, true, false)
+    );
+    assert_eq!(
+        result("array", &[null_ty(), null_ty()], &[]).unwrap(),
+        array(DataType::Null, true, false)
+    );
+    assert_eq!(
+        result("array", &[], &[]).unwrap(),
+        array(DataType::Null, false, false)
+    );
+    // The higher-order functions type their lambda argument as its body:
+    // `transform` maps the body, `filter` keeps the array, `exists` and
+    // `forall` fold to booleans.
+    let arr = || array(Integer, true, false);
+    assert_eq!(
+        result("transform", &[arr(), i()], &[]).unwrap(),
+        array(Integer, false, false)
+    );
+    assert_eq!(
+        result("transform", &[arr(), ArgType::new(Integer, true)], &[]).unwrap(),
+        array(Integer, true, false)
+    );
+    assert_eq!(result("filter", &[arr(), b()], &[]).unwrap(), arr());
+    assert_eq!(
+        result("exists", &[array(Integer, false, true), b()], &[]).unwrap(),
+        ArgType::new(Boolean, true)
+    );
+    assert_eq!(
+        result("forall", &[arr(), b()], &[]).unwrap(),
+        ArgType::new(Boolean, false)
+    );
+    // The array comes first and holds an array; the predicate is boolean.
+    for name in ["transform", "filter", "exists", "forall"] {
+        let err = result(name, &[i(), i()], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{name}"
+        );
+        assert!(err.to_string().contains("\"ARRAY\""), "{name}: {err}");
+    }
+    for name in ["filter", "exists", "forall"] {
+        let err = result(name, &[arr(), i()], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{name}"
+        );
+        assert!(err.to_string().contains("\"BOOLEAN\""), "{name}: {err}");
+    }
+    // Higher-order calls run in the executor, never in a kernel binding.
+    for name in ["transform", "filter", "exists", "forall"] {
+        assert_eq!(def(name).execution, Execution::HigherOrder, "{name}");
+        assert_eq!(def(name).kind, FunctionKind::Scalar, "{name}");
+    }
+    assert_eq!(def("array").execution, Execution::Scalar);
 }
 
 mod text;

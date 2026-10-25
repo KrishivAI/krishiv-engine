@@ -50,11 +50,11 @@
     },
     {
       "id": "decode#026a11b2172b/ansi_on",
-      "reason": "SELECT decode(null, array(1, 2), 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT decode(null, array(1, 2), 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#026a11b2172b/ansi_off",
-      "reason": "SELECT decode(null, array(1, 2), 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT decode(null, array(1, 2), 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#02dcecbca7c9/ansi_on",
@@ -154,11 +154,11 @@
     },
     {
       "id": "decode#07a4a37224f3/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', array(1, 2), 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', array(1, 2), 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#07a4a37224f3/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', array(1, 2), 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', array(1, 2), 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#07bbaaea4a70/ansi_on",
@@ -354,11 +354,11 @@
     },
     {
       "id": "decode#0fc8598e60c5/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#0fc8598e60c5/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#103c812d0dee/ansi_on",
@@ -450,19 +450,11 @@
     },
     {
       "id": "decode#14b6a9c78eee/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', array(1, 2), 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', array(1, 2), 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#14b6a9c78eee/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', array(1, 2), 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "decode#14d4e8af3e77/ansi_on",
-      "reason": "SELECT decode(encode('abc', 'utf-8'), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "decode#14d4e8af3e77/ansi_off",
-      "reason": "SELECT decode(encode('abc', 'utf-8'), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT decode(6, 1, 'Southlake', array(1, 2), 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#14f0de0a21fd/ansi_on",
@@ -610,11 +602,11 @@
     },
     {
       "id": "decode#1d0206da8bb6/ansi_on",
-      "reason": "SELECT decode(array(1, 2), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(array(1, 2), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#1d0206da8bb6/ansi_off",
-      "reason": "SELECT decode(array(1, 2), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(array(1, 2), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#1d4a59814371/ansi_on",
@@ -905,14 +897,6 @@
       "reason": "SELECT decode(null, 1.5D, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
-      "id": "decode#2b810f12e5ee/ansi_on",
-      "reason": "SELECT decode(array(1, 2), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "decode#2b810f12e5ee/ansi_off",
-      "reason": "SELECT decode(array(1, 2), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "decode#2ba79b6c8a55/ansi_on",
       "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -954,11 +938,11 @@
     },
     {
       "id": "decode#2de80affd3f1/ansi_on",
-      "reason": "SELECT decode(array(1, 2), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(array(1, 2), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#2de80affd3f1/ansi_off",
-      "reason": "SELECT decode(array(1, 2), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(array(1, 2), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#2e6beb46f788/ansi_on",
@@ -1138,11 +1122,11 @@
     },
     {
       "id": "decode#37968d97daf1/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', array(1, 2), 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', array(1, 2), 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#37968d97daf1/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', array(1, 2), 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', array(1, 2), 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#3844592d7e08/ansi_on",
@@ -1722,11 +1706,11 @@
     },
     {
       "id": "decode#52948e882166/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, array(1, 2), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, array(1, 2), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#52948e882166/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, array(1, 2), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, array(1, 2), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#52b986b20217/ansi_on",
@@ -1778,11 +1762,11 @@
     },
     {
       "id": "decode#54377efb807a/ansi_on",
-      "reason": "SELECT decode(6, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#54377efb807a/ansi_off",
-      "reason": "SELECT decode(6, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#5496d9b04287/ansi_on",
@@ -1794,11 +1778,11 @@
     },
     {
       "id": "decode#549fc51c907a/ansi_on",
-      "reason": "SELECT decode(2, array(1, 2), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, array(1, 2), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#549fc51c907a/ansi_off",
-      "reason": "SELECT decode(2, array(1, 2), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, array(1, 2), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#54a5e4b42394/ansi_on",
@@ -1834,11 +1818,11 @@
     },
     {
       "id": "decode#575e50277371/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#575e50277371/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#57c4698db3f6/ansi_on",
@@ -1890,11 +1874,11 @@
     },
     {
       "id": "decode#5aa23992c7cb/ansi_on",
-      "reason": "SELECT decode(2, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#5aa23992c7cb/ansi_off",
-      "reason": "SELECT decode(2, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, array(1, 2), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#5b915fd83019/ansi_on",
@@ -2354,11 +2338,11 @@
     },
     {
       "id": "decode#7169a30d7b10/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#7169a30d7b10/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#716e422d2bf5/ansi_on",
@@ -2410,11 +2394,11 @@
     },
     {
       "id": "decode#75d59c04b0ba/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, array(1, 2), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, array(1, 2), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#75d59c04b0ba/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, array(1, 2), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, array(1, 2), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#772c8a60ab49/ansi_on",
@@ -2482,11 +2466,11 @@
     },
     {
       "id": "decode#7b15bb38e204/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#7b15bb38e204/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, array(1, 2), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#7b2469f7640b/ansi_on",
@@ -2842,11 +2826,11 @@
     },
     {
       "id": "decode#8e046613975b/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, array(1, 2), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, array(1, 2), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#8e046613975b/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, array(1, 2), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, array(1, 2), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#8e0f971f2276/ansi_on",
@@ -3282,11 +3266,11 @@
     },
     {
       "id": "decode#a26d3b093813/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', array(1, 2), 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT decode(null, 6, 'Spark', array(1, 2), 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#a26d3b093813/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', array(1, 2), 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT decode(null, 6, 'Spark', array(1, 2), 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#a2bf0b5656c7/ansi_on",
@@ -3474,11 +3458,11 @@
     },
     {
       "id": "decode#afc7d2bef933/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', array(1, 2), 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', array(1, 2), 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#afc7d2bef933/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', array(1, 2), 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', array(1, 2), 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#afedaefd3247/ansi_on",
@@ -3786,11 +3770,11 @@
     },
     {
       "id": "decode#bd78443ac149/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', array(1, 2), 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', array(1, 2), 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#bd78443ac149/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', array(1, 2), 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', array(1, 2), 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#bdc91a829651/ansi_on",
@@ -3970,11 +3954,11 @@
     },
     {
       "id": "decode#c598c289e4ee/ansi_on",
-      "reason": "SELECT decode(6, array(1, 2), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, array(1, 2), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#c598c289e4ee/ansi_off",
-      "reason": "SELECT decode(6, array(1, 2), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, array(1, 2), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#c5d0ad6e7dc9/ansi_on",
@@ -4522,11 +4506,11 @@
     },
     {
       "id": "decode#dcfb79179cdd/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#dcfb79179cdd/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#dd527bc88de1/ansi_on",
@@ -4538,11 +4522,11 @@
     },
     {
       "id": "decode#dd7d562a29fc/ansi_on",
-      "reason": "SELECT decode(null, 6, array(1, 2), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, array(1, 2), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#dd7d562a29fc/ansi_off",
-      "reason": "SELECT decode(null, 6, array(1, 2), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, array(1, 2), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#de493ccd4bc8/ansi_on",
@@ -4858,19 +4842,19 @@
     },
     {
       "id": "decode#ee487c8acbb0/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', array(1, 2), 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', array(1, 2), 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#ee487c8acbb0/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', array(1, 2), 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', array(1, 2), 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#ee60f58ab810/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, array(1, 2), 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, array(1, 2), 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#ee60f58ab810/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, array(1, 2), 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, array(1, 2), 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#eea73479fe6c/ansi_on",
@@ -4930,11 +4914,11 @@
     },
     {
       "id": "decode#f14bb4f58fa1/ansi_on",
-      "reason": "SELECT decode(array(1, 2), 6, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(array(1, 2), 6, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#f14bb4f58fa1/ansi_off",
-      "reason": "SELECT decode(array(1, 2), 6, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(array(1, 2), 6, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#f1cea5ee1047/ansi_on",
@@ -5018,11 +5002,11 @@
     },
     {
       "id": "decode#f6305c250204/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', array(1, 2), 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', array(1, 2), 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#f6305c250204/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', array(1, 2), 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', array(1, 2), 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#f63db089d29b/ansi_on",

@@ -133,14 +133,6 @@
       "reason": "SELECT try_add(CAST(NULL AS timestamp), interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "try_add#7b854b6fa631/ansi_on",
-      "reason": "SELECT try_add(1, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#7b854b6fa631/ansi_off",
-      "reason": "SELECT try_add(1, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_add#7d65f7b45439/ansi_on",
       "reason": "SELECT try_add(1, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -231,14 +223,6 @@
     {
       "id": "try_add#cef78fc236ba/ansi_off",
       "reason": "SELECT try_add(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_add#d0e88d1d20b6/ansi_on",
-      "reason": "SELECT try_add(array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#d0e88d1d20b6/ansi_off",
-      "reason": "SELECT try_add(array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#ddadaf94c15e/ansi_on",

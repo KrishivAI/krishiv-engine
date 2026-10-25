@@ -1,100 +1,12 @@
 {
   "entries": [
     {
-      "id": "hash#050efa42b0aa/ansi_on",
-      "reason": "SELECT hash(1, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#050efa42b0aa/ansi_off",
-      "reason": "SELECT hash(1, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#06b7e5d007f1/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#06b7e5d007f1/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#07ecd1ec737e/ansi_on",
-      "reason": "SELECT hash('Ä€日本語😀é', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#07ecd1ec737e/ansi_off",
-      "reason": "SELECT hash('Ä€日本語😀é', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#10a009d846e4/ansi_on",
-      "reason": "SELECT hash(TIMESTAMP'2024-02-29 12:34:56.123456', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#10a009d846e4/ansi_off",
-      "reason": "SELECT hash(TIMESTAMP'2024-02-29 12:34:56.123456', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#11dc78602219/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#11dc78602219/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#16de041f73d5/ansi_on",
-      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#16de041f73d5/ansi_off",
-      "reason": "SELECT hash('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#17ae377c1c3e/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#17ae377c1c3e/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#183f10259830/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), 1L) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#183f10259830/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), 1L) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "hash#1d95ab5f2f7f/ansi_on",
       "reason": "SELECT hash(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "hash#1d95ab5f2f7f/ansi_off",
       "reason": "SELECT hash(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#20ac6b855c3f/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#20ac6b855c3f/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#239f9a29c6da/ansi_on",
-      "reason": "SELECT hash(NULL, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#239f9a29c6da/ansi_off",
-      "reason": "SELECT hash(NULL, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#243662e44338/ansi_on",
-      "reason": "SELECT hash(DATE'2024-02-29', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#243662e44338/ansi_off",
-      "reason": "SELECT hash(DATE'2024-02-29', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#272caba7a158/ansi_on",
@@ -105,60 +17,12 @@
       "reason": "SELECT hash(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
-      "id": "hash#31388d31f097/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), X'01') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#31388d31f097/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), X'01') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#36486ceb689e/ansi_on",
-      "reason": "SELECT hash('abc', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#36486ceb689e/ansi_off",
-      "reason": "SELECT hash('abc', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#40b05b7dd3b8/ansi_on",
-      "reason": "SELECT hash(CAST(1.5 AS FLOAT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#40b05b7dd3b8/ansi_off",
-      "reason": "SELECT hash(CAST(1.5 AS FLOAT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#4662df6e4cfe/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#4662df6e4cfe/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#4a599039809c/ansi_on",
-      "reason": "SELECT hash(CAST(NULL AS string), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#4a599039809c/ansi_off",
-      "reason": "SELECT hash(CAST(NULL AS string), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#4bb2495feeff/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), CAST(-2147483648 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#4bb2495feeff/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), CAST(-2147483648 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "hash#4d1d1a99deac/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT hash('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
       "id": "hash#4d1d1a99deac/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT hash('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
       "id": "hash#51a176d3611e/ansi_on",
@@ -167,54 +31,6 @@
     {
       "id": "hash#51a176d3611e/ansi_off",
       "reason": "SELECT hash('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
-    },
-    {
-      "id": "hash#5556de897838/ansi_on",
-      "reason": "SELECT hash('1', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#5556de897838/ansi_off",
-      "reason": "SELECT hash('1', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#56ac03b0a2dd/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#56ac03b0a2dd/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#57961fe78970/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#57961fe78970/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#58278334416c/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#58278334416c/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#5a4364ed7c74/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#5a4364ed7c74/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#5a92f4b086c0/ansi_on",
-      "reason": "SELECT hash(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#5a92f4b086c0/ansi_off",
-      "reason": "SELECT hash(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#68ccd0f7afcd/ansi_on",
@@ -233,116 +49,12 @@
       "reason": "SELECT hash('Spark', array(123), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "hash#80833cec99fa/ansi_on",
-      "reason": "SELECT hash(X'01', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#80833cec99fa/ansi_off",
-      "reason": "SELECT hash(X'01', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "hash#838d1e1f3358/ansi_on",
       "reason": "SELECT hash('Spark', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "hash#838d1e1f3358/ansi_off",
       "reason": "SELECT hash('Spark', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#845996a4629b/ansi_on",
-      "reason": "SELECT hash('Spark', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#845996a4629b/ansi_off",
-      "reason": "SELECT hash('Spark', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#8f28ae489069/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), CAST(NULL AS int)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#8f28ae489069/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), CAST(NULL AS int)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#9064665edbfa/ansi_on",
-      "reason": "SELECT hash(' \\t a\\u3000\\n ', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#9064665edbfa/ansi_off",
-      "reason": "SELECT hash(' \\t a\\u3000\\n ', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#917eb41cb472/ansi_on",
-      "reason": "SELECT hash(CAST(1 AS SMALLINT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#917eb41cb472/ansi_off",
-      "reason": "SELECT hash(CAST(1 AS SMALLINT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#92152fb6e67b/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#92152fb6e67b/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#96987ccd7021/ansi_on",
-      "reason": "SELECT hash(array(1, 2), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#96987ccd7021/ansi_off",
-      "reason": "SELECT hash(array(1, 2), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#98df9e5ecfbd/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), '1') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#98df9e5ecfbd/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), '1') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#9b5eaf237af0/ansi_on",
-      "reason": "SELECT hash(1L, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#9b5eaf237af0/ansi_off",
-      "reason": "SELECT hash(1L, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#a188de4365ba/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#a188de4365ba/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#a2161c8521d0/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), CAST(2147483647 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#a2161c8521d0/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), CAST(2147483647 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#a3ecac8e4a34/ansi_on",
-      "reason": "SELECT hash(CAST(1 AS TINYINT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#a3ecac8e4a34/ansi_off",
-      "reason": "SELECT hash(CAST(1 AS TINYINT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#a93fbeb6bcb3/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#a93fbeb6bcb3/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#ab6c7c5a6f40/ansi_on",
@@ -361,76 +73,12 @@
       "reason": "SELECT hash('Spark', array(123), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "hash#b0f0a6b58919/ansi_on",
-      "reason": "SELECT hash('', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#b0f0a6b58919/ansi_off",
-      "reason": "SELECT hash('', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#b5e5daa7ad5f/ansi_on",
-      "reason": "SELECT hash(CAST(1.5 AS DECIMAL(38,18)), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#b5e5daa7ad5f/ansi_off",
-      "reason": "SELECT hash(CAST(1.5 AS DECIMAL(38,18)), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#bca5749aac50/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), true) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#bca5749aac50/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), true) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#be26072f51ea/ansi_on",
-      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#be26072f51ea/ansi_off",
-      "reason": "SELECT hash('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#cca3887f32a9/ansi_on",
-      "reason": "SELECT hash(CAST(1.5 AS DECIMAL(10,2)), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#cca3887f32a9/ansi_off",
-      "reason": "SELECT hash(CAST(1.5 AS DECIMAL(10,2)), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "hash#ce8dfe4ae46a/ansi_on",
       "reason": "SELECT hash(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "hash#ce8dfe4ae46a/ansi_off",
       "reason": "SELECT hash(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#cf54e7b823e9/ansi_on",
-      "reason": "SELECT hash(1.5D, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#cf54e7b823e9/ansi_off",
-      "reason": "SELECT hash(1.5D, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#d8fe25feb621/ansi_on",
-      "reason": "SELECT hash(CAST(X'C328FF' AS STRING), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#d8fe25feb621/ansi_off",
-      "reason": "SELECT hash(CAST(X'C328FF' AS STRING), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#dca435a0527c/ansi_on",
-      "reason": "SELECT hash(true, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#dca435a0527c/ansi_off",
-      "reason": "SELECT hash(true, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "hash#dd8381fee2e5/ansi_on",
@@ -441,28 +89,12 @@
       "reason": "SELECT hash('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
-      "id": "hash#e450fde5e857/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#e450fde5e857/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "hash#f0c7f0566e00/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT hash('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "hash#f0c7f0566e00/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
-    },
-    {
-      "id": "hash#f8a07689fe61/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "hash#f8a07689fe61/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT hash('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     }
   ],
   "format_version": 1,

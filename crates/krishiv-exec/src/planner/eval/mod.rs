@@ -26,6 +26,7 @@ mod arith;
 mod cast;
 mod cond;
 mod func;
+mod hof;
 mod logic;
 mod nested_cast;
 mod strings;
@@ -247,9 +248,31 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 nullable: field.is_nullable(),
             }))
         }
+        // A lambda variable: a column of the flattened batch the
+        // higher-order call compiled around the body (see `hof`).
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
+            let index = input
+                .layout
+                .iter()
+                .position(|a| *a == c.id)
+                .ok_or_else(|| {
+                    internal(&format!("attribute #{} is not an input column", c.id.0))
+                })?;
+            let field = input.schema.field(index);
+            Ok(Arc::new(Column {
+                index,
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+            }))
+        }
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
         ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
+            if let FunctionId::Registry { name, .. } = &f.id
+                && hof::is_supported(name)
+            {
+                return hof::compile(name, f, input, e);
+            }
             let args = f
                 .args
                 .iter()

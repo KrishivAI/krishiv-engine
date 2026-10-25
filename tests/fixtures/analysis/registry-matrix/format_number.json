@@ -41,28 +41,12 @@
       "reason": "SELECT format_number(named_struct('a', 1, 'b', 'x'), 4) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "format_number#a01c09659bab/ansi_on",
-      "reason": "SELECT format_number(12332.123456, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "format_number#a01c09659bab/ansi_off",
-      "reason": "SELECT format_number(12332.123456, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "format_number#ba6583b472bc/ansi_on",
       "reason": "SELECT format_number(12332.123456, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "format_number#ba6583b472bc/ansi_off",
       "reason": "SELECT format_number(12332.123456, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "format_number#de8e4198e9f4/ansi_on",
-      "reason": "SELECT format_number(array(1, 2), 4) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "format_number#de8e4198e9f4/ansi_off",
-      "reason": "SELECT format_number(array(1, 2), 4) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "format_number#f2eb3f7a47db/ansi_on",

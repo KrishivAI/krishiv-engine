@@ -73,28 +73,12 @@
       "reason": "SELECT try_mod('1', 2) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "try_mod#b75bbd5e7fae/ansi_on",
-      "reason": "SELECT try_mod(3, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_mod#b75bbd5e7fae/ansi_off",
-      "reason": "SELECT try_mod(3, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_mod#e8377e2c5a5d/ansi_on",
       "reason": "SELECT try_mod(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_mod#e8377e2c5a5d/ansi_off",
       "reason": "SELECT try_mod(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_mod#f62535c1ea84/ansi_on",
-      "reason": "SELECT try_mod(array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_mod#f62535c1ea84/ansi_off",
-      "reason": "SELECT try_mod(array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     }
   ],
   "format_version": 1,

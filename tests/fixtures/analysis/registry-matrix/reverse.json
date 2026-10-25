@@ -2,19 +2,19 @@
   "entries": [
     {
       "id": "reverse#1eeb8d128702/ansi_on",
-      "reason": "SELECT reverse(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT reverse(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#1eeb8d128702/ansi_off",
-      "reason": "SELECT reverse(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT reverse(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#27d73e6b9b7a/ansi_on",
-      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#27d73e6b9b7a/ansi_off",
-      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#2a2c3e312d76/ansi_on",
@@ -26,11 +26,11 @@
     },
     {
       "id": "reverse#58b4d7850388/ansi_on",
-      "reason": "SELECT reverse(array(2, 1, 4, 3)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT reverse(array(2, 1, 4, 3)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#58b4d7850388/ansi_off",
-      "reason": "SELECT reverse(array(2, 1, 4, 3)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT reverse(array(2, 1, 4, 3)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#61dbbe3b92fa/ansi_on",
@@ -42,11 +42,11 @@
     },
     {
       "id": "reverse#6d11d9d7634a/ansi_on",
-      "reason": "SELECT reverse(CAST(array() AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT reverse(CAST(array() AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#6d11d9d7634a/ansi_off",
-      "reason": "SELECT reverse(CAST(array() AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT reverse(CAST(array() AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "reverse#b32c7db50969/ansi_on",

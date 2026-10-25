@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "octet_length#2796653aa88a/ansi_on",
-      "reason": "SELECT octet_length(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "octet_length#2796653aa88a/ansi_off",
-      "reason": "SELECT octet_length(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "octet_length#32b464f19706/ansi_on",
       "reason": "SELECT octet_length(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

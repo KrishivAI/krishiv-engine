@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "bit_length#4c1a4acd616e/ansi_on",
-      "reason": "SELECT bit_length(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_length#4c1a4acd616e/ansi_off",
-      "reason": "SELECT bit_length(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "bit_length#79fe889112dd/ansi_on",
       "reason": "SELECT bit_length(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

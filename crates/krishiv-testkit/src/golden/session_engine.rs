@@ -364,6 +364,194 @@ fn arrow_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineE
         (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
             Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
         }
+        (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
+            Cell::Array(list_cells(col, row, element)?)
+        }
+        (DataType::Map(map), ArrowType::Map(..)) => map_cell(col, row, map)?,
+        (DataType::Struct(struct_), ArrowType::Struct(_)) => struct_cell(col, row, struct_)?,
+        _ => return Err(unexpected()),
+    })
+}
+
+/// The elements of the list at `row` of `col` (a `List` or `LargeList`) as
+/// cells of the element type.
+fn list_cells(
+    col: &ArrayRef,
+    row: usize,
+    element: &krishiv_types::ArrayType,
+) -> Result<Vec<Cell>, EngineError> {
+    let (start, stop, values) = match col.data_type() {
+        ArrowType::List(_) => {
+            let list = col.as_list::<i32>();
+            (
+                usize::try_from(list.value_offsets()[row]).map_err(|_| {
+                    harness_error("a nested list with a negative offset".to_owned())
+                })?,
+                usize::try_from(list.value_offsets()[row + 1]).map_err(|_| {
+                    harness_error("a nested list with a negative offset".to_owned())
+                })?,
+                Arc::clone(list.values()),
+            )
+        }
+        ArrowType::LargeList(_) => {
+            let list = col.as_list::<i64>();
+            (
+                usize::try_from(list.value_offsets()[row])
+                    .map_err(|_| harness_error("a nested list with a bad offset".to_owned()))?,
+                usize::try_from(list.value_offsets()[row + 1])
+                    .map_err(|_| harness_error("a nested list with a bad offset".to_owned()))?,
+                Arc::clone(list.values()),
+            )
+        }
+        other => {
+            return Err(harness_error(format!(
+                "Arrow type {other} for {}",
+                DataType::Array(Arc::new(element.clone())).catalog_string()
+            )));
+        }
+    };
+    (start..stop)
+        .map(|i| nested_cell(&values, i, element.element_type()))
+        .collect()
+}
+
+/// The map at `row` of `col` as key/value cells in storage order (the
+/// renderer sorts them as Spark does).
+fn map_cell(col: &ArrayRef, row: usize, map: &krishiv_types::MapType) -> Result<Cell, EngineError> {
+    let ArrowType::Map(entries, _) = col.data_type() else {
+        return Err(harness_error(format!(
+            "Arrow type {} for {}",
+            col.data_type(),
+            DataType::Map(Arc::new(map.clone())).catalog_string()
+        )));
+    };
+    let ArrowType::Struct(kv) = entries.data_type() else {
+        return Err(harness_error(format!(
+            "Arrow map entries {}",
+            entries.data_type()
+        )));
+    };
+    if kv.len() != 2 {
+        return Err(harness_error(format!(
+            "Arrow map entries {}",
+            entries.data_type()
+        )));
+    }
+    let entries = col.as_map();
+    let (start, stop) = (
+        usize::try_from(entries.value_offsets()[row])
+            .map_err(|_| harness_error("a nested map with a negative offset".to_owned()))?,
+        usize::try_from(entries.value_offsets()[row + 1])
+            .map_err(|_| harness_error("a nested map with a negative offset".to_owned()))?,
+    );
+    let keys = entries.keys();
+    let values = entries.values();
+    (start..stop)
+        .map(|i| {
+            Ok((
+                nested_cell(keys, i, map.key_type())?,
+                nested_cell(values, i, map.value_type())?,
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Cell::Map)
+}
+
+/// The struct at `row` of `col` as its fields' cells.
+fn struct_cell(
+    col: &ArrayRef,
+    row: usize,
+    struct_: &krishiv_types::StructType,
+) -> Result<Cell, EngineError> {
+    let ArrowType::Struct(fields) = col.data_type() else {
+        return Err(harness_error(format!(
+            "Arrow type {} for {}",
+            col.data_type(),
+            DataType::Struct(struct_.clone()).catalog_string()
+        )));
+    };
+    let values = col.as_struct();
+    if fields.len() != struct_.fields().len() {
+        return Err(harness_error(format!(
+            "Arrow struct {} for {}",
+            col.data_type(),
+            DataType::Struct(struct_.clone()).catalog_string()
+        )));
+    }
+    struct_
+        .fields()
+        .iter()
+        .zip(fields.iter())
+        .enumerate()
+        .map(|(i, (f, _))| {
+            Ok((
+                f.name().to_owned(),
+                nested_cell(values.column(i), row, f.data_type())?,
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Cell::Struct)
+}
+
+/// The value at `row` of `col`, a (possibly nested) value of Spark type
+/// `ty`, as a cell. NULLs are `Null` at every level.
+fn nested_cell(col: &ArrayRef, row: usize, ty: &DataType) -> Result<Cell, EngineError> {
+    if col.is_null(row) {
+        return Ok(Cell::Null);
+    }
+    let unexpected = || {
+        harness_error(format!(
+            "Arrow type {} for {}",
+            col.data_type(),
+            ty.catalog_string()
+        ))
+    };
+    Ok(match (ty, col.data_type()) {
+        (DataType::Null, _) => Cell::Null,
+        (DataType::Boolean, ArrowType::Boolean) => Cell::Bool(col.as_boolean().value(row)),
+        (DataType::Byte, ArrowType::Int8) => {
+            Cell::Int(i64::from(col.as_primitive::<Int8Type>().value(row)))
+        }
+        (DataType::Short, ArrowType::Int16) => {
+            Cell::Int(i64::from(col.as_primitive::<Int16Type>().value(row)))
+        }
+        (DataType::Integer, ArrowType::Int32) => {
+            Cell::Int(i64::from(col.as_primitive::<Int32Type>().value(row)))
+        }
+        (DataType::Long, ArrowType::Int64) => Cell::Int(col.as_primitive::<Int64Type>().value(row)),
+        (DataType::Float, ArrowType::Float32) => {
+            Cell::Float(col.as_primitive::<Float32Type>().value(row))
+        }
+        (DataType::Double, ArrowType::Float64) => {
+            Cell::Double(col.as_primitive::<Float64Type>().value(row))
+        }
+        (DataType::Decimal(d), ArrowType::Decimal128(..)) => Cell::Decimal(
+            col.as_primitive::<Decimal128Type>().value(row),
+            u32::from(d.scale()),
+        ),
+        (DataType::String, ArrowType::Utf8View) => {
+            Cell::Str(col.as_string_view().value(row).to_owned())
+        }
+        (DataType::String, ArrowType::Utf8) => {
+            Cell::Str(col.as_string::<i32>().value(row).to_owned())
+        }
+        (DataType::String, ArrowType::LargeUtf8) => {
+            Cell::Str(col.as_string::<i64>().value(row).to_owned())
+        }
+        (DataType::Date, ArrowType::Date32) => {
+            Cell::Date(col.as_primitive::<Date32Type>().value(row))
+        }
+        (DataType::Timestamp, ArrowType::Timestamp(..)) => {
+            Cell::Timestamp(col.as_primitive::<TimestampMicrosecondType>().value(row))
+        }
+        (DataType::TimestampNtz, ArrowType::Timestamp(..)) => {
+            Cell::TimestampNtz(col.as_primitive::<TimestampMicrosecondType>().value(row))
+        }
+        (DataType::Array(element), ArrowType::List(_) | ArrowType::LargeList(_)) => {
+            Cell::Array(list_cells(col, row, element)?)
+        }
+        (DataType::Map(map), ArrowType::Map(..)) => map_cell(col, row, map)?,
+        (DataType::Struct(struct_), ArrowType::Struct(_)) => struct_cell(col, row, struct_)?,
         _ => return Err(unexpected()),
     })
 }

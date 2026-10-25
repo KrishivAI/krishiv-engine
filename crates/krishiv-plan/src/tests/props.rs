@@ -746,6 +746,10 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             m_type(to, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
+        ExprNode::Lambda { params, body } => {
+            site!(w, params.push("x".to_owned()));
+            m_expr(body, w)
+        }
         ExprNode::Subquery { kind, plan } => {
             let other = match kind {
                 SubqueryKind::Scalar => SubqueryKind::Exists,
@@ -775,7 +779,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             inside || m_expr(function, w)
         }
         ExprNode::Resolved(r) => match r {
-            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => m_bound(c, w),
+            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c) => {
+                m_bound(c, w)
+            }
             ResolvedExpr::Function(ResolvedFunction {
                 id,
                 kind,

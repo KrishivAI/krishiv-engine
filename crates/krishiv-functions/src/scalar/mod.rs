@@ -25,6 +25,7 @@
 
 mod args;
 mod arith;
+mod array;
 mod bitwise;
 mod chars;
 mod codec;
@@ -55,8 +56,15 @@ use args::{Inputs, broadcast, internal, unsupported};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum BindArg {
-    /// A value computed per row, of this type.
-    Column(DataType),
+    /// A value computed per row; `nullable` is the analyzer's nullability
+    /// (a nested field's `nullable` is part of its Arrow type, so
+    /// constructors of nested values read it).
+    Column {
+        /// The value's Arrow type.
+        data_type: DataType,
+        /// Whether the value may be null.
+        nullable: bool,
+    },
     /// A literal, as a one-row array. Some functions need the value to
     /// bind (the field of `extract`); others treat it as a column.
     Literal(ArrayRef),
@@ -67,15 +75,29 @@ impl BindArg {
     #[must_use]
     pub fn data_type(&self) -> DataType {
         match self {
-            Self::Column(t) => t.clone(),
+            Self::Column { data_type, .. } => data_type.clone(),
             Self::Literal(a) => a.data_type().clone(),
+        }
+    }
+
+    /// Whether the argument may be null: the analyzer's nullability for a
+    /// column, the array's for a literal (an untyped `NULL` literal is
+    /// always null: its `NullArray` carries no validity bitmap).
+    #[must_use]
+    pub fn nullable(&self) -> bool {
+        match self {
+            Self::Column { nullable, .. } => *nullable,
+            Self::Literal(a) => a.data_type() == &DataType::Null || a.null_count() > 0,
         }
     }
 }
 
 impl From<DataType> for BindArg {
     fn from(t: DataType) -> Self {
-        Self::Column(t)
+        Self::Column {
+            data_type: t,
+            nullable: true,
+        }
     }
 }
 
@@ -285,7 +307,8 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 12] = [
+const FAMILIES: [(&[&str], Binder); 13] = [
+    (array::NAMES, array::bind),
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),

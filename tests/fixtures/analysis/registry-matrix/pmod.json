@@ -5,14 +5,6 @@
       "reason": "SELECT pmod('1', 3) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "pmod#1a3001bfb1af/ansi_on",
-      "reason": "SELECT pmod(array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "pmod#1a3001bfb1af/ansi_off",
-      "reason": "SELECT pmod(array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "pmod#2935dced5960/ansi_on",
       "reason": "SELECT pmod(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -35,14 +27,6 @@
     {
       "id": "pmod#41c472d75d53/ansi_off",
       "reason": "SELECT pmod(10, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "pmod#45933ab5e0c9/ansi_on",
-      "reason": "SELECT pmod(10, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "pmod#45933ab5e0c9/ansi_off",
-      "reason": "SELECT pmod(10, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "pmod#4b50b5dc070f/ansi_off",

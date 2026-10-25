@@ -17,14 +17,6 @@
       "reason": "SELECT try_multiply(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "try_multiply#2a85c0d45242/ansi_on",
-      "reason": "SELECT try_multiply(2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_multiply#2a85c0d45242/ansi_off",
-      "reason": "SELECT try_multiply(2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_multiply#31933e3dbf90/ansi_on",
       "reason": "SELECT try_multiply(CAST(NULL AS interval year), 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
     },
@@ -99,14 +91,6 @@
     {
       "id": "try_multiply#bb56f48ad04e/ansi_off",
       "reason": "SELECT try_multiply(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_multiply#c3b02618e954/ansi_on",
-      "reason": "SELECT try_multiply(array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_multiply#c3b02618e954/ansi_off",
-      "reason": "SELECT try_multiply(array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_multiply#f8aceea556aa/ansi_off",

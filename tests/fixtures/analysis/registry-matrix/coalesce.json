@@ -25,14 +25,6 @@
       "reason": "SELECT coalesce(NULL, INTERVAL '1 02:03:04' DAY TO SECOND, NULL) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "coalesce#3297ad75dfb5/ansi_on",
-      "reason": "SELECT coalesce(array(1, 2), 1, NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "coalesce#3297ad75dfb5/ansi_off",
-      "reason": "SELECT coalesce(array(1, 2), 1, NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "coalesce#58920259386f/ansi_on",
       "reason": "SELECT coalesce(map('a', 1), 1, NULL) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -65,14 +57,6 @@
       "reason": "SELECT coalesce(INTERVAL '1 02:03:04' DAY TO SECOND, 1, NULL) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "coalesce#8b4e6c6ee9e8/ansi_on",
-      "reason": "SELECT coalesce(NULL, array(1, 2), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "coalesce#8b4e6c6ee9e8/ansi_off",
-      "reason": "SELECT coalesce(NULL, array(1, 2), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "coalesce#96e065bc5266/ansi_on",
       "reason": "SELECT coalesce(named_struct('a', 1, 'b', 'x'), 1, NULL) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -95,14 +79,6 @@
     {
       "id": "coalesce#ad0be0bee7ac/ansi_off",
       "reason": "SELECT coalesce(NULL, 1, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "coalesce#afa62deb2dc3/ansi_on",
-      "reason": "SELECT coalesce(NULL, 1, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "coalesce#afa62deb2dc3/ansi_off",
-      "reason": "SELECT coalesce(NULL, 1, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "coalesce#c5de409dc37c/ansi_on",

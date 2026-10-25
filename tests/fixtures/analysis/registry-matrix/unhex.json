@@ -31,14 +31,6 @@
     {
       "id": "unhex#924fd7467cd0/ansi_off",
       "reason": "SELECT decode(unhex(named_struct('a', 1, 'b', 'x')), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "unhex#b822eace082b/ansi_on",
-      "reason": "SELECT decode(unhex(array(1, 2)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "unhex#b822eace082b/ansi_off",
-      "reason": "SELECT decode(unhex(array(1, 2)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

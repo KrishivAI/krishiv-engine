@@ -13,6 +13,7 @@ PYSPARK_SIGNATURES = {
     "acos": "col",
     "acosh": "col",
     "add_months": "start, months",
+    "array": "*cols",
     "asc": "col",
     "ascii": "col",
     "asin": "col",
