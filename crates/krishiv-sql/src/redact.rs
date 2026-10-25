@@ -197,8 +197,11 @@ fn sensitive(key: &str) -> bool {
     is_sensitive_key(key)
 }
 
-/// A key part's text: identifiers unquoted, strings unescaped (both the
-/// decoded and the written form, so an escaped key cannot hide).
+/// A key part's text: identifiers unquoted, strings unescaped (every
+/// reading, so an escaped key cannot hide). `redact_sql` has no parser
+/// options (it works from tokens alone), so `consecutive` is not honoured
+/// per-query: both readings are concatenated and a key is sensitive when any
+/// reading is, fail-safe in either mode.
 fn key_text(sql: &str, t: &Token) -> String {
     let raw = t.span.text(sql);
     match t.kind {
@@ -206,11 +209,13 @@ fn key_text(sql: &str, t: &Token) -> String {
         TokenKind::Sym(Sym::Dot) => ".".to_owned(),
         k if k.is_string_like() => {
             let decoded = unescape_string(raw, true, false);
+            let decoded_consec = unescape_string(raw, true, true);
             let plain = unescape_string(raw, false, false);
-            if decoded == plain {
+            let plain_consec = unescape_string(raw, false, true);
+            if decoded == plain && decoded == decoded_consec && decoded == plain_consec {
                 decoded
             } else {
-                format!("{decoded}{plain}")
+                format!("{decoded}{decoded_consec}{plain}{plain_consec}")
             }
         }
         _ => raw.to_owned(),
@@ -275,12 +280,16 @@ fn url_marks(sql: &str, t: &Token, marks: &mut Vec<Mark>) {
         // Positions in the value are not positions in the text, and an
         // escape (`\u0040`, a doubled quote) can make the decoded value a
         // URL the written one is not: hide all when any reading is a URL.
+        // No parser options here (see `key_text`): every escapes and
+        // `consecutive` reading counts.
         let raw = t.span.text(sql);
         let readings = match t.kind {
             TokenKind::QuotedIdent => vec![unquote_ident(raw)],
             _ => vec![
                 unescape_string(raw, true, false),
+                unescape_string(raw, true, true),
                 unescape_string(raw, false, false),
+                unescape_string(raw, false, true),
             ],
         };
         if SecretUrl::parse(value).is_some()

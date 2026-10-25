@@ -343,6 +343,20 @@ fn arg_of(b: &Bound) -> Arg<'_> {
 /// Spark's documentation root, as its errors cite it.
 pub(super) const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
 
+/// Whether `qualifier` matches the trailing parts of scope qualifier `qual`,
+/// whole identifier by whole identifier (case-folded unless
+/// `case_sensitive`). An empty qualifier matches everything; `t` matches
+/// `db.t`; `db.t` matches `db.t` and `catalog.db.t` but not `t` alone or
+/// `xdb.t`.
+fn qualifier_matches(qual: &[String], qualifier: &[String], case_sensitive: bool) -> bool {
+    let q = qualifier.len();
+    qual.len() >= q
+        && qual[qual.len() - q..]
+            .iter()
+            .zip(qualifier.iter())
+            .all(|(x, y)| same(x, y, case_sensitive))
+}
+
 fn column(c: &BoundColumn) -> ArgType {
     arg_type(c.data_type.clone(), c.nullable)
 }
@@ -719,17 +733,14 @@ impl Resolver<'_> {
     }
 
     /// Whether `qualifier` names the qualifier of an input attribute
-    /// (a table or alias the scope knows).
+    /// (a table or alias the scope knows): it must match the scope
+    /// qualifier's trailing parts exactly, whole identifier by whole
+    /// identifier (case-folded unless `case_sensitive`).
     fn qualifier_matches_scope(&self, qualifier: &[String], cx: &Cx<'_>) -> bool {
         let cs = self.ctx.conf.case_sensitive;
-        cx.scope.iter().any(|a| {
-            let q = qualifier.len();
-            a.qual.len() >= q
-                && a.qual[a.qual.len() - q..]
-                    .iter()
-                    .zip(qualifier)
-                    .all(|(x, y)| same(x, y, cs))
-        })
+        cx.scope
+            .iter()
+            .any(|a| qualifier_matches(&a.qual, qualifier, cs))
     }
 
     /// The attributes `*`, `t.*` or `df["*"]` stands for.
@@ -748,14 +759,7 @@ impl Resolver<'_> {
             None => cx
                 .scope
                 .iter()
-                .filter(|a| {
-                    let q = s.qualifier.len();
-                    a.qual.len() >= q
-                        && a.qual[a.qual.len() - q..]
-                            .iter()
-                            .zip(&s.qualifier)
-                            .all(|(x, y)| same(x, y, cs))
-                })
+                .filter(|a| qualifier_matches(&a.qual, &s.qualifier, cs))
                 .cloned()
                 .collect(),
         };
@@ -1150,12 +1154,15 @@ impl Resolver<'_> {
         };
         let (mut call_kids, ty) = self.typed_call(entry, e, std::slice::from_ref(&null))?;
         let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
-        // `kids[0]` is the `FILTER`, if any (`n == 0`).
+        // `kids.first()` is the `FILTER`, if any (`n == 0`).
         call_kids.extend(kids.first().cloned());
         let call = ResolvedFunction {
             id: entry.id.clone(),
             kind: entry.kind,
-            args: call_kids[..1].iter().map(|k| Arc::clone(&k.expr)).collect(),
+            args: call_kids
+                .first()
+                .map(|k| vec![Arc::clone(&k.expr)])
+                .unwrap_or_default(),
             distinct: match &e.node {
                 ExprNode::Function(f) => f.distinct,
                 _ => false,

@@ -124,16 +124,22 @@ impl Default for CtePrecedencePolicy {
 }
 
 impl CtePrecedencePolicy {
-    /// The policy `value` names (case-insensitive, trimmed); unknown values
-    /// are [`Self::Corrected`], Spark 4.2's default.
+    /// The policy `value` names (case-insensitive, trimmed). The valid
+    /// values are the config registry's
+    /// `spark.sql.legacy.ctePrecedencePolicy` enum (`EXCEPTION`, `LEGACY`,
+    /// `CORRECTED`): that entry is the single validation source, so an
+    /// unknown value is `None` rather than a silent default. Callers holding
+    /// an already-validated config map `None` to the default.
     #[must_use]
-    pub fn from_value(value: &str) -> Self {
+    pub fn from_value(value: &str) -> Option<Self> {
         if value.trim().eq_ignore_ascii_case("LEGACY") {
-            Self::Legacy
+            Some(Self::Legacy)
         } else if value.trim().eq_ignore_ascii_case("EXCEPTION") {
-            Self::Exception
+            Some(Self::Exception)
+        } else if value.trim().eq_ignore_ascii_case("CORRECTED") {
+            Some(Self::Corrected)
         } else {
-            Self::Corrected
+            None
         }
     }
 }
@@ -255,10 +261,9 @@ impl ResolutionConf {
                 None => Some(0),
                 Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
             },
-            cte_precedence: conf(Self::KEYS[10]).map_or_else(
-                CtePrecedencePolicy::default,
-                CtePrecedencePolicy::from_value,
-            ),
+            cte_precedence: conf(Self::KEYS[10])
+                .and_then(CtePrecedencePolicy::from_value)
+                .unwrap_or_default(),
             allow_parameterless_count: on(Self::KEYS[11]),
             allow_star_with_single_table_identifier_in_count: on(Self::KEYS[12]),
         }
@@ -584,7 +589,9 @@ impl Analyzer for DefaultAnalyzer {
             }
             let owned;
             let plan = if policy.precedence == CtePrecedencePolicy::Legacy {
-                owned = Plan::try_new(legacy::eliminate(plan.root(), policy))
+                let inlined = legacy::eliminate(plan.root(), policy)
+                    .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
+                owned = Plan::try_new(inlined)
                     .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
                 &owned
             } else {
