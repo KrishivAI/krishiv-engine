@@ -110,6 +110,28 @@ def test_partition_by_raises_unsupported(df: DataFrame, tmp_path: Any) -> None:
         df.write.partitionBy(1)  # ty: ignore[invalid-argument-type]
 
 
+def test_partition_by_empty_is_a_noop(df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "t")
+    df.write.partitionBy([]).save(path)
+    assert os.path.exists(os.path.join(path, "_SUCCESS"))
+    assert len(df.sparkSession.read.parquet(path).collect()) == 3
+
+
+def test_invalid_frame_reports_analysis_error_before_partitioning(spark: SparkSession, tmp_path: Any) -> None:
+    with pytest.raises(errors.AnalysisException) as bad:
+        spark.table("missing").write.partitionBy("name").save(str(tmp_path / "t"))
+    assert bad.value.getCondition() == "TABLE_OR_VIEW_NOT_FOUND"
+    assert not os.path.exists(str(tmp_path / "t"))
+
+
+def test_partition_by_with_bogus_mode_raises_invalid_save_mode(df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "t")
+    with pytest.raises(errors.AnalysisException) as bad:
+        df.write.partitionBy("name").mode("bogus").save(path)
+    assert bad.value.getCondition() == "INVALID_SAVE_MODE"
+    assert not os.path.exists(path)
+
+
 def test_unknown_format_raises_unsupported(df: DataFrame, tmp_path: Any) -> None:
     with pytest.raises(errors.UnsupportedOperationException) as bad:
         df.write.json(str(tmp_path / "j"))
@@ -117,9 +139,49 @@ def test_unknown_format_raises_unsupported(df: DataFrame, tmp_path: Any) -> None
     assert "writing the json format" in str(bad.value)
 
     for format in ("text", "orc"):
+        path = str(tmp_path / format)
         with pytest.raises(errors.UnsupportedOperationException) as bad:
-            df.write.format(format).save(str(tmp_path / format))
+            df.write.format(format).save(path)
         assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+        assert not os.path.exists(path)
+
+
+def test_csv_modes(df: DataFrame, tmp_path: Any) -> None:
+    def rows(frame: DataFrame) -> list[tuple[str, Any]]:
+        out = [(r.asDict()["_c0"], r.asDict()["_c1"]) for r in frame.collect()]
+        out.sort(key=lambda r: (r[0] is None, r[0]))
+        return out
+
+    path = str(tmp_path / "t")
+    df.write.format("csv").save(path, mode="append")
+    df.write.format("csv").save(path, mode="append")
+    assert len(df.sparkSession.read.csv(path).collect()) == 6
+
+    one = df.filter("id = 1")
+    one.write.format("csv").save(path, mode="overwrite")
+    assert rows(df.sparkSession.read.csv(path)) == [("1", None)]
+
+    for mode in ("error", "errorifexists", "default"):
+        with pytest.raises(errors.AnalysisException) as bad:
+            df.write.format("csv").save(path, mode=mode)
+        assert bad.value.getCondition() == "PATH_ALREADY_EXISTS"
+    assert rows(df.sparkSession.read.csv(path)) == [("1", None)]
+
+    df.write.format("csv").save(path, mode="ignore")
+    assert rows(df.sparkSession.read.csv(path)) == [("1", None)]
+
+    fresh = str(tmp_path / "fresh")
+    df.write.format("csv").save(fresh, mode="ignore")
+    assert len(df.sparkSession.read.csv(fresh).collect()) == 3
+
+
+def test_csv_compression_option_raises_unsupported(df: DataFrame, tmp_path: Any) -> None:
+    path = str(tmp_path / "t")
+    with pytest.raises(errors.UnsupportedOperationException) as bad:
+        df.write.option("compression", "gzip").csv(path)
+    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+    assert "compression codec gzip" in str(bad.value)
+    assert not os.path.exists(path)
 
 
 def test_unknown_mode_raises_invalid_save_mode(df: DataFrame, tmp_path: Any) -> None:

@@ -275,9 +275,9 @@ impl PyDataFrame {
     }
 
     /// Writes the rows to `path` in `format` with `mode` (PySpark's
-    /// `DataFrameWriter.save`): `options` pairs and the `partition_by`
-    /// columns are those the facade collected. Runs with the GIL released;
-    /// a partitioned write fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+    /// `DataFrameWriter.save` collected as one call). The mapping from the
+    /// facade's collected writer state to [`DataFrameWriter`] lives here,
+    /// in `krishiv-session`, not in the facade.
     #[pyo3(signature = (format, mode, path, options=None, partition_by=None))]
     fn write(
         &self,
@@ -288,16 +288,14 @@ impl PyDataFrame {
         options: Option<Vec<(String, String)>>,
         partition_by: Option<Vec<String>>,
     ) -> PyResult<()> {
-        let mut writer = self.inner.write().format(format).mode(mode);
-        for (key, value) in options.unwrap_or_default() {
-            writer = writer.option(&key, &value);
-        }
+        let df = self.inner.clone();
+        let (format, mode, path) = (format.to_owned(), mode.to_owned(), path.to_owned());
+        let options = options.unwrap_or_default();
         let partition_by = partition_by.unwrap_or_default();
-        if !partition_by.is_empty() {
-            writer = writer.partition_by(partition_by.iter().map(String::as_str));
-        }
-        let path = path.to_owned();
-        block_on(py, async move { writer.save(&path).await })
+        block_on(py, async move {
+            df.write_to(&format, &mode, &path, options, partition_by)
+                .await
+        })
     }
 
     /// The text (or, with `json`, the JSON document) of explain `mode`:

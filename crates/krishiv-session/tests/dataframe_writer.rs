@@ -283,6 +283,65 @@ fn partition_by_fails_with_unsupported_feature() {
 }
 
 #[test]
+fn partition_by_empty_is_a_noop() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let path = out(&dir, "t");
+    block_on(
+        s.table("people")
+            .write()
+            .partition_by(Vec::<&str>::new())
+            .save(&path),
+    )
+    .unwrap();
+    assert!(dir.path().join("t").join("_SUCCESS").exists());
+    assert_eq!(block_on(s.read().parquet([&path]).count()).unwrap(), 3);
+    assert_eq!(
+        rows(&s, &path),
+        vec![
+            (1, None),
+            (2, Some("b".to_owned())),
+            (3, Some("c".to_owned())),
+        ]
+    );
+}
+
+#[test]
+fn invalid_frame_reports_analysis_error_before_partitioning() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let path = out(&dir, "t");
+    let err = block_on(
+        s.table("missing")
+            .write()
+            .partition_by(["name"])
+            .save(&path),
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
+    assert!(!dir.path().join("t").exists());
+}
+
+#[test]
+fn partition_by_with_bogus_mode_reports_invalid_save_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let path = out(&dir, "t");
+    // The save-mode name is checked before partitioning.
+    let err = block_on(
+        s.table("people")
+            .write()
+            .partition_by(["name"])
+            .mode("bogus")
+            .save(&path),
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class().name(), "INVALID_SAVE_MODE");
+    assert!(err.to_string().contains("\"bogus\""), "{err}");
+    assert!(!dir.path().join("t").exists());
+}
+
+#[test]
 fn unknown_format_fails_with_unsupported_feature() {
     let dir = tempfile::tempdir().unwrap();
     let s = session();
@@ -292,13 +351,8 @@ fn unknown_format_fails_with_unsupported_feature() {
     assert!(err.to_string().contains("writing the json format"), "{err}");
     // Any other unregistered format, through `format`.
     for format in ["text", "orc"] {
-        let err = block_on(
-            s.table("people")
-                .write()
-                .format(format)
-                .save(&out(&dir, format)),
-        )
-        .unwrap_err();
+        let path = out(&dir, format);
+        let err = block_on(s.table("people").write().format(format).save(&path)).unwrap_err();
         assert_eq!(
             err.error_class().name(),
             "KRISHIV_UNSUPPORTED_FEATURE",
@@ -309,7 +363,128 @@ fn unknown_format_fails_with_unsupported_feature() {
                 .contains(&format!("writing the {format} format")),
             "{err}"
         );
+        // The failed write leaves nothing behind.
+        assert!(!dir.path().join(format).exists());
     }
+}
+
+#[test]
+fn csv_save_modes_append_overwrite_error_ignore() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let path = out(&dir, "t");
+
+    block_on(
+        s.table("people")
+            .write()
+            .format("csv")
+            .mode("append")
+            .save(&path),
+    )
+    .unwrap();
+    block_on(
+        s.table("people")
+            .write()
+            .format("csv")
+            .mode("append")
+            .save(&path),
+    )
+    .unwrap();
+    assert_eq!(csv_rows(&s, &path, &[]).len(), 6);
+
+    // Overwrite replaces (mixed case, as Spark's modes are case-insensitive).
+    let (schema, _) = people();
+    s.register_batches(
+        "one",
+        schema,
+        vec![
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![
+                    Field::new("id", ArrowType::Int32, false),
+                    Field::new("name", ArrowType::Utf8, true),
+                ])),
+                vec![
+                    Arc::new(Int32Array::from(vec![9])),
+                    Arc::new(StringArray::from(vec![Some("z")])),
+                ],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    block_on(
+        s.table("one")
+            .write()
+            .format("csv")
+            .mode("Overwrite")
+            .save(&path),
+    )
+    .unwrap();
+    assert_eq!(
+        csv_rows(&s, &path, &[]),
+        vec![("9".to_owned(), Some("z".to_owned()))]
+    );
+
+    // Every error spelling fails on an existing path and keeps its rows.
+    for mode in ["error", "errorifexists", "default", "ERRORIFEXISTS"] {
+        assert_eq!(
+            class(block_on(
+                s.table("people")
+                    .write()
+                    .format("csv")
+                    .mode(mode)
+                    .save(&path)
+            )),
+            "PATH_ALREADY_EXISTS",
+            "{mode}"
+        );
+    }
+    assert_eq!(
+        csv_rows(&s, &path, &[]),
+        vec![("9".to_owned(), Some("z".to_owned()))]
+    );
+
+    // Ignore leaves the existing rows and writes a missing path.
+    block_on(
+        s.table("people")
+            .write()
+            .format("csv")
+            .mode("ignore")
+            .save(&path),
+    )
+    .unwrap();
+    assert_eq!(
+        csv_rows(&s, &path, &[]),
+        vec![("9".to_owned(), Some("z".to_owned()))]
+    );
+    let fresh = out(&dir, "fresh");
+    block_on(
+        s.table("people")
+            .write()
+            .format("csv")
+            .mode("ignore")
+            .save(&fresh),
+    )
+    .unwrap();
+    assert_eq!(csv_rows(&s, &fresh, &[]).len(), 3);
+}
+
+#[test]
+fn csv_compression_codec_fails_with_unsupported_feature() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    let path = out(&dir, "t");
+    let err = block_on(
+        s.table("people")
+            .write()
+            .format("csv")
+            .option("compression", "gzip")
+            .save(&path),
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert!(err.to_string().contains("compression codec gzip"), "{err}");
+    assert!(!dir.path().join("t").exists());
 }
 
 #[test]

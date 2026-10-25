@@ -1131,10 +1131,36 @@ impl DataFrame {
         DataFrameWriter {
             df: self.clone(),
             format: "parquet".to_owned(),
-            mode: "errorifexists".to_owned(),
+            mode: "error".to_owned(),
             options: BTreeMap::new(),
             partition_by: Vec::new(),
         }
+    }
+
+    /// Writes this DataFrame's rows to the directory `path` in `format`
+    /// with `mode` (PySpark's `DataFrameWriter.save` collected as one
+    /// call): `options` pairs and the `partition_by` columns. The engine
+    /// futures run is the same as [`DataFrameWriter::save`]; a partitioned
+    /// write fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+    ///
+    /// # Errors
+    /// As [`DataFrameWriter::save`].
+    pub async fn write_to(
+        &self,
+        format: &str,
+        mode: &str,
+        path: &str,
+        options: Vec<(String, String)>,
+        partition_by: Vec<String>,
+    ) -> Result<(), KrishivError> {
+        let mut writer = self.write().format(format).mode(mode);
+        for (key, value) in &options {
+            writer = writer.option(key, value);
+        }
+        if !partition_by.is_empty() {
+            writer = writer.partition_by(partition_by.iter().map(String::as_str));
+        }
+        writer.save(path).await
     }
 
     /// Registers this DataFrame as the temporary view `name`, replacing any
@@ -1440,22 +1466,18 @@ impl DataFrameWriter {
     /// ```
     ///
     /// # Errors
-    /// Analysis and planning errors; `INVALID_SAVE_MODE`;
+    /// Analysis and planning errors; `INVALID_SAVE_MODE` (checked before
+    /// partitioning, so a bad mode wins over a partitioned write);
     /// `PATH_ALREADY_EXISTS` (`errorifexists` on an existing path, or an
     /// append to a file); the format's option errors; write failures;
     /// `KRISHIV_UNSUPPORTED_FEATURE` when partitioning was requested.
     pub async fn save(self, path: &str) -> Result<(), KrishivError> {
-        if !self.partition_by.is_empty() {
-            return Err(KrishivUnsupportedFeature {
-                feature: "writing partitioned output".to_owned(),
-            }
-            .into());
-        }
         let target = WriteTarget {
             format: self.format,
             mode: self.mode,
             path: OptionValue::from_user("path", path),
             options: self.options,
+            partition_by: self.partition_by,
         };
         let df = self.df;
         let session = df.session.clone();

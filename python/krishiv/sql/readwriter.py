@@ -56,7 +56,14 @@ class DataFrameReader:
 
 
 class DataFrameWriter:
-    """Writes a :class:`DataFrame`'s rows to files, as ``pyspark.sql.DataFrameWriter``."""
+    """Writes a :class:`DataFrame`'s rows to files (a subset of
+    ``pyspark.sql.DataFrameWriter``: ``format``/``mode``/``option``/
+    ``options``/``partitionBy``/``save`` and the ``parquet``/``csv``/``json``
+    shortcuts; ``bucketBy``/``sortBy``/``saveAsTable``/``insertInto`` are not
+    implemented). The engine writes no partitioned layout, so a write with
+    ``partitionBy`` columns always fails with ``KRISHIV_UNSUPPORTED_FEATURE``;
+    unknown formats fail the same way and unknown modes with
+    ``INVALID_SAVE_MODE``."""
 
     def __init__(self, df: DataFrame) -> None:
         self._df = df
@@ -83,6 +90,11 @@ class DataFrameWriter:
         return self
 
     def partitionBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriter:
+        """Names of columns to partition by. Only column names (``str``) are
+        accepted; ``Column`` objects raise a type error. The engine writes no
+        partitioned layout, so any column fails ``save`` with
+        ``KRISHIV_UNSUPPORTED_FEATURE``; an empty ``partitionBy`` is a no-op,
+        as in Spark."""
         names: list[str] = []
         for c in cols:
             if isinstance(c, str):
