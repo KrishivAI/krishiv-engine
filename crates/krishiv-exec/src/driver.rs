@@ -223,6 +223,7 @@ impl Future for Timed {
 ///
 /// The file is opened once per thread and read with `pread`: a poll costs
 /// one syscall instead of open, statx, two reads and close.
+#[cfg(unix)]
 fn runqueue_wait() -> Option<Duration> {
     use std::os::unix::fs::FileExt;
     thread_local! {
@@ -242,6 +243,13 @@ fn runqueue_wait() -> Option<Duration> {
             .ok()?;
         Some(Duration::from_nanos(nanos))
     })
+}
+
+/// Non-Unix targets have no `/proc/thread-self/schedstat`: there is no
+/// run-queue wait to subtract, so slices are wall time.
+#[cfg(not(unix))]
+fn runqueue_wait() -> Option<Duration> {
+    None
 }
 
 impl Drop for Timed {
