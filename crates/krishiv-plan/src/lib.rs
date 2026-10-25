@@ -83,6 +83,7 @@
 //! | `PlanNode::SetOp` | U | - | - |
 //! | `PlanNode::ReplicateRows` | R | - | - |
 //! | `PlanNode::Expand` | R | - | - |
+//! | `PlanNode::InlineTable` | U | - | - |
 //! | `PlanNode::Window` | R | - | - |
 //! | `ExprNode::Column` | U | all | `col`, `df["a"]` |
 //! | `ExprNode::Literal` | U, R | all | `lit` |
