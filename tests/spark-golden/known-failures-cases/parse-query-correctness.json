@@ -1,0 +1,30 @@
+{
+  "cases": {
+    "depends-on-command": [
+      38,
+      40,
+      42,
+      48,
+      50,
+      56,
+      58,
+      60,
+      62,
+      64
+    ],
+    "sql-commands": [
+      37,
+      39,
+      41,
+      43,
+      45,
+      47,
+      49,
+      51,
+      53,
+      55
+    ]
+  },
+  "file": "parse-query-correctness",
+  "format_version": 1
+}

@@ -31,8 +31,8 @@ use arrow_array::types::{
     Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{
-    Array, ArrayRef, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
-    StringArray, cast::AsArray,
+    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, GenericStringArray, OffsetSizeTrait,
+    PrimitiveArray, StringArray, cast::AsArray,
 };
 use arrow_buffer::{NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
@@ -578,8 +578,9 @@ pub fn cast(
         ($o:ty, $t:ty) => {{
             let s = input.as_string::<$o>();
             let out = map_rows::<$t>(input, |i| {
-                // Out of the target's range is malformed too (Spark's `toInt`).
-                let v = text::parse_integral(s.value(i).as_bytes(), mode == CastMode::Ansi)
+                // Out of the target's range is malformed too (Spark's `toInt`);
+                // `try_cast` parses as ANSI does (`toLongExact`), so `'1.5'` is NULL.
+                let v = text::parse_integral(s.value(i).as_bytes(), mode != CastMode::Legacy)
                     .and_then(|v| match <$t as SparkIntegral>::narrow(i128::from(v)) {
                         (n, false) => Some(n),
                         (_, true) => None,
@@ -665,6 +666,17 @@ pub fn cast(
                 s.nulls().cloned(),
             )
             .map_err(|e| KernelError::internal(e.to_string()))?;
+            Ok(Arc::new(out))
+        }
+        (DataType::Utf8, DataType::Binary) => {
+            // A `STRING` carrier holds bytes: reinterpreting them as
+            // `BINARY` never fails (Spark's `CAST(string AS BINARY)` is the
+            // UTF-8 bytes). The union planner uses this for binary-safe
+            // string branches, whose bytes are not necessarily valid UTF-8.
+            let s = input.as_string::<i32>();
+            let out =
+                BinaryArray::try_new(s.offsets().clone(), s.values().clone(), s.nulls().cloned())
+                    .map_err(|e| KernelError::internal(e.to_string()))?;
             Ok(Arc::new(out))
         }
         (DataType::Utf8, _) => from_string(input.as_string::<i32>(), to, opts, &to_name),

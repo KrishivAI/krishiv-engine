@@ -26,10 +26,13 @@ from krishiv.sql import _convert
 from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
+from krishiv.sql.na import _NO_VALUE, DataFrameNaFunctions
 from krishiv.sql.row import Row
+from krishiv.sql.stat import DataFrameStatFunctions
 from krishiv.sql.types import StructType, _struct_from_columns
 
 if TYPE_CHECKING:
+    from krishiv.sql.readwriter import DataFrameWriter
     from krishiv.sql.session import SparkSession
 
 _HOW = {
@@ -91,9 +94,10 @@ def _same(left: str, right: str, case_sensitive: bool) -> bool:
     return left == right if case_sensitive else left.lower() == right.lower()
 
 
-def _has_duplicates(columns: list[str]) -> bool:
-    """Whether two output columns share a name (as a join can leave them)."""
-    return len({c.lower() for c in columns}) != len(columns)
+def _has_duplicates(columns: list[str], case_sensitive: bool) -> bool:
+    """Whether two output columns share a name (as a join can leave them), under the session's
+    case sensitivity: ``["A", "a"]`` collides only when matching is case-insensitive."""
+    return len({c if case_sensitive else c.lower() for c in columns}) != len(columns)
 
 
 def _check_partitions(count: int) -> None:
@@ -484,7 +488,7 @@ class DataFrame:
         if not doomed:
             return self._new(self._df)
         columns = self.columns
-        if _has_duplicates(columns):
+        if _has_duplicates(columns, case_sensitive):
             # A name select would be ambiguous: give every column a unique name by
             # position, keep the survivors, and restore their names.
             staged = self.toDF(*[f"_{i}" for i in range(len(columns))])
@@ -616,7 +620,7 @@ class DataFrame:
                     return v
             return c
 
-        if _has_duplicates(self.columns):
+        if _has_duplicates(self.columns, case_sensitive):
             # A name select would be ambiguous: rename by position.
             return self.toDF(*[renamed(c) for c in self.columns])
         return self.select([_quoted(c).alias(renamed(c)) for c in self.columns])
@@ -909,6 +913,425 @@ class DataFrame:
             )
         sampled = int(sampled_seed) if sampled_seed is not None else random.randint(0, sys.maxsize)
         return self._new(self._df.sample(replace, frac, sampled))
+
+    @property
+    def na(self) -> DataFrameNaFunctions:
+        """Functionality for working with missing data (:class:`DataFrameNaFunctions`)."""
+        return DataFrameNaFunctions(self)
+
+    @property
+    def stat(self) -> DataFrameStatFunctions:
+        """Functionality for statistic functions (:class:`DataFrameStatFunctions`)."""
+        return DataFrameStatFunctions(self)
+
+    def dropna(
+        self,
+        how: str | None = "any",
+        thresh: int | None = None,
+        subset: str | tuple[str, ...] | list[str] | None = None,
+    ) -> DataFrame:
+        """Returns a new :class:`DataFrame` omitting rows with null or NaN values.
+        :func:`DataFrame.dropna` and :func:`DataFrameNaFunctions.drop` are
+        aliases of each other.
+
+        Parameters
+        ----------
+        how : str, optional, the values that can be 'any' or 'all', default 'any'.
+            If 'any', drop a row if it contains any nulls.
+            If 'all', drop a row only if all its values are null.
+        thresh: int, optional, default None.
+            If specified, drop rows that have less than `thresh` non-null values.
+            This overwrites the `how` parameter.
+        subset : str, tuple or list, optional
+            optional list of column names to consider.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            DataFrame with null only rows excluded.
+
+        Examples
+        --------
+        >>> from krishiv.sql import Row
+        >>> df = spark.createDataFrame([
+        ...     Row(age=10, height=80.0, name="Alice"),
+        ...     Row(age=5, height=float("nan"), name="Bob"),
+        ...     Row(age=None, height=None, name="Tom"),
+        ...     Row(age=None, height=float("nan"), name=None),
+        ... ])
+
+        Example 1: Drop the row if it contains any null or NaN.
+
+        >>> df.na.drop().show()
+        +---+------+-----+
+        |age|height| name|
+        +---+------+-----+
+        | 10|  80.0|Alice|
+        +---+------+-----+
+
+        Example 2: Drop the row only if all its values are null or NaN.
+
+        >>> df.na.drop(how='all').show()
+        +----+------+-----+
+        | age|height| name|
+        +----+------+-----+
+        |  10|  80.0|Alice|
+        |   5|   NaN|  Bob|
+        |NULL|  NULL|  Tom|
+        +----+------+-----+
+
+        Example 3: Drop rows that have less than `thresh` non-null and non-NaN values.
+
+        >>> df.na.drop(thresh=2).show()
+        +---+------+-----+
+        |age|height| name|
+        +---+------+-----+
+        | 10|  80.0|Alice|
+        |  5|   NaN|  Bob|
+        +---+------+-----+
+
+        Example 4: Drop rows with null and NaN values in the specified columns.
+
+        >>> df.na.drop(subset=['age', 'name']).show()
+        +---+------+-----+
+        |age|height| name|
+        +---+------+-----+
+        | 10|  80.0|Alice|
+        |  5|   NaN|  Bob|
+        +---+------+-----+
+        """
+        return self.na.drop(how, thresh, subset)
+
+    def fillna(
+        self,
+        value: float | str | bool | dict[str, Any],
+        subset: str | tuple[str, ...] | list[str] | None = None,
+    ) -> DataFrame:
+        """Returns a new :class:`DataFrame` which null values are filled with new value.
+        :func:`DataFrame.fillna` and :func:`DataFrameNaFunctions.fill` are
+        aliases of each other.
+
+        Parameters
+        ----------
+        value : int, float, string, bool or dict, the value to replace null values with.
+            If the value is a dict, then `subset` is ignored and `value` must be a mapping
+            from column name (string) to replacement value. The replacement value must be
+            an int, float, boolean, or string.
+        subset : str, tuple or list, optional
+            optional list of column names to consider.
+            Columns specified in subset that do not have matching data types are ignored.
+            For example, if `value` is a string, and subset contains a non-string column,
+            then the non-string column is simply ignored.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            DataFrame with replaced null values.
+
+        .. note:: The string examples need string columns the engine can compare with
+            a string literal (Arrow ``string_view``); ``Utf8`` columns built from
+            Python rows do not match yet.
+
+        Examples
+        --------
+        >>> df = spark.createDataFrame([
+        ...     (10, 80.5, "Alice", None),
+        ...     (5, None, "Bob", None),
+        ...     (None, None, "Tom", None),
+        ...     (None, None, None, True)],
+        ...     schema=["age", "height", "name", "bool"])
+
+        Example 1: Fill all null values with 50 for numeric columns.
+
+        >>> df.na.fill(50).show()
+        +---+------+-----+----+
+        |age|height| name|bool|
+        +---+------+-----+----+
+        | 10|  80.5|Alice|NULL|
+        |  5|  50.0|  Bob|NULL|
+        | 50|  50.0|  Tom|NULL|
+        | 50|  50.0| NULL|true|
+        +---+------+-----+----+
+
+        Example 2: Fill all null values with ``False`` for boolean columns.
+
+        >>> df.na.fill(False).show()
+        +----+------+-----+-----+
+        | age|height| name| bool|
+        +----+------+-----+-----+
+        |  10|  80.5|Alice|false|
+        |   5|  NULL|  Bob|false|
+        |NULL|  NULL|  Tom|false|
+        |NULL|  NULL| NULL| true|
+        +----+------+-----+-----+
+
+        Example 3: Fill all null values with to 50 and "unknown" for
+            'age' and 'name' column respectively.
+
+        >>> df.na.fill({'age': 50, 'name': 'unknown'}).show()
+        +---+------+-------+----+
+        |age|height|   name|bool|
+        +---+------+-------+----+
+        | 10|  80.5|  Alice|NULL|
+        |  5|  NULL|    Bob|NULL|
+        | 50|  NULL|    Tom|NULL|
+        | 50|  NULL|unknown|true|
+        +---+------+-------+----+
+
+        Example 4: Fill all null values with "Spark" for 'name' column.
+
+        >>> df.na.fill(value = 'Spark', subset = 'name').show()
+        +----+------+-----+----+
+        | age|height| name|bool|
+        +----+------+-----+----+
+        |  10|  80.5|Alice|NULL|
+        |   5|  NULL|  Bob|NULL|
+        |NULL|  NULL|  Tom|NULL|
+        |NULL|  NULL|Spark|true|
+        +----+------+-----+----+
+        """
+        return self.na.fill(value, subset)
+
+    def replace(
+        self,
+        to_replace: Any,
+        value: Any = _NO_VALUE,
+        subset: str | tuple[str, ...] | list[str] | None = None,
+    ) -> DataFrame:
+        """Returns a new :class:`DataFrame` replacing a value with another value.
+        :func:`DataFrame.replace` and :func:`DataFrameNaFunctions.replace` are
+        aliases of each other.
+        Values to_replace and value must have the same type and can only be numerics, booleans,
+        or strings. Value can have None. When replacing, the new value will be cast
+        to the type of the existing column.
+        For numeric replacements all values to be replaced should have unique
+        floating point representation. In case of conflicts (for example with `{42: -1, 42.0: 1}`)
+        and arbitrary replacement will be used.
+
+        Parameters
+        ----------
+        to_replace : bool, int, float, string, list or dict, the value to be replaced.
+            If the value is a dict, then `value` is ignored or can be omitted, and `to_replace`
+            must be a mapping between a value and a replacement.
+        value : bool, int, float, string or None, optional
+            The replacement value must be a bool, int, float, string or None. If `value` is a
+            list, `value` should be of the same length and type as `to_replace`.
+            If `value` is a scalar and `to_replace` is a sequence, then `value` is
+            used as a replacement for each item in `to_replace`.
+        subset : list, optional
+            optional list of column names to consider.
+            Columns specified in subset that do not have matching data types are ignored.
+            For example, if `value` is a string, and subset contains a non-string column,
+            then the non-string column is simply ignored.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            DataFrame with replaced values.
+
+        .. note:: The string examples need string columns the engine can compare with
+            a string literal (Arrow ``string_view``); ``Utf8`` columns built from
+            Python rows do not match yet.
+
+        Examples
+        --------
+        >>> df = spark.createDataFrame([
+        ...     (10, 80, "Alice"),
+        ...     (5, None, "Bob"),
+        ...     (None, 10, "Tom"),
+        ...     (None, None, None)],
+        ...     schema=["age", "height", "name"])
+
+        Example 1: Replace 10 to 20 in all columns.
+
+        >>> df.na.replace(10, 20).show()
+        +----+------+-----+
+        | age|height| name|
+        +----+------+-----+
+        |  20|    80|Alice|
+        |   5|  NULL|  Bob|
+        |NULL|    20|  Tom|
+        |NULL|  NULL| NULL|
+        +----+------+-----+
+
+        Example 2: Replace 'Alice' to null in all columns.
+
+        >>> df.na.replace('Alice', None).show()
+        +----+------+----+
+        | age|height|name|
+        +----+------+----+
+        |  10|    80|NULL|
+        |   5|  NULL| Bob|
+        |NULL|    10| Tom|
+        |NULL|  NULL|NULL|
+        +----+------+----+
+
+        Example 3: Replace 'Alice' to 'A', and 'Bob' to 'B' in the 'name' column.
+
+        >>> df.na.replace(['Alice', 'Bob'], ['A', 'B'], 'name').show()
+        +----+------+----+
+        | age|height|name|
+        +----+------+----+
+        |  10|    80|   A|
+        |   5|  NULL|   B|
+        |NULL|    10| Tom|
+        |NULL|  NULL|NULL|
+        +----+------+----+
+
+        Example 4: Replace 10 to 18 in the 'age' column.
+
+        >>> df.na.replace(10, 18, 'age').show()
+        +----+------+-----+
+        | age|height| name|
+        +----+------+-----+
+        |  18|    80|Alice|
+        |   5|  NULL|  Bob|
+        |NULL|    10|  Tom|
+        |NULL|  NULL| NULL|
+        +----+------+-----+
+        """
+        return self.na.replace(to_replace, value, subset)
+
+    def crosstab(self, col1: str, col2: str) -> DataFrame:
+        """Computes a pair-wise frequency table of the given columns. Also known as a contingency
+        table.
+        The first column of each row will be the distinct values of `col1` and the column names
+        will be the distinct values of `col2`. The name of the first column will be `$col1_$col2`.
+        Pairs that have no occurrences will have zero as their counts.
+        :func:`DataFrame.crosstab` and :func:`DataFrameStatFunctions.crosstab` are aliases.
+
+        Parameters
+        ----------
+        col1 : str
+            The name of the first column. Distinct items will make the first item of
+            each row.
+        col2 : str
+            The name of the second column. Distinct items will make the column names
+            of the :class:`DataFrame`.
+
+        Returns
+        -------
+        :class:`DataFrame`
+            Frequency matrix of two columns.
+
+        Notes
+        -----
+        The distinct values of `col2` are read when this is called, to name the columns, as Spark
+        does for a pivot; at most ``spark.sql.pivotMaxValues`` (10000) are allowed.
+
+        Examples
+        --------
+        >>> df = spark.createDataFrame([(1, 11), (1, 11), (3, 10), (4, 8), (4, 8)], ["c1", "c2"])
+        >>> df.crosstab("c1", "c2").sort("c1_c2").show()
+        +-----+---+---+---+
+        |c1_c2| 10| 11|  8|
+        +-----+---+---+---+
+        |    1|  0|  2|  0|
+        |    3|  1|  0|  0|
+        |    4|  0|  0|  2|
+        +-----+---+---+---+
+        """
+        return self.stat.crosstab(col1, col2)
+
+    def sampleBy(self, col: ColumnOrName, fractions: dict[Any, float], seed: int | None = None) -> DataFrame:
+        """Returns a stratified sample without replacement based on the
+        fraction given on each stratum.
+
+        .. note:: The engine cannot sample yet: unless ``fractions`` is empty, the returned
+            :class:`DataFrame` fails its first action with ``KRISHIV_UNSUPPORTED_FEATURE`` (from
+            :meth:`DataFrame.sample`).
+
+        Parameters
+        ----------
+        col : :class:`Column` or str
+            column that defines strata
+        fractions : dict
+            sampling fraction for each stratum. If a stratum is not
+            specified, we treat its fraction as zero.
+        seed : int, optional
+            random seed
+
+        Returns
+        -------
+        a new :class:`DataFrame` that represents the stratified sample
+
+        Notes
+        -----
+        The rows come back grouped by stratum, not in the order of this DataFrame.
+        """
+        return self.stat.sampleBy(col, fractions, seed)
+
+    def describe(self, *cols: str | list[str]) -> DataFrame:
+        """Computes basic statistics for numeric and string columns: count, mean, stddev, min and max.
+
+        .. note:: The engine has no standard-deviation aggregate yet: after checking its
+            arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+
+        Parameters
+        ----------
+        cols : str, list, optional
+             Column name or list of column names to describe by (default All columns).
+        """
+        names = cols[0] if len(cols) == 1 and isinstance(cols[0], list) else cols
+        for name in names:
+            if not isinstance(name, str):
+                raise not_expected_type("cols", "str", name)
+        raise unsupported_feature("DataFrame.describe")
+
+    def summary(self, *statistics: str | list[str]) -> DataFrame:
+        """Computes the given statistics (count, mean, stddev, min, max and percentiles such as
+        ``75%``) for numeric and string columns.
+
+        .. note:: The engine has no standard-deviation or approximate-percentile aggregate yet:
+            after checking its arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+
+        Parameters
+        ----------
+        statistics : str, optional
+             The statistics to calculate (default count, mean, stddev, min, 25%, 50%, 75%, max).
+        """
+        names = statistics[0] if len(statistics) == 1 and isinstance(statistics[0], list) else statistics
+        for name in names:
+            if not isinstance(name, str):
+                raise not_expected_type("statistics", "list[str]", name)
+        raise unsupported_feature("DataFrame.summary")
+
+    def corr(self, col1: str, col2: str, method: str | None = None) -> float:
+        """The Pearson correlation of two columns as a double value.
+
+        .. note:: The engine has no correlation aggregate yet: after checking its arguments this
+            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        """
+        return self.stat.corr(col1, col2, method)
+
+    def cov(self, col1: str, col2: str) -> float:
+        """The sample covariance of two columns as a double value.
+
+        .. note:: The engine has no covariance aggregate yet: after checking its arguments this
+            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        """
+        return self.stat.cov(col1, col2)
+
+    def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None = None) -> DataFrame:
+        """The frequent items of columns, possibly with false positives.
+
+        .. note:: The engine has no frequent-items sketch yet: after checking its arguments this
+            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        """
+        return self.stat.freqItems(cols, support)
+
+    def approxQuantile(
+        self,
+        col: str | list[str] | tuple[str, ...],
+        probabilities: list[float] | tuple[float, ...],
+        relativeError: float,
+    ) -> list[Any]:
+        """The approximate quantiles of numeric columns.
+
+        .. note:: The engine has no approximate-percentile aggregate yet: after checking its
+            arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        """
+        return self.stat.approxQuantile(col, probabilities, relativeError)
 
     def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame:
         """Returns a new :class:`DataFrame` partitioned by the given partitioning expressions.
@@ -1387,3 +1810,10 @@ class DataFrame:
         if not isinstance(name, str):
             raise not_expected_type("name", "str", name)
         self._df.create_or_replace_temp_view(name)
+
+    @property
+    def write(self) -> DataFrameWriter:
+        """Writes this :class:`DataFrame`'s rows to files, as ``pyspark.sql.DataFrame.write``."""
+        from krishiv.sql.readwriter import DataFrameWriter
+
+        return DataFrameWriter(self)

@@ -9,7 +9,7 @@ use std::task::{Context, Poll, Waker};
 
 use super::{
     AllowAll, AnalysisContext, BuiltinFunctions, Catalog, CatalogResolver, MemoryCatalog,
-    Principal, PrincipalKind, ResolutionConf, SparkProfile,
+    Principal, PrincipalKind, ResolutionConf, SparkProfile, VariableSnapshot,
 };
 
 /// One catalog, the current one, and the current namespace.
@@ -51,6 +51,7 @@ pub fn context(catalog: MemoryCatalog, conf: ResolutionConf) -> AnalysisContext 
         functions: Arc::new(BuiltinFunctions::new()),
         sql: None,
         files: None,
+        variables: Arc::new(VariableSnapshot::default()),
     }
 }
 

@@ -29,6 +29,7 @@ pub fn krishiv_session::functions::col(&str) -> krishiv_session::Column
 pub fn krishiv_session::functions::count(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::count_distinct(impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::Column
 pub fn krishiv_session::functions::count_star() -> krishiv_session::Column
+pub fn krishiv_session::functions::expr(&str) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::lit(impl krishiv_session::functions::IntoLiteral) -> krishiv_session::Column
 pub fn krishiv_session::functions::lit_null() -> krishiv_session::Column
 pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_session::Column
@@ -164,13 +165,16 @@ pub async fn krishiv_session::DataFrame::collect_with_metrics(&self) -> core::re
 pub async fn krishiv_session::DataFrame::count(&self) -> core::result::Result<u64, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::cross_join(&self, &Self) -> Self
+pub fn krishiv_session::DataFrame::cube(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
 pub fn krishiv_session::DataFrame::distinct(&self) -> Self
 pub fn krishiv_session::DataFrame::except_all(&self, &Self) -> Self
 pub async fn krishiv_session::DataFrame::execute_stream(&self) -> core::result::Result<krishiv_session::RecordBatchStream, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain(&self, krishiv_session::ExplainMode) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_with(&self, krishiv_session::ExplainMode, krishiv_session::GraphFormat) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::filter(&self, krishiv_session::Column) -> Self
+pub fn krishiv_session::DataFrame::filter_expr(&self, &str) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::group_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
+pub fn krishiv_session::DataFrame::grouping_sets(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>>, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
 pub fn krishiv_session::DataFrame::hint(&self, &str, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub fn krishiv_session::DataFrame::intersect(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::intersect_all(&self, &Self) -> Self
@@ -179,9 +183,11 @@ pub fn krishiv_session::DataFrame::join_using<'a>(&self, &Self, impl core::iter:
 pub fn krishiv_session::DataFrame::limit(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::offset(&self, i32) -> Self
 pub fn krishiv_session::DataFrame::order_by(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::DataFrame::rollup(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
 pub fn krishiv_session::DataFrame::sample(&self, bool, f64, i64) -> Self
 pub async fn krishiv_session::DataFrame::schema(&self) -> core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::select(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::DataFrame::select_expr(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::sort(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub fn krishiv_session::DataFrame::subtract(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::to_df(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> Self
@@ -192,6 +198,7 @@ pub async fn krishiv_session::DataFrame::warnings(&self) -> core::result::Result
 pub fn krishiv_session::DataFrame::where_(&self, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::with_column(&self, &str, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::write(&self) -> krishiv_session::DataFrameWriter
+pub async fn krishiv_session::DataFrame::write_to(&self, &str, &str, &str, alloc::vec::Vec<(alloc::string::String, alloc::string::String)>, alloc::vec::Vec<alloc::string::String>) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::collect_with_profile(&self) -> core::result::Result<(alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_exec::profile::QueryProfile), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::explain_analyze(&self) -> core::result::Result<krishiv_exec::profile::QueryProfile, krishiv_common::error::KrishivError>
@@ -214,10 +221,14 @@ impl core::fmt::Debug for krishiv_session::DataFrameReader
 pub fn krishiv_session::DataFrameReader::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::DataFrameWriter
 impl krishiv_session::DataFrameWriter
+pub async fn krishiv_session::DataFrameWriter::csv(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrameWriter::format(self, &str) -> Self
+pub async fn krishiv_session::DataFrameWriter::json(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrameWriter::mode(self, &str) -> Self
 pub fn krishiv_session::DataFrameWriter::option(self, &str, &str) -> Self
+pub fn krishiv_session::DataFrameWriter::options(self, impl core::iter::traits::collect::IntoIterator<Item = (impl core::convert::AsRef<str>, impl core::convert::AsRef<str>)>) -> Self
 pub async fn krishiv_session::DataFrameWriter::parquet(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::DataFrameWriter::partition_by(self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> Self
 pub async fn krishiv_session::DataFrameWriter::save(self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl core::clone::Clone for krishiv_session::DataFrameWriter
 pub fn krishiv_session::DataFrameWriter::clone(&self) -> krishiv_session::DataFrameWriter
@@ -277,6 +288,7 @@ impl krishiv_session::Session
 pub fn krishiv_session::Session::builder() -> krishiv_session::SessionBuilder
 pub fn krishiv_session::Session::conf(&self) -> krishiv_session::RuntimeConf
 pub fn krishiv_session::Session::drop_temp_view(&self, &str) -> bool
+pub fn krishiv_session::Session::expr(&self, &str) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::memory_reserved(&self) -> usize
 pub fn krishiv_session::Session::new() -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader

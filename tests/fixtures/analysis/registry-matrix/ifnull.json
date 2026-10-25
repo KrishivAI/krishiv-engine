@@ -1,0 +1,230 @@
+{
+  "entries": [
+    {
+      "id": "ifnull#01f264e6f2a4/ansi_on",
+      "reason": "SELECT ifnull(CAST(1.5 AS DECIMAL(10,2)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#01f264e6f2a4/ansi_off",
+      "reason": "SELECT ifnull(CAST(1.5 AS DECIMAL(10,2)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#1901fc2f1759/ansi_on",
+      "reason": "SELECT ifnull(INTERVAL '1-2' YEAR TO MONTH, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#1901fc2f1759/ansi_off",
+      "reason": "SELECT ifnull(INTERVAL '1-2' YEAR TO MONTH, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#1bf265d2ee73/ansi_on",
+      "reason": "SELECT ifnull(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#1bf265d2ee73/ansi_off",
+      "reason": "SELECT ifnull(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#1d03a62f2a6d/ansi_on",
+      "reason": "SELECT ifnull(true, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#1d03a62f2a6d/ansi_off",
+      "reason": "SELECT ifnull(true, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#24f22a74561c/ansi_on",
+      "reason": "SELECT ifnull(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#24f22a74561c/ansi_off",
+      "reason": "SELECT ifnull(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#3fead29b1417/ansi_on",
+      "reason": "SELECT ifnull(INTERVAL '1 02:03:04' DAY TO SECOND, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#3fead29b1417/ansi_off",
+      "reason": "SELECT ifnull(INTERVAL '1 02:03:04' DAY TO SECOND, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#504352bedb38/ansi_on",
+      "reason": "SELECT ifnull(NULL, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+    },
+    {
+      "id": "ifnull#504352bedb38/ansi_off",
+      "reason": "SELECT ifnull(NULL, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+    },
+    {
+      "id": "ifnull#5c3f20483580/ansi_on",
+      "reason": "SELECT ifnull(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#5c3f20483580/ansi_off",
+      "reason": "SELECT ifnull(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#679800a7c1ba/ansi_on",
+      "reason": "SELECT ifnull('abc', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#679800a7c1ba/ansi_off",
+      "reason": "SELECT ifnull('abc', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#6dc84bc76ae3/ansi_on",
+      "reason": "SELECT ifnull(1.5D, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#6dc84bc76ae3/ansi_off",
+      "reason": "SELECT ifnull(1.5D, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#720f10b049a9/ansi_on",
+      "reason": "SELECT ifnull(CAST(1 AS TINYINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#720f10b049a9/ansi_off",
+      "reason": "SELECT ifnull(CAST(1 AS TINYINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#7328caa97776/ansi_on",
+      "reason": "SELECT ifnull(DATE'2024-02-29', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#7328caa97776/ansi_off",
+      "reason": "SELECT ifnull(DATE'2024-02-29', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#733b0fdc47e4/ansi_on",
+      "reason": "SELECT ifnull('1', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#733b0fdc47e4/ansi_off",
+      "reason": "SELECT ifnull('1', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#780c7d54a3ff/ansi_on",
+      "reason": "SELECT ifnull(1L, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#780c7d54a3ff/ansi_off",
+      "reason": "SELECT ifnull(1L, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#828551fc1860/ansi_on",
+      "reason": "SELECT ifnull(X'01', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#828551fc1860/ansi_off",
+      "reason": "SELECT ifnull(X'01', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#86e8390fb86e/ansi_on",
+      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#86e8390fb86e/ansi_off",
+      "reason": "SELECT ifnull(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#968ad8ccd489/ansi_on",
+      "reason": "SELECT ifnull(NULL, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#968ad8ccd489/ansi_off",
+      "reason": "SELECT ifnull(NULL, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#969ba6758881/ansi_on",
+      "reason": "SELECT ifnull(NULL, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#969ba6758881/ansi_off",
+      "reason": "SELECT ifnull(NULL, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#a00353742167/ansi_on",
+      "reason": "SELECT ifnull(CAST(1 AS SMALLINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#a00353742167/ansi_off",
+      "reason": "SELECT ifnull(CAST(1 AS SMALLINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#b21b1a45795f/ansi_on",
+      "reason": "SELECT ifnull(CAST(1.5 AS FLOAT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#b21b1a45795f/ansi_off",
+      "reason": "SELECT ifnull(CAST(1.5 AS FLOAT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#b2af6cfe400b/ansi_on",
+      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#b2af6cfe400b/ansi_off",
+      "reason": "SELECT ifnull(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#bfe8bb89a454/ansi_on",
+      "reason": "SELECT ifnull(TIMESTAMP'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#bfe8bb89a454/ansi_off",
+      "reason": "SELECT ifnull(TIMESTAMP'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#c4bb34dbeb36/ansi_on",
+      "reason": "SELECT ifnull(1, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#c4bb34dbeb36/ansi_off",
+      "reason": "SELECT ifnull(1, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#ca112c5b4ed3/ansi_on",
+      "reason": "SELECT ifnull(NULL, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "ifnull#ca112c5b4ed3/ansi_off",
+      "reason": "SELECT ifnull(NULL, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "ifnull#d7660483e606/ansi_on",
+      "reason": "SELECT ifnull(NULL, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+    },
+    {
+      "id": "ifnull#d7660483e606/ansi_off",
+      "reason": "SELECT ifnull(NULL, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+    },
+    {
+      "id": "ifnull#d840be61918f/ansi_on",
+      "reason": "SELECT ifnull(array(1, 2), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#d840be61918f/ansi_off",
+      "reason": "SELECT ifnull(array(1, 2), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "ifnull#e500a975bbe1/ansi_on",
+      "reason": "SELECT ifnull(NULL, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "ifnull#e500a975bbe1/ansi_off",
+      "reason": "SELECT ifnull(NULL, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "ifnull#f5e830f1e7fe/ansi_on",
+      "reason": "SELECT ifnull(CAST(1.5 AS DECIMAL(38,18)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "ifnull#f5e830f1e7fe/ansi_off",
+      "reason": "SELECT ifnull(CAST(1.5 AS DECIMAL(38,18)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "ifnull"
+}

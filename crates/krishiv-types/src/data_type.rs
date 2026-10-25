@@ -4,15 +4,17 @@
 
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 
 use crate::error::{self, Result};
+use crate::nested::{ArrayType, MapType, StructType};
 
 /// A Spark SQL data type.
 ///
-/// Covers void (the type of a bare `NULL`), boolean, integral, floating-point, string, binary, decimal, date and
-/// timestamp types. Nested, interval, char/varchar and variant types are not
+/// Covers void (the type of a bare `NULL`), boolean, integral, floating-point, string, binary, decimal, date,
+/// timestamp and the nested array, map and struct types. Interval, char/varchar and variant types are not
 /// represented yet; parsing them yields `KRISHIV_UNSUPPORTED_FEATURE`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -46,37 +48,130 @@ pub enum DataType {
     Timestamp,
     /// `TIMESTAMP_NTZ`: microseconds since the epoch, no time zone.
     TimestampNtz,
+    /// `ARRAY<element>`.
+    Array(Arc<ArrayType>),
+    /// `MAP<key, value>`.
+    Map(Arc<MapType>),
+    /// `STRUCT<name: type, ...>`.
+    Struct(StructType),
 }
 
 impl DataType {
-    /// Spark's `DataType.simpleString`, e.g. `int`, `decimal(10,2)`.
+    /// The deepest nesting of array, map and struct types accepted from
+    /// outside (a type string, Arrow, JSON, Spark Connect, a plan). Spark has
+    /// no limit; this one keeps every recursive walk over a type, and the
+    /// JSON form of a type, within bounds.
+    pub const MAX_NESTING_DEPTH: usize = 32;
+
+    /// Spark's default `spark.sql.debug.maxToStringFields`: a struct's
+    /// `simpleString` lists at most this many fields.
+    pub const MAX_TO_STRING_FIELDS: usize = 25;
+
+    /// Spark's `DataType.simpleString`, e.g. `int`, `decimal(10,2)`,
+    /// `struct<a:int>` (at most [`Self::MAX_TO_STRING_FIELDS`] fields of a
+    /// struct are listed).
     pub fn simple_string(&self) -> String {
-        match self {
-            Self::Decimal(d) => format!("decimal({},{})", d.precision, d.scale),
-            other => other.keyword().to_owned(),
-        }
+        self.render(Render::Simple)
     }
 
-    /// Spark's `DataType.catalogString`; equal to [`Self::simple_string`] for
-    /// every type represented here.
+    /// Spark's `DataType.catalogString`: [`Self::simple_string`] with every
+    /// struct field listed.
     pub fn catalog_string(&self) -> String {
-        self.simple_string()
+        self.render(Render::Catalog)
     }
 
-    /// Spark's `DataType.sql`, e.g. `INT`, `DECIMAL(10,2)`.
+    /// Spark's `DataType.sql`, e.g. `INT`, `DECIMAL(10,2)`,
+    /// `STRUCT<a: INT NOT NULL COMMENT 'c'>`.
     pub fn sql(&self) -> String {
-        self.simple_string().to_ascii_uppercase()
+        self.render(Render::Sql)
     }
 
     /// Spark's `DataType.typeName` (the name used in Spark's JSON schemas),
-    /// e.g. `integer`, `long`, `decimal(10,2)`.
+    /// e.g. `integer`, `long`, `decimal(10,2)`, `array`.
     pub fn type_name(&self) -> String {
         match self {
             Self::Byte => "byte".to_owned(),
             Self::Short => "short".to_owned(),
             Self::Integer => "integer".to_owned(),
             Self::Long => "long".to_owned(),
-            other => other.simple_string(),
+            Self::Decimal(_) => self.atomic_simple_string(),
+            other => other.keyword().to_owned(),
+        }
+    }
+
+    /// The `simpleString` of an atomic type.
+    fn atomic_simple_string(&self) -> String {
+        match self {
+            Self::Decimal(d) => format!("decimal({},{})", d.precision, d.scale),
+            other => other.keyword().to_owned(),
+        }
+    }
+
+    fn render(&self, how: Render) -> String {
+        let mut out = String::new();
+        self.render_into(how, &mut out);
+        out
+    }
+
+    fn render_into(&self, how: Render, out: &mut String) {
+        let sql = how == Render::Sql;
+        let (open, sep) = if sql { ("<", ", ") } else { ("<", ",") };
+        match self {
+            Self::Array(a) => {
+                out.push_str(if sql { "ARRAY" } else { "array" });
+                out.push_str(open);
+                a.element_type().render_into(how, out);
+                out.push('>');
+            }
+            Self::Map(m) => {
+                out.push_str(if sql { "MAP" } else { "map" });
+                out.push_str(open);
+                m.key_type().render_into(how, out);
+                out.push_str(sep);
+                m.value_type().render_into(how, out);
+                out.push('>');
+            }
+            Self::Struct(s) => {
+                out.push_str(if sql { "STRUCT" } else { "struct" });
+                out.push_str(open);
+                let fields = s.fields();
+                let shown = match how {
+                    Render::Simple => fields.len().min(Self::MAX_TO_STRING_FIELDS),
+                    _ => fields.len(),
+                };
+                for (i, f) in fields.iter().take(shown).enumerate() {
+                    if i > 0 {
+                        out.push_str(sep);
+                    }
+                    if sql {
+                        out.push_str(&quote_if_needed(f.name()));
+                        out.push_str(": ");
+                    } else {
+                        out.push_str(f.name());
+                        out.push(':');
+                    }
+                    f.data_type().render_into(how, out);
+                    if sql {
+                        if !f.nullable() {
+                            out.push_str(" NOT NULL");
+                        }
+                        if let Some(c) = f.metadata().comment() {
+                            out.push_str(" COMMENT '");
+                            out.push_str(&c.replace('\'', "\\'"));
+                            out.push('\'');
+                        }
+                    }
+                }
+                // Spark's `truncatedString`: the listed fields, a separator,
+                // then how many are left out.
+                if shown < fields.len() {
+                    out.push_str(sep);
+                    out.push_str(&format!("... {} more fields", fields.len() - shown));
+                }
+                out.push('>');
+            }
+            atomic if sql => out.push_str(&atomic.atomic_simple_string().to_ascii_uppercase()),
+            atomic => out.push_str(&atomic.atomic_simple_string()),
         }
     }
 
@@ -97,7 +192,34 @@ impl DataType {
             Self::Date => "date",
             Self::Timestamp => "timestamp",
             Self::TimestampNtz => "timestamp_ntz",
+            Self::Array(_) => "array",
+            Self::Map(_) => "map",
+            Self::Struct(_) => "struct",
         }
+    }
+}
+
+/// Which of Spark's renderings of a type.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Render {
+    Simple,
+    Catalog,
+    Sql,
+}
+
+/// Spark's `QuotingUtils.quoteIfNeeded`: a name that is not a plain
+/// identifier (`[a-zA-Z_][a-zA-Z0-9_]*`) is backquoted, with backquotes
+/// doubled.
+pub(crate) fn quote_if_needed(name: &str) -> String {
+    let mut chars = name.chars();
+    let plain = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if plain {
+        name.to_owned()
+    } else {
+        format!("`{}`", name.replace('`', "``"))
     }
 }
 

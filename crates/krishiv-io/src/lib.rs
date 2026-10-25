@@ -61,8 +61,8 @@ pub use options::{
 };
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,
-    ROW_INDEX_COLUMN, RowFilterPolicy, RowSelection, ScalarValue, ScanRequest, project_batch,
-    project_schema,
+    ROW_INDEX_COLUMN, RowFilterPolicy, RowLevel, RowSelection, ScalarValue, ScanRequest,
+    project_batch, project_schema,
 };
 pub use runtime_filter::{
     DisabledReason, FilterCounts, FilterForm, FilterId, FilterSnapshot, KeyFilter,
