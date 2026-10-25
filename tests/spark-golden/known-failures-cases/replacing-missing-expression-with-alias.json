@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "query-features": [
+      16,
+      17,
+      18,
+      19
+    ]
+  },
+  "file": "replacing-missing-expression-with-alias",
+  "format_version": 1
+}

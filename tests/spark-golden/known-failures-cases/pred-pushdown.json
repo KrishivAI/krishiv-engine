@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "depends-on-command": [
+      3
+    ]
+  },
+  "file": "pred-pushdown",
+  "format_version": 1
+}

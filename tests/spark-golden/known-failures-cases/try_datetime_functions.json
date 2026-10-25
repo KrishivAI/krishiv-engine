@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "datetime": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "file": "try_datetime_functions",
+  "format_version": 1
+}

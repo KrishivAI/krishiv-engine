@@ -1,0 +1,18 @@
+{
+  "cases": {
+    "depends-on-command": [
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "sql-commands": [
+      0,
+      1,
+      2
+    ]
+  },
+  "file": "subquery/in-subquery/not-in-group-by",
+  "format_version": 1
+}

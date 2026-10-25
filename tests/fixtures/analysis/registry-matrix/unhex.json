@@ -1,0 +1,222 @@
+{
+  "entries": [
+    {
+      "id": "unhex#0136c555de23/ansi_on",
+      "reason": "SELECT decode(unhex(NULL), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#0136c555de23/ansi_off",
+      "reason": "SELECT decode(unhex(NULL), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#117a3172ca29/ansi_on",
+      "reason": "SELECT decode(unhex(CAST(1.5 AS FLOAT)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#117a3172ca29/ansi_off",
+      "reason": "SELECT decode(unhex(CAST(1.5 AS FLOAT)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#1298bd526eef/ansi_on",
+      "reason": "SELECT decode(unhex(CAST(1 AS TINYINT)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#1298bd526eef/ansi_off",
+      "reason": "SELECT decode(unhex(CAST(1 AS TINYINT)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#1ab058144c13/ansi_on",
+      "reason": "SELECT decode(unhex('abc'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#1ab058144c13/ansi_off",
+      "reason": "SELECT decode(unhex('abc'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#24b353fd8050/ansi_on",
+      "reason": "SELECT decode(unhex(CAST(1.5 AS DECIMAL(10,2))), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#24b353fd8050/ansi_off",
+      "reason": "SELECT decode(unhex(CAST(1.5 AS DECIMAL(10,2))), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#26c1bc710a0a/ansi_on",
+      "reason": "SELECT decode(unhex(X'01'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#26c1bc710a0a/ansi_off",
+      "reason": "SELECT decode(unhex(X'01'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#30f69b1f28b8/ansi_on",
+      "reason": "SELECT decode(unhex(INTERVAL '1-2' YEAR TO MONTH), 'UTF-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "unhex#30f69b1f28b8/ansi_off",
+      "reason": "SELECT decode(unhex(INTERVAL '1-2' YEAR TO MONTH), 'UTF-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "unhex#3339f0365582/ansi_on",
+      "reason": "SELECT decode(unhex(map('a', 1)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unhex#3339f0365582/ansi_off",
+      "reason": "SELECT decode(unhex(map('a', 1)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unhex#3bad1724783f/ansi_on",
+      "reason": "SELECT decode(unhex(1L), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#3bad1724783f/ansi_off",
+      "reason": "SELECT decode(unhex(1L), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#3d740c8451d1/ansi_on",
+      "reason": "SELECT decode(unhex(' \\t a\\u3000\\n '), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#3d740c8451d1/ansi_off",
+      "reason": "SELECT decode(unhex(' \\t a\\u3000\\n '), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#4ac2c908b822/ansi_on",
+      "reason": "SELECT decode(unhex(''), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#4ac2c908b822/ansi_off",
+      "reason": "SELECT decode(unhex(''), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#4fe2346478a2/ansi_on",
+      "reason": "SELECT decode(unhex(INTERVAL '1 02:03:04' DAY TO SECOND), 'UTF-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "unhex#4fe2346478a2/ansi_off",
+      "reason": "SELECT decode(unhex(INTERVAL '1 02:03:04' DAY TO SECOND), 'UTF-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "unhex#50fe3cf35a94/ansi_on",
+      "reason": "SELECT decode(unhex(CAST(NULL AS string)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#50fe3cf35a94/ansi_off",
+      "reason": "SELECT decode(unhex(CAST(NULL AS string)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#63d48d765183/ansi_on",
+      "reason": "SELECT decode(unhex(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#63d48d765183/ansi_off",
+      "reason": "SELECT decode(unhex(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#66f8b503661d/ansi_on",
+      "reason": "SELECT decode(unhex(TIMESTAMP'2024-02-29 12:34:56.123456'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#66f8b503661d/ansi_off",
+      "reason": "SELECT decode(unhex(TIMESTAMP'2024-02-29 12:34:56.123456'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#72e9386403b6/ansi_on",
+      "reason": "SELECT decode(unhex('Ä€日本語😀é'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#72e9386403b6/ansi_off",
+      "reason": "SELECT decode(unhex('Ä€日本語😀é'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#74119f5f751c/ansi_on",
+      "reason": "SELECT decode(unhex(true), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#74119f5f751c/ansi_off",
+      "reason": "SELECT decode(unhex(true), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#854434675946/ansi_on",
+      "reason": "SELECT decode(unhex(DATE'2024-02-29'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#854434675946/ansi_off",
+      "reason": "SELECT decode(unhex(DATE'2024-02-29'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#8e9f9f745159/ansi_on",
+      "reason": "SELECT decode(unhex(1), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#8e9f9f745159/ansi_off",
+      "reason": "SELECT decode(unhex(1), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#924fd7467cd0/ansi_on",
+      "reason": "SELECT decode(unhex(named_struct('a', 1, 'b', 'x')), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unhex#924fd7467cd0/ansi_off",
+      "reason": "SELECT decode(unhex(named_struct('a', 1, 'b', 'x')), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unhex#93a896a0cd73/ansi_on",
+      "reason": "SELECT decode(unhex('1'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#93a896a0cd73/ansi_off",
+      "reason": "SELECT decode(unhex('1'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#b605e6740443/ansi_on",
+      "reason": "SELECT decode(unhex('537061726B2053514C'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#b605e6740443/ansi_off",
+      "reason": "SELECT decode(unhex('537061726B2053514C'), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#b822eace082b/ansi_on",
+      "reason": "SELECT decode(unhex(array(1, 2)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unhex#b822eace082b/ansi_off",
+      "reason": "SELECT decode(unhex(array(1, 2)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "unhex#d2dd1aa92542/ansi_on",
+      "reason": "SELECT decode(unhex(CAST(1.5 AS DECIMAL(38,18))), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#d2dd1aa92542/ansi_off",
+      "reason": "SELECT decode(unhex(CAST(1.5 AS DECIMAL(38,18))), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#ee3b19586b89/ansi_on",
+      "reason": "SELECT decode(unhex(CAST(1 AS SMALLINT)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#ee3b19586b89/ansi_off",
+      "reason": "SELECT decode(unhex(CAST(1 AS SMALLINT)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#f313836c0fe8/ansi_on",
+      "reason": "SELECT decode(unhex(1.5D), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#f313836c0fe8/ansi_off",
+      "reason": "SELECT decode(unhex(1.5D), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#ffcacbfe03e1/ansi_on",
+      "reason": "SELECT decode(unhex(CAST(X'C328FF' AS STRING)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    },
+    {
+      "id": "unhex#ffcacbfe03e1/ansi_off",
+      "reason": "SELECT decode(unhex(CAST(X'C328FF' AS STRING)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function decode"
+    }
+  ],
+  "format_version": 1,
+  "function": "unhex"
+}

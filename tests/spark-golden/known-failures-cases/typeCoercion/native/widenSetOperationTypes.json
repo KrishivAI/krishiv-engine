@@ -1,0 +1,19 @@
+{
+  "cases": {
+    "depends-on-command": [
+      93,
+      94,
+      95,
+      104,
+      105,
+      116,
+      118,
+      128,
+      131,
+      132,
+      143
+    ]
+  },
+  "file": "typeCoercion/native/widenSetOperationTypes",
+  "format_version": 1
+}

@@ -1,0 +1,33 @@
+{
+  "cases": {
+    "depends-on-command": [
+      4,
+      9,
+      14,
+      19
+    ],
+    "files": [
+      2,
+      7,
+      12,
+      17
+    ],
+    "object-stores": [
+      22
+    ],
+    "sql-commands": [
+      0,
+      1,
+      5,
+      6,
+      10,
+      11,
+      15,
+      16,
+      20,
+      21
+    ]
+  },
+  "file": "sql-on-files",
+  "format_version": 1
+}
