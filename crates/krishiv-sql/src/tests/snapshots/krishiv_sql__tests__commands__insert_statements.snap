@@ -1,0 +1,2745 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"INSERT INTO t SELECT * FROM s\",\n\"INSERT INTO t VALUES (1, 'a'), (2, 'b')\",\n\"INSERT INTO TABLE t SELECT * FROM s\",\n\"INSERT OVERWRITE TABLE t SELECT * FROM s\",\n\"INSERT INTO t (a, b) SELECT c, d FROM s\",\n\"INSERT INTO t PARTITION (c = 'Us', d = 1) SELECT * FROM s\",\n\"INSERT INTO a PARTITION (a = TIMESTAMP_NTZ '2018-11-17 13:33:33') VALUES (1)\",\n\"INSERT INTO t BY NAME SELECT * FROM s\",\n\"INSERT INTO t REPLACE WHERE c > 0 SELECT * FROM s\",\n\"INSERT INTO t PARTITION (d) BY NAME SELECT * FROM s\",\n\"INSERT OVERWRITE t PARTITION (d = 1) SELECT * FROM s\",\n\"INSERT INTO tab (IDENTIFIER('c1')) VALUES (1)\",\n\"INSERT INTO IDENTIFIER('ta' || 'b') VALUES (1)\",\n\"INSERT INTO t WITH s AS (SELECT 44 AS col) SELECT * FROM s\",\n\"INSERT INTO t (SELECT * FROM s)\",\n\"FROM s INSERT INTO a SELECT * FROM s INSERT INTO b SELECT * FROM s\",\n\"FROM s INSERT OVERWRITE TABLE a SELECT * FROM s INSERT INTO b PARTITION (d = 1) SELECT * FROM s\",\n\"FROM s INSERT INTO a SELECT * FROM s UNION ALL SELECT * FROM t INSERT INTO b SELECT 1\",\n\"FROM s INSERT INTO a SELECT * FROM x JOIN y INSERT INTO b SELECT 2\",])"
+---
+-- INSERT INTO t SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 21..22,
+                                        },
+                                        alias: None,
+                                        span: 21..22,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 28..29,
+                                                                },
+                                                            ],
+                                                            span: 28..29,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 28..29,
+                                                },
+                                                extensions: [],
+                                                span: 28..29,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 23..29,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 14..29,
+                            },
+                        ),
+                        span: 14..29,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 14..29,
+                },
+                span: 0..29,
+            },
+        ],
+        span: 0..29,
+    },
+)
+-- INSERT INTO t VALUES (1, 'a'), (2, 'b')
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Values(
+                            Values {
+                                rows: [
+                                    Expr {
+                                        kind: Row(
+                                            [
+                                                SelectItem {
+                                                    expr: Expr {
+                                                        kind: Literal(
+                                                            Number {
+                                                                text: "1",
+                                                                kind: Int,
+                                                            },
+                                                        ),
+                                                        span: 22..23,
+                                                    },
+                                                    alias: None,
+                                                    span: 22..23,
+                                                },
+                                                SelectItem {
+                                                    expr: Expr {
+                                                        kind: Literal(
+                                                            String(
+                                                                "a",
+                                                            ),
+                                                        ),
+                                                        span: 25..28,
+                                                    },
+                                                    alias: None,
+                                                    span: 25..28,
+                                                },
+                                            ],
+                                        ),
+                                        span: 21..29,
+                                    },
+                                    Expr {
+                                        kind: Row(
+                                            [
+                                                SelectItem {
+                                                    expr: Expr {
+                                                        kind: Literal(
+                                                            Number {
+                                                                text: "2",
+                                                                kind: Int,
+                                                            },
+                                                        ),
+                                                        span: 32..33,
+                                                    },
+                                                    alias: None,
+                                                    span: 32..33,
+                                                },
+                                                SelectItem {
+                                                    expr: Expr {
+                                                        kind: Literal(
+                                                            String(
+                                                                "b",
+                                                            ),
+                                                        ),
+                                                        span: 35..38,
+                                                    },
+                                                    alias: None,
+                                                    span: 35..38,
+                                                },
+                                            ],
+                                        ),
+                                        span: 31..39,
+                                    },
+                                ],
+                                alias: None,
+                                span: 14..39,
+                            },
+                        ),
+                        span: 14..39,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 14..39,
+                },
+                span: 0..39,
+            },
+        ],
+        span: 0..39,
+    },
+)
+-- INSERT INTO TABLE t SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 18..19,
+                            },
+                        ],
+                        span: 18..19,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 27..28,
+                                        },
+                                        alias: None,
+                                        span: 27..28,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 34..35,
+                                                                },
+                                                            ],
+                                                            span: 34..35,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 34..35,
+                                                },
+                                                extensions: [],
+                                                span: 34..35,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 29..35,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 20..35,
+                            },
+                        ),
+                        span: 20..35,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 20..35,
+                },
+                span: 0..35,
+            },
+        ],
+        span: 0..35,
+    },
+)
+-- INSERT OVERWRITE TABLE t SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: true,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 23..24,
+                            },
+                        ],
+                        span: 23..24,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 32..33,
+                                        },
+                                        alias: None,
+                                        span: 32..33,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 39..40,
+                                                                },
+                                                            ],
+                                                            span: 39..40,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 39..40,
+                                                },
+                                                extensions: [],
+                                                span: 39..40,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 34..40,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 25..40,
+                            },
+                        ),
+                        span: 25..40,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 25..40,
+                },
+                span: 0..40,
+            },
+        ],
+        span: 0..40,
+    },
+)
+-- INSERT INTO t (a, b) SELECT c, d FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [
+                    Ident(
+                        Ident {
+                            value: "a",
+                            quoted: false,
+                            span: 15..16,
+                        },
+                    ),
+                    Ident(
+                        Ident {
+                            value: "b",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                    ),
+                ],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Column(
+                                                [
+                                                    Ident {
+                                                        value: "c",
+                                                        quoted: false,
+                                                        span: 28..29,
+                                                    },
+                                                ],
+                                            ),
+                                            span: 28..29,
+                                        },
+                                        alias: None,
+                                        span: 28..29,
+                                    },
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Column(
+                                                [
+                                                    Ident {
+                                                        value: "d",
+                                                        quoted: false,
+                                                        span: 31..32,
+                                                    },
+                                                ],
+                                            ),
+                                            span: 31..32,
+                                        },
+                                        alias: None,
+                                        span: 31..32,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 38..39,
+                                                                },
+                                                            ],
+                                                            span: 38..39,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 38..39,
+                                                },
+                                                extensions: [],
+                                                span: 38..39,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 33..39,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 21..39,
+                            },
+                        ),
+                        span: 21..39,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 21..39,
+                },
+                span: 0..39,
+            },
+        ],
+        span: 0..39,
+    },
+)
+-- INSERT INTO t PARTITION (c = 'Us', d = 1) SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: Some(
+                    PartitionSpec {
+                        parts: [
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "c",
+                                    quoted: false,
+                                    span: 25..26,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            String(
+                                                "Us",
+                                            ),
+                                        ),
+                                        span: 29..33,
+                                    },
+                                ),
+                                span: 25..33,
+                            },
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "d",
+                                    quoted: false,
+                                    span: 35..36,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 39..40,
+                                    },
+                                ),
+                                span: 35..40,
+                            },
+                        ],
+                        span: 14..41,
+                    },
+                ),
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 49..50,
+                                        },
+                                        alias: None,
+                                        span: 49..50,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 56..57,
+                                                                },
+                                                            ],
+                                                            span: 56..57,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 56..57,
+                                                },
+                                                extensions: [],
+                                                span: 56..57,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 51..57,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 42..57,
+                            },
+                        ),
+                        span: 42..57,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 42..57,
+                },
+                span: 0..57,
+            },
+        ],
+        span: 0..57,
+    },
+)
+-- INSERT INTO a PARTITION (a = TIMESTAMP_NTZ '2018-11-17 13:33:33') VALUES (1)
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "a",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: Some(
+                    PartitionSpec {
+                        parts: [
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "a",
+                                    quoted: false,
+                                    span: 25..26,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            Typed {
+                                                type_name: Ident {
+                                                    value: "TIMESTAMP_NTZ",
+                                                    quoted: false,
+                                                    span: 29..42,
+                                                },
+                                                value: "2018-11-17 13:33:33",
+                                            },
+                                        ),
+                                        span: 29..64,
+                                    },
+                                ),
+                                span: 25..64,
+                            },
+                        ],
+                        span: 14..65,
+                    },
+                ),
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Values(
+                            Values {
+                                rows: [
+                                    Expr {
+                                        kind: Nested(
+                                            Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 74..75,
+                                            },
+                                        ),
+                                        span: 73..76,
+                                    },
+                                ],
+                                alias: None,
+                                span: 66..76,
+                            },
+                        ),
+                        span: 66..76,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 66..76,
+                },
+                span: 0..76,
+            },
+        ],
+        span: 0..76,
+    },
+)
+-- INSERT INTO t BY NAME SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: true,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 29..30,
+                                        },
+                                        alias: None,
+                                        span: 29..30,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 36..37,
+                                                                },
+                                                            ],
+                                                            span: 36..37,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 36..37,
+                                                },
+                                                extensions: [],
+                                                span: 36..37,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 31..37,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 22..37,
+                            },
+                        ),
+                        span: 22..37,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 22..37,
+                },
+                span: 0..37,
+            },
+        ],
+        span: 0..37,
+    },
+)
+-- INSERT INTO t REPLACE WHERE c > 0 SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: Some(
+                    Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Column(
+                                    [
+                                        Ident {
+                                            value: "c",
+                                            quoted: false,
+                                            span: 28..29,
+                                        },
+                                    ],
+                                ),
+                                span: 28..29,
+                            },
+                            Gt,
+                            Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "0",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 32..33,
+                            },
+                        ),
+                        span: 28..33,
+                    },
+                ),
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 41..42,
+                                        },
+                                        alias: None,
+                                        span: 41..42,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 48..49,
+                                                                },
+                                                            ],
+                                                            span: 48..49,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 48..49,
+                                                },
+                                                extensions: [],
+                                                span: 48..49,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 43..49,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 34..49,
+                            },
+                        ),
+                        span: 34..49,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 34..49,
+                },
+                span: 0..49,
+            },
+        ],
+        span: 0..49,
+    },
+)
+-- INSERT INTO t PARTITION (d) BY NAME SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: Some(
+                    PartitionSpec {
+                        parts: [
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "d",
+                                    quoted: false,
+                                    span: 25..26,
+                                },
+                                value: None,
+                                span: 25..26,
+                            },
+                        ],
+                        span: 14..27,
+                    },
+                ),
+                replace_where: None,
+                by_name: true,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 43..44,
+                                        },
+                                        alias: None,
+                                        span: 43..44,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 50..51,
+                                                                },
+                                                            ],
+                                                            span: 50..51,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 50..51,
+                                                },
+                                                extensions: [],
+                                                span: 50..51,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 45..51,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 36..51,
+                            },
+                        ),
+                        span: 36..51,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 36..51,
+                },
+                span: 0..51,
+            },
+        ],
+        span: 0..51,
+    },
+)
+-- INSERT OVERWRITE t PARTITION (d = 1) SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: true,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 17..18,
+                            },
+                        ],
+                        span: 17..18,
+                    },
+                ),
+                columns: [],
+                partition: Some(
+                    PartitionSpec {
+                        parts: [
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "d",
+                                    quoted: false,
+                                    span: 30..31,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 34..35,
+                                    },
+                                ),
+                                span: 30..35,
+                            },
+                        ],
+                        span: 19..36,
+                    },
+                ),
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 44..45,
+                                        },
+                                        alias: None,
+                                        span: 44..45,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 51..52,
+                                                                },
+                                                            ],
+                                                            span: 51..52,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 51..52,
+                                                },
+                                                extensions: [],
+                                                span: 51..52,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 46..52,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 37..52,
+                            },
+                        ),
+                        span: 37..52,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 37..52,
+                },
+                span: 0..52,
+            },
+        ],
+        span: 0..52,
+    },
+)
+-- INSERT INTO tab (IDENTIFIER('c1')) VALUES (1)
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "tab",
+                                quoted: false,
+                                span: 12..15,
+                            },
+                        ],
+                        span: 12..15,
+                    },
+                ),
+                columns: [
+                    Dynamic(
+                        DynamicName {
+                            expr: Expr {
+                                kind: Literal(
+                                    String(
+                                        "c1",
+                                    ),
+                                ),
+                                span: 28..32,
+                            },
+                            span: 17..33,
+                        },
+                    ),
+                ],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Values(
+                            Values {
+                                rows: [
+                                    Expr {
+                                        kind: Nested(
+                                            Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 43..44,
+                                            },
+                                        ),
+                                        span: 42..45,
+                                    },
+                                ],
+                                alias: None,
+                                span: 35..45,
+                            },
+                        ),
+                        span: 35..45,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 35..45,
+                },
+                span: 0..45,
+            },
+        ],
+        span: 0..45,
+    },
+)
+-- INSERT INTO IDENTIFIER('ta' || 'b') VALUES (1)
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Dynamic(
+                    DynamicName {
+                        expr: Expr {
+                            kind: Binary(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "ta",
+                                        ),
+                                    ),
+                                    span: 23..27,
+                                },
+                                Concat,
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "b",
+                                        ),
+                                    ),
+                                    span: 31..34,
+                                },
+                            ),
+                            span: 23..34,
+                        },
+                        span: 12..35,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Values(
+                            Values {
+                                rows: [
+                                    Expr {
+                                        kind: Nested(
+                                            Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "1",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 44..45,
+                                            },
+                                        ),
+                                        span: 43..46,
+                                    },
+                                ],
+                                alias: None,
+                                span: 36..46,
+                            },
+                        ),
+                        span: 36..46,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 36..46,
+                },
+                span: 0..46,
+            },
+        ],
+        span: 0..46,
+    },
+)
+-- INSERT INTO t WITH s AS (SELECT 44 AS col) SELECT * FROM s
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: Some(
+                        With {
+                            recursive: false,
+                            ctes: [
+                                Cte {
+                                    name: Ident {
+                                        value: "s",
+                                        quoted: false,
+                                        span: 19..20,
+                                    },
+                                    columns: [],
+                                    max_recursion_level: None,
+                                    query: Query {
+                                        with: None,
+                                        body: SetExpr {
+                                            kind: Select(
+                                                Select {
+                                                    hints: [],
+                                                    quantifier: None,
+                                                    projection: [
+                                                        SelectItem {
+                                                            expr: Expr {
+                                                                kind: Literal(
+                                                                    Number {
+                                                                        text: "44",
+                                                                        kind: Int,
+                                                                    },
+                                                                ),
+                                                                span: 32..34,
+                                                            },
+                                                            alias: Some(
+                                                                Name(
+                                                                    Ident {
+                                                                        value: "col",
+                                                                        quoted: false,
+                                                                        span: 38..41,
+                                                                    },
+                                                                ),
+                                                            ),
+                                                            span: 32..41,
+                                                        },
+                                                    ],
+                                                    from: None,
+                                                    lateral_views: [],
+                                                    selection: None,
+                                                    group_by: None,
+                                                    having: None,
+                                                    windows: [],
+                                                    qualify: None,
+                                                    span: 25..41,
+                                                },
+                                            ),
+                                            span: 25..41,
+                                        },
+                                        order_by: [],
+                                        order_span: None,
+                                        cluster_by: [],
+                                        distribute_by: [],
+                                        sort_by: [],
+                                        windows: [],
+                                        limit: None,
+                                        offset: None,
+                                        span: 25..41,
+                                    },
+                                    span: 19..42,
+                                },
+                            ],
+                            span: 14..42,
+                        },
+                    ),
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 50..51,
+                                        },
+                                        alias: None,
+                                        span: 50..51,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 57..58,
+                                                                },
+                                                            ],
+                                                            span: 57..58,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 57..58,
+                                                },
+                                                extensions: [],
+                                                span: 57..58,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 52..58,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 43..58,
+                            },
+                        ),
+                        span: 43..58,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 14..58,
+                },
+                span: 0..58,
+            },
+        ],
+        span: 0..58,
+    },
+)
+-- INSERT INTO t (SELECT * FROM s)
+Insert(
+    Insert {
+        source: None,
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 12..13,
+                            },
+                        ],
+                        span: 12..13,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Query(
+                            Query {
+                                with: None,
+                                body: SetExpr {
+                                    kind: Select(
+                                        Select {
+                                            hints: [],
+                                            quantifier: None,
+                                            projection: [
+                                                SelectItem {
+                                                    expr: Expr {
+                                                        kind: Wildcard {
+                                                            qualifier: [],
+                                                            except: [],
+                                                        },
+                                                        span: 22..23,
+                                                    },
+                                                    alias: None,
+                                                    span: 22..23,
+                                                },
+                                            ],
+                                            from: Some(
+                                                FromClause {
+                                                    relations: [
+                                                        Relation {
+                                                            lateral: false,
+                                                            primary: TableFactor {
+                                                                kind: Table {
+                                                                    name: ObjectName {
+                                                                        parts: [
+                                                                            Ident {
+                                                                                value: "s",
+                                                                                quoted: false,
+                                                                                span: 29..30,
+                                                                            },
+                                                                        ],
+                                                                        span: 29..30,
+                                                                    },
+                                                                    temporal: None,
+                                                                    options: [],
+                                                                },
+                                                                sample: None,
+                                                                alias: None,
+                                                                span: 29..30,
+                                                            },
+                                                            extensions: [],
+                                                            span: 29..30,
+                                                        },
+                                                    ],
+                                                    lateral_views: [],
+                                                    pivot: None,
+                                                    unpivot: None,
+                                                    span: 24..30,
+                                                },
+                                            ),
+                                            lateral_views: [],
+                                            selection: None,
+                                            group_by: None,
+                                            having: None,
+                                            windows: [],
+                                            qualify: None,
+                                            span: 15..30,
+                                        },
+                                    ),
+                                    span: 15..30,
+                                },
+                                order_by: [],
+                                order_span: None,
+                                cluster_by: [],
+                                distribute_by: [],
+                                sort_by: [],
+                                windows: [],
+                                limit: None,
+                                offset: None,
+                                span: 15..30,
+                            },
+                        ),
+                        span: 14..31,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 14..31,
+                },
+                span: 0..31,
+            },
+        ],
+        span: 0..31,
+    },
+)
+-- FROM s INSERT INTO a SELECT * FROM s INSERT INTO b SELECT * FROM s
+Insert(
+    Insert {
+        source: Some(
+            FromClause {
+                relations: [
+                    Relation {
+                        lateral: false,
+                        primary: TableFactor {
+                            kind: Table {
+                                name: ObjectName {
+                                    parts: [
+                                        Ident {
+                                            value: "s",
+                                            quoted: false,
+                                            span: 5..6,
+                                        },
+                                    ],
+                                    span: 5..6,
+                                },
+                                temporal: None,
+                                options: [],
+                            },
+                            sample: None,
+                            alias: None,
+                            span: 5..13,
+                        },
+                        extensions: [],
+                        span: 5..13,
+                    },
+                ],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                span: 0..13,
+            },
+        ),
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "a",
+                                quoted: false,
+                                span: 19..20,
+                            },
+                        ],
+                        span: 19..20,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 28..29,
+                                        },
+                                        alias: None,
+                                        span: 28..29,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 35..36,
+                                                                },
+                                                            ],
+                                                            span: 35..36,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 35..43,
+                                                },
+                                                extensions: [],
+                                                span: 35..43,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 30..43,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 21..43,
+                            },
+                        ),
+                        span: 21..43,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 21..43,
+                },
+                span: 7..36,
+            },
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "b",
+                                quoted: false,
+                                span: 49..50,
+                            },
+                        ],
+                        span: 49..50,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 58..59,
+                                        },
+                                        alias: None,
+                                        span: 58..59,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 65..66,
+                                                                },
+                                                            ],
+                                                            span: 65..66,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 65..66,
+                                                },
+                                                extensions: [],
+                                                span: 65..66,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 60..66,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 51..66,
+                            },
+                        ),
+                        span: 51..66,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 51..66,
+                },
+                span: 37..66,
+            },
+        ],
+        span: 0..66,
+    },
+)
+-- FROM s INSERT OVERWRITE TABLE a SELECT * FROM s INSERT INTO b PARTITION (d = 1) SELECT * FROM s
+Insert(
+    Insert {
+        source: Some(
+            FromClause {
+                relations: [
+                    Relation {
+                        lateral: false,
+                        primary: TableFactor {
+                            kind: Table {
+                                name: ObjectName {
+                                    parts: [
+                                        Ident {
+                                            value: "s",
+                                            quoted: false,
+                                            span: 5..6,
+                                        },
+                                    ],
+                                    span: 5..6,
+                                },
+                                temporal: None,
+                                options: [],
+                            },
+                            sample: None,
+                            alias: None,
+                            span: 5..13,
+                        },
+                        extensions: [],
+                        span: 5..13,
+                    },
+                ],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                span: 0..13,
+            },
+        ),
+        clauses: [
+            InsertClause {
+                overwrite: true,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "a",
+                                quoted: false,
+                                span: 30..31,
+                            },
+                        ],
+                        span: 30..31,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 39..40,
+                                        },
+                                        alias: None,
+                                        span: 39..40,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 46..47,
+                                                                },
+                                                            ],
+                                                            span: 46..47,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 46..54,
+                                                },
+                                                extensions: [],
+                                                span: 46..54,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 41..54,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 32..54,
+                            },
+                        ),
+                        span: 32..54,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 32..54,
+                },
+                span: 7..47,
+            },
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "b",
+                                quoted: false,
+                                span: 60..61,
+                            },
+                        ],
+                        span: 60..61,
+                    },
+                ),
+                columns: [],
+                partition: Some(
+                    PartitionSpec {
+                        parts: [
+                            PartitionSpecPart {
+                                key: Ident {
+                                    value: "d",
+                                    quoted: false,
+                                    span: 73..74,
+                                },
+                                value: Some(
+                                    Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 77..78,
+                                    },
+                                ),
+                                span: 73..78,
+                            },
+                        ],
+                        span: 62..79,
+                    },
+                ),
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 87..88,
+                                        },
+                                        alias: None,
+                                        span: 87..88,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 94..95,
+                                                                },
+                                                            ],
+                                                            span: 94..95,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 94..95,
+                                                },
+                                                extensions: [],
+                                                span: 94..95,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 89..95,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 80..95,
+                            },
+                        ),
+                        span: 80..95,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 80..95,
+                },
+                span: 48..95,
+            },
+        ],
+        span: 0..95,
+    },
+)
+-- FROM s INSERT INTO a SELECT * FROM s UNION ALL SELECT * FROM t INSERT INTO b SELECT 1
+Insert(
+    Insert {
+        source: Some(
+            FromClause {
+                relations: [
+                    Relation {
+                        lateral: false,
+                        primary: TableFactor {
+                            kind: Table {
+                                name: ObjectName {
+                                    parts: [
+                                        Ident {
+                                            value: "s",
+                                            quoted: false,
+                                            span: 5..6,
+                                        },
+                                    ],
+                                    span: 5..6,
+                                },
+                                temporal: None,
+                                options: [],
+                            },
+                            sample: None,
+                            alias: None,
+                            span: 5..13,
+                        },
+                        extensions: [],
+                        span: 5..13,
+                    },
+                ],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                span: 0..13,
+            },
+        ),
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "a",
+                                quoted: false,
+                                span: 19..20,
+                            },
+                        ],
+                        span: 19..20,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: SetOp {
+                            op: Union,
+                            quantifier: Some(
+                                All,
+                            ),
+                            left: SetExpr {
+                                kind: Select(
+                                    Select {
+                                        hints: [],
+                                        quantifier: None,
+                                        projection: [
+                                            SelectItem {
+                                                expr: Expr {
+                                                    kind: Wildcard {
+                                                        qualifier: [],
+                                                        except: [],
+                                                    },
+                                                    span: 28..29,
+                                                },
+                                                alias: None,
+                                                span: 28..29,
+                                            },
+                                        ],
+                                        from: Some(
+                                            FromClause {
+                                                relations: [
+                                                    Relation {
+                                                        lateral: false,
+                                                        primary: TableFactor {
+                                                            kind: Table {
+                                                                name: ObjectName {
+                                                                    parts: [
+                                                                        Ident {
+                                                                            value: "s",
+                                                                            quoted: false,
+                                                                            span: 35..36,
+                                                                        },
+                                                                    ],
+                                                                    span: 35..36,
+                                                                },
+                                                                temporal: None,
+                                                                options: [],
+                                                            },
+                                                            sample: None,
+                                                            alias: None,
+                                                            span: 35..36,
+                                                        },
+                                                        extensions: [],
+                                                        span: 35..36,
+                                                    },
+                                                ],
+                                                lateral_views: [],
+                                                pivot: None,
+                                                unpivot: None,
+                                                span: 30..36,
+                                            },
+                                        ),
+                                        lateral_views: [],
+                                        selection: None,
+                                        group_by: None,
+                                        having: None,
+                                        windows: [],
+                                        qualify: None,
+                                        span: 21..36,
+                                    },
+                                ),
+                                span: 21..36,
+                            },
+                            right: SetExpr {
+                                kind: Select(
+                                    Select {
+                                        hints: [],
+                                        quantifier: None,
+                                        projection: [
+                                            SelectItem {
+                                                expr: Expr {
+                                                    kind: Wildcard {
+                                                        qualifier: [],
+                                                        except: [],
+                                                    },
+                                                    span: 54..55,
+                                                },
+                                                alias: None,
+                                                span: 54..55,
+                                            },
+                                        ],
+                                        from: Some(
+                                            FromClause {
+                                                relations: [
+                                                    Relation {
+                                                        lateral: false,
+                                                        primary: TableFactor {
+                                                            kind: Table {
+                                                                name: ObjectName {
+                                                                    parts: [
+                                                                        Ident {
+                                                                            value: "t",
+                                                                            quoted: false,
+                                                                            span: 61..62,
+                                                                        },
+                                                                    ],
+                                                                    span: 61..62,
+                                                                },
+                                                                temporal: None,
+                                                                options: [],
+                                                            },
+                                                            sample: None,
+                                                            alias: None,
+                                                            span: 61..69,
+                                                        },
+                                                        extensions: [],
+                                                        span: 61..69,
+                                                    },
+                                                ],
+                                                lateral_views: [],
+                                                pivot: None,
+                                                unpivot: None,
+                                                span: 56..69,
+                                            },
+                                        ),
+                                        lateral_views: [],
+                                        selection: None,
+                                        group_by: None,
+                                        having: None,
+                                        windows: [],
+                                        qualify: None,
+                                        span: 47..69,
+                                    },
+                                ),
+                                span: 47..69,
+                            },
+                        },
+                        span: 21..69,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 21..69,
+                },
+                span: 7..62,
+            },
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "b",
+                                quoted: false,
+                                span: 75..76,
+                            },
+                        ],
+                        span: 75..76,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Literal(
+                                                Number {
+                                                    text: "1",
+                                                    kind: Int,
+                                                },
+                                            ),
+                                            span: 84..85,
+                                        },
+                                        alias: None,
+                                        span: 84..85,
+                                    },
+                                ],
+                                from: None,
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 77..85,
+                            },
+                        ),
+                        span: 77..85,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 77..85,
+                },
+                span: 63..85,
+            },
+        ],
+        span: 0..85,
+    },
+)
+-- FROM s INSERT INTO a SELECT * FROM x JOIN y INSERT INTO b SELECT 2
+Insert(
+    Insert {
+        source: Some(
+            FromClause {
+                relations: [
+                    Relation {
+                        lateral: false,
+                        primary: TableFactor {
+                            kind: Table {
+                                name: ObjectName {
+                                    parts: [
+                                        Ident {
+                                            value: "s",
+                                            quoted: false,
+                                            span: 5..6,
+                                        },
+                                    ],
+                                    span: 5..6,
+                                },
+                                temporal: None,
+                                options: [],
+                            },
+                            sample: None,
+                            alias: None,
+                            span: 5..13,
+                        },
+                        extensions: [],
+                        span: 5..13,
+                    },
+                ],
+                lateral_views: [],
+                pivot: None,
+                unpivot: None,
+                span: 0..13,
+            },
+        ),
+        clauses: [
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "a",
+                                quoted: false,
+                                span: 19..20,
+                            },
+                        ],
+                        span: 19..20,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 28..29,
+                                        },
+                                        alias: None,
+                                        span: 28..29,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "x",
+                                                                    quoted: false,
+                                                                    span: 35..36,
+                                                                },
+                                                            ],
+                                                            span: 35..36,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 35..36,
+                                                },
+                                                extensions: [
+                                                    Join(
+                                                        Join {
+                                                            kind: Inner,
+                                                            natural: false,
+                                                            lateral: false,
+                                                            right: TableFactor {
+                                                                kind: Table {
+                                                                    name: ObjectName {
+                                                                        parts: [
+                                                                            Ident {
+                                                                                value: "y",
+                                                                                quoted: false,
+                                                                                span: 42..43,
+                                                                            },
+                                                                        ],
+                                                                        span: 42..43,
+                                                                    },
+                                                                    temporal: None,
+                                                                    options: [],
+                                                                },
+                                                                sample: None,
+                                                                alias: None,
+                                                                span: 42..50,
+                                                            },
+                                                            constraint: None,
+                                                            span: 37..50,
+                                                        },
+                                                    ),
+                                                ],
+                                                span: 35..50,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 30..50,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 21..50,
+                            },
+                        ),
+                        span: 21..50,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 21..50,
+                },
+                span: 7..43,
+            },
+            InsertClause {
+                overwrite: false,
+                name: Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "b",
+                                quoted: false,
+                                span: 56..57,
+                            },
+                        ],
+                        span: 56..57,
+                    },
+                ),
+                columns: [],
+                partition: None,
+                replace_where: None,
+                by_name: false,
+                query: Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Literal(
+                                                Number {
+                                                    text: "2",
+                                                    kind: Int,
+                                                },
+                                            ),
+                                            span: 65..66,
+                                        },
+                                        alias: None,
+                                        span: 65..66,
+                                    },
+                                ],
+                                from: None,
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 58..66,
+                            },
+                        ),
+                        span: 58..66,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 58..66,
+                },
+                span: 44..66,
+            },
+        ],
+        span: 0..66,
+    },
+)

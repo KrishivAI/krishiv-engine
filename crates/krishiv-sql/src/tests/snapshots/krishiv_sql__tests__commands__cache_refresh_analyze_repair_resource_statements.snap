@@ -1,0 +1,863 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"CACHE TABLE t\", \"CACHE LAZY TABLE t\",\n\"CACHE TABLE t AS SELECT * FROM s\",\n\"CACHE TABLE t OPTIONS (storageLevel 'MEMORY_AND_DISK') AS SELECT * FROM s\",\n\"CACHE TABLE IDENTIFIER('ta' || 'b')\", \"UNCACHE TABLE t\",\n\"UNCACHE TABLE IDENTIFIER('ta' || 'b')\", \"CLEAR CACHE\", \"REFRESH TABLE t\",\n\"REFRESH TABLE t ASYNC\", \"REFRESH FUNCTION f\",\n\"REFRESH FUNCTION IDENTIFIER('ident.' || 'myDoubleAvg')\",\n\"REFRESH RESOURCE '/path/to.jar'\", \"REFRESH '/path/to/data'\",\n\"ANALYZE TABLE t COMPUTE STATISTICS\",\n\"ANALYZE TABLE t PARTITION (ds = '2017-08-01', hr = 10) COMPUTE STATISTICS\",\n\"ANALYZE TABLE t PARTITION (ds, hr) COMPUTE STATISTICS\",\n\"ANALYZE TABLE t COMPUTE STATISTICS NOSCAN\",\n\"ANALYZE TABLE t COMPUTE STATISTICS FOR COLUMNS c1, c2\",\n\"ANALYZE TABLE t COMPUTE STATISTICS FOR ALL COLUMNS\", \"MSCK REPAIR TABLE t\",\n\"REPAIR TABLE t\", \"REPAIR TABLE t ADD PARTITIONS\",\n\"REPAIR TABLE t DROP PARTITIONS\", \"MSCK REPAIR TABLE t SYNC PARTITIONS\",\n\"ADD JAR '/path/to.jar'\", \"ADD FILE '/path/to/file'\",\n\"ADD ARCHIVE '/path/to.tgz'\", \"LIST JAR\", \"LIST JAR '/path'\", \"LIST FILE\",])"
+---
+-- CACHE TABLE t
+Cache(
+    Cache {
+        kind: Cache {
+            lazy: false,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 12..13,
+                        },
+                    ],
+                    span: 12..13,
+                },
+            ),
+            options: [],
+            query: None,
+            span: 6..13,
+        },
+        span: 0..13,
+    },
+)
+-- CACHE LAZY TABLE t
+Cache(
+    Cache {
+        kind: Cache {
+            lazy: true,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 17..18,
+                        },
+                    ],
+                    span: 17..18,
+                },
+            ),
+            options: [],
+            query: None,
+            span: 6..18,
+        },
+        span: 0..18,
+    },
+)
+-- CACHE TABLE t AS SELECT * FROM s
+Cache(
+    Cache {
+        kind: Cache {
+            lazy: false,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 12..13,
+                        },
+                    ],
+                    span: 12..13,
+                },
+            ),
+            options: [],
+            query: Some(
+                Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 24..25,
+                                        },
+                                        alias: None,
+                                        span: 24..25,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 31..32,
+                                                                },
+                                                            ],
+                                                            span: 31..32,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 31..32,
+                                                },
+                                                extensions: [],
+                                                span: 31..32,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 26..32,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 17..32,
+                            },
+                        ),
+                        span: 17..32,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 17..32,
+                },
+            ),
+            span: 6..32,
+        },
+        span: 0..32,
+    },
+)
+-- CACHE TABLE t OPTIONS (storageLevel 'MEMORY_AND_DISK') AS SELECT * FROM s
+Cache(
+    Cache {
+        kind: Cache {
+            lazy: false,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 12..13,
+                        },
+                    ],
+                    span: 12..13,
+                },
+            ),
+            options: [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "storageLevel",
+                                quoted: false,
+                                span: 23..35,
+                            },
+                        ],
+                        is_string: false,
+                        span: 23..35,
+                    },
+                    value: Some(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "MEMORY_AND_DISK",
+                                ),
+                            ),
+                            span: 36..53,
+                        },
+                    ),
+                    span: 23..53,
+                },
+            ],
+            query: Some(
+                Query {
+                    with: None,
+                    body: SetExpr {
+                        kind: Select(
+                            Select {
+                                hints: [],
+                                quantifier: None,
+                                projection: [
+                                    SelectItem {
+                                        expr: Expr {
+                                            kind: Wildcard {
+                                                qualifier: [],
+                                                except: [],
+                                            },
+                                            span: 65..66,
+                                        },
+                                        alias: None,
+                                        span: 65..66,
+                                    },
+                                ],
+                                from: Some(
+                                    FromClause {
+                                        relations: [
+                                            Relation {
+                                                lateral: false,
+                                                primary: TableFactor {
+                                                    kind: Table {
+                                                        name: ObjectName {
+                                                            parts: [
+                                                                Ident {
+                                                                    value: "s",
+                                                                    quoted: false,
+                                                                    span: 72..73,
+                                                                },
+                                                            ],
+                                                            span: 72..73,
+                                                        },
+                                                        temporal: None,
+                                                        options: [],
+                                                    },
+                                                    sample: None,
+                                                    alias: None,
+                                                    span: 72..73,
+                                                },
+                                                extensions: [],
+                                                span: 72..73,
+                                            },
+                                        ],
+                                        lateral_views: [],
+                                        pivot: None,
+                                        unpivot: None,
+                                        span: 67..73,
+                                    },
+                                ),
+                                lateral_views: [],
+                                selection: None,
+                                group_by: None,
+                                having: None,
+                                windows: [],
+                                qualify: None,
+                                span: 58..73,
+                            },
+                        ),
+                        span: 58..73,
+                    },
+                    order_by: [],
+                    order_span: None,
+                    cluster_by: [],
+                    distribute_by: [],
+                    sort_by: [],
+                    windows: [],
+                    limit: None,
+                    offset: None,
+                    span: 58..73,
+                },
+            ),
+            span: 6..73,
+        },
+        span: 0..73,
+    },
+)
+-- CACHE TABLE IDENTIFIER('ta' || 'b')
+Cache(
+    Cache {
+        kind: Cache {
+            lazy: false,
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "ta",
+                                    ),
+                                ),
+                                span: 23..27,
+                            },
+                            Concat,
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "b",
+                                    ),
+                                ),
+                                span: 31..34,
+                            },
+                        ),
+                        span: 23..34,
+                    },
+                    span: 12..35,
+                },
+            ),
+            options: [],
+            query: None,
+            span: 6..35,
+        },
+        span: 0..35,
+    },
+)
+-- UNCACHE TABLE t
+Cache(
+    Cache {
+        kind: Uncache {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 14..15,
+                        },
+                    ],
+                    span: 14..15,
+                },
+            ),
+            span: 8..15,
+        },
+        span: 0..15,
+    },
+)
+-- UNCACHE TABLE IDENTIFIER('ta' || 'b')
+Cache(
+    Cache {
+        kind: Uncache {
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "ta",
+                                    ),
+                                ),
+                                span: 25..29,
+                            },
+                            Concat,
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "b",
+                                    ),
+                                ),
+                                span: 33..36,
+                            },
+                        ),
+                        span: 25..36,
+                    },
+                    span: 14..37,
+                },
+            ),
+            span: 8..37,
+        },
+        span: 0..37,
+    },
+)
+-- CLEAR CACHE
+Cache(
+    Cache {
+        kind: Clear,
+        span: 0..11,
+    },
+)
+-- REFRESH TABLE t
+Refresh(
+    Refresh {
+        kind: Table {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 14..15,
+                        },
+                    ],
+                    span: 14..15,
+                },
+            ),
+            async_refresh: false,
+            span: 8..15,
+        },
+        span: 0..15,
+    },
+)
+-- REFRESH TABLE t ASYNC
+Refresh(
+    Refresh {
+        kind: Table {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 14..15,
+                        },
+                    ],
+                    span: 14..15,
+                },
+            ),
+            async_refresh: true,
+            span: 8..21,
+        },
+        span: 0..21,
+    },
+)
+-- REFRESH FUNCTION f
+Refresh(
+    Refresh {
+        kind: Function {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "f",
+                            quoted: false,
+                            span: 17..18,
+                        },
+                    ],
+                    span: 17..18,
+                },
+            ),
+            span: 8..18,
+        },
+        span: 0..18,
+    },
+)
+-- REFRESH FUNCTION IDENTIFIER('ident.' || 'myDoubleAvg')
+Refresh(
+    Refresh {
+        kind: Function {
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "ident.",
+                                    ),
+                                ),
+                                span: 28..36,
+                            },
+                            Concat,
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "myDoubleAvg",
+                                    ),
+                                ),
+                                span: 40..53,
+                            },
+                        ),
+                        span: 28..53,
+                    },
+                    span: 17..54,
+                },
+            ),
+            span: 8..54,
+        },
+        span: 0..54,
+    },
+)
+-- REFRESH RESOURCE '/path/to.jar'
+Refresh(
+    Refresh {
+        kind: Resource {
+            path: "/path/to.jar",
+            span: 8..31,
+        },
+        span: 0..31,
+    },
+)
+-- REFRESH '/path/to/data'
+Refresh(
+    Refresh {
+        kind: Path {
+            path: "/path/to/data",
+            span: 8..23,
+        },
+        span: 0..23,
+    },
+)
+-- ANALYZE TABLE t COMPUTE STATISTICS
+Analyze(
+    Analyze {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 14..15,
+                    },
+                ],
+                span: 14..15,
+            },
+        ),
+        partition: None,
+        noscan: false,
+        columns: All,
+        span: 0..34,
+    },
+)
+-- ANALYZE TABLE t PARTITION (ds = '2017-08-01', hr = 10) COMPUTE STATISTICS
+Analyze(
+    Analyze {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 14..15,
+                    },
+                ],
+                span: 14..15,
+            },
+        ),
+        partition: Some(
+            PartitionSpec {
+                parts: [
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "ds",
+                            quoted: false,
+                            span: 27..29,
+                        },
+                        value: Some(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "2017-08-01",
+                                    ),
+                                ),
+                                span: 32..44,
+                            },
+                        ),
+                        span: 27..44,
+                    },
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "hr",
+                            quoted: false,
+                            span: 46..48,
+                        },
+                        value: Some(
+                            Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "10",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 51..53,
+                            },
+                        ),
+                        span: 46..53,
+                    },
+                ],
+                span: 16..54,
+            },
+        ),
+        noscan: false,
+        columns: All,
+        span: 0..73,
+    },
+)
+-- ANALYZE TABLE t PARTITION (ds, hr) COMPUTE STATISTICS
+Analyze(
+    Analyze {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 14..15,
+                    },
+                ],
+                span: 14..15,
+            },
+        ),
+        partition: Some(
+            PartitionSpec {
+                parts: [
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "ds",
+                            quoted: false,
+                            span: 27..29,
+                        },
+                        value: None,
+                        span: 27..29,
+                    },
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "hr",
+                            quoted: false,
+                            span: 31..33,
+                        },
+                        value: None,
+                        span: 31..33,
+                    },
+                ],
+                span: 16..34,
+            },
+        ),
+        noscan: false,
+        columns: All,
+        span: 0..53,
+    },
+)
+-- ANALYZE TABLE t COMPUTE STATISTICS NOSCAN
+Analyze(
+    Analyze {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 14..15,
+                    },
+                ],
+                span: 14..15,
+            },
+        ),
+        partition: None,
+        noscan: true,
+        columns: All,
+        span: 0..41,
+    },
+)
+-- ANALYZE TABLE t COMPUTE STATISTICS FOR COLUMNS c1, c2
+Analyze(
+    Analyze {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 14..15,
+                    },
+                ],
+                span: 14..15,
+            },
+        ),
+        partition: None,
+        noscan: false,
+        columns: ForColumns(
+            [
+                Ident {
+                    value: "c1",
+                    quoted: false,
+                    span: 47..49,
+                },
+                Ident {
+                    value: "c2",
+                    quoted: false,
+                    span: 51..53,
+                },
+            ],
+        ),
+        span: 0..53,
+    },
+)
+-- ANALYZE TABLE t COMPUTE STATISTICS FOR ALL COLUMNS
+Analyze(
+    Analyze {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 14..15,
+                    },
+                ],
+                span: 14..15,
+            },
+        ),
+        partition: None,
+        noscan: false,
+        columns: ForAll,
+        span: 0..50,
+    },
+)
+-- MSCK REPAIR TABLE t
+Repair(
+    Repair {
+        msck: true,
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 18..19,
+                    },
+                ],
+                span: 18..19,
+            },
+        ),
+        action: None,
+        span: 0..19,
+    },
+)
+-- REPAIR TABLE t
+Repair(
+    Repair {
+        msck: false,
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 13..14,
+                    },
+                ],
+                span: 13..14,
+            },
+        ),
+        action: None,
+        span: 0..14,
+    },
+)
+-- REPAIR TABLE t ADD PARTITIONS
+Repair(
+    Repair {
+        msck: false,
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 13..14,
+                    },
+                ],
+                span: 13..14,
+            },
+        ),
+        action: Some(
+            Add,
+        ),
+        span: 0..29,
+    },
+)
+-- REPAIR TABLE t DROP PARTITIONS
+Repair(
+    Repair {
+        msck: false,
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 13..14,
+                    },
+                ],
+                span: 13..14,
+            },
+        ),
+        action: Some(
+            Drop,
+        ),
+        span: 0..30,
+    },
+)
+-- MSCK REPAIR TABLE t SYNC PARTITIONS
+Repair(
+    Repair {
+        msck: true,
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 18..19,
+                    },
+                ],
+                span: 18..19,
+            },
+        ),
+        action: Some(
+            Sync,
+        ),
+        span: 0..35,
+    },
+)
+-- ADD JAR '/path/to.jar'
+AddResource(
+    AddResource {
+        kind: Jar,
+        path: "/path/to.jar",
+        span: 0..22,
+    },
+)
+-- ADD FILE '/path/to/file'
+AddResource(
+    AddResource {
+        kind: File,
+        path: "/path/to/file",
+        span: 0..24,
+    },
+)
+-- ADD ARCHIVE '/path/to.tgz'
+AddResource(
+    AddResource {
+        kind: Archive,
+        path: "/path/to.tgz",
+        span: 0..26,
+    },
+)
+-- LIST JAR
+ListResource(
+    ListResource {
+        kind: Jar,
+        path: None,
+        span: 0..8,
+    },
+)
+-- LIST JAR '/path'
+ListResource(
+    ListResource {
+        kind: Jar,
+        path: Some(
+            "/path",
+        ),
+        span: 0..16,
+    },
+)
+-- LIST FILE
+ListResource(
+    ListResource {
+        kind: File,
+        path: None,
+        span: 0..9,
+    },
+)

@@ -157,8 +157,13 @@ pub fn parse_query(sql: &str, options: &ParserOptions) -> Result<ast::Query, Par
 /// Parses one statement, optionally followed by `;`: a query, `SET`,
 /// `RESET`, `CREATE TEMPORARY VIEW`, `DROP VIEW`, `CREATE TABLE` (or
 /// `CREATE TABLE ... LIKE`), `DROP TABLE`, `CREATE`/`DROP`
-/// `DATABASE`|`SCHEMA`|`NAMESPACE`, `USE`, or `EXPLAIN [EXTENDED |
+/// `DATABASE`|`SCHEMA`|`NAMESPACE`, `USE`, `ALTER TABLE`|`VIEW`|`NAMESPACE`,
+/// `CREATE`/`DROP VIEW`, `INSERT`, `DELETE`, `UPDATE`, `MERGE`, `TRUNCATE`,
+/// `SHOW`, `DESCRIBE`, `CACHE`/`UNCACHE`/`CLEAR CACHE`, `REFRESH`,
+/// `ANALYZE`, `MSCK`/`REPAIR`, `ADD`/`LIST`, or `EXPLAIN [EXTENDED |
 /// FORMATTED | CODEGEN | COST]` of a statement.
+/// Commands beyond queries parse to syntax trees; lowering and execution
+/// answer them with `KRISHIV_UNSUPPORTED_FEATURE`.
 ///
 /// ```
 /// use krishiv_sql::ast::{ExplainMode, Statement};
