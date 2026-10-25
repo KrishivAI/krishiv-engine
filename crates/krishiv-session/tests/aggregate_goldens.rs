@@ -202,6 +202,70 @@ fn render(schema: &Schema, batches: &[RecordBatch]) -> (String, Vec<String>) {
     (format!("struct<{}>", columns.join(",")), rows)
 }
 
+/// Whether `query` has an `ORDER BY` at parenthesis depth 0, outside
+/// string literals, quoted identifiers and comments. An `ORDER BY` inside
+/// `OVER (...)` orders only the window frame, as in Spark, and does not
+/// fix the order of the query's rows: the engine runs window partitions
+/// in parallel across hash buckets, so rows come back in bucket order.
+/// (Same approximation as `krishiv_testkit::golden::parse::text_sorted`.)
+fn outer_order_by(query: &str) -> bool {
+    let mut top = String::with_capacity(query.len());
+    let mut depth = 0_usize;
+    let mut chars = query.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' | '`' => {
+                while let Some(n) = chars.next() {
+                    if n == '\\' {
+                        chars.next();
+                    } else if n == c {
+                        break;
+                    }
+                }
+                top.push(' ');
+            }
+            '-' if chars.peek() == Some(&'-') => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        break;
+                    }
+                }
+                top.push(' ');
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                let mut prev = ' ';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        break;
+                    }
+                    prev = n;
+                }
+                top.push(' ');
+            }
+            '(' => {
+                depth += 1;
+                top.push(' ');
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                top.push(' ');
+            }
+            _ if depth == 0 => top.push(c.to_ascii_lowercase()),
+            _ => {}
+        }
+    }
+    let mut words = top
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty())
+        .peekable();
+    while let Some(w) = words.next() {
+        if w == "order" && words.peek() == Some(&"by") {
+            return true;
+        }
+    }
+    false
+}
+
 /// The JSON body of a golden error: class, SQLSTATE, message parameters.
 fn expected_error(output: &str) -> R<(String, String, Value)> {
     let body = output.split_once('\n').ok_or("an error without a body")?.1;
@@ -252,8 +316,9 @@ fn run(s: &Session, case: &Case) -> R<Option<String>> {
     };
     let (schema, mut rows) = render(&schema, &batches);
     let mut want: Vec<String> = case.output.lines().map(str::to_owned).collect();
-    // Only an `ORDER BY` fixes the order of Spark's rows.
-    if !case.query.to_ascii_uppercase().contains("ORDER BY") {
+    // Only an outer `ORDER BY` fixes the order of Spark's rows; an
+    // `ORDER BY` inside `OVER (...)` orders only the window frame.
+    if !outer_order_by(&case.query) {
         rows.sort();
         want.sort();
     }
