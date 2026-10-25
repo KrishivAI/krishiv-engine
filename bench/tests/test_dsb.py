@@ -126,10 +126,14 @@ def test_manifest_licence_names_the_tpc_terms():
 
 
 def test_convert_table_roundtrip(tmp_path: Path):
+    import datetime
+    from decimal import Decimal
+
+    import duckdb
     import pyarrow.parquet as pq
 
     dat = tmp_path / "w.dat"
-    dat.write_bytes("1|caf\xe9|2.50||\n2||0.00|2001-02-03|04:05:06\n".encode("latin-1"))
+    dat.write_bytes("1|th\xe9|2.50||\n2||0.00|2001-02-03|04:05:06\n".encode("latin-1"))
     cols = [
         ("a", "INTEGER"),
         ("b", "VARCHAR"),
@@ -137,15 +141,24 @@ def test_convert_table_roundtrip(tmp_path: Path):
         ("d", "DATE"),
         ("e", "TIME"),
     ]
-    rec = dsb.convert_table(dat, cols, tmp_path / "w.parquet", threads=1)
+    out = tmp_path / "w.parquet"
+    rec = dsb.convert_table(dat, cols, out, threads=1)
     assert rec["rows"] == 2
-    t = pq.read_table(tmp_path / "w.parquet").to_pylist()
-    assert t[0]["b"] == "café"
-    assert t[0]["d"] is None
-    assert t[1]["b"] is None
-    assert str(t[1]["d"]) == "2001-02-03"
-    assert rec["file_sha256"] == dsb.sha256_file(tmp_path / "w.parquet")
-    assert rec["row_hash_sum"].lstrip("-").isdigit()
+    assert rec["file"] == "w.parquet"
+    t = sorted(pq.read_table(out).to_pylist(), key=lambda r: r["a"])
+    assert t == [
+        {"a": 1, "b": "thé", "c": Decimal("2.50"), "d": None, "e": None},
+        {"a": 2, "b": None, "c": Decimal("0.00"), "d": datetime.date(2001, 2, 3), "e": datetime.time(4, 5, 6)},
+    ]
+    assert rec["file_sha256"] == dsb.sha256_file(out)
+    expected = (
+        duckdb.connect()
+        .execute(
+            f"SELECT coalesce(sum(h::HUGEINT), 0)::VARCHAR FROM (SELECT hash(t) AS h FROM read_parquet('{out}') t)"
+        )
+        .fetchone()[0]
+    )
+    assert rec["row_hash_sum"] == expected
 
 
 def test_oracle_file_is_reproducible_and_loadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

@@ -102,14 +102,27 @@ def fetch_source() -> Path:
     return src
 
 
+def _build_stamp() -> dict[str, str]:
+    """Current tool-build configuration: flags plus the compiler version (cache identity)."""
+    out = subprocess.run(["gcc", "--version"], capture_output=True, text=True, check=True).stdout
+    gcc = out.splitlines()[0].strip() if out.splitlines() else "unknown"
+    return {"gcc": gcc, "tool_cflags": TOOL_CFLAGS}
+
+
 def build_tools(src: Path) -> Path:
     """Builds ``dsdgen`` and ``dsqgen`` from ``<src>/code/tools``; returns the build directory holding both."""
     build = cache_dir() / "build"
-    if (build / "dsdgen").is_file() and (build / "dsqgen").is_file():
-        return build
+    stamp = build / ".krishiv-build-stamp.json"
     for tool in ("gcc", "make"):
         if shutil.which(tool) is None:
             sys.exit(f"`{tool}` not found: building the DSB generator needs gcc and make")
+    if (build / "dsdgen").is_file() and (build / "dsqgen").is_file():
+        try:
+            recorded = json.loads(stamp.read_text())
+        except (OSError, ValueError):
+            recorded = None
+        if recorded == _build_stamp():
+            return build
     shutil.rmtree(build, ignore_errors=True)
     shutil.copytree(src / "code" / "tools", build)
     # The parser sources are generated and shipped; make would rerun yacc/lex (not installed)
@@ -124,6 +137,7 @@ def build_tools(src: Path) -> Path:
     subprocess.run(cmd, cwd=build, check=True, stdout=subprocess.DEVNULL)
     if not (build / "dsdgen").is_file() or not (build / "dsqgen").is_file():
         raise RuntimeError("DSB tool build produced no dsdgen/dsqgen")
+    stamp.write_text(json.dumps(_build_stamp(), sort_keys=True) + "\n")
     return build
 
 
@@ -233,12 +247,12 @@ def relation_count(sql: str) -> int | None:
     import duckdb
 
     try:
-        ser = duckdb.connect().execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0]  # ty: ignore[not-subscriptable]
+        plan_json = duckdb.connect().execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0]  # ty: ignore[not-subscriptable]
     except duckdb.Error:
         return None
-    if '"error":true' in ser:  # json_serialize_sql reports parse errors in the JSON, it does not raise
+    if '"error":true' in plan_json:  # json_serialize_sql reports parse errors in the JSON, it does not raise
         return None
-    return len(re.findall(r'"type":"BASE_TABLE"', ser))
+    return len(re.findall(r'"type":"BASE_TABLE"', plan_json))
 
 
 def count_distribution(counts: dict[str, int | None]) -> dict[int, int]:
