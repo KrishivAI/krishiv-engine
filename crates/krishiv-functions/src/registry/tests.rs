@@ -1562,8 +1562,25 @@ fn hof_signatures() {
         result("exists", &[array(Integer, false, true), b()], &[]).unwrap(),
         ArgType::new(Boolean, true)
     );
+    // `exists`/`forall` are nullable when the array is, when the body is,
+    // or when the array may hold NULL elements (Spark's three-valued
+    // default): only a non-null array of non-null elements with a
+    // non-null body folds to a non-null boolean.
     assert_eq!(
         result("forall", &[arr(), b()], &[]).unwrap(),
+        ArgType::new(Boolean, true)
+    );
+    assert_eq!(
+        result(
+            "exists",
+            &[array(Integer, false, false), ArgType::new(Boolean, true)],
+            &[]
+        )
+        .unwrap(),
+        ArgType::new(Boolean, true)
+    );
+    assert_eq!(
+        result("forall", &[array(Integer, false, false), b()], &[]).unwrap(),
         ArgType::new(Boolean, false)
     );
     // The array comes first and holds an array; the predicate is boolean.

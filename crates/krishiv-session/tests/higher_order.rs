@@ -373,3 +373,86 @@ fn higher_order_output_names_and_types() {
         "transform(ys, lambdafunction((y + 1), y))"
     );
 }
+
+#[test]
+fn lambda_variables_respect_case_sensitivity() {
+    let s = session();
+    // Case-insensitive (the default): `n` names the `N` parameter.
+    assert_eq!(
+        strings(&s, "transform(ys, N -> n + 1)", "FROM t"),
+        [
+            Some("[33, 98]".to_owned()),
+            Some("[78, -75]".to_owned()),
+            Some("[13]".to_owned()),
+            None,
+            Some("[]".to_owned()),
+        ]
+    );
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    // Case-sensitive: `n` is the outer column, `N` the (unused) element.
+    assert_eq!(
+        strings(&s, "transform(ys, N -> n + 1)", "FROM t"),
+        [
+            Some("[2, 2]".to_owned()),
+            Some("[3, 3]".to_owned()),
+            Some("[4]".to_owned()),
+            None,
+            Some("[]".to_owned()),
+        ]
+    );
+    s.conf().unset("spark.sql.caseSensitive").unwrap();
+}
+
+#[test]
+fn scalar_subqueries_in_lambda_bodies_are_rejected() {
+    let s = session();
+    let sql = "SELECT transform(ys, y -> (SELECT max(n) FROM t)) FROM t";
+    let err = match block_on(s.sql(sql)) {
+        Err(e) => e,
+        Ok(df) => match block_on(df.collect()) {
+            Err(e) => e,
+            Ok(_) => panic!("{sql} ran"),
+        },
+    };
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{err}"
+    );
+    assert!(
+        err.to_string()
+            .contains("scalar subqueries in lambda functions"),
+        "{err}"
+    );
+}
+
+#[test]
+fn large_lists_are_rejected() {
+    use arrow_array::LargeListArray;
+    let s = Session::new().unwrap();
+    let large = LargeListArray::from_iter_primitive::<arrow_array::types::Int32Type, _, _>(vec![
+        Some(vec![Some(1), Some(2)]),
+        Some(vec![Some(3)]),
+    ]);
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "ys",
+        large.data_type().clone(),
+        true,
+    )]));
+    let batch =
+        RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(large) as ArrayRef]).unwrap();
+    s.register_batches("u", schema, vec![batch]).unwrap();
+    let sql = "SELECT transform(ys, y -> y + 1) FROM u";
+    let err = match block_on(s.sql(sql)) {
+        Err(e) => e,
+        Ok(df) => match block_on(df.collect()) {
+            Err(e) => e,
+            Ok(_) => panic!("{sql} ran over a LargeList"),
+        },
+    };
+    // A graceful engine error, never a panic or wrong rows.
+    assert!(
+        err.to_string().contains("no list") || err.to_string().contains("non-list"),
+        "{err}"
+    );
+}

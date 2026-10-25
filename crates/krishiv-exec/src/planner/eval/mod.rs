@@ -155,6 +155,9 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
 pub(crate) struct EvalEnv {
     /// `spark.sql.ansi.enabled`.
     pub(crate) ansi: bool,
+    /// `spark.sql.caseSensitive`: lambda variables resolve as the
+    /// analyzer does (see `hof`).
+    pub(crate) case_sensitive: bool,
     /// The session time zone as a fixed offset in seconds, when it is one
     /// (`UTC`, `+hh:mm`); region zones need the tz database (P2-T021b).
     pub(crate) zone: Option<i32>,
@@ -173,6 +176,9 @@ impl EvalEnv {
             .get(&ANSI_ENABLED)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let case_sensitive = config
+            .get_unregistered("spark.sql.caseSensitive")
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
         let zone = config
             .get(&SESSION_TIME_ZONE)
             .and_then(|v| v.as_str())
@@ -184,6 +190,7 @@ impl EvalEnv {
             .unwrap_or_default();
         Self {
             ansi,
+            case_sensitive,
             zone,
             kernels: KernelCtx::new(),
             query_start_micros,
@@ -191,10 +198,13 @@ impl EvalEnv {
         }
     }
 
-    /// The environment a plan fixed, with this worker's kernels.
+    /// The environment a plan fixed, with this worker's kernels. The
+    /// higher-order call's flattening is fixed at planning, so the case
+    /// flag it used is not plan data: execution never re-resolves names.
     pub(crate) fn from_plan(env: &ExprEnv) -> Self {
         Self {
             ansi: env.ansi,
+            case_sensitive: false,
             zone: env.zone,
             kernels: KernelCtx::new(),
             query_start_micros: env.query_start_micros,

@@ -53,7 +53,14 @@ pub(super) fn compile(
         return Err(internal("a higher-order call over a non-list"));
     };
     let mut refs = Refs::default();
-    collect(body, 0, params, &mut Vec::new(), &mut refs);
+    collect(
+        body,
+        0,
+        params,
+        &mut Vec::new(),
+        input.env.case_sensitive,
+        &mut refs,
+    );
     // The flattened batch's columns: the captured outer columns, then this
     // call's element variables and index. A scalar subquery reads the root
     // batch, which a nested call no longer sees, so bodies may not hold
@@ -159,12 +166,14 @@ struct Refs {
 /// Collects `refs` from `body` against `params`, the enclosing lambda's
 /// parameters (a nested lambda collects against its own). A variable of an
 /// enclosing call is an outer reference here, carried through this level's
-/// flattened batch.
+/// flattened batch. Name matching follows `case_sensitive`, exactly like
+/// the analyzer resolves it.
 fn collect(
     body: &Arc<Expr>,
     depth: usize,
     params: &[String],
     below: &mut Vec<String>,
+    case_sensitive: bool,
     refs: &mut Refs,
 ) {
     match &body.node {
@@ -173,17 +182,19 @@ fn collect(
             body: nested,
         } => {
             below.extend(inner.iter().cloned());
-            collect(nested, depth + 1, inner, below, refs);
+            collect(nested, depth + 1, inner, below, case_sensitive, refs);
             below.truncate(below.len() - inner.len());
         }
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
-            // The innermost scope naming the variable, exactly like the
-            // analyzer resolves it, then case-insensitively.
+            // The innermost scope naming the variable, like the analyzer
+            // resolves it: exact when case-sensitive, else a
+            // case-insensitive fallback.
             let at = |scope: &[String]| {
-                scope
-                    .iter()
-                    .position(|p| p == &c.name)
-                    .or_else(|| scope.iter().position(|p| p.eq_ignore_ascii_case(&c.name)))
+                scope.iter().position(|p| p == &c.name).or_else(|| {
+                    (!case_sensitive)
+                        .then(|| scope.iter().position(|p| p.eq_ignore_ascii_case(&c.name)))
+                        .flatten()
+                })
             };
             if depth == 0 && at(params) == Some(0) {
                 if !refs.lambda.contains(&c.id) {
@@ -208,7 +219,7 @@ fn collect(
                 refs.outer.push(c.id);
             }
         }
-        _ => body.for_each_child(&mut |c| collect(c, depth, params, below, refs)),
+        _ => body.for_each_child(&mut |c| collect(c, depth, params, below, case_sensitive, refs)),
     }
 }
 
@@ -272,9 +283,12 @@ impl PhysExpr for Call {
         let mut rows_of: Vec<u32> = Vec::with_capacity(total);
         for r in 0..rows {
             let (start, stop) = (at(r)?, at(r.checked_add(1).ok_or_else(|| too_many(rows))?)?);
+            let len = stop
+                .checked_sub(start)
+                .ok_or_else(|| internal("a higher-order list with decreasing offsets"))?;
             rows_of.extend(std::iter::repeat_n(
                 u32::try_from(r).map_err(|_| too_many(rows))?,
-                stop - start,
+                len,
             ));
         }
         let rows_of = UInt32Array::from(rows_of);
@@ -293,7 +307,9 @@ impl PhysExpr for Call {
                     let mut at_vals: Vec<i32> = Vec::with_capacity(total);
                     for r in 0..rows {
                         let next = r.checked_add(1).ok_or_else(|| too_many(rows))?;
-                        let len = at(next)? - at(r)?;
+                        let len = at(next)?.checked_sub(at(r)?).ok_or_else(|| {
+                            internal("a higher-order list with decreasing offsets")
+                        })?;
                         at_vals.extend(0..i32::try_from(len).map_err(|_| too_many(len))?);
                     }
                     Arc::new(Int32Array::from(at_vals))

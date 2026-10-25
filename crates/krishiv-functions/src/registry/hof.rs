@@ -117,18 +117,28 @@ fn filter_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     ))
 }
 
-/// `exists(arr, p)`: a boolean, with a boolean body.
+/// `exists(arr, p)`: a boolean, with a boolean body. The result is
+/// nullable when the array is, when the body is (a NULL mark decides
+/// nothing, so the fold stays NULL), or when the array may hold NULL
+/// elements (Spark's three-valued default).
 fn exists_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    let (_, _, nullable) = array_argument("exists", c)?;
-    let _ = boolean_body("exists", c)?;
-    Ok(ArgType::new(DataType::Boolean, nullable))
+    let (_, contains_null, nullable) = array_argument("exists", c)?;
+    let body_nullable = boolean_body("exists", c)?;
+    Ok(ArgType::new(
+        DataType::Boolean,
+        nullable || body_nullable || contains_null,
+    ))
 }
 
-/// `forall(arr, p)`: a boolean, with a boolean body.
+/// `forall(arr, p)`: a boolean, with a boolean body (same nullability
+/// as `exists`: a NULL mark decides nothing either way).
 fn forall_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    let (_, _, nullable) = array_argument("forall", c)?;
-    let _ = boolean_body("forall", c)?;
-    Ok(ArgType::new(DataType::Boolean, nullable))
+    let (_, contains_null, nullable) = array_argument("forall", c)?;
+    let body_nullable = boolean_body("forall", c)?;
+    Ok(ArgType::new(
+        DataType::Boolean,
+        nullable || body_nullable || contains_null,
+    ))
 }
 
 /// The signatures of this family.

@@ -1,28 +1,12 @@
 {
   "entries": [
     {
-      "id": "exists#2555a2780a5a/ansi_on",
-      "reason": "SELECT exists(array(1, null, 3), x -> x % 2 == 0) | boolean not null where Spark has boolean"
+      "id": "exists#431d1152f599/ansi_on",
+      "reason": "SELECT exists(array(0, null, 2, 3, null), x -> x IS NULL) | boolean where Spark has boolean not null"
     },
     {
-      "id": "exists#2555a2780a5a/ansi_off",
-      "reason": "SELECT exists(array(1, null, 3), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#48d045dea176/ansi_on",
-      "reason": "SELECT exists(CAST(array() AS array<int>), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#48d045dea176/ansi_off",
-      "reason": "SELECT exists(CAST(array() AS array<int>), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#558cbae87dba/ansi_on",
-      "reason": "SELECT exists(array(1, 2, 3), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#558cbae87dba/ansi_off",
-      "reason": "SELECT exists(array(1, 2, 3), x -> x % 2 == 0) | boolean not null where Spark has boolean"
+      "id": "exists#431d1152f599/ansi_off",
+      "reason": "SELECT exists(array(0, null, 2, 3, null), x -> x IS NULL) | boolean where Spark has boolean not null"
     },
     {
       "id": "exists#6a6847e8ef3b/ansi_on",
@@ -39,30 +23,6 @@
     {
       "id": "exists#6e826ed77c7c/ansi_off",
       "reason": "SELECT exists(INTERVAL '1-2' YEAR TO MONTH, x -> x % 2 == 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "exists#8f3eff5b5424/ansi_on",
-      "reason": "SELECT exists(array(1, 2, 3), x -> x % 2 == 10) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#8f3eff5b5424/ansi_off",
-      "reason": "SELECT exists(array(1, 2, 3), x -> x % 2 == 10) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#b57f088884a3/ansi_on",
-      "reason": "SELECT exists(array(1, 2), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#b57f088884a3/ansi_off",
-      "reason": "SELECT exists(array(1, 2), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#ba182479db25/ansi_on",
-      "reason": "SELECT exists(CAST(array(NULL) AS array<int>), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "exists#ba182479db25/ansi_off",
-      "reason": "SELECT exists(CAST(array(NULL) AS array<int>), x -> x % 2 == 0) | boolean not null where Spark has boolean"
     },
     {
       "id": "exists#da2bc52421fa/ansi_on",

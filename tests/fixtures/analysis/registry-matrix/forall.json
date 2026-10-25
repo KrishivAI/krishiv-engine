@@ -9,44 +9,12 @@
       "reason": "SELECT forall(INTERVAL '1 02:03:04' DAY TO SECOND, x -> x % 2 == 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "forall#3a97060c1889/ansi_on",
-      "reason": "SELECT forall(CAST(array(NULL) AS array<int>), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#3a97060c1889/ansi_off",
-      "reason": "SELECT forall(CAST(array(NULL) AS array<int>), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#4990494cff81/ansi_on",
-      "reason": "SELECT forall(array(1, null, 3), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#4990494cff81/ansi_off",
-      "reason": "SELECT forall(array(1, null, 3), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#5efff6957542/ansi_on",
-      "reason": "SELECT forall(array(1, 2), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#5efff6957542/ansi_off",
-      "reason": "SELECT forall(array(1, 2), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
       "id": "forall#7781d8d40b2b/ansi_on",
       "reason": "SELECT forall(map('a', 1), x -> x % 2 == 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "forall#7781d8d40b2b/ansi_off",
       "reason": "SELECT forall(map('a', 1), x -> x % 2 == 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "forall#9c7a1e75739a/ansi_on",
-      "reason": "SELECT forall(CAST(array() AS array<int>), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#9c7a1e75739a/ansi_off",
-      "reason": "SELECT forall(CAST(array() AS array<int>), x -> x % 2 == 0) | boolean not null where Spark has boolean"
     },
     {
       "id": "forall#a88594001a66/ansi_on",
@@ -57,36 +25,12 @@
       "reason": "SELECT forall(INTERVAL '1-2' YEAR TO MONTH, x -> x % 2 == 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "forall#abbf8a9f2d21/ansi_on",
-      "reason": "SELECT forall(array(2, null, 8), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#abbf8a9f2d21/ansi_off",
-      "reason": "SELECT forall(array(2, null, 8), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#b289e7a29570/ansi_on",
-      "reason": "SELECT forall(array(2, 4, 8), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#b289e7a29570/ansi_off",
-      "reason": "SELECT forall(array(2, 4, 8), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
       "id": "forall#b9b4aee34cc6/ansi_on",
       "reason": "SELECT forall(named_struct('a', 1, 'b', 'x'), x -> x % 2 == 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "forall#b9b4aee34cc6/ansi_off",
       "reason": "SELECT forall(named_struct('a', 1, 'b', 'x'), x -> x % 2 == 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "forall#c2a0228edaea/ansi_on",
-      "reason": "SELECT forall(array(1, 2, 3), x -> x % 2 == 0) | boolean not null where Spark has boolean"
-    },
-    {
-      "id": "forall#c2a0228edaea/ansi_off",
-      "reason": "SELECT forall(array(1, 2, 3), x -> x % 2 == 0) | boolean not null where Spark has boolean"
     }
   ],
   "format_version": 1,
