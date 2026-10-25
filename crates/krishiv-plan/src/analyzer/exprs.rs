@@ -12,8 +12,8 @@ use krishiv_common::error::{
     DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
     DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchInputSizeNotOne,
-    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+    DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
+    DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
     InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
@@ -1246,7 +1246,8 @@ impl Resolver<'_> {
             .with_literals(&literals)
             .with_sql(&sql)
             .with_ansi(ansi)
-            .with_decimal_loss(loss);
+            .with_decimal_loss(loss)
+            .with_case_sensitive(self.ctx.conf.case_sensitive);
         let coerced: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let casts = coerce::inputs(&entry.inputs, &coerced, &call)
             .map_err(|m| self.mismatch(m, e, kids, entry.id.name(), e.origin))?;
@@ -1262,7 +1263,8 @@ impl Resolver<'_> {
             .with_literals(&literals)
             .with_sql(&sql)
             .with_ansi(ansi)
-            .with_decimal_loss(loss);
+            .with_decimal_loss(loss)
+            .with_case_sensitive(self.ctx.conf.case_sensitive);
         let ty = (entry.result)(&call).map_err(|err| {
             // An error folding an argument is Spark's, cited at the argument.
             let origin = constants
@@ -1420,7 +1422,11 @@ impl Resolver<'_> {
         }
         let args: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let conf = self.ctx.conf;
-        let typed = coerce::operator(op, &args, conf.ansi, conf.decimal_precision_loss);
+        let rules = coerce::Rules {
+            ansi: conf.ansi,
+            case_sensitive: conf.case_sensitive,
+        };
+        let typed = coerce::operator(op, &args, rules, conf.decimal_precision_loss);
         let call = |args: Vec<Arc<Expr>>, data_type: DataType, nullable: bool| {
             let f = ResolvedFunction {
                 id: FunctionId::Builtin(op),
@@ -2123,10 +2129,14 @@ impl Resolver<'_> {
     ) -> Result<Arc<Expr>, AnalysisError> {
         let args = [arg_of(a), arg_of(b)];
         let ansi = self.ctx.conf.ansi;
+        let rules = coerce::Rules {
+            ansi,
+            case_sensitive: self.ctx.conf.case_sensitive,
+        };
         match coerce::operator(
             Builtin::Eq,
             &args,
-            ansi,
+            rules,
             self.ctx.conf.decimal_precision_loss,
         ) {
             Ok(typed) => Ok(self.implicit_cast(b, typed.casts[1].clone()).expr),
@@ -2188,7 +2198,7 @@ impl Resolver<'_> {
                 nullable: a.col.nullable,
                 literal: None,
             };
-            match coerce::common_type(&arg_of(k), &out) {
+            match coerce::common_type(&arg_of(k), &out, self.ctx.conf.case_sensitive) {
                 Some(t) => targets.push(t),
                 None => {
                     let left = format!(
@@ -2354,6 +2364,12 @@ impl Resolver<'_> {
                 }
                 .into()
             }
+            Mismatch::InvalidOrdering(t) => DatatypeMismatchInvalidOrderingType {
+                sql_expr,
+                function_name: quoted(&[function.to_owned()]),
+                data_type: quoted_type(Some(&t)),
+            }
+            .into(),
             Mismatch::Unsupported(what) => return unsupported(what, origin),
         };
         AnalysisError::new(error, origin)
