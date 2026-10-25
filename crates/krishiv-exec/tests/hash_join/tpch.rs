@@ -388,6 +388,7 @@ fn hj(
         build_keys: keys(&build.schema(), build_keys),
         null_safe: vec![false; probe_keys.len()],
         filter: filter.map(|f| Arc::new(Cond(f)) as Arc<dyn Predicate>),
+        single_match: false,
         spill: Some(spill.clone()),
     };
     let join = HashJoin::try_new(spec).unwrap();

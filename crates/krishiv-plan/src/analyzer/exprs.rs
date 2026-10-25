@@ -32,6 +32,7 @@ use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::fold;
 use super::resolve::{Attr, Env, Rel, Resolver};
+use super::suggest::closest;
 use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
@@ -186,6 +187,29 @@ fn assert_message(cond: &Bound, origin: Origin, zone: Option<i32>) -> Bound {
     Bound {
         expr: Arc::new(Expr::new(ExprNode::Literal(Literal::String(message))).with_origin(origin)),
         ty: arg_type(DataType::String, false),
+        agg: None,
+        win: None,
+        outer: None,
+        lateral: Vec::new(),
+        shown: None,
+    }
+}
+
+/// The replacement characters `mask` takes when a call omits them, which
+/// Spark's constructors write into the call (so the schema names them):
+/// `mask(s)` is `mask(s, 'X', 'x', 'n', NULL)`.
+const MASK_DEFAULTS: [Option<&str>; 4] = [Some("X"), Some("x"), Some("n"), None];
+
+/// A literal argument written by a constructor, at `origin`.
+fn default_argument(
+    literal: Literal,
+    data_type: DataType,
+    nullable: bool,
+    origin: Origin,
+) -> Bound {
+    Bound {
+        expr: Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(origin)),
+        ty: arg_type(data_type, nullable),
         agg: None,
         win: None,
         outer: None,
@@ -1068,6 +1092,39 @@ impl Resolver<'_> {
                         assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
                     );
                     (&owned[..], 2)
+                } else if entry.id.name() == "mask" && (1..5).contains(&n) {
+                    owned = kids[..n].to_vec();
+                    owned.extend(MASK_DEFAULTS.iter().skip(n - 1).map(|d| match d {
+                        Some(text) => default_argument(
+                            Literal::String((*text).to_owned()),
+                            DataType::String,
+                            false,
+                            e.origin,
+                        ),
+                        None => default_argument(
+                            Literal::Null(Some(DataType::String)),
+                            DataType::String,
+                            true,
+                            e.origin,
+                        ),
+                    }));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 5)
+                } else if matches!(entry.id.name(), "locate" | "position") && n == 2 {
+                    // `locate(sub, str)` is `locate(sub, str, 1)`.
+                    owned = kids[..n].to_vec();
+                    owned.push(default_argument(
+                        Literal::Integer(1),
+                        DataType::Integer,
+                        false,
+                        e.origin,
+                    ));
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], 3)
                 } else {
                     (&kids[..], n)
                 };
@@ -2298,7 +2355,17 @@ impl Resolver<'_> {
         origin: Origin,
     ) -> AnalysisError {
         let zone = self.ctx.conf.session_zone;
-        let sql_expr = format!("\"{}\"", pretty(call, zone));
+        // `mask` materializes its omitted arguments before typing (Spark's
+        // constructor writes them into the call), so an input-type error
+        // quotes the expanded call, as Spark does
+        // (`mask(c1, replaceArg, x, n, NULL)`).
+        let sql_expr = match function {
+            "mask" if kids.len() == 5 => {
+                let args: Vec<String> = kids.iter().map(|k| pretty(&k.shown(), zone)).collect();
+                format!("\"{function}({})\"", args.join(", "))
+            }
+            _ => format!("\"{}\"", pretty(call, zone)),
+        };
         let error: KrishivError = match m {
             Mismatch::DiffTypes(left, right) => DatatypeMismatchBinaryOpDiffTypes {
                 sql_expr,
@@ -2725,9 +2792,8 @@ fn is_prefix(a: &[String], b: &[String]) -> bool {
 /// `city`, `country` `` for `non_exist`, `` `id`, `name`, `data` `` for
 /// `invalid_column`).
 pub(super) fn unresolved(parts: &[String], scope: &[Attr], origin: Origin) -> AnalysisError {
-    let target = parts.join(".");
     let qualified = parts.len() > 1;
-    let mut ranked: Vec<(usize, String)> = scope
+    let candidates = scope
         .iter()
         .map(|a| {
             let mut p: Vec<String> = a
@@ -2738,20 +2804,17 @@ pub(super) fn unresolved(parts: &[String], scope: &[Attr], origin: Origin) -> An
                 .into_iter()
                 .collect();
             p.push(a.col.name.clone());
-            let q = quoted(&p);
-            (levenshtein(&q, &target), q)
+            p
         })
         .collect();
-    // Closest first; ties in name order, as Spark orders them.
-    ranked.sort();
+    let ranked = closest(&parts.join("."), candidates);
     let object_name = quoted(parts);
     if ranked.is_empty() {
         return AnalysisError::new(UnresolvedColumnWithoutSuggestion { object_name }, origin);
     }
     let proposal = ranked
         .iter()
-        .take(5)
-        .map(|(_, q)| q.clone())
+        .map(|p| quoted(p))
         .collect::<Vec<_>>()
         .join(", ");
     AnalysisError::new(
@@ -2770,21 +2833,6 @@ pub(super) fn names(attrs: &[Attr], _qualified: bool) -> String {
         .map(|a| quoted(std::slice::from_ref(&a.col.name)))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn levenshtein(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, x) in a.chars().enumerate() {
-        let mut prev = row[0];
-        row[0] = i + 1;
-        for (j, y) in b.iter().enumerate() {
-            let cur = row[j + 1];
-            row[j + 1] = (prev + usize::from(x != *y)).min(row[j] + 1).min(cur + 1);
-            prev = cur;
-        }
-    }
-    row[b.len()]
 }
 
 /// The `UNRECOGNIZED_PARAMETER_NAME` proposal for `name`: the parameter

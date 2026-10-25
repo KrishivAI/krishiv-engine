@@ -26,6 +26,8 @@
 mod args;
 mod arith;
 mod bitwise;
+mod chars;
+mod codec;
 mod datetime;
 mod hash;
 mod math;
@@ -283,7 +285,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 10] = [
+const FAMILIES: [(&[&str], Binder); 12] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
@@ -294,6 +296,8 @@ const FAMILIES: [(&[&str], Binder); 10] = [
     (bitwise::NAMES, bitwise::bind),
     (predicate::NAMES, predicate::bind),
     (number::NAMES, number::bind),
+    (chars::NAMES, chars::bind),
+    (codec::NAMES, codec::bind),
 ];
 
 /// The name of every scalar function [`bind_scalar`] binds, aliases
@@ -309,16 +313,23 @@ pub fn scalar_names() -> Vec<&'static str> {
 }
 
 /// Whether the result of the scalar function `name` depends only on its
-/// arguments and `spark.sql.ansi.enabled`: the string, math and arithmetic
-/// families. The datetime, session and hash families read the session time
-/// zone, the user or the query start, so a caller that evaluates a call
-/// before execution (constant folding) must not evaluate those.
+/// arguments and `spark.sql.ansi.enabled`: the string (with its character and
+/// encoding families), math and arithmetic families. The datetime, session and
+/// hash families read the session time zone, the user or the query start, so a
+/// caller that evaluates a call before execution (constant folding) must not
+/// evaluate those.
 #[must_use]
 pub fn is_argument_pure(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    [string::NAMES, math::NAMES, arith::NAMES]
-        .iter()
-        .any(|names| names.contains(&lower.as_str()))
+    [
+        string::NAMES,
+        chars::NAMES,
+        codec::NAMES,
+        math::NAMES,
+        arith::NAMES,
+    ]
+    .iter()
+    .any(|names| names.contains(&lower.as_str()))
 }
 
 /// Binds the scalar function `name` (ASCII case-insensitive) to `args`.

@@ -16,6 +16,13 @@
 //! | `next_day` with an unknown weekday name (ANSI) | `ILLEGAL_DAY_OF_WEEK` |
 //! | a `LIKE` pattern ending in its escape, or escaping a character that cannot be escaped | `INVALID_FORMAT.ESC_AT_THE_END`, `INVALID_FORMAT.ESC_IN_THE_MIDDLE` |
 //! | ANSI `BINARY` -> `STRING` of bytes that are not UTF-8 | `INVALID_UTF8_STRING` |
+//! | `validate_utf8` of bytes that are not UTF-8 | `INVALID_UTF8_STRING` |
+//! | `split_part(.., 0)` | `INVALID_INDEX_OF_ZERO` |
+//! | ANSI `elt` with an index outside the arguments | `INVALID_ARRAY_INDEX` |
+//! | `to_binary` of text that is not in its format | `CONVERSION_INVALID_INPUT` |
+//! | `unbase64` of text Java's MIME decoder rejects | `KRISHIV_INVALID_BASE64_INPUT` |
+//! | `encode`/`decode` with a charset outside Spark's default set, or text it cannot hold | `INVALID_PARAMETER_VALUE.CHARSET`, `MALFORMED_CHARACTER_CODING` |
+//! | `url_decode` of a malformed escape | `CANNOT_DECODE_URL` |
 //! | decimal `%` whose integral quotient exceeds 39 significant digits (every mode) | `KRISHIV_DECIMAL_REMAINDER_IMPOSSIBLE` |
 //! | output buffer cannot be reserved | `UNABLE_TO_ACQUIRE_MEMORY` |
 //! | decimal plan Krishiv does not support yet | `KRISHIV_UNSUPPORTED_FEATURE` |

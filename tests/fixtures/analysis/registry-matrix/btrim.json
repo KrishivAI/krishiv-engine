@@ -17,44 +17,12 @@
       "reason": "SELECT btrim(map('a', 1), 'SL') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "btrim#1043c6b8f7d4/ansi_on",
-      "reason": "SELECT btrim(X'', encode('SL', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#1043c6b8f7d4/ansi_off",
-      "reason": "SELECT btrim(X'', encode('SL', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#348504d1c8c5/ansi_on",
-      "reason": "SELECT btrim(CAST(NULL AS binary), encode('SL', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#348504d1c8c5/ansi_off",
-      "reason": "SELECT btrim(CAST(NULL AS binary), encode('SL', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#35bc736d3463/ansi_on",
-      "reason": "SELECT btrim(X'00FF7F80', encode('SL', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#35bc736d3463/ansi_off",
-      "reason": "SELECT btrim(X'00FF7F80', encode('SL', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
       "id": "btrim#49205ad1c50a/ansi_on",
       "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "btrim#49205ad1c50a/ansi_off",
       "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "btrim#4f1f9b615e5c/ansi_on",
-      "reason": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), X'') | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#4f1f9b615e5c/ansi_off",
-      "reason": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), X'') | KRISHIV_UNSUPPORTED_FEATURE: function encode"
     },
     {
       "id": "btrim#5450b1642469/ansi_on",
@@ -71,14 +39,6 @@
     {
       "id": "btrim#5a1a560c70c8/ansi_off",
       "reason": "SELECT btrim(INTERVAL '1 02:03:04' DAY TO SECOND, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "btrim#63c2c80017bb/ansi_on",
-      "reason": "SELECT btrim(encode('    SparkSQL   ', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#63c2c80017bb/ansi_off",
-      "reason": "SELECT btrim(encode('    SparkSQL   ', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
     },
     {
       "id": "btrim#6f1102cdc0c2/ansi_on",
@@ -121,36 +81,12 @@
       "reason": "SELECT btrim('SSparkSQLS', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "btrim#9768f625aa9f/ansi_on",
-      "reason": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), encode('SL', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#9768f625aa9f/ansi_off",
-      "reason": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), encode('SL', 'utf-8')) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
       "id": "btrim#a36287350867/ansi_on",
       "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "btrim#a36287350867/ansi_off",
       "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "btrim#a4157eab9f21/ansi_on",
-      "reason": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), X'00FF7F80') | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#a4157eab9f21/ansi_off",
-      "reason": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), X'00FF7F80') | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#c4dad9cf2d5b/ansi_on",
-      "reason": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), CAST(NULL AS binary)) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "btrim#c4dad9cf2d5b/ansi_off",
-      "reason": "SELECT btrim(encode('SSparkSQLS', 'utf-8'), CAST(NULL AS binary)) | KRISHIV_UNSUPPORTED_FEATURE: function encode"
     },
     {
       "id": "btrim#d8226b5a98fe/ansi_on",
