@@ -195,6 +195,35 @@ PYSPARK_CALLS = [
     (lambda: F.conv("s", 10, 2), ("call", "conv", (("col", "s"), ("lit", 10), ("lit", 2)))),
     (lambda: F.row_number(), ("call", "row_number", ())),
     (lambda: F.bitwise_not("a"), ("call", "~", (("col", "a"),))),
+    (lambda: F.add_months("d", 1), ("call", "add_months", (("col", "d"), ("lit", 1)))),
+    (lambda: F.date_trunc("YEAR", "t"), ("call", "date_trunc", (("lit", "YEAR"), ("col", "t")))),
+    (
+        lambda: F.months_between("a", "b"),
+        ("call", "months_between", (("col", "a"), ("col", "b"), ("lit", True))),
+    ),
+    (
+        lambda: F.months_between("a", "b", False),
+        ("call", "months_between", (("col", "a"), ("col", "b"), ("lit", False))),
+    ),
+    (lambda: F.next_day("d", "MO"), ("call", "next_day", (("col", "d"), ("lit", "MO")))),
+    (lambda: F.trunc("d", "YEAR"), ("call", "trunc", (("col", "d"), ("lit", "YEAR")))),
+    (
+        lambda: F.from_utc_timestamp("t", "UTC"),
+        ("call", "from_utc_timestamp", (("col", "t"), ("lit", "UTC"))),
+    ),
+    (
+        lambda: F.to_utc_timestamp("t", "UTC"),
+        ("call", "to_utc_timestamp", (("col", "t"), ("lit", "UTC"))),
+    ),
+    (lambda: F.make_date("y", "m", "d"), ("call", "make_date", (("col", "y"), ("col", "m"), ("col", "d")))),
+    (
+        lambda: F.convert_timezone(F.lit("UTC"), F.lit("Asia/Hong_Kong"), "ts"),
+        ("call", "convert_timezone", (("lit", "UTC"), ("lit", "Asia/Hong_Kong"), ("col", "ts"))),
+    ),
+    (
+        lambda: F.convert_timezone(None, F.lit("Asia/Hong_Kong"), "ts"),
+        ("call", "convert_timezone", (("lit", "Asia/Hong_Kong"), ("col", "ts"))),
+    ),
 ]
 
 
