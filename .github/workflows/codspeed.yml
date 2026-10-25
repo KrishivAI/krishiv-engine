@@ -39,7 +39,9 @@ jobs:
   benchmarks:
     name: Benchmarks
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Cold-cache runs took 27-73 minutes (instrumented build, then the run); a job
+    # cancelled at the limit gets no cache save, so the retry started cold again.
+    timeout-minutes: 90
     permissions:
       contents: read
       # OIDC authentication with CodSpeed (no token needed on public repositories).
@@ -56,6 +58,12 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Its own cache entry: the benchmark build (bench profile, codspeed instrumentation)
+          # shares no artifacts with the other workflows' dev/test builds, and a run that is
+          # cut off or fails after the build still saves what it compiled.
+          shared-key: codspeed-bench
+          cache-on-failure: true
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-codspeed
