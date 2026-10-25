@@ -16,6 +16,7 @@
 //!
 //! - A null-aware anti join (`NOT IN`) is never reoriented: it reads
 //!   whether the whole subquery side holds a NULL key.
+//! - Mark joins are never reoriented.
 //! - Inner joins keep the join orderer's choice.
 //! - A build the planner would broadcast (at most
 //!   [`BROADCAST_MAX_BYTES`](super::join::BROADCAST_MAX_BYTES)) stays.
@@ -79,6 +80,8 @@ pub(crate) fn flipped(t: JoinType) -> Option<JoinType> {
         JoinType::LeftOuter => Some(JoinType::RightOuter),
         JoinType::Inner
         | JoinType::NullAwareAnti
+        | JoinType::MarkExists
+        | JoinType::MarkIn
         | JoinType::RightSemi
         | JoinType::RightAnti
         | JoinType::RightOuter => None,
@@ -147,6 +150,8 @@ mod tests {
         for t in [
             JoinType::Inner,
             JoinType::NullAwareAnti,
+            JoinType::MarkExists,
+            JoinType::MarkIn,
             JoinType::RightSemi,
             JoinType::RightAnti,
             JoinType::RightOuter,

@@ -433,6 +433,10 @@ pub struct HashJoinPlan {
     pub null_safe: Vec<bool>,
     /// The non-equality conditions.
     pub residual: Option<Residual>,
+    /// A left outer join that fails when a probe row matches more than
+    /// once (a correlated scalar subquery without an aggregate). Only
+    /// `LeftOuter` joins set it.
+    pub single_match: bool,
     /// The runtime filters the build publishes.
     pub runtime_filters: Vec<JoinFilterPlan>,
     /// Broadcast or partitioned.
@@ -504,8 +508,8 @@ plan_data!(struct SubqueryPlan { id, kind, data_type, plan });
 plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output });
 plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
-    probe, build, join_type, probe_keys, build_keys, null_safe, residual, runtime_filters,
-    distribution
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,
+    runtime_filters, distribution
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, schema, explain, warnings, env });

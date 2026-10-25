@@ -222,6 +222,7 @@ fn inconsistent_plans_are_internal_errors() {
             build_keys: vec![0],
             null_safe: vec![false],
             residual: None,
+            single_match: false,
             runtime_filters: vec![JoinFilterPlan {
                 id: FilterId(id),
                 key: 0,

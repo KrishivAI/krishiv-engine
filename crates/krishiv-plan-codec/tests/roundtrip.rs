@@ -295,6 +295,9 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             // A feature added after the freeze: above every frozen version.
             "window_group_limit" => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
+            "hash_join_mark_exists" | "hash_join_mark_in" | "hash_join_single_match" => {
+                POST_MIGRATION_READER_VERSION
+            }
             "window_frames" | "window_offset_values" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
@@ -467,6 +470,66 @@ fn joins_that_build_their_preserved_side_are_a_feature() {
             "{name}"
         );
     }
+}
+
+/// Mark joins and the single-match flag are the `mark_join` feature: a
+/// semantic one (no equivalent plan exists without it), refused by name by
+/// a reader without it.
+#[test]
+fn mark_joins_and_single_match_are_a_feature() {
+    assert_eq!(Feature::MarkJoin.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::MarkJoin.to_string(), "mark_join");
+    for name in [
+        "hash_join_mark_exists",
+        "hash_join_mark_in",
+        "hash_join_single_match",
+    ] {
+        let m = message(name);
+        assert_eq!(m.features, ["mark_join"], "{name}");
+        assert_eq!(
+            m.min_reader_version, POST_MIGRATION_READER_VERSION,
+            "{name}"
+        );
+    }
+    // A reader without the feature refuses the plan, naming it.
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "hash_join_mark_in")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::LimitOffset]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["mark_join".to_owned()]
+        }
+    );
+    // A reader with every feature reads them back exactly.
+    for name in [
+        "hash_join_mark_exists",
+        "hash_join_mark_in",
+        "hash_join_single_match",
+    ] {
+        let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
+        assert_eq!(round_trip(&plan), plan, "{name}");
+    }
+}
+
+/// A single match on a join that is not left outer is corrupt.
+#[test]
+fn a_misplaced_single_match_flag_is_corrupt() {
+    use pb::node::Kind;
+    let mut m = message("hash_join");
+    let last = m.nodes.len() - 1;
+    let Kind::HashJoin(j) = node_mut(&mut m, last) else {
+        panic!("not a join")
+    };
+    j.single_match = true;
+    corrupt(&m, "single match");
 }
 
 #[test]

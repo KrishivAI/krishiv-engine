@@ -832,6 +832,7 @@ pub(crate) fn hash_join(
         build_keys: j.build_keys.clone(),
         null_safe: j.null_safe.clone(),
         filter: residual(probe, build, j.residual.as_ref(), env)?,
+        single_match: j.single_match,
         spill,
     })?;
     if j.runtime_filters.is_empty() {

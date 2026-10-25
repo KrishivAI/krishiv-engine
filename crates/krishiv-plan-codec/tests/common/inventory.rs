@@ -369,6 +369,7 @@ fn join(join_type: JoinType) -> HashJoinPlan {
         build_keys: vec![1, 0],
         null_safe: vec![false, true],
         residual: Some(residual()),
+        single_match: false,
         runtime_filters: vec![JoinFilterPlan {
             id: FilterId(3),
             key: 0,
@@ -382,6 +383,24 @@ fn join(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_fpp: 0.05,
             },
         }],
+        distribution: JoinDistribution::Broadcast,
+    }
+}
+
+/// A mark or single-match join over one key, without a residual condition
+/// or runtime filters (the single-match flag rides on a plain left outer
+/// join).
+fn mark_join(join_type: JoinType) -> HashJoinPlan {
+    HashJoinPlan {
+        probe: boxed(scan()),
+        build: boxed(PhysNode::Scan(file_scan())),
+        join_type,
+        probe_keys: vec![0],
+        build_keys: vec![1],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+        runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
     }
 }
@@ -650,6 +669,21 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
                 ..join(JoinType::Inner)
+            }),
+        ),
+        (
+            "hash_join_mark_exists",
+            PhysNode::HashJoin(mark_join(JoinType::MarkExists)),
+        ),
+        (
+            "hash_join_mark_in",
+            PhysNode::HashJoin(mark_join(JoinType::MarkIn)),
+        ),
+        (
+            "hash_join_single_match",
+            PhysNode::HashJoin(HashJoinPlan {
+                single_match: true,
+                ..mark_join(JoinType::LeftOuter)
             }),
         ),
         (

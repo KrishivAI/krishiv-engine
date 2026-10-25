@@ -101,6 +101,35 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         None
     );
     assert_eq!(
+        feature_of(Construct::Join(krishiv_exec::JoinType::MarkExists)),
+        Some(Feature::MarkJoin)
+    );
+    assert_eq!(
+        feature_of(Construct::Join(krishiv_exec::JoinType::MarkIn)),
+        Some(Feature::MarkJoin)
+    );
+    // The single-match flag is a property of the hash join node: a plain
+    // left outer join is the baseline, a single-match one needs the
+    // feature.
+    let single = |single_match| {
+        let (_, plan) = cases()
+            .into_iter()
+            .find(|(n, _)| n == "hash_join_single_match")
+            .unwrap();
+        match plan.root() {
+            PhysNode::HashJoin(join) => feature_of(Construct::Node(&PhysNode::HashJoin(
+                krishiv_exec::physical::HashJoinPlan {
+                    single_match,
+                    ..join.clone()
+                },
+            ))),
+            _ => None,
+        }
+    };
+    assert_eq!(single(false), None);
+    assert_eq!(single(true), Some(Feature::MarkJoin));
+    assert_eq!(Feature::MarkJoin.kind(), FeatureKind::Semantic);
+    assert_eq!(
         feature_of(Construct::Partitioning(
             &krishiv_exec::physical::Partitioning::Single
         )),

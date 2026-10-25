@@ -556,14 +556,19 @@ impl Decoder {
         if probe_keys.len() != build_keys.len() || probe_keys.len() != j.null_safe.len() {
             return Err(corrupt("a hash join whose key lists differ in length"));
         }
+        let join_type = join_type(j.join_type)?;
+        if j.single_match && join_type != JoinType::LeftOuter {
+            return Err(corrupt("single match on a join that is not left outer"));
+        }
         Ok(HashJoinPlan {
             probe: self.boxed(j.probe)?,
             build: self.boxed(j.build)?,
-            join_type: join_type(j.join_type)?,
+            join_type,
             probe_keys,
             build_keys,
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
+            single_match: j.single_match,
             runtime_filters: j
                 .runtime_filters
                 .iter()
@@ -860,6 +865,8 @@ fn join_type(t: i32) -> Result<JoinType> {
         LeftSemi => JoinType::LeftSemi,
         LeftAnti => JoinType::LeftAnti,
         NullAwareAnti => JoinType::NullAwareAnti,
+        MarkExists => JoinType::MarkExists,
+        MarkIn => JoinType::MarkIn,
         RightSemi => JoinType::RightSemi,
         RightAnti => JoinType::RightAnti,
         RightOuter => JoinType::RightOuter,

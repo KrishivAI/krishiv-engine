@@ -37,7 +37,7 @@ use super::build::BuildGlobal;
 use super::keys::{Hashing, MAX_DEPTH, PARTITIONS};
 use super::probe::{Cursor, Tables};
 use super::table::{JoinTable, RowArena, key_bytes};
-use super::{Counter, Shared, take_batch};
+use super::{Counter, MarkBuild, Shared, take_batch};
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
 use crate::operator::FlushOutput;
@@ -773,7 +773,7 @@ pub(crate) async fn step(
     if let Some(a) = &mut st.active {
         if let Some(c) = &mut a.cursor {
             let tables = Tables::Single(&a.table);
-            let (out, done) = c.next(shared, &tables, limit)?;
+            let (out, done) = c.next(shared, &tables, limit, MarkBuild::of(build))?;
             if done {
                 a.cursor = None;
             }
@@ -1642,6 +1642,7 @@ mod tests {
             build_keys: vec![0],
             null_safe: vec![false],
             filter: None,
+            single_match: false,
             spill: Some(scope.clone()),
         })
         .unwrap();

@@ -232,6 +232,7 @@ impl Planner<'_> {
             build_keys,
             null_safe,
             residual: filter,
+            single_match: false,
             runtime_filters,
             distribution,
         };

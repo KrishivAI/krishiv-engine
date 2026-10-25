@@ -463,6 +463,12 @@ pub struct HashJoinNode {
     /// `JOIN_DISTRIBUTION_UNSPECIFIED`, which decodes as broadcast.
     #[prost(enumeration = "JoinDistribution", tag = "9")]
     pub distribution: i32,
+    /// A left outer join that fails when a probe row matches more than once
+    /// (a correlated scalar subquery without an aggregate); only `LeftOuter`
+    /// joins set it.
+    /// feature: mark_join
+    #[prost(bool, tag = "10")]
+    pub single_match: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
@@ -1184,6 +1190,12 @@ pub enum JoinType {
     RightAnti = 7,
     /// feature: join_build_preserved
     RightOuter = 8,
+    /// Mark joins (decorrelated `EXISTS` and `IN` subqueries): every probe row
+    /// once, plus one boolean mark column.
+    /// feature: mark_join
+    MarkExists = 9,
+    /// feature: mark_join
+    MarkIn = 10,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1201,6 +1213,8 @@ impl JoinType {
             Self::RightSemi => "JOIN_TYPE_RIGHT_SEMI",
             Self::RightAnti => "JOIN_TYPE_RIGHT_ANTI",
             Self::RightOuter => "JOIN_TYPE_RIGHT_OUTER",
+            Self::MarkExists => "JOIN_TYPE_MARK_EXISTS",
+            Self::MarkIn => "JOIN_TYPE_MARK_IN",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1215,6 +1229,8 @@ impl JoinType {
             "JOIN_TYPE_RIGHT_SEMI" => Some(Self::RightSemi),
             "JOIN_TYPE_RIGHT_ANTI" => Some(Self::RightAnti),
             "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
+            "JOIN_TYPE_MARK_EXISTS" => Some(Self::MarkExists),
+            "JOIN_TYPE_MARK_IN" => Some(Self::MarkIn),
             _ => None,
         }
     }

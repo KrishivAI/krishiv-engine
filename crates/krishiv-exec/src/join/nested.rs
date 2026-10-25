@@ -73,6 +73,9 @@ impl NestedLoopJoin {
         if spec.join_type == JoinType::NullAwareAnti {
             return Err(unsupported("a null-aware anti join without a key"));
         }
+        if matches!(spec.join_type, JoinType::MarkExists | JoinType::MarkIn) {
+            return Err(unsupported("a mark join by nested loops"));
+        }
         if spec.join_type.builds_preserved() {
             return Err(unsupported(
                 "nested-loop joins that return rows of their build side by their matches",

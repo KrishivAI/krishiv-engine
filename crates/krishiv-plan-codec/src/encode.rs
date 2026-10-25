@@ -352,6 +352,7 @@ impl Encoder {
             residual: self.residual(join.residual.as_ref())?,
             runtime_filters: join.runtime_filters.iter().map(join_filter).collect(),
             distribution: distribution(join.distribution) as i32,
+            single_match: join.single_match,
         })
     }
 
@@ -536,6 +537,8 @@ fn join_type(t: JoinType) -> pb::JoinType {
         JoinType::LeftSemi => pb::JoinType::LeftSemi,
         JoinType::LeftAnti => pb::JoinType::LeftAnti,
         JoinType::NullAwareAnti => pb::JoinType::NullAwareAnti,
+        JoinType::MarkExists => pb::JoinType::MarkExists,
+        JoinType::MarkIn => pb::JoinType::MarkIn,
         JoinType::RightSemi => pb::JoinType::RightSemi,
         JoinType::RightAnti => pb::JoinType::RightAnti,
         JoinType::RightOuter => pb::JoinType::RightOuter,

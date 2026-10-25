@@ -117,6 +117,7 @@ registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
+    (mark_join, MarkJoin, POST_MIGRATION_READER_VERSION, Semantic, "Mark joins (`MarkExists`, `MarkIn`) and the single-match flag of `LeftOuter` joins (decorrelated `EXISTS`, `IN` and scalar subqueries)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -166,6 +167,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
     match construct {
         Construct::Node(node) => match node {
             PhysNode::Limit { offset, .. } => (*offset != 0).then_some(Feature::LimitOffset),
+            PhysNode::HashJoin(j) => j.single_match.then_some(Feature::MarkJoin),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
@@ -177,7 +179,6 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::Sort { .. }
             | PhysNode::TopN { .. }
             | PhysNode::Aggregate { .. }
-            | PhysNode::HashJoin(_)
             | PhysNode::NestedLoopJoin(_)
             | PhysNode::Union { .. }
             | PhysNode::WriteFiles { .. }
@@ -193,6 +194,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::NullAwareAnti => None,
+            JoinType::MarkExists | JoinType::MarkIn => Some(Feature::MarkJoin),
             JoinType::RightSemi | JoinType::RightAnti | JoinType::RightOuter => {
                 Some(Feature::JoinBuildPreserved)
             }

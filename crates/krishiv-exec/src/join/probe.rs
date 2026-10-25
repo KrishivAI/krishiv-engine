@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, Int64Array, UInt32Array, new_null_array};
+use arrow_array::{Array, ArrayRef, BooleanArray, Int64Array, UInt32Array, new_null_array};
 use futures::future::BoxFuture;
-use krishiv_common::error::{ArithmeticOverflow, KrishivError};
+use krishiv_common::error::{ArithmeticOverflow, KrishivError, ScalarSubqueryTooManyRows};
 use krishiv_memory::SpillSignal;
 use krishiv_types::batch::{Batch, Weights};
 
@@ -16,7 +16,7 @@ use super::build::BuildGlobal;
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
 use super::keys::Hashing;
 use super::table::{JoinTable, NONE, RowArena};
-use super::{Counter, JoinType, Shared, record, take_batch};
+use super::{Counter, JoinType, MarkBuild, Shared, record, take_batch};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::hash::ProbeCount;
@@ -61,6 +61,8 @@ const UNMATCHED: u8 = 0;
 const MATCHED: u8 = 1;
 /// Deferred to a spilled partition, or a NULL key of a null-aware anti join.
 const SKIP: u8 = 2;
+/// A NULL key of a mark join: never probed, decided by the tail.
+const NULL_KEY: u8 = 3;
 
 /// Iterates the matches of one probe batch, emitting bounded batches; the
 /// rows that stay unmatched (or matched) are emitted at the end.
@@ -101,8 +103,10 @@ impl Cursor {
         for i in 0..n {
             let row = u32::try_from(i).map_err(|_| internal("probe batch too large".to_owned()))?;
             if !keys.is_valid(i) {
-                if shared.join_type == JoinType::NullAwareAnti {
-                    state[i] = SKIP;
+                match shared.join_type {
+                    JoinType::NullAwareAnti => state[i] = SKIP,
+                    JoinType::MarkExists | JoinType::MarkIn => state[i] = NULL_KEY,
+                    _ => {}
                 }
                 continue;
             }
@@ -154,6 +158,7 @@ impl Cursor {
         shared: &Shared,
         tables: &Tables<'_>,
         limit: usize,
+        mark: MarkBuild,
     ) -> Result<(Option<Batch>, bool)> {
         let n = self.batch.num_rows();
         let quick = !shared.join_type.emits_build() && shared.filter.is_none();
@@ -192,7 +197,7 @@ impl Cursor {
         if !probe.is_empty() {
             return Ok((self.pairs(shared, tables, &probe, &build)?, false));
         }
-        Ok((self.tail(shared)?, true))
+        Ok((self.tail(shared, mark)?, true))
     }
 
     /// Joins candidate pairs: applies the filter, marks matches and builds
@@ -230,6 +235,14 @@ impl Cursor {
         };
         for (j, &i) in probe.iter().enumerate() {
             if mask.as_ref().is_none_or(|k| k.value(j)) {
+                // A single-match join holds at most one match per probe
+                // row: the pairs of one row arrive in order, so a row that
+                // is already marked matched this row twice. The mark lives
+                // in `state`, so it survives across output batches, the
+                // in-memory and grace phases alike.
+                if shared.single_match && self.state[i as usize] == MATCHED {
+                    return Err(too_many_rows());
+                }
                 self.state[i as usize] = MATCHED;
             }
         }
@@ -264,7 +277,7 @@ impl Cursor {
     }
 
     /// The rows the join type emits once every match is known.
-    fn tail(&self, shared: &Shared) -> Result<Option<Batch>> {
+    fn tail(&self, shared: &Shared, mark: MarkBuild) -> Result<Option<Batch>> {
         let want = match shared.join_type {
             // No probe row waits for the end: inner joins emit pairs as
             // they match, and the joins that build their preserved side
@@ -274,6 +287,10 @@ impl Cursor {
             }
             JoinType::LeftSemi => MATCHED,
             JoinType::LeftOuter | JoinType::LeftAnti | JoinType::NullAwareAnti => UNMATCHED,
+            // Mark joins emit every probe row once plus its mark.
+            JoinType::MarkExists | JoinType::MarkIn => {
+                return self.tail_mark(shared, mark);
+            }
         };
         let rows: Vec<u32> = (0..self.state.len())
             .filter(|&i| self.state[i] == want)
@@ -302,6 +319,45 @@ impl Cursor {
         let out = Batch::with_weights(record(&shared.schema, columns, m)?, weights);
         out.map(Some).map_err(|e| internal(e.to_string()))
     }
+
+    /// Every probe row once plus its mark: TRUE on a match; `MarkExists` is
+    /// FALSE otherwise, while `MarkIn` is NULL when the probe key is NULL
+    /// or the build side holds a NULL key, else FALSE, except that an empty
+    /// build side gives FALSE for every row. Rows deferred to a spilled
+    /// partition are skipped here and joined in the grace phase.
+    fn tail_mark(&self, shared: &Shared, mark: MarkBuild) -> Result<Option<Batch>> {
+        let mut rows = Vec::new();
+        let mut marks: Vec<Option<bool>> = Vec::new();
+        for (i, &state) in self.state.iter().enumerate() {
+            if state == SKIP {
+                continue;
+            }
+            let matched = state == MATCHED;
+            let value = match shared.join_type {
+                JoinType::MarkExists => Some(matched),
+                JoinType::MarkIn if matched || mark.empty => Some(matched),
+                JoinType::MarkIn => (state != NULL_KEY && !mark.null_key).then_some(false),
+                _ => {
+                    return Err(internal("a mark tail of a join without a mark".to_owned()));
+                }
+            };
+            rows.push(u32::try_from(i).unwrap_or(u32::MAX));
+            marks.push(value);
+        }
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let taken = if rows.len() == self.batch.num_rows() {
+            self.batch.clone()
+        } else {
+            take_batch(&self.batch, &UInt32Array::from(rows))?
+        };
+        let (data, weights) = taken.into_parts();
+        let mut columns = data.columns().to_vec();
+        columns.push(Arc::new(BooleanArray::from(marks)) as ArrayRef);
+        let out = Batch::with_weights(record(&shared.schema, columns, data.num_rows())?, weights);
+        out.map(Some).map_err(|e| internal(e.to_string()))
+    }
 }
 
 fn overflow() -> KrishivError {
@@ -311,6 +367,12 @@ fn overflow() -> KrishivError {
         config: "\"krishiv.ivm\"".to_owned(),
     }
     .into()
+}
+
+/// A probe row matched more than once in a single-match left outer join: a
+/// correlated scalar subquery returned more than one row.
+fn too_many_rows() -> KrishivError {
+    ScalarSubqueryTooManyRows {}.into()
 }
 
 struct ProbeLocal {
@@ -388,7 +450,7 @@ impl ProbeOp {
             .as_mut()
             .ok_or_else(|| internal("no probe cursor".to_owned()))?;
         loop {
-            let (out, done) = cursor.next(s, &tables, limit)?;
+            let (out, done) = cursor.next(s, &tables, limit, MarkBuild::of(g))?;
             if done {
                 l.cursor = None;
                 return Ok(OperatorOutput::NeedMoreInput(out));
