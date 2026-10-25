@@ -7,18 +7,31 @@
 //! `prefersDecimal`), the leniency flags (`allowComments`,
 //! `allowSingleQuotes`, `allowNumericLeadingZeros`,
 //! `allowBackslashEscapingAnyCharacter`, `allowUnquotedFieldNames`,
-//! `allowUnquotedControlChars`) and `sortKeys` (a `to_json` writer flag).
-//! Unknown options are ignored, as Spark's reader ignores them; `mode` is
-//! accepted and always reads `PERMISSIVE` (Spark's default), and the file
-//! options (`multiLine`, `columnNameOfCorruptRecord`, `samplingRatio`,
-//! `dropFieldIfAllNull`, `locale`, `timeFormat`, ...) have no scalar
-//! meaning and are ignored.
+//! `allowUnquotedControlChars`), `sortKeys` (a `to_json` writer flag) and
+//! `mode` (`PERMISSIVE` or `FAILFAST` for `from_json`; `DROPMALFORMED` is
+//! rejected with `PARSE_MODE_UNSUPPORTED`). Unknown options are ignored,
+//! as Spark's reader ignores them, and the file options (`multiLine`,
+//! `columnNameOfCorruptRecord`, `samplingRatio`, `dropFieldIfAllNull`,
+//! `locale`, `timeFormat`, ...) have no scalar meaning and are ignored.
 
 use std::collections::BTreeMap;
 
 use krishiv_common::error::KrishivError;
 
 use crate::datetime_pattern::{DateTimePattern, Purpose};
+
+/// How `from_json` handles malformed records (Spark's `mode` option).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParseMode {
+    /// Return `NULL` for a malformed record (Spark's default).
+    #[default]
+    Permissive,
+    /// Fail the query with `MALFORMED_RECORD_IN_PARSING`.
+    FailFast,
+    /// Drop malformed records (files only): `from_json` rejects this with
+    /// `PARSE_MODE_UNSUPPORTED`.
+    DropMalformed,
+}
 
 /// The parsed options of one JSON function call.
 #[derive(Debug, Clone, Default)]
@@ -53,6 +66,8 @@ pub struct JsonOptions {
     pub allow_unquoted_control_chars: bool,
     /// `sortKeys` (a `to_json` writer flag).
     pub sort_keys: bool,
+    /// `mode` (a `from_json` reader flag).
+    pub mode: ParseMode,
 }
 
 impl JsonOptions {
@@ -99,9 +114,17 @@ impl JsonOptions {
                 "allowUnquotedFieldNames" => out.allow_unquoted_field_names = is_true(value),
                 "allowUnquotedControlChars" => out.allow_unquoted_control_chars = is_true(value),
                 "sortKeys" => out.sort_keys = is_true(value),
-                // `mode` (always `PERMISSIVE` here), the file-only options
-                // (`multiLine`, `columnNameOfCorruptRecord`, ...),
-                // `timeFormat` (no `TIME` type yet) and anything unknown.
+                "mode" => {
+                    out.mode = match value.trim().to_ascii_uppercase().as_str() {
+                        "PERMISSIVE" => ParseMode::Permissive,
+                        "FAILFAST" => ParseMode::FailFast,
+                        "DROPMALFORMED" => ParseMode::DropMalformed,
+                        _ => out.mode,
+                    };
+                }
+                // The file-only options (`multiLine`,
+                // `columnNameOfCorruptRecord`, ...), `timeFormat` (no `TIME`
+                // type yet) and anything unknown.
                 _ => {}
             }
         }

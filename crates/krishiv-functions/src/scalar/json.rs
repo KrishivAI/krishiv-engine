@@ -101,8 +101,10 @@ fn get_object(args: &[BindArg]) -> Result<Binding, KrishivError> {
 }
 
 /// `schema_of_json(json[, options])`: the inferred type's `sql` form per
-/// row (`NULL` for malformed input and for types deeper than Spark's
-/// nesting limit, which no DDL string could name back).
+/// row (`NULL` for SQL `NULL` input and for types deeper than 1000
+/// (Jackson's default `MAX_JSON_DEPTH`), which no DDL string could name
+/// back; malformed JSON fails with `KRISHIV_MALFORMED_JSON`, as Spark
+/// raises a parse error instead of returning `NULL`).
 fn schema_of(args: &[BindArg]) -> Result<Binding, KrishivError> {
     let (json, options) = match args {
         [json] => (json, None),
@@ -130,6 +132,11 @@ fn schema_of(args: &[BindArg]) -> Result<Binding, KrishivError> {
 }
 
 /// `from_json(json, schema[, options])`: the schema's Arrow type per row.
+/// `PERMISSIVE` (the default) maps malformed input to `NULL` (a struct
+/// field to `NULL`); `FAILFAST` fails with
+/// `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION`; `DROPMALFORMED` is
+/// rejected with `PARSE_MODE_UNSUPPORTED` (Spark only supports
+/// `PERMISSIVE` and `FAILFAST` here).
 fn from(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     let (json, schema, options) = match args {
         [json, schema] => (json, schema, None),
@@ -141,6 +148,17 @@ fn from(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     }
     let target = read_schema(schema)?.to_arrow();
     let options = read_options(options)?;
+    if matches!(
+        options.mode,
+        krishiv_kernels::json::ParseMode::DropMalformed
+    ) {
+        // Spark's `from_json` only supports PERMISSIVE and FAILFAST.
+        return Err(krishiv_common::error::ParseModeUnsupported {
+            func_name: "from_json".to_owned(),
+            mode: "DROPMALFORMED".to_owned(),
+        }
+        .into());
+    }
     let zone = Arc::clone(&opts.time_zone);
     let start = opts.query_start_micros;
     Ok(Binding::new(target.clone(), move |x: &Inputs<'_>| {

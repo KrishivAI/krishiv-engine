@@ -14,10 +14,15 @@
 //!
 //! Scalar conversions are strict except the documented ones: strings parse
 //! to dates, timestamps and timestamp-ntz values (in the session zone, as
-//! the CSV and JSON readers do) and to binary through base64; a string is
+//! the CSV and JSON readers do) and to binary through base64; a `STRING`
+//! field accepts any JSON token and yields its JSON text (numbers,
+//! booleans and strings as written, nested arrays and objects as compact
+//! JSON), as Spark's `JacksonParser` does for `StringType`. A string is
 //! never read as a number or boolean, and a number is never read as a
-//! string. Duplicate object keys: the last value wins for structs; map
-//! entries keep document order.
+//! numeric, date or boolean (a float into an integral stays `NULL`, as does
+//! a string like `"1"` into an integral). Duplicate object keys: the last
+//! value wins for structs; map entries keep document order (duplicates
+//! kept).
 
 use std::sync::Arc;
 
@@ -30,10 +35,13 @@ use arrow_array::builder::{
 use arrow_array::{Array, ArrayRef, NullArray, StringArray};
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType as ArrowType, FieldRef, Fields};
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{
+    InternalError, KrishivError, MalformedRecordInParsingWithoutSuggestion,
+};
 
 use super::JsonOptions;
 use super::base64;
+use super::options::ParseMode;
 use super::parse::{Error as ParseError, Lexer, RawKey, RawStr, Token};
 use crate::cast::TimeZoneRules;
 use crate::text::{
@@ -42,6 +50,10 @@ use crate::text::{
 };
 
 /// Reads `json` into `target`, one row per string.
+///
+/// `PERMISSIVE` (the default) maps malformed input to `NULL` (a struct
+/// field catches a failure and is `NULL` instead); `FAILFAST` fails the
+/// whole read with `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION`.
 pub fn read_json(
     json: &StringArray,
     target: &ArrowType,
@@ -52,15 +64,38 @@ pub fn read_json(
     let mut out = Builder::for_type(target)?;
     let today = today_in(query_start_micros, zone);
     let ctx = Ctx { opts, zone, today };
+    let fail_fast = matches!(opts.mode, ParseMode::FailFast);
     for i in 0..json.len() {
         if json.is_null(i) {
-            out.append_null();
+            out.append_null().map_err(|e| match e {
+                Fault::Internal(e) => e,
+                Fault::Poison => InternalError {
+                    message: "appending a NULL JSON row poisoned it".to_owned(),
+                }
+                .into(),
+            })?;
             continue;
         }
-        let mut lexer = Lexer::new(json.value(i), opts.lexer());
+        let text = json.value(i);
+        let mut lexer = Lexer::new(text, opts.lexer());
         match read_top(&mut lexer, &mut out, &ctx) {
             Ok(()) => {}
-            Err(Fault::Poison) => out.append_null(),
+            Err(Fault::Poison) if fail_fast => {
+                return Err(MalformedRecordInParsingWithoutSuggestion {
+                    bad_record: text.to_owned(),
+                    fail_fast_mode: "FAILFAST".to_owned(),
+                }
+                .into());
+            }
+            Err(Fault::Poison) => {
+                out.append_null().map_err(|e| match e {
+                    Fault::Internal(e) => e,
+                    Fault::Poison => InternalError {
+                        message: "a poisoned JSON row poisoned its NULL fallback".to_owned(),
+                    }
+                    .into(),
+                })?;
+            }
             Err(Fault::Internal(e)) => return Err(e),
         }
     }
@@ -107,21 +142,25 @@ struct Ctx<'a> {
 /// One row's value at the top level: empty input and JSON `null` are
 /// `NULL`, anything else is read against `target`. A struct target maps
 /// even unparseable text (but not empty input) to a struct of `NULL`s, as
-/// Spark does (`'abc'` reads as `{null, null}`).
+/// Spark does (`'abc'` reads as `{null, null}`) in `PERMISSIVE` mode; in
+/// `FAILFAST` mode that unparseable text poisons the row instead.
 fn read_top(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
     lexer.skip_trivia()?;
     match lexer.peek() {
         Ok(None) => {
-            out.append_null();
+            out.append_null()?;
             Ok(())
         }
         Err(_) if matches!(out, Builder::Struct { .. }) => {
+            if matches!(ctx.opts.mode, ParseMode::FailFast) {
+                return Err(Poison.into());
+            }
             if let Builder::Struct {
                 children, valid, ..
             } = out
             {
                 for child in children.iter_mut() {
-                    child.append_null();
+                    child.append_null()?;
                 }
                 valid.push(true);
             }
@@ -130,7 +169,7 @@ fn read_top(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
         Err(_) => Err(Poison.into()),
         Ok(Some(Token::Null)) => {
             lexer.next()?;
-            out.append_null();
+            out.append_null()?;
             Ok(())
         }
         Ok(Some(_)) => read_value(lexer, out, ctx),
@@ -142,7 +181,7 @@ fn read_value(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result
     match out {
         Builder::Null { .. } => {
             lexer.skip_value()?;
-            out.append_null();
+            out.append_null()?;
             Ok(())
         }
         Builder::Struct { .. } => read_struct(lexer, out, ctx),
@@ -152,8 +191,9 @@ fn read_value(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result
 }
 
 /// A struct: an object fills its fields by name (missing is `NULL`, a
-/// failing value is `NULL`, the last duplicate wins); anything else,
-/// including JSON `null`, is a struct of `NULL`s.
+/// failing value is `NULL` in `PERMISSIVE` mode and poisons the row in
+/// `FAILFAST` mode, the last duplicate wins); anything else, including
+/// JSON `null`, is a struct of `NULL`s.
 fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
     let Builder::Struct {
         fields,
@@ -165,10 +205,15 @@ fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
     };
     if !matches!(lexer.peek()?, Some(Token::OpenBrace)) {
         // Not an object: skip the value and leave a struct of NULLs (the
-        // goldens pin `'1'` and `'abc'` to `{null, null}`).
+        // goldens pin `'1'` and `'abc'` to `{null, null}`) in PERMISSIVE
+        // mode; in FAILFAST mode this poisons the row.
+        if matches!(ctx.opts.mode, ParseMode::FailFast) {
+            lexer.skip_value()?;
+            return Err(Poison.into());
+        }
         lexer.skip_value()?;
         for child in children.iter_mut() {
-            child.append_null();
+            child.append_null()?;
         }
         valid.push(true);
         return Ok(());
@@ -203,6 +248,7 @@ fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
         return Err(Poison.into());
     }
     let text = lexer.text();
+    let fail_fast = matches!(ctx.opts.mode, ParseMode::FailFast);
     for (field, child) in fields.iter().zip(children.iter_mut()) {
         let mut span = None;
         for (key, start, end) in spans.iter() {
@@ -211,13 +257,14 @@ fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
             }
         }
         match span {
-            None => child.append_null(),
+            None => child.append_null()?,
             Some((start, end)) => {
                 let body = text.get(start..end).ok_or(Poison)?;
                 let mut sub = Lexer::new(body, ctx.opts.lexer());
                 match read_value(&mut sub, child, ctx) {
                     Ok(()) => {}
-                    Err(Fault::Poison) => child.append_null(),
+                    Err(Fault::Poison) if fail_fast => return Err(Poison.into()),
+                    Err(Fault::Poison) => child.append_null()?,
                     Err(Fault::Internal(e)) => return Err(Fault::Internal(e)),
                 }
             }
@@ -227,7 +274,8 @@ fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
     Ok(())
 }
 
-/// An array or map: the shape must match, else the value is `NULL`.
+/// An array or map: the shape must match, else the value is `NULL` in
+/// `PERMISSIVE` mode and poisons the row in `FAILFAST` mode.
 fn read_nested(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
     match lexer.peek()? {
         Some(Token::OpenBracket) if matches!(out, Builder::List { .. }) => {
@@ -243,12 +291,15 @@ fn read_nested(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
             };
             match read_value(lexer, values, ctx) {
                 Ok(()) => {
-                    offsets.push(values.len_total());
+                    offsets.push(values.len_total()?);
                     out.set_valid(true);
                     Ok(())
                 }
+                Err(Fault::Poison) if matches!(ctx.opts.mode, ParseMode::FailFast) => {
+                    Err(Poison.into())
+                }
                 Err(Fault::Poison) => {
-                    offsets.push(values.len_total());
+                    offsets.push(values.len_total()?);
                     out.set_valid(false);
                     Ok(())
                 }
@@ -258,15 +309,22 @@ fn read_nested(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
         Some(Token::OpenBrace) if matches!(out, Builder::Map { .. }) => read_map(lexer, out, ctx),
         Some(Token::Null) => {
             lexer.next()?;
-            out.append_null();
+            out.append_null()?;
             Ok(())
         }
         _ => Err(Poison.into()),
     }
 }
 
-/// An array's elements; a failing element nulls the whole array.
+/// An array's elements; a failing element nulls the whole array in
+/// `PERMISSIVE` mode and poisons the row in `FAILFAST` mode.
 fn read_list(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    // Borrow `values` for the base length first, then re-borrow `out` for
+    // offsets: the borrow checker needs the split.
+    let base = match out {
+        Builder::List { values, .. } => values.len_total()?,
+        _ => return Err(internal("a list value for a list builder".to_owned())),
+    };
     let Builder::List {
         offsets, values, ..
     } = out
@@ -274,7 +332,6 @@ fn read_list(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<
         return Err(internal("a list value for a list builder".to_owned()));
     };
     lexer.next()?;
-    let base = values.len_total();
     let mut ok = true;
     if lexer.eat(Token::CloseBracket)? {
         offsets.push(base);
@@ -301,15 +358,18 @@ fn read_list(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<
         break;
     }
     if !ok {
+        if matches!(ctx.opts.mode, ParseMode::FailFast) {
+            return Err(Poison.into());
+        }
         // Drain to the closing bracket so the caller's cursor is placed.
         // Values appended before the failure fall inside this row's range,
         // which is `NULL` and so never read.
         drain_to_close(lexer, b']')?;
-        offsets.push(values.len_total());
+        offsets.push(values.len_total()?);
         out.set_valid(false);
         return Ok(());
     }
-    offsets.push(values.len_total());
+    offsets.push(values.len_total()?);
     out.set_valid(true);
     Ok(())
 }
@@ -339,8 +399,14 @@ fn drain_to_close(lexer: &mut Lexer<'_>, close: u8) -> Result<(), Fault> {
     }
 }
 
-/// A map's entries; a failing key or value nulls the whole map.
+/// A map's entries; a failing key or value nulls the whole map in
+/// `PERMISSIVE` mode and poisons the row in `FAILFAST` mode. Duplicate
+/// keys are kept, in document order (as Spark does).
 fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
+    let base = match out {
+        Builder::Map { values, .. } => values.len_total()?,
+        _ => return Err(internal("a map value for a map builder".to_owned())),
+    };
     let Builder::Map {
         offsets,
         keys,
@@ -351,7 +417,6 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
         return Err(internal("a map value for a map builder".to_owned()));
     };
     lexer.next()?;
-    let base = values.len_total();
     let mut ok = true;
     if lexer.eat(Token::CloseBrace)? {
         offsets.push(base);
@@ -380,7 +445,7 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
         match read_value(lexer, values, ctx) {
             Ok(()) => {}
             Err(Fault::Poison) => {
-                values.append_null();
+                values.append_null()?;
                 ok = false;
                 break;
             }
@@ -397,12 +462,15 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
         break;
     }
     if !ok {
+        if matches!(ctx.opts.mode, ParseMode::FailFast) {
+            return Err(Poison.into());
+        }
         drain_to_close(lexer, b'}')?;
-        offsets.push(values.len_total());
+        offsets.push(values.len_total()?);
         out.set_valid(false);
         return Ok(());
     }
-    offsets.push(values.len_total());
+    offsets.push(values.len_total()?);
     out.set_valid(true);
     Ok(())
 }
@@ -482,6 +550,84 @@ fn append_key(keys: &mut Builder, key: Key) {
     }
 }
 
+/// One JSON value at the cursor as compact JSON text (for a `STRING`
+/// field holding a nested value): numbers and booleans as written,
+/// strings re-quoted, arrays and objects without whitespace, `null` as
+/// `null`. Past [`super::parse::MAX_JSON_DEPTH`] (Jackson's default, 1000)
+/// is a conversion failure.
+fn render_compact_value(
+    lexer: &mut Lexer<'_>,
+    text: &mut String,
+    depth: usize,
+) -> Result<(), Fault> {
+    if depth > super::parse::MAX_JSON_DEPTH {
+        return Err(Poison.into());
+    }
+    let deeper = depth.saturating_add(1);
+    match lexer.next()? {
+        Some(Token::Null) => text.push_str("null"),
+        Some(Token::Bool(true)) => text.push_str("true"),
+        Some(Token::Bool(false)) => text.push_str("false"),
+        Some(Token::Num(raw, _)) => text.push_str(raw),
+        Some(Token::Str(raw)) => {
+            let s = raw.unescape().ok_or(Poison)?;
+            super::write::push_quoted(&s, text);
+        }
+        Some(Token::OpenBracket) => {
+            text.push('[');
+            if lexer.eat(Token::CloseBracket)? {
+                text.push(']');
+                return Ok(());
+            }
+            loop {
+                render_compact_value(lexer, text, deeper)?;
+                lexer.skip_trivia()?;
+                if lexer.eat(Token::Comma)? {
+                    text.push(',');
+                    continue;
+                }
+                if lexer.eat(Token::CloseBracket)? {
+                    break;
+                }
+                return Err(Poison.into());
+            }
+            text.push(']');
+        }
+        Some(Token::OpenBrace) => {
+            text.push('{');
+            if lexer.eat(Token::CloseBrace)? {
+                text.push('}');
+                return Ok(());
+            }
+            loop {
+                let key = match lexer.raw_key()? {
+                    RawKey::Quoted(raw) => raw.unescape().ok_or(Poison)?,
+                    RawKey::Bare(word) => word.to_owned(),
+                };
+                lexer.skip_trivia()?;
+                if !lexer.eat(Token::Colon)? {
+                    return Err(Poison.into());
+                }
+                super::write::push_quoted(&key, text);
+                text.push(':');
+                render_compact_value(lexer, text, deeper)?;
+                lexer.skip_trivia()?;
+                if lexer.eat(Token::Comma)? {
+                    text.push(',');
+                    continue;
+                }
+                if lexer.eat(Token::CloseBrace)? {
+                    break;
+                }
+                return Err(Poison.into());
+            }
+            text.push('}');
+        }
+        None | Some(_) => return Err(Poison.into()),
+    }
+    Ok(())
+}
+
 /// One scalar token into `out`.
 fn read_scalar_token(lexer: &mut Lexer<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), Fault> {
     match lexer.next()? {
@@ -494,10 +640,76 @@ fn read_scalar_token(lexer: &mut Lexer<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> 
                 o.append_value(b);
                 Ok(())
             }
+            Scalar::Str(o) => {
+                o.append_value(if b { "true" } else { "false" });
+                Ok(())
+            }
             _ => Err(Poison.into()),
         },
         Some(Token::Str(raw)) => read_string(raw, out, ctx),
         Some(Token::Num(text, is_float)) => read_number(text, is_float, out),
+        Some(Token::OpenBracket) if matches!(out, Scalar::Str(_)) => {
+            let Scalar::Str(b) = out else {
+                return Err(internal("a string builder for a JSON array".to_owned()));
+            };
+            let mut text = String::from("[");
+            if lexer.eat(Token::CloseBracket)? {
+                text.push(']');
+                b.append_value(&text);
+                return Ok(());
+            }
+            loop {
+                render_compact_value(lexer, &mut text, 0)?;
+                lexer.skip_trivia()?;
+                if lexer.eat(Token::Comma)? {
+                    text.push(',');
+                    continue;
+                }
+                if lexer.eat(Token::CloseBracket)? {
+                    break;
+                }
+                return Err(Poison.into());
+            }
+            text.push(']');
+            b.append_value(&text);
+            Ok(())
+        }
+        Some(Token::OpenBrace) if matches!(out, Scalar::Str(_)) => {
+            let Scalar::Str(b) = out else {
+                return Err(internal("a string builder for a JSON object".to_owned()));
+            };
+            let mut text = String::from("{");
+            if lexer.eat(Token::CloseBrace)? {
+                text.push('}');
+                b.append_value(&text);
+                return Ok(());
+            }
+            loop {
+                let key = match lexer.raw_key()? {
+                    RawKey::Quoted(raw) => raw.unescape().ok_or(Poison)?,
+                    RawKey::Bare(word) => word.to_owned(),
+                };
+                lexer.skip_trivia()?;
+                if !lexer.eat(Token::Colon)? {
+                    return Err(Poison.into());
+                }
+                super::write::push_quoted(&key, &mut text);
+                text.push(':');
+                render_compact_value(lexer, &mut text, 0)?;
+                lexer.skip_trivia()?;
+                if lexer.eat(Token::Comma)? {
+                    text.push(',');
+                    continue;
+                }
+                if lexer.eat(Token::CloseBrace)? {
+                    break;
+                }
+                return Err(Poison.into());
+            }
+            text.push('}');
+            b.append_value(&text);
+            Ok(())
+        }
         None | Some(_) => Err(Poison.into()),
     }
 }
@@ -567,10 +779,16 @@ fn f32_from_f64(v: f64) -> f32 {
     v as f32
 }
 
-/// One JSON number into `out`.
+/// One JSON number into `out`: a `STRING` field accepts any number as
+/// its JSON text (as Spark does); a float into an integral stays `NULL`,
+/// as does a string like `"1"` into an integral.
 fn read_number(text: &str, is_float: bool, out: &mut Scalar) -> Result<(), Fault> {
     if is_float {
         return match out {
+            Scalar::Str(b) => {
+                b.append_value(text);
+                Ok(())
+            }
             Scalar::F32(b) => match java_parse_double(text) {
                 Some(v) => {
                     b.append_value(f32_from_f64(v));
@@ -597,6 +815,10 @@ fn read_number(text: &str, is_float: bool, out: &mut Scalar) -> Result<(), Fault
     }
     let int = text.parse::<i128>().map_err(|_| Poison)?;
     match out {
+        Scalar::Str(b) => {
+            b.append_value(text);
+            Ok(())
+        }
         Scalar::I8(b) => match i8::try_from(int) {
             Ok(v) => {
                 b.append_value(v);
@@ -831,8 +1053,9 @@ impl Scalar {
 }
 
 /// The length of a builder's column.
-fn len_of<B: ArrayBuilder>(builder: &B) -> i32 {
-    i32::try_from(builder.len()).unwrap_or(i32::MAX)
+fn len_of<B: ArrayBuilder>(builder: &B) -> Result<i32, Fault> {
+    i32::try_from(builder.len())
+        .map_err(|_| internal("a JSON builder length past the 32-bit offset limit".to_owned()))
 }
 
 /// A builder for one Arrow type.
@@ -958,11 +1181,15 @@ impl Builder {
 
     /// The number of values appended: the elements of a list, the
     /// entries of a map, the rows of anything else.
-    fn len_total(&self) -> i32 {
+    fn len_total(&self) -> Result<i32, Fault> {
         match self {
-            Self::Null { len } => i32::try_from(*len).unwrap_or(i32::MAX),
+            Self::Null { len } => i32::try_from(*len).map_err(|_| {
+                internal("a JSON null column past the 32-bit offset limit".to_owned())
+            }),
             Self::List { valid, .. } | Self::Map { valid, .. } | Self::Struct { valid, .. } => {
-                i32::try_from(valid.len()).unwrap_or(i32::MAX)
+                i32::try_from(valid.len()).map_err(|_| {
+                    internal("a JSON nested column past the 32-bit offset limit".to_owned())
+                })
             }
             Self::Scalar(scalar) => match scalar {
                 Scalar::Bool(b) => len_of(b),
@@ -982,21 +1209,32 @@ impl Builder {
     }
 
     /// Appends a SQL `NULL`.
-    fn append_null(&mut self) {
+    fn append_null(&mut self) -> Result<(), Fault> {
         match self {
-            Self::Null { len } => *len = len.saturating_add(1),
-            Self::Scalar(scalar) => scalar.append_null(),
+            Self::Null { len } => {
+                *len = len.saturating_add(1);
+                Ok(())
+            }
+            Self::Scalar(scalar) => {
+                scalar.append_null();
+                Ok(())
+            }
             Self::List { offsets, valid, .. } | Self::Map { offsets, valid, .. } => {
-                offsets.push(*offsets.last().unwrap_or(&0));
+                let last = offsets.last().copied().ok_or_else(|| {
+                    internal("a JSON list or map without a base offset".to_owned())
+                })?;
+                offsets.push(last);
                 valid.push(false);
+                Ok(())
             }
             Self::Struct {
                 children, valid, ..
             } => {
                 for child in children.iter_mut() {
-                    child.append_null();
+                    child.append_null()?;
                 }
                 valid.push(false);
+                Ok(())
             }
         }
     }

@@ -10,20 +10,21 @@
 //! pairs to `BIGINT`, mixes floating-point in as `DOUBLE` (or the wider
 //! decimal with `prefersDecimal`) and falls back to `STRING` for anything
 //! incompatible. An empty array infers `ARRAY<VOID>` and empty input
-//! `VOID`. What Spark would reject (deeper nesting than Jackson allows,
-//! malformed text) infers `NULL` here instead of failing the query, as the
-//! rest of this family maps malformed JSON to `NULL`.
+//! `VOID`. Nesting past 1000 (Jackson's default `MAX_JSON_DEPTH`) infers
+//! `NULL` (no DDL string could name it back); malformed text fails the
+//! query with `KRISHIV_MALFORMED_JSON`, as Spark raises a parse error for
+//! `schema_of_json('not json')` instead of returning `NULL`.
 
 use arrow_array::Array;
 use arrow_schema::DataType as ArrowType;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivMalformedJson};
 
 use super::JsonOptions;
 use super::parse::{Error as ParseError, Lexer, RawKey, Token};
 
-/// The inferred Arrow type of each row's JSON text (`None` for malformed
-/// input and JSON `null`... no: JSON `null` infers `VOID`; `None` is only
-/// for malformed text).
+/// The inferred Arrow type of each row's JSON text (`None` for SQL `NULL`
+/// input, JSON `null` infers `VOID`, and nesting past 1000 infers `NULL`;
+/// malformed text is an error).
 pub fn infer_json(
     json: &arrow_array::StringArray,
     opts: &JsonOptions,
@@ -34,10 +35,17 @@ pub fn infer_json(
             out.push(None);
             continue;
         }
-        let mut lexer = Lexer::new(json.value(i), opts.lexer());
+        let text = json.value(i);
+        let mut lexer = Lexer::new(text, opts.lexer());
         match infer_top(&mut lexer, opts) {
             Ok(ty) => out.push(Some(ty)),
-            Err(_) => out.push(None),
+            Err(ParseError::TooDeep) => out.push(None),
+            Err(ParseError::Malformed) => {
+                return Err(KrishivMalformedJson {
+                    json: text.to_owned(),
+                }
+                .into());
+            }
         }
     }
     Ok(out)

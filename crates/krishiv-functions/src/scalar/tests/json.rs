@@ -270,7 +270,7 @@ fn from_json_reads_options_and_dates() {
         .unwrap();
     let st = out.as_any().downcast_ref::<StructArray>().unwrap();
     assert!(!st.is_null(0));
-    // A mode the reader does not implement is still accepted.
+    // FAILFAST with valid input is unaffected.
     let one = strs(&[Some("{\"a\":1}")]);
     let aschema = strs(&[Some("a INT")]);
     let mode = opts(&[("mode", "FAILFAST")]);
@@ -284,9 +284,24 @@ fn from_json_reads_options_and_dates() {
         &BindOptions::new(),
     )
     .unwrap();
-    let _ = f
+    let out = f
         .invoke(&[col(&one), lit(&aschema), lit(&mode)], 1)
         .unwrap();
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(!st.is_null(0));
+    // DROPMALFORMED is rejected with PARSE_MODE_UNSUPPORTED.
+    let drop = opts(&[("mode", "DROPMALFORMED")]);
+    let err = bind_scalar(
+        "from_json",
+        &[
+            json.data_type().clone().into(),
+            schema_arg_of(&aschema),
+            BindArg::Literal(Arc::clone(&drop)),
+        ],
+        &BindOptions::new(),
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::ParseModeUnsupported);
     // A bad pattern fails the bind.
     assert!(
         bind_scalar(
@@ -359,6 +374,89 @@ fn to_json_writes_structs_and_nulls() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn from_json_string_field_accepts_any_token() {
+    // Spark 4.2 oracle: to STRING accepts any token as its JSON text.
+    let out = run_with_schema(
+        "from_json",
+        &[Some(
+            "{\"a\":1,\"b\":1.5,\"c\":true,\"d\":[1,2],\"e\":{\"x\":1}}",
+        )],
+        "a STRING, b STRING, c STRING, d STRING, e STRING",
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let col = |i: usize| {
+        st.column(i)
+            .as_string_view()
+            .iter()
+            .map(|s| s.map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(col(0), [Some("1".to_owned())]);
+    assert_eq!(col(1), [Some("1.5".to_owned())]);
+    assert_eq!(col(2), [Some("true".to_owned())]);
+    assert_eq!(col(3), [Some("[1,2]".to_owned())]);
+    assert_eq!(col(4), [Some("{\"x\":1}".to_owned())]);
+}
+
+#[test]
+fn from_json_failfast_fails_malformed_valid_unaffected() {
+    let json = strs(&[Some("{\"a\":1}"), Some("not json")]);
+    let schema = strs(&[Some("a INT")]);
+    let mode = opts(&[("mode", "FAILFAST")]);
+    let f = bind_scalar(
+        "from_json",
+        &[
+            json.data_type().clone().into(),
+            schema_arg_of(&schema),
+            BindArg::Literal(Arc::clone(&mode)),
+        ],
+        &BindOptions::new(),
+    )
+    .unwrap();
+    // One malformed row fails the whole batch.
+    let err = f
+        .invoke(&[col(&json), lit(&schema), lit(&mode)], json.len())
+        .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::MalformedRecordInParsingWithoutSuggestion
+    );
+    // Valid input alone is unaffected.
+    let json = strs(&[Some("{\"a\":1}"), None]);
+    let out = f
+        .invoke(&[col(&json), lit(&schema), lit(&mode)], json.len())
+        .unwrap();
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(!st.is_null(0));
+    assert!(st.is_null(1));
+}
+
+#[test]
+fn schema_of_json_malformed_is_an_error() {
+    let json = strs(&[Some("not json")]);
+    let f = bind("schema_of_json", &[&json]);
+    let err = f.invoke(&[col(&json)], json.len()).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::KrishivMalformedJson);
+    // SQL NULL stays NULL; nesting past 1000 stays NULL.
+    let json = strs(&[None]);
+    let f = bind("schema_of_json", &[&json]);
+    let out = f.invoke(&[col(&json)], json.len()).unwrap();
+    assert_eq!(text(&out), owned(&[None]));
+}
+
+#[test]
+fn from_json_maps_keep_duplicate_keys() {
+    let out = run_with_schema(
+        "from_json",
+        &[Some("{\"a\":1, \"a\":2}")],
+        "MAP<STRING, INT>",
+    );
+    let map = out.as_any().downcast_ref::<MapArray>().unwrap();
+    assert!(!map.is_null(0));
+    assert_eq!(map.value_length(0), 2);
 }
 
 #[test]

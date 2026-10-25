@@ -71,13 +71,17 @@ pub fn json_array_length(json: &StringArray) -> ArrayRef {
 
 /// The keys of each row's top-level JSON object (`NULL` otherwise).
 pub fn json_object_keys(json: &StringArray) -> Result<ArrayRef, KrishivError> {
+    use krishiv_common::error::InternalError;
     let flags = LexerFlags::strict();
     let mut items = StringViewBuilder::new();
     let mut offsets = vec![0_i32];
     let mut valid = Vec::with_capacity(json.len());
     for i in 0..json.len() {
         if json.is_null(i) {
-            offsets.push(*offsets.last().unwrap_or(&0));
+            let last = offsets.last().copied().ok_or_else(|| InternalError {
+                message: "a JSON object-keys column without a base offset".to_owned(),
+            })?;
+            offsets.push(last);
             valid.push(false);
             continue;
         }
@@ -87,11 +91,17 @@ pub fn json_object_keys(json: &StringArray) -> Result<ArrayRef, KrishivError> {
                 for key in keys {
                     items.append_value(&key);
                 }
-                offsets.push(i32::try_from(items.len()).unwrap_or(i32::MAX));
+                let next = i32::try_from(items.len()).map_err(|_| InternalError {
+                    message: "a JSON object-keys column past the 32-bit offset limit".to_owned(),
+                })?;
+                offsets.push(next);
                 valid.push(true);
             }
             Err(_) => {
-                offsets.push(*offsets.last().unwrap_or(&0));
+                let last = offsets.last().copied().ok_or_else(|| InternalError {
+                    message: "a JSON object-keys column without a base offset".to_owned(),
+                })?;
+                offsets.push(last);
                 valid.push(false);
             }
         }

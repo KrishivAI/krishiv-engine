@@ -533,7 +533,6 @@ fn infer_types_primitives_nesting_and_options() {
         Some("1.5"),
         Some("\"x\""),
         Some(""),
-        Some("abc"),
         None,
     ]);
     let got = infer_json(&json, &opts).unwrap();
@@ -549,7 +548,17 @@ fn infer_types_primitives_nesting_and_options() {
     assert!(kinds[6].contains("Utf8"));
     assert_eq!(kinds[7], "Null");
     assert_eq!(kinds[8], "NULL");
-    assert_eq!(kinds[9], "NULL");
+    // Malformed text fails with `KRISHIV_MALFORMED_JSON` (Spark raises a
+    // parse error for `schema_of_json('not json')`).
+    let err = infer_json(&strs(&[Some("abc")]), &opts).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::KrishivMalformedJson
+    );
+    // Nesting past 1000 (Jackson's default `MAX_JSON_DEPTH`) infers NULL.
+    let deep = format!("{}null{}", "[".repeat(1001), "]".repeat(1001));
+    let got = infer_json(&strs(&[Some(&deep)]), &opts).unwrap();
+    assert_eq!(got[0], None);
     // `prefersDecimal` and `primitivesAsString`.
     let mut decimal = JsonOptions::new();
     decimal.prefers_decimal = true;
@@ -594,4 +603,138 @@ fn base64_round_trips_binary() {
         write(&out, &JsonOptions::new()),
         [Some("\"aGVsbG8=\"".to_owned()), None, None]
     );
+}
+
+#[test]
+fn read_string_accepts_any_token_as_json_text() {
+    // Spark 4.2 oracle: `from_json` to a STRING field accepts any token
+    // and yields its JSON text.
+    let target = struct_of(vec![
+        Field::new("a", DataType::Utf8View, true),
+        Field::new("b", DataType::Utf8View, true),
+        Field::new("c", DataType::Utf8View, true),
+        Field::new("d", DataType::Utf8View, true),
+        Field::new("e", DataType::Utf8View, true),
+    ]);
+    let out = read(
+        &[Some(
+            "{\"a\":1,\"b\":1.5,\"c\":true,\"d\":[1,2],\"e\":{\"x\":1}}",
+        )],
+        &target,
+        &JsonOptions::new(),
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let col = |i: usize| {
+        st.column(i)
+            .as_string_view()
+            .iter()
+            .map(|s| s.map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(col(0), [Some("1".to_owned())]);
+    assert_eq!(col(1), [Some("1.5".to_owned())]);
+    assert_eq!(col(2), [Some("true".to_owned())]);
+    assert_eq!(col(3), [Some("[1,2]".to_owned())]);
+    assert_eq!(col(4), [Some("{\"x\":1}".to_owned())]);
+    // Nested whitespace compacts, strings re-quote, null stays NULL.
+    let target = struct_of(vec![
+        Field::new("a", DataType::Utf8View, true),
+        Field::new("b", DataType::Utf8View, true),
+    ]);
+    let out = read(
+        &[Some("{\"a\": [1, 2], \"b\": null}")],
+        &target,
+        &JsonOptions::new(),
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let a: Vec<Option<String>> = st
+        .column(0)
+        .as_string_view()
+        .iter()
+        .map(|s| s.map(str::to_owned))
+        .collect();
+    let b: Vec<Option<String>> = st
+        .column(1)
+        .as_string_view()
+        .iter()
+        .map(|s| s.map(str::to_owned))
+        .collect();
+    assert_eq!(a, [Some("[1,2]".to_owned())]);
+    assert_eq!(b, [None]);
+    // Float into INT stays NULL; string "1" into INT stays NULL.
+    let target = struct_of(vec![
+        Field::new("i", DataType::Int32, true),
+        Field::new("j", DataType::Int32, true),
+    ]);
+    let out = read(
+        &[Some("{\"i\":1.5, \"j\":\"1\"}")],
+        &target,
+        &JsonOptions::new(),
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let i: Vec<Option<i32>> = st.column(0).as_primitive::<Int32Type>().iter().collect();
+    let j: Vec<Option<i32>> = st.column(1).as_primitive::<Int32Type>().iter().collect();
+    assert_eq!(i, [None]);
+    assert_eq!(j, [None]);
+}
+
+#[test]
+fn read_failfast_valid_unaffected_and_malformed_fails() {
+    use std::collections::BTreeMap;
+    let target = struct_of(vec![Field::new("a", DataType::Int32, true)]);
+    let opts = JsonOptions::from_map(&BTreeMap::from([(
+        "mode".to_owned(),
+        "FAILFAST".to_owned(),
+    )]))
+    .unwrap();
+    // Valid input is unaffected.
+    let out = read(&[Some("{\"a\":1}"), None], &target, &opts);
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let a: Vec<Option<i32>> = st.column(0).as_primitive::<Int32Type>().iter().collect();
+    assert_eq!(a, [Some(1), None]);
+    // Malformed input fails with MALFORMED_RECORD_IN_PARSING.
+    let err = read_json(&strs(&[Some("not json")]), &target, &opts, &zone(), 0).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::MalformedRecordInParsingWithoutSuggestion
+    );
+    assert!(err.message().contains("FAILFAST"), "{err}");
+    // A field conversion failure also fails in FAILFAST (PERMISSIVE would
+    // null the field).
+    let err = read_json(&strs(&[Some("{\"a\":\"x\"}")]), &target, &opts, &zone(), 0).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::MalformedRecordInParsingWithoutSuggestion
+    );
+    // PERMISSIVE maps the same inputs to struct-of-NULLs / field NULL.
+    let permissive = JsonOptions::new();
+    let out = read(&[Some("not json")], &target, &permissive);
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(!st.is_null(0));
+    let a: Vec<Option<i32>> = st.column(0).as_primitive::<Int32Type>().iter().collect();
+    assert_eq!(a, [None]);
+    let out = read(&[Some("{\"a\":\"x\"}")], &target, &permissive);
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(!st.is_null(0));
+    let a: Vec<Option<i32>> = st.column(0).as_primitive::<Int32Type>().iter().collect();
+    assert_eq!(a, [None]);
+}
+
+#[test]
+fn read_maps_keep_duplicate_keys_struct_last_wins() {
+    // Duplicate keys in a map target are kept.
+    let target = map_of(
+        Field::new("key", DataType::Utf8View, false),
+        Field::new("value", DataType::Int32, true),
+    );
+    let out = read(&[Some("{\"a\":1, \"a\":2}")], &target, &JsonOptions::new());
+    let map = out.as_any().downcast_ref::<MapArray>().unwrap();
+    assert!(!map.is_null(0));
+    assert_eq!(map.value_length(0), 2);
+    // Duplicate keys in a struct target: last wins.
+    let target = struct_of(vec![Field::new("a", DataType::Int32, true)]);
+    let out = read(&[Some("{\"a\":1, \"a\":2}")], &target, &JsonOptions::new());
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let a: Vec<Option<i32>> = st.column(0).as_primitive::<Int32Type>().iter().collect();
+    assert_eq!(a, [Some(2)]);
 }
