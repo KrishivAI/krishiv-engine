@@ -1,0 +1,38 @@
+{
+  "cases": {
+    "depends-on-command": [
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      26
+    ],
+    "sql-commands": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      28,
+      29
+    ]
+  },
+  "file": "subquery/subquery-nested-data",
+  "format_version": 1
+}

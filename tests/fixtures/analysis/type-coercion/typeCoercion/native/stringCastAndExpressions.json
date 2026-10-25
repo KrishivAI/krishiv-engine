@@ -1,0 +1,50 @@
+{
+  "entries": [
+    {
+      "query": "select from_json(a, 'a INT') from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_json"
+    },
+    {
+      "query": "select from_unixtime('2018-01-01', a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_unixtime"
+    },
+    {
+      "query": "select from_unixtime(a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_unixtime"
+    },
+    {
+      "query": "select get_json_object(a, a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function get_json_object"
+    },
+    {
+      "query": "select json_tuple(a, a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function json_tuple"
+    },
+    {
+      "query": "select to_timestamp('2018-01-01', a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp"
+    },
+    {
+      "query": "select to_timestamp(a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_timestamp"
+    },
+    {
+      "query": "select to_unix_timestamp('2018-01-01', a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_unix_timestamp"
+    },
+    {
+      "query": "select to_unix_timestamp(a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function to_unix_timestamp"
+    },
+    {
+      "query": "select unix_timestamp('2018-01-01', a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function unix_timestamp"
+    },
+    {
+      "query": "select unix_timestamp(a) from t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function unix_timestamp"
+    }
+  ],
+  "file": "typeCoercion/native/stringCastAndExpressions",
+  "format_version": 1
+}

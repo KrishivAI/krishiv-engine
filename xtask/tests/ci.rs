@@ -75,6 +75,14 @@ fn allowlist_matches_expected_paths() {
     assert!(is_size_excluded(
         "crates/krishiv-io/tests/fixtures/a.parquet"
     ));
+    assert!(is_size_excluded(
+        "python/krishiv/sql/_generated_functions.py"
+    ));
+    assert!(is_size_excluded(
+        "python/krishiv/sql/_generated_functions.pyi"
+    ));
+    assert!(!is_size_excluded("python/krishiv/sql/_function_support.py"));
+    assert!(!is_size_excluded("python/krishiv/sql/functions.py"));
     assert!(!is_size_excluded("crates/x/src/generated/ids.rs"));
     assert!(!is_size_excluded("crates/x/src/fixtures/helpers.rs"));
     assert!(!is_size_excluded("docs/notes.out"));

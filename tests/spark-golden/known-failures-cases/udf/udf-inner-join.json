@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "depends-on-command": [
+      6
+    ],
+    "sql-commands": [
+      4,
+      5
+    ]
+  },
+  "file": "udf/udf-inner-join",
+  "format_version": 1
+}

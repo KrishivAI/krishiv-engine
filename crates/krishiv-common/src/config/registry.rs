@@ -37,8 +37,10 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &FILES_OPEN_COST_IN_BYTES,
     &FILES_MIN_PARTITION_NUM,
     &FILES_MAX_PARTITION_NUM,
+    &BUCKETING_MAX_BUCKETS,
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
+    &IO_BLOCKING_THREADS,
     &IO_COALESCE_BYTES,
     &IO_MAX_REQUEST_BYTES,
     &IO_PREFETCH_BYTES,
@@ -83,6 +85,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
     ("krishiv.exec.agg.rowLayout", &EXEC_AGG_ROW_LAYOUT),
+    ("krishiv.io.blockingThreads", &IO_BLOCKING_THREADS),
     ("krishiv.io.footerReadBytes", &IO_FOOTER_READ_BYTES),
     ("krishiv.io.maxRequestBytes", &IO_MAX_REQUEST_BYTES),
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
@@ -173,8 +176,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
     (
+        "spark.sql.sources.bucketing.maxBuckets",
+        &BUCKETING_MAX_BUCKETS,
+    ),
+    (
         "krishiv.runtimeFilter.exactSet.maxValues",
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
+    ),
+    (
+        "krishiv.sql.sources.bucketing.maxBuckets",
+        &BUCKETING_MAX_BUCKETS,
     ),
     (
         "krishiv.experimental.unalignedCheckpoints",
@@ -547,6 +558,18 @@ pub static FILES_MAX_PARTITION_NUM: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.files.maxPartitionNum"),
 };
 
+/// `spark.sql.sources.bucketing.maxBuckets` (Spark's default: 100,000).
+pub static BUCKETING_MAX_BUCKETS: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.sources.bucketing.maxBuckets",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(100_000)),
+    doc: "Maximum `CLUSTERED BY ... INTO n BUCKETS` bucket count: a count above it fails \
+          with `INVALID_BUCKET_COUNT`.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.sources.bucketing.maxBuckets"),
+};
+
 /// `krishiv.sql.leafNodeDefaultParallelism`.
 pub static LEAF_NODE_DEFAULT_PARALLELISM: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.leafNodeDefaultParallelism",
@@ -564,7 +587,24 @@ pub static IO_MAX_CONCURRENT_REQUESTS: ConfigEntry = ConfigEntry {
     key: "krishiv.io.maxConcurrentRequests",
     value_type: ValueType::Int,
     default: Some(ConfigValue::Int(64)),
-    doc: "Most object-store requests in flight at once per store, over all queries of the process.",
+    doc: "Most object-store requests in flight at once per store, over all queries of the process. \
+          The local file store also runs each request on a blocking thread of the I/O runtime, so \
+          at most `krishiv.io.blockingThreads` of them run at once.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.io.blockingThreads`.
+pub static IO_BLOCKING_THREADS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.blockingThreads",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(8)),
+    doc: "Most blocking threads of the I/O runtime, where local-file reads and writes run: at most \
+          this many local-file requests run at once per executor (`krishiv.io.maxConcurrentRequests` \
+          still bounds those in flight). Each such thread keeps freed read buffers in its own \
+          allocator cache, so the bound also bounds that memory. Read when the session starts its \
+          executor.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,

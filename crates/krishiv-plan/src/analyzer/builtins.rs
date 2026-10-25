@@ -51,7 +51,87 @@ impl FunctionRegistry for BuiltinFunctions {
         }
     }
 
+    fn spark_deterministic(&self, name: &str) -> Option<bool> {
+        self.0
+            .spark_function(&name.to_ascii_lowercase())?
+            .deterministic
+    }
+
     fn version(&self) -> u64 {
         self.0.version()
+    }
+}
+
+/// One named parameter of a function Spark documents with named
+/// parameters: its name and default.
+pub(super) struct NamedParam {
+    /// The parameter name, as Spark spells it.
+    pub name: &'static str,
+    /// The default, filled in when the call omits the parameter.
+    pub default: NamedDefault,
+}
+
+/// The default of a named parameter.
+#[derive(Clone, Copy)]
+pub(super) enum NamedDefault {
+    /// No default: the call must supply the parameter.
+    Required,
+    /// `NULL`, retaining the input (as `mask`'s `otherChar` does).
+    Null,
+    /// A string literal default (as `mask`'s replacements do).
+    Text(&'static str),
+}
+
+/// The named-parameter signature of the functions Spark 4.2 documents with
+/// named parameters that the engine accepts named arguments for: `mask`
+/// (implemented) and `count_min_sketch` (known but unimplemented, so its
+/// calls reorder and then fail as unsupported). Any other function rejects
+/// named arguments with `NAMED_PARAMETERS_NOT_SUPPORTED`.
+pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
+    use NamedDefault::{Null, Required, Text};
+    const MASK: &[NamedParam] = &[
+        NamedParam {
+            name: "str",
+            default: Required,
+        },
+        NamedParam {
+            name: "upperChar",
+            default: Text("X"),
+        },
+        NamedParam {
+            name: "lowerChar",
+            default: Text("x"),
+        },
+        NamedParam {
+            name: "digitChar",
+            default: Text("n"),
+        },
+        NamedParam {
+            name: "otherChar",
+            default: Null,
+        },
+    ];
+    const COUNT_MIN_SKETCH: &[NamedParam] = &[
+        NamedParam {
+            name: "column",
+            default: Required,
+        },
+        NamedParam {
+            name: "epsilon",
+            default: Required,
+        },
+        NamedParam {
+            name: "confidence",
+            default: Required,
+        },
+        NamedParam {
+            name: "seed",
+            default: Required,
+        },
+    ];
+    match name.to_ascii_lowercase().as_str() {
+        "mask" => Some(MASK),
+        "count_min_sketch" => Some(COUNT_MIN_SKETCH),
+        _ => None,
     }
 }

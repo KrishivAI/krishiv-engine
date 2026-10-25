@@ -1710,6 +1710,7 @@ name = "krishiv-session"
 version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "arrow-select",
  "futures",
@@ -1780,6 +1781,7 @@ dependencies = [
  "krishiv-kernels",
  "krishiv-memory",
  "krishiv-plan",
+ "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
  "object_store",

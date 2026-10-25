@@ -966,11 +966,25 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         Date => DataType::Date,
         Timestamp => DataType::Timestamp,
         TimestampNtz => DataType::TimestampNtz,
+        Nested => nested(t)?,
     })?;
     if !matches!(data_type, DataType::Decimal(_)) && (t.precision != 0 || t.scale != 0) {
         return Err(corrupt("a precision or scale on a type that has none"));
     }
+    if !data_type.is_nested() && !t.json.is_empty() {
+        return Err(corrupt("a JSON form on a type that is not nested"));
+    }
     Ok(data_type)
+}
+
+/// A nested type from its Spark JSON (depth-bounded by `from_json`).
+fn nested(t: &pb::DataType) -> Result<DataType> {
+    // Only the canonical form the encoder writes: bytes decode to a plan
+    // that encodes to the same bytes.
+    match DataType::from_json(&t.json) {
+        Ok(d) if d.is_nested() && d.json() == t.json => Ok(d),
+        _ => Err(corrupt("an invalid nested type")),
+    }
 }
 
 fn decimal(t: &pb::DataType) -> Result<DecimalType> {

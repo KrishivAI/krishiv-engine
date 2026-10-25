@@ -7,8 +7,8 @@ use std::sync::Arc;
 use krishiv_types::{DataType, DecimalType};
 
 use crate::{
-    Builtin, Expr, ExprNode, JoinCondition, JoinKind, Literal, LogicalPlan, SortOrder, Star,
-    SubqueryKind,
+    Builtin, Expr, ExprNode, FunctionCall, JoinCondition, JoinKind, Literal, LogicalPlan,
+    SortOrder, Star, SubqueryKind,
 };
 
 /// A column; dots separate name parts.
@@ -45,6 +45,30 @@ pub(super) fn date(v: &str) -> Expr {
 
 pub(super) fn f(name: &str, args: Vec<Expr>) -> Expr {
     Expr::function(name, args)
+}
+
+/// `name(args)`, each with its `name => ` prefix when one is given.
+pub(super) fn named_call(name: &str, args: &[(Option<&str>, Expr)]) -> Expr {
+    Expr::new(ExprNode::Function(FunctionCall {
+        name: name.to_owned(),
+        qualifier: Vec::new(),
+        args: args.iter().map(|(_, e)| Arc::new(e.clone())).collect(),
+        arg_names: args.iter().map(|(n, _)| n.map(str::to_owned)).collect(),
+        distinct: false,
+        filter: None,
+    }))
+}
+
+/// `qualifier.name(args)`.
+pub(super) fn qualified_call(qualifier: &[&str], name: &str, args: Vec<Expr>) -> Expr {
+    Expr::new(ExprNode::Function(FunctionCall {
+        name: name.to_owned(),
+        qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
+        args: args.into_iter().map(Arc::new).collect(),
+        arg_names: Vec::new(),
+        distinct: false,
+        filter: None,
+    }))
 }
 
 pub(super) fn op(b: Builtin, l: Expr, r: Expr) -> Expr {
@@ -152,6 +176,7 @@ pub(super) fn when(cond: Expr, then: Expr, otherwise: Expr) -> Expr {
 pub(super) fn star() -> Expr {
     Expr::new(ExprNode::Star(Star {
         qualifier: Vec::new(),
+        except: Vec::new(),
         plan_id: None,
     }))
 }
