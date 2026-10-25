@@ -223,7 +223,7 @@ impl Parser<'_> {
     fn prefixes(&mut self, min_bp: u8, ops: &mut Vec<Op>) {
         loop {
             let start = self.start();
-            let not = self.kw_at(0, "NOT") || self.sym_at(0, Sym::Bang);
+            let not = (self.kw_at(0, "NOT") && !self.not_is_column()) || self.sym_at(0, Sym::Bang);
             let op = if not && Self::boolean_context(min_bp, ops) {
                 Op::Not(start)
             } else if self.sym_at(0, Sym::Minus)
@@ -240,6 +240,19 @@ impl Parser<'_> {
             self.bump();
             ops.push(op);
         }
+    }
+
+    /// Whether the `NOT` here is a column, as Spark reads `SELECT NOT`,
+    /// `NOT = 1`, `NOT.x`, `NOT::INT` and `NOT[0]`: no operand can follow
+    /// it (a postfix operator does instead). `+` and `-` do
+    /// (`NOT + 1` is `NOT (+1)`).
+    fn not_is_column(&self) -> bool {
+        let operand_sign = self.sym_at(1, Sym::Plus) || self.sym_at(1, Sym::Minus);
+        !operand_sign
+            && (self.reserved_as_column()
+                || self.sym_at(1, Sym::Dot)
+                || self.sym_at(1, Sym::DoubleColon)
+                || self.sym_at(1, Sym::LBracket))
     }
 
     fn exists_follows(&self) -> bool {
