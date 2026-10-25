@@ -20,7 +20,7 @@ use super::analytics::Analytics;
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
-use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key};
+use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key, unresolved};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, TableKind};
 use crate::{
@@ -2097,7 +2097,16 @@ impl Resolver<'_> {
                 .out
                 .iter()
                 .any(|a| same(&a.col.name, "all", self.ctx.conf.case_sensitive))
-        {
+            && !c.agg.as_ref().is_some_and(|agg| {
+                agg.keys
+                    .iter()
+                    .any(|a| same(&a.col.name, "all", self.ctx.conf.case_sensitive))
+                    || agg
+                        .input
+                        .out
+                        .iter()
+                        .any(|a| same(&a.col.name, "all", self.ctx.conf.case_sensitive))
+            }) {
             let template = &order[0];
             expanded = c
                 .out
@@ -2147,7 +2156,23 @@ impl Resolver<'_> {
         }
         // Over an aggregate with windows, Spark's `ORDER BY` reads the
         // select list only (nothing resolves through the windows).
+        // A name the aggregate outputs twice is `UNRESOLVED_COLUMN` in
+        // `ORDER BY` (not `AMBIGUOUS_REFERENCE`): Spark lists the
+        // duplicates as proposals (checked against Spark 4.2.0).
         let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
+            for e in &exprs {
+                if let ExprNode::Column(col) = &e.node
+                    && col.plan_id.is_none()
+                    && col.name.len() == 1
+                    && c.out
+                        .iter()
+                        .filter(|a| same(&a.col.name, &col.name[0], self.ctx.conf.case_sensitive))
+                        .count()
+                        > 1
+                {
+                    return Err(unresolved(&col.name, &c.out, e.origin));
+                }
+            }
             self.over_agg(&c, &exprs, env, "Sort")?
         } else {
             // A name the select list outputs twice is looked up below it,
