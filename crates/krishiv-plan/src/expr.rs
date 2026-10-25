@@ -127,14 +127,28 @@ pub struct Star {
 /// An unresolved function call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCall {
-    /// The function name; operators use their canonical names.
-    pub name: String,
+    /// The function name parts as written (`["upper"]`, or
+    /// `["system", "builtin", "upper"]` for a qualified call); operators
+    /// use their canonical names, always unqualified.
+    pub name: Vec<String>,
     /// The arguments.
     pub args: Vec<Arc<Expr>>,
     /// `f(DISTINCT ...)`.
     pub distinct: bool,
     /// `f(...) FILTER (WHERE filter)`.
     pub filter: Option<Arc<Expr>>,
+}
+
+impl FunctionCall {
+    /// The name when it is unqualified (a single part), as operators and
+    /// the name-based function checks require.
+    #[must_use]
+    pub fn unqualified(&self) -> Option<&str> {
+        match self.name.as_slice() {
+            [name] => Some(name),
+            _ => None,
+        }
+    }
 }
 
 /// How a cast handles invalid input.
@@ -415,7 +429,7 @@ impl Expr {
     #[must_use]
     pub fn function(name: impl Into<String>, args: Vec<Self>) -> Self {
         Self::new(ExprNode::Function(FunctionCall {
-            name: name.into(),
+            name: vec![name.into()],
             args: args.into_iter().map(Arc::new).collect(),
             distinct: false,
             filter: None,
@@ -633,7 +647,7 @@ impl Expr {
 /// resolved): a frame bound written `x PRECEDING`.
 pub(crate) fn negated(e: &Expr) -> Option<&Arc<Expr>> {
     let (name, args) = match &e.node {
-        ExprNode::Function(f) => (f.name.as_str(), &f.args),
+        ExprNode::Function(f) => (f.unqualified()?, &f.args),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => (f.id.name(), &f.args),
         _ => return None,
     };

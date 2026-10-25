@@ -50,6 +50,7 @@ mod explain;
 pub mod functions;
 mod profile;
 mod session;
+mod udfs;
 mod variables;
 
 pub use column::Column;
@@ -58,5 +59,12 @@ pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType,
 };
 pub use krishiv_exec::profile::{QueryProfile, TextOptions};
+pub use krishiv_udf_sdk::{
+    ArgField, InvokeContext, NullHandling, ReturnField, ScalarUdf, Signature, UdfArg, UdfError,
+    UdfInputType, UdfLibrary, UdfProperties,
+};
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use session::{RecordBatchStream, Session, SessionBuilder};
+/// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
+/// for [`Session::register_udf`].
+pub use udfs::SessionFunctions;

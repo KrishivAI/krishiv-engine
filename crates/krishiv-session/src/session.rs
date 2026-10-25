@@ -33,14 +33,15 @@ use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, St
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
-    AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, BuiltinFunctions,
-    DefaultAnalyzer, FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
+    AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, DefaultAnalyzer,
+    FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
 use krishiv_sql::{Frontend, ParserOptions};
 use krishiv_types::DataType;
 use krishiv_types::batch::{Batch, Weights};
+use krishiv_udf_sdk::UdfLibrary;
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
@@ -49,6 +50,7 @@ use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
+use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
 
 /// The store id of the local file system.
@@ -99,6 +101,9 @@ pub(crate) struct SessionState {
     profile: SparkProfile,
     principal: Arc<Principal>,
     functions: Arc<dyn FunctionRegistry>,
+    /// The session's registered UDFs, shared with the registry above and
+    /// the workers running its plans.
+    udfs: Arc<UdfLibrary>,
     executor: Arc<dyn Executor>,
     runner: QueryRunner,
     memory: Arc<dyn MemoryPool>,
@@ -240,6 +245,12 @@ impl SessionBuilder {
             .ok()
             .and_then(|d| d.to_str().map(str::to_owned))
             .unwrap_or_else(|| "/".to_owned());
+        let udfs = Arc::new(UdfLibrary::new());
+        let functions = match self.functions {
+            Some(f) => Arc::new(SessionFunctions::with_registry(f, Arc::clone(&udfs)))
+                as Arc<dyn FunctionRegistry>,
+            None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
+        };
         Ok(Session {
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
@@ -247,9 +258,8 @@ impl SessionBuilder {
                 variables: Arc::new(SessionVariables::default()),
                 profile: self.profile,
                 principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
-                functions: self
-                    .functions
-                    .unwrap_or_else(|| Arc::new(BuiltinFunctions::new())),
+                functions,
+                udfs,
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
@@ -495,6 +505,45 @@ impl Session {
         Ok(())
     }
 
+    /// Registers a native Rust scalar UDF under its name
+    /// (case-insensitive), replacing any UDF of that name. Built-ins keep precedence on the
+    /// bare search path; qualify with `system.session` (or `session`) to
+    /// reach the UDF when a built-in shares its name. Every registration
+    /// changes the analysis fingerprint, so plans analyzed before it are
+    /// never reused after it.
+    ///
+    /// ```
+    /// # use krishiv_session::{ScalarUdf, Session};
+    /// # use krishiv_session::{ArgField, InvokeContext, ReturnField, Signature, UdfArg, UdfError, UdfInputType};
+    /// # use krishiv_types::DataType;
+    /// # use std::sync::Arc;
+    /// # use arrow_array::ArrayRef;
+    /// # #[derive(Debug)] struct One;
+    /// # impl ScalarUdf for One {
+    /// #     fn name(&self) -> &str { "one" }
+    /// #     fn version(&self) -> u32 { 1 }
+    /// #     fn signature(&self) -> &Signature {
+    /// #         use std::sync::OnceLock; static SIG: OnceLock<Signature> = OnceLock::new();
+    /// #         SIG.get_or_init(|| Signature::Exact(Vec::new()))
+    /// #     }
+    /// #     fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+    /// #         Ok(ReturnField { data_type: DataType::Integer, nullable: false })
+    /// #     }
+    /// #     fn invoke(&self, _: &[UdfArg<'_>], _: usize, _: &InvokeContext) -> Result<ArrayRef, UdfError> {
+    /// #         Ok(Arc::new(arrow_array::Int32Array::from(vec![1])) as ArrayRef)
+    /// #     }
+    /// # }
+    /// let session = Session::new()?;
+    /// session.register_udf(One);
+    /// let df = futures::executor::block_on(session.sql("SELECT one()"))?;
+    /// let rows = futures::executor::block_on(df.collect())?;
+    /// assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn register_udf(&self, udf: impl krishiv_udf_sdk::ScalarUdf) {
+        self.state.udfs.register(Arc::new(udf));
+    }
+
     /// The temporary tables and views, by name as registered.
     ///
     /// ```
@@ -673,15 +722,26 @@ impl Session {
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
         let stats = ProviderStatistics(Arc::clone(&tables));
         let (optimized, steps) = if trace {
-            krishiv_optimizer::optimize_traced(&analyzed.plan, &stats)?
+            krishiv_optimizer::optimize_traced_with_udfs(
+                &analyzed.plan,
+                &stats,
+                &self.state.udfs,
+                &env.config,
+            )?
         } else {
             (
-                krishiv_optimizer::optimize_with(&analyzed.plan, &stats)?,
+                krishiv_optimizer::optimize_with_udfs(
+                    &analyzed.plan,
+                    &stats,
+                    &self.state.udfs,
+                    &env.config,
+                )?,
                 Vec::new(),
             )
         };
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
-            .with_user(self.state.principal.name.as_str());
+            .with_user(self.state.principal.name.as_str())
+            .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
@@ -832,12 +892,13 @@ impl Session {
 
 impl Session {
     /// What a query's plans are instantiated with in this process: the
-    /// query's tables, and its spill scope under the session's spill
-    /// directory (created at instantiation).
+    /// query's tables, its UDFs, and its spill scope under the session's
+    /// spill directory (created at instantiation).
     fn worker(&self, env: &QueryEnv) -> WorkerContext {
         WorkerContext::new(
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
         )
+        .with_udfs(Arc::clone(&self.state.udfs))
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
             config: Arc::clone(&env.config),

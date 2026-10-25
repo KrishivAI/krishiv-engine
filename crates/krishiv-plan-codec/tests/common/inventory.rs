@@ -844,6 +844,38 @@ pub(crate) fn expressions() -> PhysNode {
     }
 }
 
+/// A call of a session-registered native Rust UDF (`rust_udf`): the plan
+/// references it by name and version only.
+pub(crate) fn udf_call() -> PhysNode {
+    PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "u".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Udf {
+                        name: "my_udf".to_owned(),
+                        version: 7,
+                    },
+                    kind: FunctionKind::Scalar,
+                    args: vec![
+                        col(1, "a", DataType::Integer),
+                        lit(Literal::String("x".to_owned())),
+                    ],
+                    distinct: false,
+                    filter: None,
+                    data_type: DataType::String,
+                    nullable: true,
+                    deterministic: true,
+                },
+            )))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// The named plans the inventory test, the error tests and the golden
 /// files share.
 pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
@@ -852,5 +884,6 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .map(|(name, node)| (name.to_owned(), plan_of(node)))
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
+    out.push(("rust_udf".to_owned(), plan_of(udf_call())));
     out
 }

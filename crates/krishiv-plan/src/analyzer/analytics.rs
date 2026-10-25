@@ -156,7 +156,8 @@ pub(super) fn reject_grouping_calls(exprs: &[Arc<Expr>]) -> Result<(), AnalysisE
         if !seen.insert(Arc::as_ptr(&x) as usize) {
             continue;
         }
-        if matches!(&x.node, ExprNode::Function(f) if GroupingFn::from_name(&f.name).is_some()) {
+        if matches!(&x.node, ExprNode::Function(f) if f.unqualified().is_some_and(|n| GroupingFn::from_name(n).is_some()))
+        {
             return Err(AnalysisError::new(
                 UnsupportedGroupingExpression {},
                 Origin::UNKNOWN,
@@ -288,7 +289,7 @@ impl Resolver<'_> {
             ));
         }
         let call = FunctionCall {
-            name: which.name().to_owned(),
+            name: vec![which.name().to_owned()],
             args: kids.iter().map(|k| Arc::clone(&k.expr)).collect(),
             distinct: false,
             filter: None,
@@ -635,7 +636,10 @@ impl Resolver<'_> {
                 return self.retype(rebuilt, env);
             }
             ExprNode::Subquery { .. } => return Ok(Arc::clone(e)),
-            ExprNode::Function(f) if GroupingFn::from_name(&f.name).is_some() => {
+            ExprNode::Function(f)
+                if f.unqualified()
+                    .is_some_and(|n| GroupingFn::from_name(n).is_some()) =>
+            {
                 return self.grouping_value(f, an, env, memo);
             }
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
@@ -675,7 +679,7 @@ impl Resolver<'_> {
             ExprNode::Resolved(ResolvedExpr::Function(f)) if !has_subquery(&e) => {
                 let call = Arc::new(
                     Expr::new(ExprNode::Function(FunctionCall {
-                        name: f.id.name().to_owned(),
+                        name: vec![f.id.name().to_owned()],
                         args: f.args.clone(),
                         distinct: f.distinct,
                         filter: f.filter.clone(),
@@ -714,7 +718,7 @@ impl Resolver<'_> {
             None => literal(Literal::Long(0)),
         };
         let positions: Vec<Option<usize>> = f.args.iter().map(|a| an.position(a, memo)).collect();
-        match GroupingFn::from_name(&f.name) {
+        match f.unqualified().and_then(GroupingFn::from_name) {
             Some(GroupingFn::GroupingId) => {
                 let exact = positions.len() == n
                     && positions.iter().enumerate().all(|(i, p)| *p == Some(i));

@@ -45,6 +45,7 @@ use std::sync::Arc;
 
 use krishiv_common::config::Config;
 use krishiv_plan::Plan;
+use krishiv_udf_sdk::UdfLibrary;
 
 pub use build::DefaultPlanner;
 pub(crate) use build::concat_schemas;
@@ -82,6 +83,10 @@ pub struct PlanningContext {
     pub config: Arc<Config>,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
+    /// The session's UDFs, for validating UDF calls at planning. The
+    /// implementation a plan runs is resolved from the worker at
+    /// instantiation, never stored in the plan.
+    pub udfs: Option<Arc<UdfLibrary>>,
 }
 
 impl PlanningContext {
@@ -91,6 +96,7 @@ impl PlanningContext {
             tables,
             config,
             user: Arc::from(krishiv_plan::analyzer::Principal::local_user().name),
+            udfs: None,
         }
     }
 
@@ -98,6 +104,13 @@ impl PlanningContext {
     #[must_use]
     pub fn with_user(mut self, user: impl Into<Arc<str>>) -> Self {
         self.user = user.into();
+        self
+    }
+
+    /// The same context validating UDF calls against `udfs`.
+    #[must_use]
+    pub fn with_udfs(mut self, udfs: Arc<UdfLibrary>) -> Self {
+        self.udfs = Some(udfs);
         self
     }
 }

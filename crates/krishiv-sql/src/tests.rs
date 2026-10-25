@@ -1118,7 +1118,7 @@ fn expression_strings_lower_like_select_items() {
     let krishiv_plan::ExprNode::Function(call) = &lowered.node else {
         panic!("not a call: {lowered:?}");
     };
-    assert_eq!(call.name, "+");
+    assert_eq!(call.name, vec!["+".to_owned()]);
     assert_eq!(call.args.len(), 2);
     let lowered = parse_and_lower_named_expression("b AS c", &d, SourceId(0)).unwrap();
     let krishiv_plan::ExprNode::Alias { name, .. } = &lowered.node else {
@@ -1142,7 +1142,7 @@ fn lower_expression_and_select_item() {
     let krishiv_plan::ExprNode::Function(call) = &lowered.node else {
         panic!("not a call: {lowered:?}");
     };
-    assert_eq!(call.name, "+");
+    assert_eq!(call.name, vec!["+".to_owned()]);
     let item = parse_named_expression("b AS c", &d).unwrap();
     let lowered = lower_select_item(&item, SourceId(0)).unwrap();
     let krishiv_plan::ExprNode::Alias { name, .. } = &lowered.node else {

@@ -275,21 +275,20 @@ impl Resolver<'_> {
             }
             let reject = match &e.node {
                 ExprNode::Subquery { .. } | ExprNode::Window(_) => true,
-                ExprNode::Function(f) if Builtin::from_name(&f.name).is_none() => {
-                    match self
-                        .ctx
-                        .functions
-                        .lookup(std::slice::from_ref(&f.name), self.ctx.profile)
-                    {
+                ExprNode::Function(f)
+                    if f.unqualified()
+                        .is_none_or(|n| Builtin::from_name(n).is_none()) =>
+                {
+                    match self.ctx.functions.lookup(&f.name, self.ctx.profile) {
                         FunctionLookup::Found(entry) => {
                             !entry.deterministic || !matches!(entry.kind, FunctionKind::Scalar)
                         }
                         // A function the engine lacks but Spark analyzes as
                         // nondeterministic (like `rand`) cannot be
                         // evaluated here either.
-                        FunctionLookup::KnownUnsupported => {
-                            self.ctx.functions.spark_deterministic(&f.name) == Some(false)
-                        }
+                        FunctionLookup::KnownUnsupported => f.unqualified().is_some_and(|n| {
+                            self.ctx.functions.spark_deterministic(n) == Some(false)
+                        }),
                         FunctionLookup::NotFound => false,
                     }
                 }
@@ -612,7 +611,7 @@ impl Resolver<'_> {
             .collect();
         for (name, tag) in ["l", "r"].into_iter().zip(&u.out[n..]) {
             let sum = Arc::new(Expr::new(ExprNode::Function(FunctionCall {
-                name: "sum".to_owned(),
+                name: vec!["sum".to_owned()],
                 args: vec![col_expr(&tag.col, Origin::UNKNOWN)],
                 distinct: false,
                 filter: None,

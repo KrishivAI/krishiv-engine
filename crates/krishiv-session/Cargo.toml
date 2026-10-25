@@ -21,6 +21,7 @@ krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-types = { path = "../krishiv-types" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 # The `EXPLAIN VERBOSE` JSON document.
 serde_json = { workspace = true, features = ["std"] }
 # Warnings from analysis and planning are logged, as Spark logs them.

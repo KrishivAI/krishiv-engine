@@ -118,7 +118,7 @@ fn rename(e: Arc<Expr>) -> Result<Arc<Expr>, Infallible> {
 fn transforms_share_unchanged_subtrees() {
     let b = Arc::new(Expr::column(["b"]));
     let call = Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
-        name: "f".to_owned(),
+        name: vec!["f".to_owned()],
         args: vec![Arc::new(a()), Arc::clone(&b)],
         distinct: false,
         filter: None,

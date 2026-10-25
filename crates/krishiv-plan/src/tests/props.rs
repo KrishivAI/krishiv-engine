@@ -187,7 +187,7 @@ impl Gen<'_> {
                 let name = ["+", "sum", "and", "in"][usize::from(self.pick(4))].to_owned();
                 let (args, distinct, filter) = self.args(d);
                 ExprNode::Function(FunctionCall {
-                    name,
+                    name: vec![name],
                     args,
                     distinct,
                     filter,
@@ -668,6 +668,15 @@ fn m_exprs(v: &mut Vec<Arc<Expr>>, w: &mut Walk) -> bool {
     v.iter_mut().any(|e| m_expr(e, w))
 }
 
+/// Appends `x` to the last name part (or adds one): the call resolves
+/// differently afterwards, as a renamed function does.
+fn mutate_name(name: &mut Vec<String>) {
+    match name.last_mut() {
+        Some(last) => last.push('x'),
+        None => name.push("x".to_owned()),
+    }
+}
+
 fn m_filter(filter: &mut Option<Arc<Expr>>, w: &mut Walk) -> bool {
     let toggled = match filter {
         Some(_) => None,
@@ -690,7 +699,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             distinct,
             filter,
         }) => {
-            site!(w, name.push('x'));
+            // Mutate the last name part (or add one): qualification still
+            // resolves differently, as a renamed function does.
+            site!(w, mutate_name(name));
             site!(w, *distinct = !*distinct);
             m_exprs(args, w) || m_filter(filter, w)
         }
@@ -745,6 +756,11 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                     FunctionId::Registry { name, id } => FunctionId::Registry {
                         name: format!("{name}x"),
                         id: *id,
+                    },
+                    // A UDF at another version resolves differently.
+                    FunctionId::Udf { name, version } => FunctionId::Udf {
+                        name: name.clone(),
+                        version: version.wrapping_add(1),
                     },
                 };
                 site!(w, *id = other);

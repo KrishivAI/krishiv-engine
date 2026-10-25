@@ -244,25 +244,28 @@ fn visit<'a>(
     Ok(())
 }
 
-fn check_function(ctx: &AnalysisContext, name: &str, origin: Origin) -> Result<(), AnalysisError> {
+fn check_function(
+    ctx: &AnalysisContext,
+    parts: &[String],
+    origin: Origin,
+) -> Result<(), AnalysisError> {
     // The canonical operators exist in every profile; the analyzer types
-    // them itself.
-    if crate::Builtin::from_name(name).is_some() {
+    // them itself. Operators are never qualified.
+    if parts.len() == 1 && crate::Builtin::from_name(&parts[0]).is_some() {
         return Ok(());
     }
     // `grouping` and `grouping_id` are the analyzer's too (grouping sets).
-    if super::analytics::GroupingFn::from_name(name).is_some() {
+    if parts.len() == 1 && super::analytics::GroupingFn::from_name(&parts[0]).is_some() {
         return Ok(());
     }
-    match ctx
-        .functions
-        .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile)
-    {
+    match ctx.functions.lookup(parts, ctx.profile) {
         FunctionLookup::Found(_) => Ok(()),
-        FunctionLookup::KnownUnsupported => Err(unsupported(format!("function {name}"), origin)),
+        FunctionLookup::KnownUnsupported => {
+            Err(unsupported(format!("function {}", parts.join(".")), origin))
+        }
         FunctionLookup::NotFound => Err(AnalysisError::new(
             UnresolvedRoutine {
-                routine_name: quoted(&[name.to_owned()]),
+                routine_name: quoted(parts),
                 search_path: search_path(ctx),
             },
             origin,

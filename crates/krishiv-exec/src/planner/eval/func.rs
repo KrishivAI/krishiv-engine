@@ -9,11 +9,68 @@ use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
+use krishiv_udf_sdk::ScalarUdf;
 
 use super::strings::to_view;
 use super::{Input, PhysExpr, Value, literal_array, unsupported_expr};
 use crate::error::Result;
 use crate::planner::build::{internal, unsupported};
+
+/// Binds a session UDF call: wraps the implementation (resolved from the
+/// worker by the caller) like a built-in binding, over the arguments the
+/// analyzer cast.
+pub(super) fn compile_udf(
+    udf: &Arc<dyn ScalarUdf>,
+    f: &ResolvedFunction,
+    args: Vec<Arc<dyn PhysExpr>>,
+    input: Input<'_>,
+    e: &Expr,
+) -> Result<Arc<dyn PhysExpr>> {
+    let bind_args = f
+        .args
+        .iter()
+        .zip(&args)
+        .map(|(ir, compiled)| match &ir.node {
+            ExprNode::Literal(l) => literal_array(l).map(BindArg::Literal),
+            _ => Ok(BindArg::Column(compiled.data_type().clone())),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let arg_types: Vec<ArrowType> = bind_args.iter().map(BindArg::data_type).collect();
+    let function = krishiv_functions::scalar::bind_udf(
+        udf,
+        &arg_types,
+        &f.data_type,
+        f.nullable,
+        input.env.ansi,
+        input.env.zone,
+    )
+    .map_err(|err| {
+        if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {
+            unsupported_expr(e)
+        } else {
+            err
+        }
+    })?;
+    let out = f.data_type.to_arrow();
+    // The binding returns plain carriers; Spark's `STRING` is a view here.
+    let view = match (function.return_type(), &out) {
+        (a, b) if a == b => false,
+        (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView) => true,
+        (a, b) => {
+            return Err(internal(&format!(
+                "{} returns {a} where the analyzer typed {b}",
+                udf.name()
+            )));
+        }
+    };
+    Ok(Arc::new(Call {
+        function,
+        args,
+        out,
+        view,
+        nullable: f.nullable,
+    }))
+}
 
 pub(super) fn compile(
     name: &str,

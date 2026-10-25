@@ -16,7 +16,7 @@ use crate::{
 fn and_chain(leaf: Expr) -> Arc<Expr> {
     (0..30).fold(Arc::new(leaf), |e, _| {
         Arc::new(Expr::new(ExprNode::Function(FunctionCall {
-            name: Builtin::And.name().to_owned(),
+            name: vec![Builtin::And.name().to_owned()],
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,

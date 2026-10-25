@@ -190,16 +190,28 @@ pub enum FunctionLookup {
 
 /// The function registry: built-in functions resolve in-process, so the
 /// lookup is synchronous. It is not asked about the canonical operators
-/// ([`crate::Builtin`] names).
+/// ([`crate::Builtin`] names). Registries hosting session UDFs also answer
+/// [`FunctionRegistry::resolve_udf`].
 pub trait FunctionRegistry: Send + Sync {
     /// The function named by `name`'s parts (as written, case-insensitive;
-    /// one part for a built-in, more for a qualified name) in `profile`.
+    /// one part for a bare built-in, more for a qualified name) in
+    /// `profile`.
     fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup;
     /// Whether Spark analyzes the built-in `name` (case-insensitive) as
     /// deterministic: `None` when the registry does not know. Inline
     /// tables use it for functions the engine does not implement (which
     /// [`FunctionLookup::KnownUnsupported`] does not say).
     fn spark_deterministic(&self, _name: &str) -> Option<bool> {
+        None
+    }
+    /// The session UDF named `name` (already lower-case) at `version`, for
+    /// constant folding: `None` when the registry hosts no UDFs, or none
+    /// at that name and version. The default has none.
+    fn resolve_udf(
+        &self,
+        _name: &str,
+        _version: u32,
+    ) -> Option<Arc<dyn krishiv_udf_sdk::ScalarUdf>> {
         None
     }
     /// Changes whenever a lookup could answer differently (temporary and

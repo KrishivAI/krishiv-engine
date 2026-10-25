@@ -106,7 +106,7 @@ fn operators_get_their_canonical_names() {
         ("concat", "concat"),
     ] {
         let e = translate_expression(&func(sent, vec![a(), b()]), &conf()).unwrap();
-        assert_eq!(function(&e).name, canonical, "{sent}");
+        assert_eq!(function(&e).name, vec![canonical.to_owned()], "{sent}");
         assert_eq!(function(&e).args.len(), 2);
     }
 }
@@ -115,11 +115,11 @@ fn operators_get_their_canonical_names() {
 fn not_equal_is_not_of_equal() {
     for spelling in ["!=", "<>"] {
         let e = translate_expression(&func(spelling, vec![attr("a"), attr("b")]), &conf()).unwrap();
-        assert_eq!(function(&e).name, "not", "{spelling}");
+        assert_eq!(function(&e).name, vec!["not".to_owned()], "{spelling}");
         let [inner] = function(&e).args.as_slice() else {
             panic!("one argument")
         };
-        assert_eq!(function(inner).name, "==");
+        assert_eq!(function(inner).name, vec!["==".to_owned()]);
         assert_eq!(e.to_string(), "(NOT (a == b))");
     }
 }
@@ -137,8 +137,8 @@ fn other_functions_keep_their_name_and_distinct_flag() {
     let e = translate_expression(&sum, &conf()).unwrap();
     let call = function(&e);
     assert_eq!(
-        (call.name.as_str(), call.distinct, call.filter.is_none()),
-        ("Sum", true, true)
+        (call.name.join("."), call.distinct, call.filter.is_none()),
+        ("Sum".to_owned(), true, true)
     );
     assert_eq!(
         text(&func(

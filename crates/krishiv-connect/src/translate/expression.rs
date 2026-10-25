@@ -166,7 +166,7 @@ impl Translator<'_> {
             .map(|a| self.expression(a))
             .collect::<Result<Vec<_>>>()?;
         let call = |name: &str, args: Vec<Arc<Expr>>, distinct: bool| FunctionCall {
-            name: name.to_owned(),
+            name: vec![name.to_owned()],
             args,
             distinct,
             filter: None,

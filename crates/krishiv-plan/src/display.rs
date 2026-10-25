@@ -546,14 +546,19 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             args,
             distinct,
             filter,
-        }) => call(
-            name,
-            Builtin::from_name(name),
-            args,
-            *distinct,
-            filter.as_deref(),
-            out,
-        ),
+        }) => {
+            let dotted = name.join(".");
+            // Operators are never qualified, so a dotted name matches no
+            // canonical operator.
+            call(
+                &dotted,
+                Builtin::from_name(&dotted),
+                args,
+                *distinct,
+                filter.as_deref(),
+                out,
+            );
+        }
         ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
             id,
             args,
@@ -563,7 +568,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
         })) => {
             let op = match id {
                 FunctionId::Builtin(b) => Some(*b),
-                FunctionId::Registry { .. } => None,
+                FunctionId::Registry { .. } | FunctionId::Udf { .. } => None,
             };
             call(id.name(), op, args, *distinct, filter.as_deref(), out);
         }

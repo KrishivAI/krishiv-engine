@@ -197,7 +197,7 @@ fn every_expression_form_prints() {
         ),
         (
             Expr::new(ExprNode::Function(FunctionCall {
-                name: "sum".to_owned(),
+                name: vec!["sum".to_owned()],
                 args: vec![col("a")],
                 distinct: false,
                 filter: Some(col("p")),
@@ -263,7 +263,7 @@ fn shared_subqueries_print_once() {
         LogicalPlan::table(["u"]),
     ));
     let both = Expr::new(ExprNode::Function(FunctionCall {
-        name: Builtin::And.name().to_owned(),
+        name: vec![Builtin::And.name().to_owned()],
         args: vec![Arc::clone(&sub), sub],
         distinct: false,
         filter: None,

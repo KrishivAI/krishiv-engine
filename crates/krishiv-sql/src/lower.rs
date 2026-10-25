@@ -216,7 +216,7 @@ impl Lowerer {
     fn call(&self, name: &str, args: Vec<Arc<IrExpr>>, span: Span) -> IrExpr {
         self.ex(
             ExprNode::Function(FunctionCall {
-                name: name.to_owned(),
+                name: vec![name.to_owned()],
                 args,
                 distinct: false,
                 filter: None,
@@ -1258,13 +1258,15 @@ impl Lowerer {
                 if let Some(dynamic) = &f.dynamic_name {
                     return Err(unsupported("IDENTIFIER() function names", dynamic.span));
                 }
-                let [name] = &f.name.parts[..] else {
+                if f.name.parts.is_empty() || f.name.parts.len() > 3 {
                     return Err(unsupported("qualified function names", f.name.span));
-                };
+                }
+                let parts: Vec<String> = f.name.parts.iter().map(|p| p.value.clone()).collect();
+                let name = parts.last().cloned().unwrap_or_default();
                 for (present, what) in [
                     (!f.within_group.is_empty(), "WITHIN GROUP"),
                     (
-                        f.null_treatment.is_some() && !takes_null_treatment(&name.value),
+                        f.null_treatment.is_some() && !takes_null_treatment(&name),
                         "IGNORE NULLS and RESPECT NULLS",
                     ),
                 ] {
@@ -1281,7 +1283,7 @@ impl Lowerer {
                 }
                 // Spark's builder of `lag` and `lead`: `input` NULL, `offset`
                 // 1 and `default` NULL when not given.
-                let lname = name.value.to_ascii_lowercase();
+                let lname = name.to_ascii_lowercase();
                 if matches!(lname.as_str(), "lag" | "lead") && args.len() < 3 {
                     let fill = [
                         IrLiteral::Null(None),
@@ -1323,7 +1325,7 @@ impl Lowerer {
                 let filter = f.filter.as_ref().map(|x| self.arg(x)).transpose()?;
                 let call = self.ex(
                     ExprNode::Function(FunctionCall {
-                        name: name.value.clone(),
+                        name: parts,
                         args,
                         distinct: f.quantifier == Some(SetQuantifier::Distinct),
                         filter,
@@ -1396,7 +1398,7 @@ fn takes_null_treatment(name: &str) -> bool {
 fn is_predicate(e: &IrExpr) -> bool {
     match &e.node {
         ExprNode::Function(f) => matches!(
-            Builtin::from_name(&f.name),
+            f.unqualified().and_then(Builtin::from_name),
             Some(
                 Builtin::Eq
                     | Builtin::EqNullSafe

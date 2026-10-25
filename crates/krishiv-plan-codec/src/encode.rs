@@ -470,6 +470,10 @@ impl Encoder {
                 name: name.clone(),
                 id: *id,
             }),
+            FunctionId::Udf { name, version } => pb::function::Id::Udf(pb::UdfFunction {
+                name: name.clone(),
+                version: u64::from(*version),
+            }),
             _ => return Err(unresolved("a function identity this version does not know")),
         };
         Ok(pb::Function {

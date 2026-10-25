@@ -88,7 +88,7 @@ fn shared_subtrees_print_once() {
     );
     let e = (0..40).fold(Arc::new(Expr::column(["a"])), |e, _| {
         Arc::new(Expr::new(ExprNode::Function(FunctionCall {
-            name: Builtin::And.name().to_owned(),
+            name: vec![Builtin::And.name().to_owned()],
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,

@@ -667,6 +667,11 @@ impl Decoder {
                 name: r.name.clone(),
                 id: r.id,
             },
+            pb::function::Id::Udf(u) => FunctionId::Udf {
+                name: u.name.clone(),
+                version: u32::try_from(u.version)
+                    .map_err(|_| corrupt("a UDF version out of range"))?,
+            },
         };
         Ok(ResolvedFunction {
             id,

@@ -70,7 +70,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 4;
+pub const ENCODING_VERSION: u16 = 5;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -937,7 +937,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 filter,
             }) => {
                 self.u8(4);
-                self.str(name);
+                self.strs(name);
                 self.call(args, *distinct, filter.as_ref());
             }
             ExprNode::Cast { expr, to, mode } => {
@@ -997,8 +997,12 @@ impl<'k, 'a> Encoder<'k, 'a> {
             })) => {
                 self.u8(10);
                 // The canonical name only: a registry id is never part of
-                // a key (see `FunctionId`).
+                // a key (see `FunctionId`). A UDF's version is part of its
+                // identity, so it enters the key after the name.
                 self.str(id.name());
+                if let crate::FunctionId::Udf { version, .. } = id {
+                    self.u32(*version);
+                }
                 self.u8(kind.code());
                 self.data_type(data_type);
                 self.bool(*nullable);

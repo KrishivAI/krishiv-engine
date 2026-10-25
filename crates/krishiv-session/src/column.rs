@@ -315,10 +315,11 @@ impl Column {
         }
     }
 
-    /// The expression of an aggregate call `name(args)`.
+    /// The expression of an aggregate call `name(args)`. Dots separate
+    /// name parts outside backquotes, as in SQL (`system.session.f`).
     pub(crate) fn function(name: &str, args: Vec<Self>, distinct: bool) -> Self {
         Self::new(Expr::new(ExprNode::Function(FunctionCall {
-            name: name.to_owned(),
+            name: split_name(name),
             args: args.into_iter().map(|c| Arc::new(c.expr)).collect(),
             distinct,
             filter: None,

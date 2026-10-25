@@ -656,7 +656,7 @@ impl Resolver<'_> {
     fn is_aggregate(&self, e: &Expr) -> bool {
         match &e.node {
             ExprNode::Function(f) => matches!(
-                self.ctx.functions.lookup(std::slice::from_ref(&f.name), self.ctx.profile),
+                self.ctx.functions.lookup(&f.name, self.ctx.profile),
                 FunctionLookup::Found(entry) if entry.kind == FunctionKind::Aggregate
             ),
             ExprNode::Resolved(ResolvedExpr::Function(f)) => f.kind == FunctionKind::Aggregate,
@@ -673,7 +673,9 @@ impl Resolver<'_> {
         if !f.args.iter().any(|a| matches!(a.node, ExprNode::Star(_))) {
             return Ok(None);
         }
-        let count_star = f.name.eq_ignore_ascii_case("count")
+        let count_star = f
+            .unqualified()
+            .is_some_and(|n| n.eq_ignore_ascii_case("count"))
             && matches!(&f.args[..], [a] if matches!(&a.node, ExprNode::Star(s) if s.qualifier.is_empty() && s.plan_id.is_none()));
         let mut args = Vec::new();
         for a in &f.args {
@@ -827,25 +829,30 @@ impl Resolver<'_> {
                 {
                     return Err(super::windows::window_in_filter(filter, e.origin));
                 }
-                if let Some(which) = GroupingFn::from_name(&f.name) {
+                // The last part names the function; any leading parts select
+                // the catalog (`system.builtin`, `system.session`, `session`).
+                // Grouping functions are never qualified.
+                if f.name.len() == 1
+                    && let Some(which) =
+                        GroupingFn::from_name(f.name.last().map(String::as_str).unwrap_or(""))
+                {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
-                if let Some(op) = builtin_op(&f.name, n) {
+                if let Some(op) = f.unqualified().and_then(|name| builtin_op(name, n)) {
                     return self.operator_call(op, e.origin, &kids[..n]);
                 }
-                let entry = match self
-                    .ctx
-                    .functions
-                    .lookup(std::slice::from_ref(&f.name), self.ctx.profile)
-                {
+                let entry = match self.ctx.functions.lookup(&f.name, self.ctx.profile) {
                     FunctionLookup::Found(entry) => entry,
                     FunctionLookup::KnownUnsupported => {
-                        return Err(unsupported(format!("function {}", f.name), e.origin));
+                        return Err(unsupported(
+                            format!("function {}", f.name.join(".")),
+                            e.origin,
+                        ));
                     }
                     FunctionLookup::NotFound => {
                         return Err(AnalysisError::new(
                             UnresolvedRoutine {
-                                routine_name: quoted(std::slice::from_ref(&f.name)),
+                                routine_name: quoted(&f.name),
                                 search_path: self.b.search_path.clone(),
                             },
                             e.origin,
@@ -870,7 +877,9 @@ impl Resolver<'_> {
                 } else {
                     (kids, n)
                 };
-                if let Some(which) = Conditional::of(&f.name) {
+                if let Some(which) =
+                    Conditional::of(f.name.last().map(String::as_str).unwrap_or(""))
+                {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
@@ -1102,7 +1111,7 @@ impl Resolver<'_> {
     #[inline(never)]
     fn call_shown(
         &self,
-        name: &str,
+        name: &[String],
         expr: &Expr,
         kids: &[Bound],
         cast: &[Bound],
@@ -1115,15 +1124,26 @@ impl Resolver<'_> {
     /// session's settings, with `ansi` for the arithmetic: shared with
     /// every other fold of the pass.
     pub(super) fn fold(&self, e: &Arc<Expr>, ansi: bool) -> Option<Constant> {
-        let conf = fold::Conf::new(ansi, self.ctx.conf.decimal_precision_loss, self.ctx.profile);
-        fold::constant(e, conf, &mut self.folds.borrow_mut())
+        let conf = fold::Conf::new(
+            ansi,
+            self.ctx.conf.decimal_precision_loss,
+            self.ctx.profile,
+            self.ctx.conf.session_zone,
+        );
+        fold::constant(
+            e,
+            conf,
+            &mut self.folds.borrow_mut(),
+            self.ctx.functions.as_ref(),
+        )
     }
 
-    fn legacy_day_count(&self, name: &str, kids: &[Bound]) -> Option<Vec<Bound>> {
+    fn legacy_day_count(&self, name: &[String], kids: &[Bound]) -> Option<Vec<Bound>> {
+        let last = name.last().map(String::as_str).unwrap_or("");
         if self.ctx.conf.ansi
             || !["date_add", "dateadd", "date_sub"]
                 .iter()
-                .any(|n| name.eq_ignore_ascii_case(n))
+                .any(|n| last.eq_ignore_ascii_case(n))
         {
             return None;
         }
@@ -1496,7 +1516,7 @@ impl Resolver<'_> {
                 if !ansi && let Some(to) = legacy_nullif_cast(a, b) {
                     return Ok(self.implicit_cast(b, to).expr);
                 }
-                Err(self.mismatch(m, shown, kids, &f.name, origin))
+                Err(self.mismatch(m, shown, kids, &f.name.join("."), origin))
             }
         }
     }
@@ -1801,7 +1821,7 @@ impl Resolver<'_> {
         {
             let call = Arc::new(
                 Expr::new(ExprNode::Function(FunctionCall {
-                    name: function.to_owned(),
+                    name: vec![function.to_owned()],
                     args: Vec::new(),
                     distinct: false,
                     filter: None,
@@ -2253,7 +2273,12 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         ExprNode::Star(_) => "*".to_owned(),
         ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall { name, distinct, .. }) => {
-            call(name, Builtin::from_name(name), *distinct, k, None)
+            // Operators are never qualified, so only a bare name matches.
+            let op = match name.as_slice() {
+                [one] => Builtin::from_name(one),
+                _ => None,
+            };
+            call(&name.join("."), op, *distinct, k, None)
         }
         // Spark's `lag`/`lead` show `input, offset, default`, and
         // `nth_value` `input, offset` then ` ignore nulls` when set.
@@ -2279,6 +2304,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),
                 FunctionId::Registry { name, .. } => builtin_op(name, f.args.len()),
+                FunctionId::Udf { .. } => None,
             };
             let n = f.args.len().min(k.len());
             let text = call(f.id.name(), op, f.distinct, &k[..n], Some(&f.data_type));

@@ -581,10 +581,13 @@ enum FunctionKind {
 }
 
 message Function {
-  // A canonical operator name (`==`, `and`, ...), or a registry function.
+  // A canonical operator name (`==`, `and`, ...), a registry function, or
+  // a session UDF.
   oneof id {
     string builtin = 1;
     RegistryFunction registry = 2;
+    // feature: rust_udf
+    UdfFunction udf = 10;
   }
   FunctionKind kind = 3;
   repeated uint32 args = 4;
@@ -600,6 +603,14 @@ message Function {
 message RegistryFunction {
   string name = 1;
   uint32 id = 2;
+}
+
+// A session-registered native Rust UDF, by name and implementation
+// version. A worker must hold the same version to run the plan.
+// feature: rust_udf
+message UdfFunction {
+  string name = 1;
+  uint64 version = 2;
 }
 
 // A Spark type.

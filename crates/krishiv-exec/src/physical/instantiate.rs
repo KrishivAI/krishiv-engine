@@ -36,6 +36,7 @@ use arrow_schema::SchemaRef;
 use krishiv_io::{FilterId, RuntimeFilter};
 use krishiv_memory::SpillScope;
 use krishiv_plan::{AttrId, Expr};
+use krishiv_udf_sdk::UdfLibrary;
 
 use super::{
     AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
@@ -71,11 +72,12 @@ pub trait SpillScopes: Send + Sync + fmt::Debug {
 }
 
 /// What a worker resolves a plan's references against: the tables its
-/// scans read, the spill scope of the query, the sink of a write. One per
-/// query and worker.
+/// scans read, the session UDFs its function calls invoke, the spill scope
+/// of the query, the sink of a write. One per query and worker.
 #[derive(Clone)]
 pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
+    udfs: Option<Arc<UdfLibrary>>,
     spill: Option<SpillScope>,
     scopes: Option<Arc<dyn SpillScopes>>,
     write: Option<Arc<FileWriteSink>>,
@@ -86,10 +88,19 @@ impl WorkerContext {
     pub fn new(tables: Arc<dyn TableProviderResolver>) -> Self {
         Self {
             tables,
+            udfs: None,
             spill: None,
             scopes: None,
             write: None,
         }
+    }
+
+    /// The same context invoking session UDFs from `udfs`. A plan calling
+    /// a UDF the context lacks fails with `KRISHIV_UDF_NOT_AVAILABLE`.
+    #[must_use]
+    pub fn with_udfs(mut self, udfs: Arc<UdfLibrary>) -> Self {
+        self.udfs = Some(udfs);
+        self
     }
 
     /// The same context spilling into `scope` (one per query).
@@ -126,6 +137,7 @@ impl fmt::Debug for WorkerContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WorkerContext")
             .field("tables", &self.tables)
+            .field("udfs", &self.udfs.is_some())
             .field("spill", &self.spill.is_some())
             .field("spill_scopes", &self.scopes.is_some())
             .field("write", &self.write.is_some())
@@ -149,10 +161,13 @@ pub fn instantiate(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<Arc<dy
             (None, Some(scopes)) => Some(scopes.scope()?),
             (None, None) => None,
         };
+        let mut env = EvalEnv::from_plan(plan.env());
+        // The UDFs travel with the worker, never with the plan.
+        env.udfs = worker.udfs.clone();
         let mut cx = Instantiation {
             worker,
             spill,
-            env: EvalEnv::from_plan(plan.env()),
+            env,
             filters: HashMap::new(),
             ids: node_ids(plan.root()),
         };

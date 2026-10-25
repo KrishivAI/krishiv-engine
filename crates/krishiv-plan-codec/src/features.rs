@@ -36,11 +36,13 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::Arc;
 
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::AggregateFunction;
-use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan, Residual};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
+use krishiv_plan::{Expr, ExprNode, FunctionId, ResolvedExpr, SubqueryKind};
 
 /// The `min_reader_version` of a plan that uses no feature (the epoch-1
 /// baseline): the format of version 2.
@@ -117,6 +119,7 @@ registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
+    (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -158,6 +161,8 @@ pub enum Construct<'a> {
     Frame(&'a WindowFrame),
     /// An aggregate function (of an aggregate or a window).
     Aggregate(AggregateFunction),
+    /// A resolved function call: only a session UDF needs a feature.
+    Function(&'a FunctionId),
 }
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
@@ -243,6 +248,14 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::MaxBy
             | AggregateFunction::MinBy => None,
         },
+        // Built-ins and registry functions travel by name; only a
+        // session UDF (by name and version) needs a reader with it. A
+        // future identity is baseline until it is classified (encoding
+        // refuses it first).
+        Construct::Function(id) => match id {
+            FunctionId::Udf { .. } => Some(Feature::RustUdf),
+            FunctionId::Builtin(_) | FunctionId::Registry { .. } | _ => None,
+        },
     }
 }
 
@@ -281,6 +294,83 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::WindowGroupLimit { .. }
         | PhysNode::Union { .. }
         | PhysNode::WriteFiles { .. } => {}
+    }
+    // A UDF call hides in any expression of the node.
+    for e in exprs_of(node) {
+        functions_in(e, f);
+    }
+}
+
+/// Every expression `node` holds (not its children's or its subqueries').
+fn exprs_of(node: &PhysNode) -> Vec<&Arc<Expr>> {
+    match node {
+        PhysNode::Filter { predicate, .. } => vec![predicate],
+        PhysNode::Project { items, .. } => items
+            .iter()
+            .filter_map(|i| match i {
+                ProjectItemPlan::Expr { expr, .. } => Some(expr),
+                ProjectItemPlan::Column { .. } | ProjectItemPlan::NullOf { .. } => None,
+            })
+            .collect(),
+        PhysNode::ReplicateRows { count, .. } => vec![count],
+        PhysNode::Expand { projections, .. } => projections
+            .iter()
+            .flatten()
+            .filter_map(|i| match i {
+                ProjectItemPlan::Expr { expr, .. } => Some(expr),
+                ProjectItemPlan::Column { .. } | ProjectItemPlan::NullOf { .. } => None,
+            })
+            .collect(),
+        PhysNode::Scan(s) => s
+            .filter
+            .as_ref()
+            .map(|f| &f.predicate)
+            .into_iter()
+            .collect(),
+        _ => vec![],
+    }
+    .into_iter()
+    .chain(residual_of(node))
+    .collect()
+}
+
+/// The conjuncts of a join's residual, if it has one.
+fn residual_of(node: &PhysNode) -> Vec<&Arc<Expr>> {
+    match node {
+        PhysNode::HashJoin(j) => residual(j.residual.as_ref()),
+        PhysNode::NestedLoopJoin(j) => residual(j.residual.as_ref()),
+        _ => Vec::new(),
+    }
+}
+
+fn residual(residual: Option<&Residual>) -> Vec<&Arc<Expr>> {
+    residual
+        .map(|r| r.conjuncts.iter().collect())
+        .unwrap_or_default()
+}
+
+/// Calls `f` with every function call `e` holds: only a session UDF needs
+/// a feature, so only those arms matter. Physical expressions hold no
+/// subquery nodes (the codec refuses them); values of one are still
+/// entered, so nothing hides.
+fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
+    let mut stack = vec![e];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(e) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(e)) {
+            continue;
+        }
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Function(c)) => f(Construct::Function(&c.id)),
+            // Physical expressions hold no subqueries; the values of one
+            // are still entered, so nothing hides.
+            ExprNode::Subquery {
+                kind: SubqueryKind::In(values),
+                ..
+            } => stack.extend(values.iter()),
+            _ => {}
+        }
+        e.for_each_child(&mut |c| stack.push(c));
     }
 }
 

@@ -34,6 +34,7 @@ mod predicate;
 mod regex;
 mod session;
 mod string;
+mod udf;
 
 pub use regex::{extract_all_pieces, split_regex};
 
@@ -48,6 +49,7 @@ use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
 
 pub use args::Arg;
 use args::{Inputs, broadcast, internal, unsupported};
+pub use udf::bind_udf;
 
 /// An argument as the planner knows it when binding.
 #[derive(Debug, Clone)]

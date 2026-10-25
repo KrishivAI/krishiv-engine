@@ -1589,7 +1589,7 @@ impl Resolver<'_> {
     ) -> Result<Arc<Expr>, AnalysisError> {
         let call = Arc::new(
             Expr::new(ExprNode::Function(FunctionCall {
-                name: name.to_owned(),
+                name: vec![name.to_owned()],
                 args,
                 distinct: false,
                 filter: None,

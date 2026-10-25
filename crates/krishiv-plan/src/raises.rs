@@ -133,6 +133,8 @@ fn function_never_raises(id: &FunctionId, args: &[std::sync::Arc<Expr>], ansi: b
             "try_add" | "try_subtract" | "try_multiply" | "try_divide" | "try_mod" => numeric(),
             _ => false,
         },
+        // User code may raise (or fail its contract): never assumed pure.
+        FunctionId::Udf { .. } => false,
     }
 }
 

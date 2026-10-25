@@ -289,8 +289,8 @@ fn keys_are_stable() {
         ))
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
-    assert_eq!(encoding.len(), 461, "{encoding:?}");
-    assert_eq!(hash.to_string(), "c8beb826b28467220b04a0c87ce3719b");
+    assert_eq!(encoding.len(), 477, "{encoding:?}");
+    assert_eq!(hash.to_string(), "64511121320f453329adcbd9efcac0ea");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -302,7 +302,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "ba4505febd5716e05d133affe7ea86c9");
+    assert_eq!(hash.to_string(), "32ab3ead12ad3c48c04c5b5fa751a13c");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in
@@ -345,7 +345,7 @@ fn shared_expressions_are_encoded_once() {
     let start = Instant::now();
     let e = (0..30).fold(Arc::new(Expr::column(["a"])), |e, _| {
         Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
-            name: Builtin::And.name().to_owned(),
+            name: vec![Builtin::And.name().to_owned()],
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,

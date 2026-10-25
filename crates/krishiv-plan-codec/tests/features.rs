@@ -42,6 +42,7 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("window_offset_values").features,
         ["window", "window_frame_offsets", "window_offset_functions"]
     );
+    assert_eq!(message("rust_udf").features, ["rust_udf"]);
     // An offset of zero is the baseline `Limit`.
     let zero = plan_of(PhysNode::Limit {
         input: Box::new(PhysNode::OneRow),
@@ -118,6 +119,26 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         None
     );
+    assert_eq!(
+        feature_of(Construct::Function(&krishiv_plan::FunctionId::Builtin(
+            krishiv_plan::Builtin::Add
+        ))),
+        None
+    );
+    assert_eq!(
+        feature_of(Construct::Function(&krishiv_plan::FunctionId::Registry {
+            name: "upper".to_owned(),
+            id: 1,
+        })),
+        None
+    );
+    assert_eq!(
+        feature_of(Construct::Function(&krishiv_plan::FunctionId::Udf {
+            name: "my_udf".to_owned(),
+            version: 7,
+        })),
+        Some(Feature::RustUdf)
+    );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
     use krishiv_exec::window::{FrameBound, FrameUnits, WindowFrame};
@@ -157,6 +178,8 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         Some(Feature::WindowOffsetFunctions)
     );
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::RustUdf.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::RustUdf.to_string(), "rust_udf");
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::LimitOffset.to_string(), "limit_offset");
@@ -201,6 +224,23 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
             missing: vec!["window".to_owned()]
         }
     );
+    // A reader without `rust_udf` refuses the plan naming it.
+    let udf_bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "rust_udf")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let err = decode_with(&udf_bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["rust_udf".to_owned()]
+        }
+    );
+    assert!(ReaderFeatures::default().contains(Feature::RustUdf));
     assert_eq!(ReaderFeatures::default(), ReaderFeatures::all());
 }
 

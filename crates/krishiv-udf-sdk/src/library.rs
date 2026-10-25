@@ -1,0 +1,180 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The session's UDF registrations: which implementations a name resolves
+//! to on the executing side.
+//!
+//! A [`UdfLibrary`] lives with the session that registers into it and is
+//! passed to the workers that run its plans (`WorkerContext::with_udfs` in
+//! `krishiv-exec`). Plans reference a UDF by name and version only, so
+//! the library is consulted at execution, never at planning: a worker
+//! holding another version (or none) refuses the plan with
+//! `KRISHIV_UDF_NOT_AVAILABLE` instead of running the wrong code.
+
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::{Arc, PoisonError, RwLock};
+
+use super::ScalarUdf;
+
+/// The UDFs registered on one session, by lower-case name.
+///
+/// Re-registering a name replaces its implementation. Every registration
+/// bumps the library [`version`](Self::version): the analyzer's context
+/// fingerprint covers it, so a cached plan never outlives the registration
+/// it was analyzed with.
+pub struct UdfLibrary {
+    inner: RwLock<Inner>,
+}
+
+#[derive(Debug, Default)]
+struct Inner {
+    udfs: HashMap<String, Arc<dyn ScalarUdf>>,
+    /// Bumped on every registration; part of the analysis fingerprint.
+    epoch: u64,
+}
+
+impl UdfLibrary {
+    /// An empty library.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: RwLock::new(Inner::default()),
+        }
+    }
+
+    /// Registers `udf` under its lower-case [`name`](ScalarUdf::name),
+    /// replacing any UDF of that name, and bumps the library version.
+    pub fn register(&self, udf: Arc<dyn ScalarUdf>) {
+        let name = udf.name().to_lowercase();
+        let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
+        inner.udfs.insert(name, udf);
+        inner.epoch = inner.epoch.wrapping_add(1);
+    }
+
+    /// The UDF named `name` (case-insensitive), if registered.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<Arc<dyn ScalarUdf>> {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        inner.udfs.get(&name.to_lowercase()).cloned()
+    }
+
+    /// The UDF named `name` at `version` (both case- and
+    /// version-sensitive), as a plan references it; `None` when the name is
+    /// unregistered or holds another version.
+    #[must_use]
+    pub fn get_versioned(&self, name: &str, version: u32) -> Option<Arc<dyn ScalarUdf>> {
+        let udf = self.get(name)?;
+        (udf.version() == version).then_some(udf)
+    }
+
+    /// Bumped on every registration; part of the analysis fingerprint.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .epoch
+    }
+
+    /// Whether no UDF is registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.inner
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .udfs
+            .is_empty()
+    }
+}
+
+impl Default for UdfLibrary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for UdfLibrary {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        let mut names: Vec<String> = inner
+            .udfs
+            .values()
+            .map(|u| format!("{}@{}", u.name(), u.version()))
+            .collect();
+        names.sort();
+        f.debug_struct("UdfLibrary")
+            .field("udfs", &names)
+            .field("epoch", &inner.epoch)
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{ArgField, InvokeContext, ReturnField, Signature, UdfArg, UdfError};
+    use super::*;
+
+    use arrow_array::ArrayRef;
+    use krishiv_types::DataType;
+
+    #[derive(Debug)]
+    struct Identity {
+        version: u32,
+    }
+
+    impl ScalarUdf for Identity {
+        fn name(&self) -> &str {
+            "my_identity"
+        }
+
+        fn version(&self) -> u32 {
+            self.version
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            _: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Err(UdfError::new("unimplemented"))
+        }
+    }
+
+    #[test]
+    fn registration_replaces_and_bumps_the_version() {
+        let lib = UdfLibrary::new();
+        assert!(lib.is_empty());
+        assert_eq!(lib.version(), 0);
+        lib.register(Arc::new(Identity { version: 1 }));
+        assert!(!lib.is_empty());
+        assert_eq!(lib.version(), 1);
+        assert_eq!(lib.get("MY_IDENTITY").unwrap().version(), 1);
+        // Another registration, same or new version: replaced, bumped.
+        lib.register(Arc::new(Identity { version: 2 }));
+        assert_eq!(lib.version(), 2);
+        assert_eq!(lib.get("my_identity").unwrap().version(), 2);
+        assert!(lib.get("nosuch").is_none());
+        // A plan names its version: only the matching one resolves.
+        assert!(lib.get_versioned("my_identity", 2).is_some());
+        assert!(lib.get_versioned("my_identity", 1).is_none());
+        assert!(lib.get_versioned("nosuch", 2).is_none());
+        assert_eq!(
+            format!("{lib:?}"),
+            "UdfLibrary { udfs: [\"my_identity@2\"], epoch: 2 }"
+        );
+        assert_eq!(format!("{}", UdfLibrary::default().version()), "0");
+    }
+}
