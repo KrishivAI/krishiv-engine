@@ -898,5 +898,34 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
+    out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out
+}
+
+/// A struct field access (`GetStructField`): the `b` of a struct column.
+pub(crate) fn struct_field() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let st = t("struct<a:int,b:string>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(4, "st", st.clone(), false));
+    }
+    let base = col(4, "st", st);
+    let field = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+        base,
+        ordinal: 1,
+        name: "b".to_owned(),
+        data_type: DataType::String,
+        nullable: true,
+    })));
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3), AttrId(4)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "b".to_owned(),
+            expr: field,
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
 }

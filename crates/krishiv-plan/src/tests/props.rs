@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 12 };
+        let kinds = if depth == 0 { 5 } else { 14 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -238,6 +238,17 @@ impl Gen<'_> {
             9 => ExprNode::Resolved(ResolvedExpr::Alias {
                 expr: Arc::new(self.expr(d)),
                 output: self.bound(),
+            }),
+            10 => ExprNode::Field {
+                base: Arc::new(self.expr(d)),
+                name: self.name(),
+            },
+            12 => ExprNode::Resolved(ResolvedExpr::Field {
+                base: Arc::new(self.expr(d)),
+                ordinal: usize::from(self.pick(9)),
+                name: self.name(),
+                data_type: self.data_type(),
+                nullable: self.flag(),
             }),
             11 => ExprNode::Window(WindowExpr {
                 function: Arc::new(self.expr(d)),
@@ -721,6 +732,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             m_type(to, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
+        ExprNode::Field { base, name } => m_string(name, w) || m_expr(base, w),
         ExprNode::Subquery { kind, plan } => {
             let other = match kind {
                 SubqueryKind::Scalar => SubqueryKind::Exists,
@@ -776,6 +788,17 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 m_type(data_type, w) || m_exprs(args, w) || m_filter(filter, w)
             }
             ResolvedExpr::Alias { expr, output } => m_bound(output, w) || m_expr(expr, w),
+            ResolvedExpr::Field {
+                base,
+                ordinal,
+                name,
+                data_type,
+                nullable,
+            } => {
+                site!(w, *ordinal = ordinal.wrapping_add(1));
+                site!(w, *nullable = !*nullable);
+                m_string(name, w) || m_type(data_type, w) || m_expr(base, w)
+            }
         },
     }
 }

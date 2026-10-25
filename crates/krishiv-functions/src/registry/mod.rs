@@ -21,6 +21,7 @@ mod hashing;
 mod math;
 mod number;
 mod predicate;
+mod r#struct;
 
 use std::collections::HashMap;
 use std::fmt;

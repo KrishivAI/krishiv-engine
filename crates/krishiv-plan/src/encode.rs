@@ -1090,6 +1090,25 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 });
                 self.str(value);
             }
+            ExprNode::Field { base, name } => {
+                self.u8(14);
+                self.str(name);
+                self.expr(base);
+            }
+            ExprNode::Resolved(ResolvedExpr::Field {
+                base,
+                ordinal,
+                name,
+                data_type,
+                nullable,
+            }) => {
+                self.u8(15);
+                self.str(name);
+                self.len(*ordinal);
+                self.data_type(data_type);
+                self.bool(*nullable);
+                self.expr(base);
+            }
         }
     }
 
