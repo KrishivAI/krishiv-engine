@@ -13,6 +13,7 @@ pub mod batch;
 mod data_type;
 mod ddl;
 pub mod error;
+pub mod variant;
 
 pub use data_type::{DataType, DecimalStorage, DecimalType};
 pub use ddl::parse_data_type;
