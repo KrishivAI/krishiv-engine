@@ -106,6 +106,6 @@ Paths are relative to this crate.
   (`spark.sql.legacy.javaCharsets` and `...codingErrorAction` are not read) and report unmappable input. `split_part`/`substring_index`
   with `Int.MIN` return the algorithm's value where the JVM raises; `initcap`/`mask` classify non-ASCII with the toolchain's Unicode
   data (pinned by `toolchain_unicode_is_pinned`). A string is always valid UTF-8 here, so the validators only fail on `binary` input.
-  Not implemented (`KnownUnsupported`): `format_string`/`printf`, `parse_url`/`try_parse_url`, `sentences`, `split`, `str_to_map`
-  (array/map results or a Java formatter), `collate`/`collation`/`collations`, `randstr` (no seeded random source), and the
+  Not implemented (`KnownUnsupported`): `format_string`/`printf`, `parse_url`/`try_parse_url`, `sentences`, `split`
+  (array results or a Java formatter), `collate`/`collation`/`collations`, `randstr` (no seeded random source), and the
   `decode(expr, search, result, ...)` form (analysis error `KRISHIV_UNSUPPORTED_FEATURE`).

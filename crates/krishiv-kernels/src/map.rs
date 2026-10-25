@@ -123,6 +123,14 @@ fn internal(e: impl std::fmt::Display) -> KernelError {
     KernelError::internal(e.to_string())
 }
 
+/// The hash at `at`: a missing entry means the hash run is shorter than the
+/// entries it dedups, which is an internal error rather than a hash of zero.
+fn hash_at(hash: &[i32], at: usize) -> Result<i32, KernelError> {
+    hash.get(at)
+        .copied()
+        .ok_or_else(|| internal("map entries past their hashes"))
+}
+
 /// Spark's equality of two key values: `a[i] = b[j]`. Both sides already
 /// share the Spark type (the analyzer cast them), but their carriers may
 /// differ (a plain `Utf8` against a view, a `List` against a `LargeList`).
@@ -493,7 +501,7 @@ impl<'a> Deduped<'a> {
                 if e.keys.is_null(e.key) {
                     return Err(KernelError::with_row(Some(row), NullMapKey {}.into()));
                 }
-                let h = hash.get(at).copied().unwrap_or(0);
+                let h = hash_at(hash, at)?;
                 at = at.saturating_add(1);
                 let mut found = None;
                 if let Some(same) = seen.get(&h) {
@@ -509,7 +517,7 @@ impl<'a> Deduped<'a> {
                         if policy == DedupPolicy::Exception {
                             return Err(KernelError::with_row(
                                 Some(row),
-                                duplicate_key(e.keys, e.key),
+                                duplicate_key(e.keys, e.key)?,
                             ));
                         }
                         kept[p].values = e.values;
@@ -528,12 +536,12 @@ impl<'a> Deduped<'a> {
 }
 
 /// `DUPLICATED_MAP_KEY` for the key value, rendered as Spark renders it.
-fn duplicate_key(keys: &dyn Array, key: usize) -> KrishivError {
-    DuplicatedMapKey {
-        key: key_text(keys, key),
+fn duplicate_key(keys: &dyn Array, key: usize) -> Result<KrishivError, KernelError> {
+    Ok(DuplicatedMapKey {
+        key: key_text(keys, key)?,
         map_key_dedup_policy: "\"spark.sql.mapKeyDedupPolicy\"".to_owned(),
     }
-    .into()
+    .into())
 }
 
 /// Spark's `key.toString` for a key value: strings as they are, numbers by
@@ -541,58 +549,56 @@ fn duplicate_key(keys: &dyn Array, key: usize) -> KrishivError {
 /// and timestamps by their internal number, binary by its bytes. Nested
 /// keys render in brackets; only the error class is compared anywhere, so
 /// this is best-effort display, not a format pin.
-fn key_text(keys: &dyn Array, key: usize) -> String {
+fn key_text(keys: &dyn Array, key: usize) -> Result<String, KernelError> {
     use DataType as T;
     match keys.data_type() {
-        T::Utf8 | T::Utf8View | T::LargeUtf8 => string_value(keys, key).to_owned(),
-        T::Boolean => keys.as_boolean().value(key).to_string(),
-        T::Int8 => keys.as_primitive::<Int8Type>().value(key).to_string(),
-        T::Int16 => keys.as_primitive::<Int16Type>().value(key).to_string(),
-        T::Int32 => keys.as_primitive::<Int32Type>().value(key).to_string(),
-        T::Int64 => keys.as_primitive::<Int64Type>().value(key).to_string(),
-        T::UInt8 => keys.as_primitive::<UInt8Type>().value(key).to_string(),
-        T::UInt16 => keys.as_primitive::<UInt16Type>().value(key).to_string(),
-        T::UInt32 => keys.as_primitive::<UInt32Type>().value(key).to_string(),
-        T::UInt64 => keys.as_primitive::<UInt64Type>().value(key).to_string(),
+        T::Utf8 | T::Utf8View | T::LargeUtf8 => Ok(string_value(keys, key).to_owned()),
+        T::Boolean => Ok(keys.as_boolean().value(key).to_string()),
+        T::Int8 => Ok(keys.as_primitive::<Int8Type>().value(key).to_string()),
+        T::Int16 => Ok(keys.as_primitive::<Int16Type>().value(key).to_string()),
+        T::Int32 => Ok(keys.as_primitive::<Int32Type>().value(key).to_string()),
+        T::Int64 => Ok(keys.as_primitive::<Int64Type>().value(key).to_string()),
+        T::UInt8 => Ok(keys.as_primitive::<UInt8Type>().value(key).to_string()),
+        T::UInt16 => Ok(keys.as_primitive::<UInt16Type>().value(key).to_string()),
+        T::UInt32 => Ok(keys.as_primitive::<UInt32Type>().value(key).to_string()),
+        T::UInt64 => Ok(keys.as_primitive::<UInt64Type>().value(key).to_string()),
         T::Float32 => {
             let v = keys.as_primitive::<Float32Type>().value(key);
             if v.is_nan() {
-                "NaN".to_owned()
+                Ok("NaN".to_owned())
             } else {
-                format!("{v:?}")
+                Ok(format!("{v:?}"))
             }
         }
         T::Float64 => {
             let v = keys.as_primitive::<Float64Type>().value(key);
             if v.is_nan() {
-                "NaN".to_owned()
+                Ok("NaN".to_owned())
             } else {
-                format!("{v:?}")
+                Ok(format!("{v:?}"))
             }
         }
         T::Decimal128(_, scale) => {
             decimal_text(keys.as_primitive::<Decimal128Type>().value(key), *scale)
         }
-        T::Binary | T::BinaryView | T::LargeBinary => {
-            format!("{:?}", binary_value(keys, key))
-        }
-        T::Date32 => keys.as_primitive::<Date32Type>().value(key).to_string(),
-        T::Timestamp(..) => keys
+        T::Binary | T::BinaryView | T::LargeBinary => Ok(format!("{:?}", binary_value(keys, key))),
+        T::Date32 => Ok(keys.as_primitive::<Date32Type>().value(key).to_string()),
+        T::Timestamp(..) => Ok(keys
             .as_primitive::<TimestampMicrosecondType>()
             .value(key)
-            .to_string(),
+            .to_string()),
         T::List(_) | T::LargeList(_) => {
-            let (from, to) = list_range(keys, key).unwrap_or((0, 0));
+            let (from, to) = list_range(keys, key)?;
             let values = list_values(keys);
             let mut parts = Vec::new();
             for p in from..to {
                 parts.push(if values.is_null(p) {
                     "null".to_owned()
                 } else {
-                    key_text(values.as_ref(), p)
+                    key_text(values.as_ref(), p)?
                 });
             }
-            format!("[{}]", parts.join(", "))
+            Ok(format!("[{}]", parts.join(", ")))
         }
         T::Struct(_) => {
             let s = keys.as_struct();
@@ -601,27 +607,27 @@ fn key_text(keys: &dyn Array, key: usize) -> String {
                 parts.push(if col.is_null(key) {
                     "null".to_owned()
                 } else {
-                    key_text(col.as_ref(), key)
+                    key_text(col.as_ref(), key)?
                 });
             }
-            format!("[{}]", parts.join(", "))
+            Ok(format!("[{}]", parts.join(", ")))
         }
-        _ => format!("{:?}", keys),
+        _ => Ok(format!("{:?}", keys)),
     }
 }
 
 /// A decimal unscaled value with `scale` digits after the point.
-fn decimal_text(unscaled: i128, scale: i8) -> String {
-    let scale = usize::try_from(scale.max(0)).unwrap_or(0);
+fn decimal_text(unscaled: i128, scale: i8) -> Result<String, KernelError> {
+    let scale = usize::try_from(scale.max(0)).map_err(internal)?;
     let digits = unscaled.unsigned_abs().to_string();
     let padded = format!("{:0>width$}", digits, width = scale.saturating_add(1));
     let point = padded.len().saturating_sub(scale);
     let (int, frac) = padded.split_at(point);
     let sign = if unscaled < 0 { "-" } else { "" };
     if scale == 0 {
-        format!("{sign}{int}")
+        Ok(format!("{sign}{int}"))
     } else {
-        format!("{sign}{int}.{frac}")
+        Ok(format!("{sign}{int}.{frac}"))
     }
 }
 
@@ -700,7 +706,7 @@ pub fn create_map(
                 .checked_mul(rows)
                 .and_then(|at| at.checked_add(r))
                 .ok_or_else(|| internal("map entries past their hashes"))?;
-            ordered.push(hash.get(at).copied().unwrap_or(0));
+            ordered.push(hash_at(&hash, at)?);
             row.push(Entry {
                 keys: k.as_ref(),
                 key: r,
@@ -757,10 +763,11 @@ pub fn concat(
         for (mi, m) in marrays.iter().enumerate() {
             let (from, to) = map_range(m, r)?;
             for p in from..to {
-                let h = hash
-                    .get(base.get(mi).copied().unwrap_or(0).saturating_add(p))
+                let base_at = base
+                    .get(mi)
                     .copied()
-                    .unwrap_or(0);
+                    .ok_or_else(|| internal("map entries past their hashes"))?;
+                let h = hash_at(&hash, base_at.saturating_add(p))?;
                 ordered.push(h);
                 row.push(Entry {
                     keys: m.keys().as_ref(),
@@ -918,7 +925,7 @@ pub fn from_arrays(
         }
         let mut row = Vec::with_capacity(kt.saturating_sub(kf));
         for (p, q) in (kf..kt).zip(vf..vt) {
-            ordered.push(hash.get(p).copied().unwrap_or(0));
+            ordered.push(hash_at(&hash, p)?);
             row.push(Entry {
                 keys: k.values().as_ref(),
                 key: p,
@@ -974,7 +981,7 @@ pub fn from_entries(
                 null_element = true;
                 break;
             }
-            ordered.push(hash.get(p).copied().unwrap_or(0));
+            ordered.push(hash_at(&hash, p)?);
             row.push(Entry {
                 keys: keys.as_ref(),
                 key: p,
@@ -1038,7 +1045,7 @@ pub fn from_pairs(
         let Some(row) = per_row.get_mut(*r) else {
             return Err(internal("a str_to_map pair past its rows"));
         };
-        ordered.push(hash.get(p).copied().unwrap_or(0));
+        ordered.push(hash_at(&hash, p)?);
         row.push(Entry {
             keys: keys.as_ref(),
             key: p,
@@ -1105,7 +1112,7 @@ mod tests {
                 let (from, to) = map_range(m, r).unwrap();
                 let mut row = Vec::new();
                 for p in from..to {
-                    let k = key_text(m.keys().as_ref(), p);
+                    let k = key_text(m.keys().as_ref(), p).expect("key text renders");
                     let v = if m.values().is_null(p) {
                         None
                     } else {
@@ -1414,7 +1421,7 @@ mod tests {
         let (from, to) = map_range(&m, rows - 1).unwrap();
         assert_eq!((to - from), 1);
         assert_eq!(
-            key_text(m.keys().as_ref(), from),
+            key_text(m.keys().as_ref(), from).expect("key text renders"),
             (i32::try_from(rows).unwrap_or(0).saturating_sub(1)).to_string()
         );
     }
@@ -1756,10 +1763,10 @@ mod tests {
 
     #[test]
     fn decimal_text_renders() {
-        assert_eq!(decimal_text(100, 2), "1.00");
-        assert_eq!(decimal_text(-5, 3), "-0.005");
-        assert_eq!(decimal_text(0, 0), "0");
-        assert_eq!(decimal_text(12345, 0), "12345");
+        assert_eq!(decimal_text(100, 2).expect("decimal text"), "1.00");
+        assert_eq!(decimal_text(-5, 3).expect("decimal text"), "-0.005");
+        assert_eq!(decimal_text(0, 0).expect("decimal text"), "0");
+        assert_eq!(decimal_text(12345, 0).expect("decimal text"), "12345");
     }
 
     #[test]
