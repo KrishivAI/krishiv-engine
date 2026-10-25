@@ -48,8 +48,9 @@ pub(crate) enum JVal {
     Num(String, bool),
     /// An unescaped string.
     Str(String),
-    /// An object or array value: flat schemas cannot hold it.
-    Nested,
+    /// An object or array value, as compact JSON text: only a string column
+    /// can hold it (Spark reads a nested value as its raw JSON text there).
+    Nested(String),
 }
 
 /// A flat JSON object: field names in order with their values. Later
@@ -440,14 +441,45 @@ fn expect_sep(c: &mut Cur<'_>) -> Result<(), Reason> {
     }
 }
 
+/// `raw` without the whitespace between tokens (string contents are kept
+/// as written).
+fn compact_json(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in raw.chars() {
+        match quote {
+            Some(q) => {
+                out.push(ch);
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == q {
+                    quote = None;
+                }
+            }
+            None if ch == '"' || ch == '\'' => {
+                quote = Some(ch);
+                out.push(ch);
+            }
+            None if ch.is_whitespace() => {}
+            None => out.push(ch),
+        }
+    }
+    out
+}
+
 /// One field value starting at `c.pos`.
 fn parse_value(c: &mut Cur<'_>, text: &str) -> Result<JVal, Reason> {
     c.skip_gap();
     match c.at() {
         None => Err("truncated value"),
         Some(b'{' | b'[') => {
+            let start = c.pos;
             skip_value(c, text)?;
-            Ok(JVal::Nested)
+            let raw = text.get(start..c.pos).ok_or("truncated value")?;
+            Ok(JVal::Nested(compact_json(raw)))
         }
         Some(b'"') => Ok(JVal::Str(parse_quoted(c, text)?)),
         Some(b'\'') => {
@@ -908,13 +940,10 @@ impl JsonDecoder {
         Ok(())
     }
 
-    /// Accepted rows: counted, and appended unless they precede the split.
+    /// Accepted rows: counted and appended (rows before the split are
+    /// counted by the prefix reader and never get here).
     fn accept(&mut self, vals: &[Val]) {
         self.row_no += 1;
-        if self.prefix.is_some() {
-            // Rows before the split are only counted.
-            return;
-        }
         for (col, v) in self.columns.iter_mut().zip(vals) {
             if let Val::Text(s) = v {
                 self.held_text += s.len();
@@ -945,7 +974,12 @@ impl JsonDecoder {
         mut vals: Vec<Val>,
     ) -> FormatResult<()> {
         match self.o.mode {
-            Mode::DropMalformed => Ok(()),
+            // A dropped record still holds its place in the file's row
+            // numbering (the prefix count above counts every record).
+            Mode::DropMalformed => {
+                self.row_no += 1;
+                Ok(())
+            }
             Mode::FailFast => Err(fail_fast(raw, cause)),
             Mode::Permissive => {
                 for (out, v) in self.outs.iter().zip(&mut vals) {

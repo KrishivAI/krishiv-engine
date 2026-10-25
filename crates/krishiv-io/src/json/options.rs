@@ -79,7 +79,8 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("lineSep", "The line separator (read: \\r, \\r\\n, \\n; write: \\n).");
         string("samplingRatio", "The fraction of records inference reads (default 1.0).");
         flag("dropFieldIfAllNull", false, "Inference drops columns that are null in every record.");
-        flag("ignoreNullFields", false, "Write: omit fields whose value is null.");
+        conf("ignoreNullFields", OptionKind::Bool, OptionDefault::Bool(true), "spark.sql.jsonGenerator.ignoreNullFields", "Write: omit fields whose value is null (default: the session conf, true).");
+        flag("inferTimestamp", false, "Inference reads timestamp-like strings as timestamps.");
         flag("enableDateTimeParsingFallback", false, "Parse with the lenient grammar when the pattern fails.");
         string("compression", "Write codec: only none and uncompressed so far.");
         string("codec", "Alias of `compression`.");
@@ -151,6 +152,8 @@ pub(crate) struct JsonOptions {
     pub multi_line: bool,
     pub primitives_as_string: bool,
     pub prefers_decimal: bool,
+    /// Inference reads timestamp-like strings as timestamps.
+    pub infer_timestamp: bool,
     pub syntax: Syntax,
     pub mode: Mode,
     pub corrupt_column: String,
@@ -181,6 +184,7 @@ impl JsonOptions {
             multi_line: o.bool("multiLine").unwrap_or(false),
             primitives_as_string: o.bool("primitivesAsString").unwrap_or(false),
             prefers_decimal: o.bool("prefersDecimal").unwrap_or(false),
+            infer_timestamp: o.bool("inferTimestamp").unwrap_or(false),
             syntax: Syntax {
                 comments: o.bool("allowComments").unwrap_or(false),
                 unquoted_names: o.bool("allowUnquotedFieldNames").unwrap_or(false),
@@ -199,7 +203,7 @@ impl JsonOptions {
             charset,
             line_sep,
             drop_field_if_all_null: o.bool("dropFieldIfAllNull").unwrap_or(false),
-            ignore_null_fields: o.bool("ignoreNullFields").unwrap_or(false),
+            ignore_null_fields: o.bool("ignoreNullFields").unwrap_or(true),
         })
     }
 }

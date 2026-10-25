@@ -132,15 +132,25 @@ impl JsonEncoder {
             (Kind::Int(_), _) => {
                 buf.push_str(&a.as_primitive::<Int64Type>().value(i).to_string());
             }
+            // Non-finite values are written as quoted strings (Jackson's
+            // `QUOTE_NON_NUMERIC_NUMBERS`), which stay valid JSON.
             (Kind::F32, _) => {
-                buf.push_str(&java_float_string32(
-                    a.as_primitive::<Float32Type>().value(i),
-                ));
+                let v = a.as_primitive::<Float32Type>().value(i);
+                let text = java_float_string32(v);
+                if v.is_finite() {
+                    buf.push_str(&text);
+                } else {
+                    push_quoted(buf, &text);
+                }
             }
             (Kind::F64, _) => {
-                buf.push_str(&java_double_string(
-                    a.as_primitive::<Float64Type>().value(i),
-                ));
+                let v = a.as_primitive::<Float64Type>().value(i);
+                let text = java_double_string(v);
+                if v.is_finite() {
+                    buf.push_str(&text);
+                } else {
+                    push_quoted(buf, &text);
+                }
             }
             (Kind::Decimal(_, s), _) => {
                 buf.push_str(&java_decimal_string(

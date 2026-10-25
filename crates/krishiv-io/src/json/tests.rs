@@ -308,9 +308,9 @@ fn tokenizer_reads_flat_values() {
         )
     );
     assert_eq!(o.fields[6], ("u".to_owned(), JVal::Str("é☃".to_owned())));
-    assert!(matches!(o.fields[7].1, JVal::Nested));
-    assert!(matches!(o.fields[8].1, JVal::Nested));
-    assert!(matches!(o.fields[9].1, JVal::Nested));
+    assert!(matches!(o.fields[7].1, JVal::Nested(_)));
+    assert!(matches!(o.fields[8].1, JVal::Nested(_)));
+    assert!(matches!(o.fields[9].1, JVal::Nested(_)));
     // Surrogate pairs and lone surrogates.
     let top = parse_line(r#"{"s":"Aß𝄞"}"#, s).expect("surrogates");
     let Top::Object(o) = top else {
@@ -683,35 +683,47 @@ fn primitives_as_string_reads_scalars_as_text() {
             vec![None, None, None, None, Some("{\"a\":oops}".into())],
         ]
     );
-    // Nested values are malformed records, even as strings: PERMISSIVE
-    // keeps nulls plus the raw record, DROPMALFORMED drops the record.
-    let got = read(b"{\"a\":[1]}\n", &o, &ScanRequest::all(Arc::clone(&schema)))
-        .expect("nested permissive");
+    // A nested value in a string column reads as its compact JSON text.
+    let got = read(
+        b"{\"a\":[1, {\"b\": \"x y\"}]}\n",
+        &o,
+        &ScanRequest::all(Arc::clone(&schema)),
+    )
+    .expect("nested as text");
     assert_eq!(
         rows_of(&got),
-        [vec![None, None, None, None, Some("{\"a\":[1]}".into())]]
+        [vec![
+            Some("[1,{\"b\":\"x y\"}]".into()),
+            None,
+            None,
+            None,
+            None
+        ]]
     );
-    let drop = options(&serde_json::json!({"primitivesAsString": "true", "mode": "DROPMALFORMED"}));
+    // In a non-string column it is a malformed record: PERMISSIVE keeps
+    // nulls plus the raw record, DROPMALFORMED drops the record.
+    let ints = ddl("a int, _corrupt_record string");
+    let got = read(b"{\"a\":[1]}\n", &o, &ScanRequest::all(Arc::clone(&ints)))
+        .expect("nested permissive");
+    assert_eq!(rows_of(&got), [vec![None, Some("{\"a\":[1]}".into())]]);
+    let drop = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
     let got = read(
         b"{\"a\":[1]}\n{\"a\":2}\n",
         &drop,
-        &ScanRequest::all(Arc::clone(&schema)),
+        &ScanRequest::all(Arc::clone(&ints)),
     )
     .expect("nested drop");
-    assert_eq!(
-        rows_of(&got),
-        [vec![Some("2".into()), None, None, None, None]]
-    );
+    assert_eq!(rows_of(&got), [vec![Some("2".into()), None]]);
 }
 
 #[test]
 fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
     use ErrorClass::{KrishivUnsupportedFeature as Unsupported, UnsupportedDataTypeForDatasource};
     let o = options(&serde_json::json!({}));
-    // A nested value in the data is a malformed record, not a failed scan:
+    // A nested value in a non-string column is a malformed record, not a failed scan:
     // PERMISSIVE keeps the good fields plus the raw record in the corrupt
     // column (or nulls without it).
-    let corrupt = ddl("a int, n string, _corrupt_record string");
+    let corrupt = ddl("a int, n int, _corrupt_record string");
     for record in [
         "{\"a\":1,\"n\":{\"b\":2}}",
         "{\"a\":1,\"n\":[1,2]}",
@@ -732,9 +744,9 @@ fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
         }
         assert_eq!(rows[0][1], None, "{record}");
     }
-    let plain = ddl("a int, n string");
+    let plain = ddl("a int, n int");
     let got = read(
-        b"{\"a\":1,\"n\":{\"b\":2}}\n{\"a\":2,\"n\":\"x\"}\n",
+        b"{\"a\":1,\"n\":{\"b\":2}}\n{\"a\":2,\"n\":7}\n",
         &o,
         &ScanRequest::all(Arc::clone(&plain)),
     )
@@ -743,19 +755,19 @@ fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
         rows_of(&got),
         [
             vec![Some("1".into()), None],
-            vec![Some("2".into()), Some("x".into())],
+            vec![Some("2".into()), Some("7".into())],
         ]
     );
     // DROPMALFORMED drops nested records; FAILFAST fails with the nested
     // cause under `MALFORMED_RECORD_IN_PARSING`.
     let drop = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
     let got = read(
-        b"{\"a\":1,\"n\":{\"b\":2}}\n{\"a\":2,\"n\":\"x\"}\n",
+        b"{\"a\":1,\"n\":{\"b\":2}}\n{\"a\":2,\"n\":7}\n",
         &drop,
         &ScanRequest::all(Arc::clone(&plain)),
     )
     .expect("nested drop");
-    assert_eq!(rows_of(&got), [vec![Some("2".into()), Some("x".into())]]);
+    assert_eq!(rows_of(&got), [vec![Some("2".into()), Some("7".into())]]);
     let fail = options(&serde_json::json!({"mode": "FAILFAST"}));
     let e = read(
         b"{\"a\":1,\"n\":{\"b\":2}}\n",
@@ -798,9 +810,65 @@ fn nested_data_is_malformed_and_nested_schemas_are_unsupported() {
             krishiv_common::error::UnsupportedDataTypeForDatasource {
                 format: "JSON".to_owned(),
                 column_name: "`n`".to_owned(),
-                column_type: "\"List(Int32)\"".to_owned(),
+                column_type: "\"array<int>\"".to_owned(),
             }
             .into()
+        )
+    );
+}
+
+#[test]
+fn decimal_merges_fall_back_to_double_past_38_digits() {
+    let o = options(&serde_json::json!({"prefersDecimal": "true"}));
+    let ty = |text: &str| {
+        let s = infer(text.as_bytes(), &o).expect("infer");
+        s.field_with_name("a").expect("a").data_type().clone()
+    };
+    assert_eq!(
+        ty("{\"a\":1.5}\n{\"a\":12.25}\n"),
+        DataType::Decimal128(4, 2)
+    );
+    // 30 integer digits next to 10 fractional ones needs 40 digits.
+    assert_eq!(
+        ty("{\"a\":12345678901234567890.1234567890}\n{\"a\":123456789012345678901234567890.5}\n"),
+        DataType::Float64
+    );
+    // A long next to a decimal merges as DECIMAL(20, 0).
+    assert_eq!(
+        ty("{\"a\":1}\n{\"a\":123456789012345678901234567890.5}\n"),
+        DataType::Decimal128(31, 1)
+    );
+}
+
+#[test]
+fn non_finite_floats_write_as_quoted_strings() {
+    let o = options(&serde_json::json!({}));
+    let batch = RecordBatch::try_new(
+        ddl("d double, f float"),
+        vec![
+            Arc::new(arrow_array::Float64Array::from(vec![
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+                1.5,
+            ])),
+            Arc::new(arrow_array::Float32Array::from(vec![
+                f32::NAN,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                2.5,
+            ])),
+        ],
+    )
+    .expect("batch");
+    let bytes = encode(&batch, &o).expect("encode");
+    assert_eq!(
+        String::from_utf8_lossy(&bytes),
+        concat!(
+            "{\"d\":\"NaN\",\"f\":\"NaN\"}\n",
+            "{\"d\":\"Infinity\",\"f\":\"Infinity\"}\n",
+            "{\"d\":\"-Infinity\",\"f\":\"-Infinity\"}\n",
+            "{\"d\":1.5,\"f\":2.5}\n"
         )
     );
 }
@@ -813,8 +881,19 @@ fn inference_follows_spark_rules() {
         "{\"long\":3.5,\"dbl\":null,\"str\":\"y\",\"b\":1,\"ts\":null,\"n\":null}\n",
     );
     // Longs widen to doubles, numbers and booleans widen to strings,
-    // timestamp-like strings infer timestamps, null columns stay strings.
+    // timestamp-like strings stay strings unless `inferTimestamp` is set,
+    // null columns stay strings.
     let s = infer(data.as_bytes(), &options(&serde_json::json!({}))).expect("infer");
+    assert_eq!(
+        schema_string(&s),
+        "struct<long:Float64,dbl:Float64,str:Utf8View,b:Utf8View,\
+         ts:Utf8View,n:Utf8View>"
+    );
+    let s = infer(
+        data.as_bytes(),
+        &options(&serde_json::json!({"inferTimestamp": "true"})),
+    )
+    .expect("infer");
     assert_eq!(
         schema_string(&s),
         "struct<long:Float64,dbl:Float64,str:Utf8View,b:Utf8View,\
@@ -827,7 +906,7 @@ fn inference_follows_spark_rules() {
     )
     .expect("infer");
     let dec = s.field_with_name("long").expect("long");
-    assert_eq!(dec.data_type(), &DataType::Decimal128(20, 1));
+    assert_eq!(dec.data_type(), &DataType::Decimal128(21, 1));
     // dropFieldIfAllNull drops the null column; field order is by first appearance.
     let s = infer(
         b"{\"b\":1,\"a\":2}\n{\"a\":3,\"c\":4}\n",
@@ -847,10 +926,11 @@ fn inference_follows_spark_rules() {
     )
     .expect("infer");
     assert!(s.fields().is_empty());
-    // Timestamp-like strings infer timestamps, other strings stay strings.
+    // With `inferTimestamp`, timestamp-like strings infer timestamps and
+    // other strings stay strings.
     let s = infer(
         "{\"a\":\"2020-01-02T03:04:05\"}\n".as_bytes(),
-        &options(&serde_json::json!({})),
+        &options(&serde_json::json!({"inferTimestamp": "true"})),
     )
     .expect("infer");
     assert!(matches!(
@@ -882,6 +962,34 @@ fn inference_follows_spark_rules() {
         s.field_with_name("a").expect("a").data_type(),
         &DataType::Float64
     );
+}
+
+#[test]
+fn dropped_records_keep_their_row_index_across_splits() {
+    let text = "{\"a\":0}\n{\"a\":oops}\n{\"a\":2}\n{\"a\":bad}\n{\"a\":4}\n";
+    let bytes = text.as_bytes();
+    let o = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
+    let schema = ddl("a int");
+    let req = row_indexed(&schema);
+    let size = bytes.len() as u64;
+    let indexes = |range: ByteRange| -> Vec<(i64, i32)> {
+        let got = read_split(bytes, &o, &req, range).expect("read");
+        let mut seen = Vec::new();
+        for b in &got {
+            let a = b.column(0).as_primitive::<Int32Type>();
+            let idx = b.column_by_name(ROW_INDEX_COLUMN).expect("row index");
+            let idx = idx.as_primitive::<Int64Type>();
+            seen.extend((0..b.num_rows()).map(|i| (idx.value(i), a.value(i))));
+        }
+        seen
+    };
+    // The index is the record's place in the file, dropped records included.
+    let want = vec![(0, 0), (2, 2), (4, 4)];
+    assert_eq!(indexes(ByteRange::new(0, size)), want);
+    let mut halves = indexes(ByteRange::new(0, 18));
+    halves.extend(indexes(ByteRange::new(18, size)));
+    halves.sort_unstable();
+    assert_eq!(halves, want);
 }
 
 #[test]
@@ -1167,15 +1275,16 @@ fn write_then_read_round_trips() {
     }));
     let got = read(&bytes, &r, &ScanRequest::all(Arc::clone(&schema))).expect("read back");
     assert_eq!(rows_of(&got), rows_of(std::slice::from_ref(&batch)));
-    // NULLs write as nulls, and are skipped with ignoreNullFields.
-    assert!(String::from_utf8_lossy(&bytes).contains("null"));
+    // NULL fields are skipped by default (`ignoreNullFields` is true) and
+    // write as nulls when it is false.
+    assert!(!String::from_utf8_lossy(&bytes).contains("null"));
     let o = options(&serde_json::json!({
         "timestampFormat": "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXX",
         "timestampNTZFormat": "yyyy-MM-dd'T'HH:mm:ss.SSSSSS",
-        "ignoreNullFields": "true",
+        "ignoreNullFields": "false",
     }));
     let bytes = encode(&batch, &o).expect("encode");
-    assert!(!String::from_utf8_lossy(&bytes).contains("null"));
+    assert!(String::from_utf8_lossy(&bytes).contains("null"));
     let got = read(&bytes, &r, &ScanRequest::all(Arc::clone(&schema))).expect("read back");
     assert_eq!(rows_of(&got), rows_of(std::slice::from_ref(&batch)));
     // Compression needs codecs this build lacks.
@@ -1278,13 +1387,13 @@ fn truncated_and_garbage_inputs_never_panic() {
     let got = read(
         deep.as_bytes(),
         &o,
-        &ScanRequest::all(ddl("a string, _corrupt_record string")),
+        &ScanRequest::all(ddl("a int, _corrupt_record string")),
     )
     .expect("deep permissive");
     assert_eq!(rows_of(&got).len(), 1);
     assert_eq!(rows_of(&got)[0][0], None);
     let o = options(&serde_json::json!({"mode": "DROPMALFORMED"}));
-    let got = read(deep.as_bytes(), &o, &ScanRequest::all(ddl("a string"))).expect("deep drop");
+    let got = read(deep.as_bytes(), &o, &ScanRequest::all(ddl("a int"))).expect("deep drop");
     assert!(rows_of(&got).is_empty());
     let top = " [".to_owned() + &"[".repeat(9_999) + &"]".repeat(10_000);
     let o = options(&serde_json::json!({"mode": "FAILFAST"}));

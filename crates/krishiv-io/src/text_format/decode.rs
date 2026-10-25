@@ -148,13 +148,22 @@ impl TextDecoder {
                 Source::Lines(main) => match main.next_line()? {
                     ReadChunk::NeedData(range) => return Ok(Next::NeedData(range)),
                     ReadChunk::End => return Ok(Next::End),
-                    // Empty lines are empty values, as in Hadoop.
-                    ReadChunk::Line(bytes, _) => {
-                        let line = self.o.charset.decode(&bytes).into_owned();
+                    // Empty lines are empty values, as in Hadoop, whose line
+                    // reader drops a UTF-8 BOM at the start of the file.
+                    ReadChunk::Line(bytes, offset) => {
+                        let bytes = if offset == 0 {
+                            bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes)
+                        } else {
+                            &bytes[..]
+                        };
+                        let line = self.o.charset.decode(bytes).into_owned();
                         return Ok(Next::Row(line));
                     }
                 },
                 Source::Whole { reader, text, pos } => {
+                    if *pos > 0 {
+                        return Ok(Next::End);
+                    }
                     if text.is_none() {
                         if let Some(r) = reader.need() {
                             return Ok(Next::NeedData(r));
@@ -167,21 +176,19 @@ impl TextDecoder {
                             None => return Ok(Next::End),
                         }
                     }
-                    let Some(t) = text.as_deref() else {
+                    // The whole file is one row: moved out, not copied.
+                    let Some(t) = text.take() else {
                         return Ok(Next::End);
                     };
-                    if *pos > 0 {
-                        return Ok(Next::End);
-                    }
                     *pos = 1;
-                    return Ok(Next::Row(t.to_owned()));
+                    return Ok(Next::Row(t));
                 }
             }
         }
     }
 
     /// One row into the builder.
-    fn add(&mut self, row: &str) {
+    fn add(&mut self, row: String) {
         self.row_no += 1;
         if self.prefix.is_some() {
             // Rows before the split are only counted.
@@ -189,7 +196,7 @@ impl TextDecoder {
         }
         // The column holds every row; the row index is derived below.
         self.held_text += row.len();
-        self.column.append(&Val::Text(row.to_owned()));
+        self.column.append(&Val::Text(row));
         self.rows += 1;
     }
 
@@ -227,7 +234,7 @@ impl Decoder for TextDecoder {
             match self.next()? {
                 Next::NeedData(r) => return Ok(Step::NeedData(vec![r])),
                 Next::Row(row) => {
-                    self.add(&row);
+                    self.add(row);
                     if self.rows >= BATCH_ROWS {
                         return Ok(Step::Batch(self.batch()?));
                     }

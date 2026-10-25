@@ -49,24 +49,22 @@ fn compatible(a: T, b: T) -> T {
         )]
         (Str, _) | (_, Str) => Str,
         (Double, Long | Decimal(_, _)) | (Long | Decimal(_, _), Double) => Double,
-        (Decimal(p, s), Decimal(q, r)) => {
-            let int = (i16::from(p) - i16::from(s)).max(i16::from(q) - i16::from(r));
-            let scale = s.max(r);
-            Decimal(
-                u8::try_from(int + i16::from(scale))
-                    .unwrap_or(u8::MAX)
-                    .min(38),
-                scale,
-            )
-        }
-        (Long, Decimal(p, s)) | (Decimal(p, s), Long) => {
-            let int = (i16::from(p) - i16::from(s)).max(19);
-            Decimal(
-                u8::try_from(int + i16::from(s)).unwrap_or(u8::MAX).min(38),
-                s,
-            )
-        }
+        (Decimal(p, s), Decimal(q, r)) => merge_decimals(p, s, q, r),
+        // An integral type merges as the decimal that holds it (`Long` is
+        // `DECIMAL(20, 0)`).
+        (Long, Decimal(p, s)) | (Decimal(p, s), Long) => merge_decimals(20, 0, p, s),
         _ => Str,
+    }
+}
+
+/// The decimal that holds both `(p, s)` and `(q, r)`, or `Double` when it
+/// would need more than 38 digits (as Spark's `findTightestCommonType`).
+fn merge_decimals(p: u8, s: i8, q: u8, r: i8) -> T {
+    let scale = s.max(r);
+    let range = (i16::from(p) - i16::from(s)).max(i16::from(q) - i16::from(r));
+    match u8::try_from(range + i16::from(scale)) {
+        Ok(precision) if precision <= 38 => T::Decimal(precision, scale),
+        _ => T::Double,
     }
 }
 
@@ -119,6 +117,7 @@ fn big_decimal_shape(s: &str) -> Option<(i64, i64)> {
 struct Infer<'a> {
     prefers_decimal: bool,
     primitives_as_string: bool,
+    infer_timestamp: bool,
     dt: &'a Datetimes,
 }
 
@@ -127,13 +126,13 @@ impl Infer<'_> {
     fn scalar(&self, so_far: T, field: &str, v: &JVal) -> Result<T, KrishivError> {
         if self.primitives_as_string {
             return match v {
-                JVal::Nested => Err(nested(field)),
+                JVal::Nested(_) => Err(nested(field)),
                 _ => Ok(compatible(so_far, T::Str)),
             };
         }
         Ok(match v {
             JVal::Null => so_far,
-            JVal::Nested => return Err(nested(field)),
+            JVal::Nested(_) => return Err(nested(field)),
             JVal::Bool(_) => compatible(so_far, T::Boolean),
             JVal::Num(t, false) => {
                 if java_parse_long(t).is_some() {
@@ -152,7 +151,8 @@ impl Infer<'_> {
             JVal::Str(s) => {
                 if s.is_empty() {
                     compatible(so_far, T::Str)
-                } else if matches!(self.dt.parse_timestamp(s), Ok(Some(_))) {
+                } else if self.infer_timestamp && matches!(self.dt.parse_timestamp(s), Ok(Some(_)))
+                {
                     compatible(so_far, T::Timestamp)
                 } else {
                     compatible(so_far, T::Str)
@@ -352,6 +352,7 @@ pub(crate) fn infer<'a>(
         let inf = Infer {
             prefers_decimal: opts.prefers_decimal,
             primitives_as_string: opts.primitives_as_string,
+            infer_timestamp: opts.infer_timestamp,
             dt: &dt,
         };
         let ratio = sampling_ratio(o)?;

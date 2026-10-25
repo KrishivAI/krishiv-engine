@@ -41,7 +41,7 @@ fn token_type(v: &JVal) -> &'static str {
         JVal::Bool(_) => "BOOLEAN",
         JVal::Num(_, _) => "NUMBER",
         JVal::Str(_) => "STRING",
-        JVal::Nested => "OBJECT",
+        JVal::Nested(_) => "OBJECT",
     }
 }
 
@@ -65,18 +65,21 @@ impl JsonConverter<'_> {
         let Some(v) = v else {
             return Ok(Val::Null);
         };
+        if let (Kind::Str, JVal::Nested(raw)) = (kind, v) {
+            return Ok(Val::Text(raw.clone()));
+        }
         if self.primitives_as_string {
             return match v {
                 JVal::Null => Ok(Val::Null),
                 JVal::Bool(b) => Ok(Val::Text(b.to_string())),
                 JVal::Num(t, _) => Ok(Val::Text(t.clone())),
                 JVal::Str(s) => Ok(Val::Text(s.clone())),
-                JVal::Nested => Err(Self::nested(name)),
+                JVal::Nested(_) => Err(Self::nested(name)),
             };
         }
         let bad = || Conv::Malformed;
         Ok(match (kind, v) {
-            (_, JVal::Nested) => return Err(Self::nested(name)),
+            (_, JVal::Nested(_)) => return Err(Self::nested(name)),
             (_, JVal::Null) | (Kind::Null, _) => Val::Null,
             (Kind::Str, JVal::Str(s)) => Val::Text(s.clone()),
             (Kind::Str, JVal::Bool(b)) => Val::Text(b.to_string()),
@@ -170,7 +173,7 @@ fn scalar_text(v: &JVal) -> String {
         JVal::Bool(b) => b.to_string(),
         JVal::Num(t, _) => t.clone(),
         JVal::Str(s) => s.clone(),
-        JVal::Nested => "{...}".to_owned(),
+        JVal::Nested(raw) => raw.clone(),
     }
 }
 

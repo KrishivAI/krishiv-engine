@@ -19,7 +19,6 @@ pub(crate) struct TextEncoder {
     out: Vec<u8>,
     /// Bytes taken.
     taken: u64,
-    line: Vec<u8>,
 }
 
 impl TextEncoder {
@@ -47,15 +46,7 @@ impl TextEncoder {
             o: opts,
             out: Vec::new(),
             taken: 0,
-            line: Vec::new(),
         })
-    }
-
-    fn eol(&self) -> Vec<u8> {
-        match &self.o.line_sep {
-            LineSep::Default => b"\n".to_vec(),
-            LineSep::Custom(s) => s.clone(),
-        }
     }
 }
 
@@ -65,15 +56,15 @@ impl Encoder for TextEncoder {
             return Err(FormatError::Other(internal("a text batch without columns")));
         };
         for i in 0..batch.num_rows() {
-            let Some(v) = str_value(a.as_ref(), i) else {
-                return Err(FormatError::WriteFailed(
-                    "a NULL value cannot be written to a text file".to_owned(),
-                ));
+            // A NULL is an empty line, as Spark's text writer writes it.
+            if let Some(v) = str_value(a.as_ref(), i) {
+                self.o.charset.encode(v, &mut self.out);
+            }
+            let eol = match &self.o.line_sep {
+                LineSep::Default => b"\n".as_slice(),
+                LineSep::Custom(s) => s.as_slice(),
             };
-            self.line.clear();
-            self.o.charset.encode(v, &mut self.line);
-            self.line.extend_from_slice(&self.eol());
-            self.out.extend_from_slice(&self.line);
+            self.out.extend_from_slice(eol);
         }
         Ok(())
     }
@@ -96,7 +87,7 @@ impl Encoder for TextEncoder {
     }
 
     fn buffered_bytes(&self) -> usize {
-        self.out.capacity() + self.line.capacity()
+        self.out.capacity()
     }
 
     fn written_bytes(&self) -> u64 {

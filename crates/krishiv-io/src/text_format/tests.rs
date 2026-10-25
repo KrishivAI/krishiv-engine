@@ -174,14 +174,14 @@ fn encode(batch: &RecordBatch, o: &FormatOptions) -> Result<Vec<u8>, KrishivErro
 fn lines_read_verbatim() {
     let o = options(&serde_json::json!({}));
     let req = ScanRequest::all(value_schema());
-    // Every line is a row, empty lines included; no BOM stripping, as in
-    // Hadoop: the BOM stays in the first value.
+    // Every line is a row, empty lines included; a UTF-8 BOM at the start
+    // of the file is dropped, as Hadoop's line reader drops it.
     let bytes = "\u{FEFF}first\n\nsecondµ\nlast".as_bytes();
     let got = read(bytes, &o, &req).expect("read");
     assert_eq!(
         rows_of(&got),
         [
-            Some("\u{FEFF}first".to_owned()),
+            Some("first".to_owned()),
             Some(String::new()),
             Some("secondµ".to_owned()),
             Some("last".to_owned()),
@@ -319,9 +319,10 @@ fn write_checks_and_nulls() {
     ]));
     let e = TextFormat.check_write(&two, &o).expect_err("two columns");
     assert!(matches!(
-        e,
-        crate::error::FormatError::Other(_)
-            if format!("{e:?}").contains("single column")
+        &e,
+        crate::error::FormatError::Other(e)
+            if e.error_class() == ErrorClass::LegacyErrorTemp1290
+                && format!("{e:?}").contains("single column")
     ));
     let int = Arc::new(Schema::new(vec![Field::new(
         "value",
@@ -330,8 +331,7 @@ fn write_checks_and_nulls() {
     )]));
     let e = TextFormat.check_write(&int, &o).expect_err("int column");
     assert!(matches!(&e, crate::error::FormatError::Other(e) if e.error_class() == Unsupported));
-    // NULL is a write failure (`TASK_WRITE_FAILED`, the engine's
-    // write-failure class; Spark fails the task with a null pointer).
+    // A NULL writes an empty line, as Spark's text writer does.
     let batch = RecordBatch::try_new(
         value_schema(),
         vec![Arc::new(arrow_array::StringViewArray::from(vec![
@@ -340,8 +340,7 @@ fn write_checks_and_nulls() {
         ]))],
     )
     .expect("batch");
-    let e = encode(&batch, &o).expect_err("null");
-    assert_eq!(e.error_class(), ErrorClass::TaskWriteFailed);
+    assert_eq!(encode(&batch, &o).expect("null"), b"a\n\n");
     // Non-UTF8View string forms write too.
     for dt in [DataType::Utf8, DataType::LargeUtf8] {
         let schema = Arc::new(Schema::new(vec![Field::new("value", dt, true)]));
