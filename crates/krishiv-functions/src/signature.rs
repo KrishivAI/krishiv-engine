@@ -245,6 +245,15 @@ impl<'a> CallTypes<'a> {
         }
     }
 
+    /// Whether argument `i` is a plain literal, whether or not it folds to
+    /// a [`Constant`] (a timestamp or binary literal has no constant, but
+    /// Spark still folds it): what `schema_of_csv` needs to tell an
+    /// unfoldable literal from a non-foldable expression.
+    #[must_use]
+    pub fn is_plain_literal(&self, i: usize) -> bool {
+        self.literals.get(i).is_some_and(|plain| *plain)
+    }
+
     /// Whether any argument may be null.
     #[must_use]
     pub fn any_nullable(&self) -> bool {

@@ -1222,3 +1222,75 @@ fn classes_of(e: &KrishivError) -> Vec<krishiv_common::error::ErrorClass> {
         .map(KrishivError::error_class)
         .collect()
 }
+
+/// `schema_of_csv`'s DDL over literals, through the same inference file
+/// reads use (cases from Spark 4.2's `csv-functions.sql` golden and the
+/// function matrix, plus the `|` delimiter the golden passes as options).
+#[test]
+fn schema_of_csv_literals() {
+    use super::infer::{ddl_of_string, ddl_type};
+    let plain = options(&serde_json::json!({}));
+    for (csv, want) in [
+        ("1", "STRUCT<_c0: INT>"),
+        ("1,abc", "STRUCT<_c0: INT, _c1: STRING>"),
+        ("abc", "STRUCT<_c0: STRING>"),
+        ("", "STRUCT<_c0: STRING>"),
+        (" \t a\u{3000}\n ", "STRUCT<_c0: STRING>"),
+        ("14:30:45", "STRUCT<_c0: TIMESTAMP>"),
+        ("14:30:45.123456", "STRUCT<_c0: TIMESTAMP>"),
+        ("true", "STRUCT<_c0: BOOLEAN>"),
+        ("2024-02-29", "STRUCT<_c0: DATE>"),
+        ("1.5", "STRUCT<_c0: DOUBLE>"),
+        ("123456789012", "STRUCT<_c0: BIGINT>"),
+        ("45678901234567890123", "STRUCT<_c0: DECIMAL(20,0)>"),
+        ("\"a\nb\",c", "STRUCT<_c0: STRING, _c1: STRING>"),
+    ] {
+        assert_eq!(ddl_of_string(csv, &plain).unwrap(), want, "{csv:?}");
+    }
+    // Options are the CSV reader's: a pipe delimiter (the golden's
+    // `map('delimiter', '|')`, which SQL cannot pass yet).
+    let pipes = options(&serde_json::json!({"delimiter": "|"}));
+    assert_eq!(
+        ddl_of_string("1|abc", &pipes).unwrap(),
+        "STRUCT<_c0: INT, _c1: STRING>"
+    );
+    // A bad option value is rejected, not ignored.
+    let bad_sep = options(&serde_json::json!({"sep": ""}));
+    let err = ddl_of_string("1", &bad_sep).unwrap_err();
+    match &err {
+        crate::FormatError::Other(e) => assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivInvalidFormatOptionValue,
+            "{err}"
+        ),
+        other => panic!("{other}"),
+    }
+    // A record past `maxColumns` is an internal error, as Spark's crash is.
+    let huge = "a,".repeat(20_481);
+    let err = ddl_of_string(&huge, &plain).unwrap_err();
+    match &err {
+        crate::FormatError::Other(e) => assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::InternalError,
+            "{err}"
+        ),
+        other => panic!("{other}"),
+    }
+    // Every inferred column type has a DDL name.
+    for (t, want) in [
+        (DataType::Int32, "INT"),
+        (DataType::Int64, "BIGINT"),
+        (DataType::Decimal128(20, 0), "DECIMAL(20,0)"),
+        (DataType::Float64, "DOUBLE"),
+        (DataType::Date32, "DATE"),
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            "TIMESTAMP",
+        ),
+        (DataType::Boolean, "BOOLEAN"),
+        (DataType::Utf8View, "STRING"),
+    ] {
+        assert_eq!(ddl_type(&t).unwrap(), want);
+    }
+    assert!(ddl_type(&DataType::Int8).is_err());
+}

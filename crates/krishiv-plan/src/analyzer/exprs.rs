@@ -11,7 +11,7 @@ use krishiv_common::error::{
     DatatypeMismatchBinaryOpWrongType, DatatypeMismatchCastWithConfSuggestion,
     DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
-    DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchUnexpectedInputType,
+    DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchUnexpectedInputType, InternalError,
     InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, NestedAggregateFunction,
@@ -874,6 +874,8 @@ impl Resolver<'_> {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
+                // `schema_of_csv(lit)` resolves below to the DDL literal.
+                let is_schema_of_csv = entry.id.name() == "schema_of_csv";
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
                 let call = ResolvedFunction {
@@ -888,7 +890,7 @@ impl Resolver<'_> {
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 let shown = self.call_shown(&f.name, &expr, kids, &call_kids);
-                Bound {
+                let mut bound = Bound {
                     agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
                     } else {
@@ -897,7 +899,14 @@ impl Resolver<'_> {
                     shown,
                     expr,
                     ..keep(ty)
+                };
+                // `schema_of_csv(lit)` resolves during analysis (Spark's
+                // `SchemaOfCsv` evaluates its foldable child): the DDL
+                // literal, shown as the call.
+                if is_schema_of_csv {
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound)?;
                 }
+                bound
             }
             ExprNode::Cast { to, mode, .. } => {
                 let mode = match mode {
@@ -1093,6 +1102,44 @@ impl Resolver<'_> {
             );
         }
         kids
+    }
+
+    /// `schema_of_csv(csv)` as the DDL literal it resolves to (Spark's
+    /// `SchemaOfCsv` evaluates its foldable child during analysis, keeping
+    /// the call as the output name). The signature's result rule already
+    /// rejected a non-foldable, null or non-string child, so anything but
+    /// a folded string here (a custom registry's rule) keeps the call.
+    /// Out of line: it is on the path of every call.
+    #[inline(never)]
+    fn resolve_schema_of_csv(
+        &self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        bound: &mut Bound,
+    ) -> Result<(), AnalysisError> {
+        let csv = kids
+            .first()
+            .and_then(|k| self.fold(&k.expr, self.ctx.conf.ansi));
+        let Some(Constant::String(csv)) = csv else {
+            return Ok(());
+        };
+        let options = krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema());
+        let ddl = krishiv_io::csv::ddl_of_string(&csv, &options).map_err(|err| {
+            AnalysisError::new(
+                match err {
+                    krishiv_io::FormatError::Other(e) => e,
+                    other => InternalError {
+                        message: other.to_string(),
+                    }
+                    .into(),
+                },
+                e.origin,
+            )
+        })?;
+        bound.shown = Some(Arc::clone(&bound.expr));
+        bound.expr =
+            Arc::new(Expr::new(ExprNode::Literal(Literal::String(ddl))).with_origin(e.origin));
+        Ok(())
     }
 
     /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,

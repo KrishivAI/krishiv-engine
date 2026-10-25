@@ -643,5 +643,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::bitwise::specs());
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
+    out.extend(super::url::specs());
+    out.extend(super::csv::specs());
     out
 }

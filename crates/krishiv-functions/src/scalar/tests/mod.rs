@@ -565,6 +565,7 @@ mod bitwise;
 mod families;
 mod number;
 mod predicate;
+mod url;
 
 #[test]
 fn session_user_and_local_clock() {

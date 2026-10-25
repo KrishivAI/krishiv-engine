@@ -233,6 +233,69 @@ fn arrow_type(t: T) -> DataType {
     }
 }
 
+/// Spark's DDL name of an inferred column type, as `StructType.sql` spells
+/// it (`INT`, `DECIMAL(10,0)`, `STRING`, ...).
+pub(crate) fn ddl_type(t: &DataType) -> FormatResult<String> {
+    Ok(match t {
+        DataType::Int32 => "INT".to_owned(),
+        DataType::Int64 => "BIGINT".to_owned(),
+        DataType::Decimal128(p, s) => format!("DECIMAL({p},{s})"),
+        DataType::Float64 => "DOUBLE".to_owned(),
+        DataType::Date32 => "DATE".to_owned(),
+        DataType::Timestamp(_, _) => "TIMESTAMP".to_owned(),
+        DataType::Boolean => "BOOLEAN".to_owned(),
+        DataType::Utf8View => "STRING".to_owned(),
+        // `arrow_type` above only yields the types matched here.
+        other => {
+            return Err(FormatError::Other(internal(format!(
+                "cannot render {other} in a CSV DDL"
+            ))));
+        }
+    })
+}
+
+/// The DDL of a CSV literal (Spark's `schema_of_csv`): the literal parsed
+/// as one record under `options` (the CSV reader's options, as Spark adds
+/// `lineSep` `\uFFFF` so the literal is one record), its fields named
+/// `_c0`, `_c1`, ... (Spark ignores the header option here), typed by the
+/// same inference file reads use and rendered as Spark's `StructType.sql`
+/// (`STRUCT<_c0: INT, _c1: STRING>`).
+///
+/// # Errors
+/// What the CSV reader's options reject, and `INTERNAL_ERROR` for a
+/// record the tokenizer cannot tokenize at all.
+pub fn ddl_of_string(csv: &str, options: &FormatOptions) -> FormatResult<String> {
+    let opts = CsvOptions::new(options, false)?;
+    let dt = Datetimes::new(options, Purpose::Parse)?;
+    let date = DateTimePattern::new(
+        options.str("dateFormat").unwrap_or("yyyy-MM-dd"),
+        Purpose::Parse,
+    )?;
+    let inf = Infer {
+        o: &opts,
+        dt: &dt,
+        date,
+    };
+    let mut syntax = opts.syntax.clone();
+    // The lines are not split already (as for file lines): the whole
+    // literal is one record, newlines inside values included.
+    syntax.eol = Eol::EndOfText;
+    let tok = Tokenizer::new(syntax);
+    let mut tokens = Vec::new();
+    tok.record(csv, 0, &mut tokens).map_err(|e| {
+        FormatError::Other(internal(format!(
+            "the CSV literal cannot be tokenized ({e:?})"
+        )))
+    })?;
+    let mut types = vec![T::Null; tokens.len()];
+    inf.row(&mut types, &tokens);
+    let mut fields = Vec::with_capacity(types.len());
+    for (i, t) in types.iter().enumerate() {
+        fields.push(format!("_c{i}: {}", ddl_type(&arrow_type(*t))?));
+    }
+    Ok(format!("STRUCT<{}>", fields.join(", ")))
+}
+
 /// Reads `range` of `file` line by line, calling `f` with each line until
 /// it returns `false`.
 async fn for_each_line(
