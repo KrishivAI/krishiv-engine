@@ -216,6 +216,7 @@ fn star(s: &expression::UnresolvedStar) -> Result<Star> {
     match (&s.unparsed_target, s.plan_id) {
         (None, plan_id) => Ok(Star {
             qualifier: Vec::new(),
+            except: Vec::new(),
             plan_id: plan_id.map(PlanId),
         }),
         (Some(target), None) => {
@@ -228,6 +229,7 @@ fn star(s: &expression::UnresolvedStar) -> Result<Star> {
             };
             Ok(Star {
                 qualifier: parse_attribute_name(path)?,
+                except: Vec::new(),
                 plan_id: None,
             })
         }

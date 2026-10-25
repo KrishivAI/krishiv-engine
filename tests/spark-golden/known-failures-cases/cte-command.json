@@ -1,0 +1,22 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      4,
+      5,
+      7,
+      9,
+      10,
+      11
+    ],
+    "sql-commands": [
+      0,
+      6,
+      8,
+      12,
+      13
+    ]
+  },
+  "file": "cte-command",
+  "format_version": 1
+}

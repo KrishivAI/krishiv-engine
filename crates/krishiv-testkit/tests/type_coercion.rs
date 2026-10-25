@@ -4,16 +4,17 @@
 //! (names and types), or fails with Spark's analysis error class; a
 //! statement Spark fails only at run time must resolve. The statements
 //! that use what Krishiv does not have yet are listed, each with a reason,
-//! in `tests/fixtures/analysis/type-coercion-manifest.json`; the list must
-//! match the failures and their reasons exactly, so a fix shrinks it and a
-//! regression fails.
+//! in `tests/fixtures/analysis/type-coercion/`, one file per coercion
+//! input file; the list must match the failures and their reasons exactly,
+//! so a fix shrinks it and a regression fails.
 //! Rows need the engine (P2-T074): this checks analysis only.
 //!
-//! `KRISHIV_UPDATE_MANIFEST=1` rewrites the manifest from the failures.
+//! `KRISHIV_UPDATE_MANIFEST=1` rewrites only the per-file manifests whose
+//! content changed and deletes the files with no failures left.
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::SourceId;
@@ -24,11 +25,57 @@ use krishiv_plan::analyzer::{
 use krishiv_sql::{ParserOptions, parse_and_lower};
 use krishiv_testkit::golden::parse::{Expected, parse_results};
 use krishiv_testkit::golden::setup::FileSetup;
+use krishiv_testkit::manifest_dir::{read_json_dir, sync_json_dir};
 use krishiv_types::DataType;
 use serde_json::{Value, json};
 
 const DIR: &str = "spark-golden/v4.2.0";
-const MANIFEST: &str = "fixtures/analysis/type-coercion-manifest.json";
+/// One file per coercion input file (e.g. `typeCoercion/native/concat.json`)
+/// under `tests/fixtures/analysis/`.
+const MANIFEST_DIR: &str = "fixtures/analysis/type-coercion";
+
+/// Manifest file format version this test reads and writes.
+const FORMAT_VERSION: u64 = 1;
+
+/// The listed failures (`(file, query) -> reason`) across the per-file
+/// manifests. Each file holds `{"format_version", "file", "entries":
+/// [{query, reason}]}` at the path of its coercion input file.
+fn load_listed(dir: &Path) -> BTreeMap<(String, String), String> {
+    let mut listed = BTreeMap::new();
+    for (rel, text) in read_json_dir(dir).unwrap() {
+        let stem = rel
+            .to_str()
+            .unwrap()
+            .strip_suffix(".json")
+            .unwrap_or_default()
+            .replace('\\', "/");
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            file["format_version"].as_u64(),
+            Some(FORMAT_VERSION),
+            "{}: bad format_version",
+            rel.display()
+        );
+        let name = file["file"].as_str().unwrap().to_owned();
+        assert_eq!(
+            name,
+            stem,
+            "{}: file name does not match its coercion file",
+            rel.display()
+        );
+        for e in file["entries"].as_array().unwrap() {
+            let query = e["query"].as_str().unwrap().to_owned();
+            let reason = e["reason"].as_str().unwrap().to_owned();
+            assert!(
+                listed
+                    .insert((name.clone(), query.clone()), reason)
+                    .is_none(),
+                "{name}: {query} is listed twice"
+            );
+        }
+    }
+    listed
+}
 
 /// The view `CREATE TEMPORARY VIEW name AS SELECT v [AS c], ...` defines,
 /// for the literal forms the files use: an integer or a string.
@@ -163,26 +210,31 @@ fn type_coercion_goldens_analyze_as_spark_does() {
     let (failures, queries) = failures(&root);
     // Of 2,858 query statements, 2,642 resolve as Spark resolves them.
     assert_eq!((queries, queries - failures.len()), (2858, 2642));
-    let path = root.join(MANIFEST);
+    let dir = root.join(MANIFEST_DIR);
     if std::env::var_os("KRISHIV_UPDATE_MANIFEST").is_some() {
-        let entries: Vec<Value> = failures
-            .iter()
-            .map(|((file, query), reason)| json!({"file": file, "query": query, "reason": reason}))
-            .collect();
-        let doc = json!({"format_version": 1, "entries": entries});
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap() + "\n").unwrap();
+        let mut by_file: BTreeMap<&str, Vec<(&String, &String)>> = BTreeMap::new();
+        for ((file, query), reason) in &failures {
+            by_file.entry(file).or_default().push((query, reason));
+        }
+        let mut wanted: BTreeMap<PathBuf, String> = BTreeMap::new();
+        for (file, rows) in &by_file {
+            let entries: Vec<Value> = rows
+                .iter()
+                .map(|(query, reason)| json!({"query": query, "reason": reason}))
+                .collect();
+            let doc = json!({
+                "format_version": FORMAT_VERSION,
+                "file": file,
+                "entries": entries,
+            });
+            wanted.insert(
+                PathBuf::from(format!("{file}.json")),
+                serde_json::to_string_pretty(&doc).unwrap() + "\n",
+            );
+        }
+        sync_json_dir(&dir, &wanted).unwrap();
     }
-    let manifest: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    let listed: BTreeMap<(String, String), String> = manifest["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| {
-            let text = |k: &str| e[k].as_str().unwrap().to_owned();
-            ((text("file"), text("query")), text("reason"))
-        })
-        .collect();
+    let listed = load_listed(&dir);
     let new: Vec<_> = failures
         .iter()
         .filter(|(k, _)| !listed.contains_key(*k))
