@@ -47,10 +47,11 @@ use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DuplicateClauses, DuplicatedCteNames,
     IdentityColumnsDuplicatedSequenceGeneratorOption, IdentityColumnsIllegalStep,
     IncompatibleJoinTypes, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
-    InvalidSqlSyntaxEmptyInPredicate, InvalidSqlSyntaxInvalidWindowReference,
+    InvalidSetSyntax, InvalidSqlSyntaxEmptyInPredicate, InvalidSqlSyntaxInvalidWindowReference,
     InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxUnresolvedWindowReference,
-    InvalidStatementOrClause, KrishivError, LegacyErrorTemp0035, LegacyErrorTemp0051,
-    LegacyErrorTemp0064, UnsupportedFeatureLateralJoinUsing,
+    InvalidSqlSyntaxVariableTypeOrDefaultRequired, InvalidStatementOrClause, KrishivError,
+    LegacyErrorTemp0035, LegacyErrorTemp0051, LegacyErrorTemp0064,
+    UnsupportedFeatureLateralJoinUsing,
 };
 
 pub(crate) use self::types::data_type;
@@ -60,8 +61,9 @@ use crate::ast::{
     FrameBoundKind, FromClause, Function, GeneratedKind, GroupBy, GroupItem, GroupItemKind,
     GroupWith, GroupingSet, Join, JoinConstraint, Literal, NamedWindow, NumKind,
     PartitionFieldKind, Query, Relation, RelationExt, Select, SelectItem, SetExpr, SetExprKind,
-    SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind, TableElement,
-    TableFactor, TableFactorKind, TableOption, TemporalClause, WindowRef, WindowSpec, With,
+    SetVariableKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
+    TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause, WindowRef, WindowSpec,
+    With,
 };
 use crate::error::ParseError;
 use crate::lexer::tokenize;
@@ -81,9 +83,10 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
         Statement::Query(q) => query(q, sql, opts),
         Statement::Explain(e) => statement(&e.statement, sql, opts),
         // Assignments and resets carry raw strings; drops, namespaces and
-        // `USE` name one object: nothing Spark's builder checks. A created
-        // view's query, and a CTAS query, are checked as statements of
-        // their own; `TABLE ... LIKE` names two tables.
+        // `USE` name one object (a view, table, namespace or variable):
+        // nothing Spark's builder checks. A created view's query, and a
+        // CTAS query, are checked as statements of their own; `TABLE ...
+        // LIKE` names two tables.
         Statement::Set(_)
         | Statement::Reset(_)
         | Statement::DropView(_)
@@ -91,9 +94,44 @@ pub(crate) fn statement(s: &Statement, sql: &str, opts: ParserOptions) -> R {
         | Statement::CreateNamespace(_)
         | Statement::DropNamespace(_)
         | Statement::Use(_)
+        | Statement::DropVariable(_)
         | Statement::CreateTableLike(_) => Ok(()),
         Statement::CreateView(v) => query(&v.query, sql, opts),
         Statement::CreateTable(t) => Checker { sql, opts }.create_table(t),
+        Statement::DeclareVariable(v) => {
+            // Neither a type nor a default: Spark rejects the declaration
+            // after parsing, with `INVALID_SQL_SYNTAX` at the statement.
+            if v.data_type.is_none() && v.default.is_none() {
+                return Err(at(InvalidSqlSyntaxVariableTypeOrDefaultRequired {}, v.span));
+            }
+            if let Some(t) = &v.data_type {
+                data_type(t)?;
+            }
+            if let Some(e) = &v.default {
+                Checker { sql, opts }.expr(e)?;
+            }
+            Ok(())
+        }
+        Statement::SetVariable(v) => match &v.kind {
+            SetVariableKind::Single { assignments } => {
+                let checker = Checker { sql, opts };
+                assignments
+                    .iter()
+                    .try_for_each(|a| checker.expr(&a.value))?;
+                Ok(())
+            }
+            SetVariableKind::Row {
+                targets,
+                query: row,
+            } => {
+                // No targets: Spark rejects the assignment after parsing,
+                // with `INVALID_SET_SYNTAX` at the statement.
+                if targets.is_empty() {
+                    return Err(at(InvalidSetSyntax {}, v.span));
+                }
+                query(row, sql, opts)
+            }
+        },
     }
 }
 

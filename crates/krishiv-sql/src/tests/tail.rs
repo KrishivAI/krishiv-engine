@@ -1032,18 +1032,41 @@ fn nested_partition(depth: usize, innermost: &str) -> String {
 /// parses (the input is untrusted, nesting is capped only at `MAX_DEPTH`).
 #[test]
 fn nested_table_argument_partitions_parse_in_bounded_time() {
-    let started = std::time::Instant::now();
-    for depth in [10, 30, 100] {
-        let sql = nested_partition(depth, "(1)");
-        ok(&sql);
-        // The same shape that fails at the bottom fails as fast.
-        let bad = nested_partition(depth, "(1 +)");
-        err(&bad, &defaults());
-    }
+    use crate::parser::PARSERS;
+    let attempts_valid = |depth: usize| {
+        PARSERS.set(0);
+        ok(&nested_partition(depth, "(1)"));
+        PARSERS.get()
+    };
+    let attempts_invalid = |depth: usize| {
+        PARSERS.set(0);
+        err(&nested_partition(depth, "(1 +)"), &defaults());
+        PARSERS.get()
+    };
+    let valid10 = attempts_valid(10);
+    let valid30 = attempts_valid(30);
+    let valid100 = attempts_valid(100);
+    // Linear with depth: depth 100 does about 10x the work of depth 10,
+    // not 2^100.
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(10),
-        "nested TABLE argument partitions took {:?}",
-        started.elapsed()
+        valid30 <= valid10 * 4,
+        "valid depth 30 took {valid30} parsers, depth 10 took {valid10}"
+    );
+    assert!(
+        valid100 <= valid10 * 12,
+        "valid depth 100 took {valid100} parsers, depth 10 took {valid10}"
+    );
+    let invalid10 = attempts_invalid(10);
+    let invalid30 = attempts_invalid(30);
+    let invalid100 = attempts_invalid(100);
+    // Invalid inputs reparse for error recovery, so their own bound.
+    assert!(
+        invalid30 <= invalid10 * 4,
+        "invalid depth 30 took {invalid30} parsers, depth 10 took {invalid10}"
+    );
+    assert!(
+        invalid100 <= invalid10 * 12,
+        "invalid depth 100 took {invalid100} parsers, depth 10 took {invalid10}"
     );
     // The list forms keep their meaning.
     let table_arg = |arg: &ast::FunctionArg| match &arg.expr.kind {

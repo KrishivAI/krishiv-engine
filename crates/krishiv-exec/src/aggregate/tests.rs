@@ -2450,6 +2450,7 @@ async fn a_cancel_during_a_result_spill_releases_everything() {
         compute_threads: 1,
         io_threads: 1,
         blocking_threads: 1,
+        io_blocking_threads: 2,
     })
     .unwrap();
     let runner = QueryRunner::new(executor);

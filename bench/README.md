@@ -117,6 +117,21 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## Spill coverage of the memory gate (TPC-H SF10)
+The gate's 2 GiB run (each query in its own `MemoryMax=2816M`, `MemorySwapMax=0` scope, a fresh runner per query)
+spills only in hash joins (q04, q21). Hash aggregate and sort spill at 1 GiB on the same data: TPC-H `q18`
+(its per-order aggregation over `lineitem`) and `queries/spill-gate/sort_lineitem.sql` (a full sort of `lineitem`).
+Per query, with the dist runner and `$SF10` the `tpch-duckdb/sf10` directory:
+
+```text
+printf 'PROFILE <query.sql>\nDUMP <query.sql> <out-dir>\nQUIT\n' | systemd-run --user --scope -q \
+  -p MemoryMax=2816M -p MemorySwapMax=0 -- krishiv-bench-runner --data $SF10 --threads 12 --memory-limit 1g
+```
+
+`PROFILE` must show `spill_files > 0` on the `HashAggregate` (q18) or `Sort` (sort_lineitem) operator; the `DUMP`
+result must equal the same `DUMP` from a runner with `--memory-limit 32g` (no spill). The CI form of the same check,
+on generated TPC-H-shaped data, is `crates/krishiv-bench-runner/tests/spill_operators.rs`.
+
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
 RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner

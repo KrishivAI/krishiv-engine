@@ -838,7 +838,10 @@ impl Parser<'_> {
         // `(SELECT 'a', 'b')` is also a row of the typed literal `SELECT 'a'`
         // and a string; ANTLR prefers the row constructor, which is listed
         // before the subquery.
-        if self.kw_at(1, "SELECT") && self.single_string_at(2) {
+        if !self.opts.enforce_reserved_keywords
+            && self.kw_at(1, "SELECT")
+            && self.single_string_at(2)
+        {
             let at = self.checkpoint();
             self.bump();
             let item_start = self.start();

@@ -195,6 +195,13 @@ pub trait FunctionRegistry: Send + Sync {
     /// The function named by `name`'s parts (as written, case-insensitive;
     /// one part for a built-in, more for a qualified name) in `profile`.
     fn lookup(&self, name: &[String], profile: SparkProfile) -> FunctionLookup;
+    /// Whether Spark analyzes the built-in `name` (case-insensitive) as
+    /// deterministic: `None` when the registry does not know. Inline
+    /// tables use it for functions the engine does not implement (which
+    /// [`FunctionLookup::KnownUnsupported`] does not say).
+    fn spark_deterministic(&self, _name: &str) -> Option<bool> {
+        None
+    }
     /// Changes whenever a lookup could answer differently (temporary and
     /// session functions); part of the context fingerprint.
     fn version(&self) -> u64;

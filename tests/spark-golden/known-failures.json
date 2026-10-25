@@ -1,0 +1,765 @@
+{
+  "categories": {
+    "analyzer-bugs": {
+      "kind": "bug",
+      "owner": "analyzer follow-up of P2-T071a",
+      "summary": "analyzer resolution differs from Spark: an unused CTE definition over a missing relation is not analyzed, so TABLE_OR_VIEW_NOT_FOUND is not raised (cte#16, cte#24), GROUP BY a backquoted output alias `1`, LIMIT over a column reports UNRESOLVED_COLUMN instead of IS_UNFOLDABLE"
+    },
+    "cast-matrix": {
+      "kind": "unsupported",
+      "summary": "the full cast matrix: casts not in P2a, cast-named functions, region time zones",
+      "task": "P2-T021b"
+    },
+    "coercion": {
+      "kind": "unsupported",
+      "summary": "full Spark type coercion (implicit string casts with ANSI off)",
+      "task": "P2-T071d"
+    },
+    "datetime": {
+      "kind": "unsupported",
+      "summary": "datetime functions and literals beyond P2a (TIMESTAMP literals, date/timestamp arithmetic, patterns, unit-argument forms)",
+      "task": "P2-T025"
+    },
+    "depends-on-command": {
+      "kind": "unsupported",
+      "summary": "queries that read a table, view, function or variable an earlier command of the file creates (the command failed, so the query fails or reads the shared fixture of the same name)",
+      "task": "P2-T179"
+    },
+    "files": {
+      "kind": "unsupported",
+      "summary": "partitioned and glob reads of directories",
+      "task": "P2-T082b"
+    },
+    "fn-aggregate": {
+      "kind": "unsupported",
+      "summary": "aggregate and sketch functions beyond P2a, WITHIN GROUP",
+      "task": "P2-T032"
+    },
+    "fn-array": {
+      "kind": "unsupported",
+      "summary": "array and collection functions",
+      "task": "P2-T028"
+    },
+    "fn-json": {
+      "kind": "unsupported",
+      "summary": "JSON functions",
+      "task": "P2-T031"
+    },
+    "fn-map": {
+      "kind": "unsupported",
+      "summary": "map functions",
+      "task": "P2-T029"
+    },
+    "fn-misc": {
+      "kind": "unsupported",
+      "summary": "misc functions (typeof, uuid, rand, raise_error, vector, current_*)",
+      "task": "P2-T035"
+    },
+    "fn-regex": {
+      "kind": "unsupported",
+      "summary": "regular-expression functions and operators",
+      "task": "P2-T024"
+    },
+    "fn-string": {
+      "kind": "unsupported",
+      "summary": "string and math-tail functions not in P2a (hex, conv, bin, width_bucket, ...)",
+      "task": "P2-T023"
+    },
+    "fn-struct": {
+      "kind": "unsupported",
+      "summary": "struct functions",
+      "task": "P2-T030"
+    },
+    "fn-url-xml-csv": {
+      "kind": "unsupported",
+      "summary": "URL, XML, CSV and protobuf functions",
+      "task": "P2-T038"
+    },
+    "generators": {
+      "kind": "unsupported",
+      "summary": "generators: explode, LATERAL VIEW, multi-name aliases, stack, inline",
+      "task": "P2-T034"
+    },
+    "grouping-sets": {
+      "kind": "unsupported",
+      "summary": "ROLLUP, CUBE, GROUPING SETS, grouping()/grouping_id()",
+      "task": "P2-T053b"
+    },
+    "hof": {
+      "kind": "unsupported",
+      "summary": "lambda functions and higher-order functions",
+      "task": "P2-T036"
+    },
+    "legacy-configs": {
+      "kind": "bug",
+      "owner": "config map follow-up of P2-T004",
+      "summary": "legacy behaviour flags the session ignores instead of rejecting (ctePrecedencePolicy, consecutiveStringLiterals, allowStarWithSingleTableIdentifierInCount, allowParameterlessCount)"
+    },
+    "nested-interval-types": {
+      "kind": "unsupported",
+      "summary": "nested types, intervals, CHAR/VARCHAR, struct constructors, subscripts and field access",
+      "task": "P2-T001b"
+    },
+    "object-stores": {
+      "kind": "unsupported",
+      "summary": "remote paths (https and object stores)",
+      "task": "P2-T084"
+    },
+    "output-names": {
+      "kind": "bug",
+      "owner": "analyzer output-name follow-up of P2-T071a",
+      "summary": "auto-generated column names differ from Spark's toPrettySQL (Java float/decimal text, default arguments, TRIM/CEIL/LOG/mod spellings, +year dates)"
+    },
+    "parser-pipe-collate": {
+      "kind": "unsupported",
+      "summary": "pipe syntax |> and COLLATE / collations",
+      "task": "P2-T075b"
+    },
+    "parser-tail": {
+      "kind": "unsupported",
+      "summary": "TRANSFORM, IDENTIFIER(), TABLE(...) arguments, TABLESAMPLE, NEAREST BY, variant paths",
+      "task": "P2-T075c"
+    },
+    "query-features": {
+      "kind": "unsupported",
+      "summary": "query features the analyzer or planner lacks: inline VALUES, table-valued functions, NATURAL and USING joins, recursive CTEs, LATERAL, PIVOT/UNPIVOT, OFFSET, GROUP BY ALL, SELECT * EXCEPT, QUALIFY, named and qualified function names, LIKE ANY/ALL, aggregate FILTER, multi-SELECT FROM",
+      "task": "P2-T180"
+    },
+    "sql-commands": {
+      "kind": "unsupported",
+      "summary": "SQL commands (DDL, DML, SET/RESET, DESCRIBE/SHOW, session variables, EXECUTE IMMEDIATE, SQL functions): not parsed or executed by the session yet",
+      "task": "P2-T179"
+    },
+    "subqueries": {
+      "kind": "unsupported",
+      "summary": "general subquery unnesting (correlated shapes beyond TPC-H)",
+      "task": "P2-T115"
+    },
+    "test-udfs": {
+      "kind": "unsupported",
+      "summary": "the suite's Python/Scala test UDFs (udf/, udaf/, udtf/ folders)",
+      "task": "P2-T059"
+    },
+    "time-geo-types": {
+      "kind": "unsupported",
+      "summary": "Spark 4.x TIME type and literals; GEOMETRY/GEOGRAPHY types and ST functions",
+      "task": "P2-T181"
+    },
+    "variant-type": {
+      "kind": "unsupported",
+      "summary": "the VARIANT type",
+      "task": "P2-T001c"
+    },
+    "window": {
+      "kind": "unsupported",
+      "summary": "window functions and WINDOW clauses",
+      "task": "P2-T055"
+    }
+  },
+  "format_version": 1,
+  "frozen_at": "2026-10-22",
+  "rules": [
+    {
+      "category": "sql-commands",
+      "command": true
+    },
+    {
+      "category": "legacy-configs",
+      "file": "^cte-(legacy|nonlegacy)$"
+    },
+    {
+      "category": "legacy-configs",
+      "detail": "^rows differ",
+      "file": "literals$",
+      "query": "\\\"S\\\"\\\"par|'S''par"
+    },
+    {
+      "category": "legacy-configs",
+      "detail": "^no error|WRONG_NUM_ARGS",
+      "file": "^count$"
+    },
+    {
+      "category": "depends-on-command",
+      "depends": true
+    },
+    {
+      "category": "test-udfs",
+      "file": "^(udf|udaf|udtf)/"
+    },
+    {
+      "category": "test-udfs",
+      "detail": "Cannot resolve routine `(udf|udaf|vol|booleq|boolne)`"
+    },
+    {
+      "category": "sql-commands",
+      "query": "(?i)^\\s*explain\\s+(extended\\s+|formatted\\s+)?(desc|describe|show|create|insert|set)\\b"
+    },
+    {
+      "category": "depends-on-command",
+      "detail": "TABLE_OR_VIEW_NOT_FOUND.*`(tab_renamed)`"
+    },
+    {
+      "category": "time-geo-types",
+      "file": "^st-functions$"
+    },
+    {
+      "category": "parser-tail",
+      "file": "^transform$"
+    },
+    {
+      "category": "analyzer-bugs",
+      "detail": "AMBIGUOUS_REFERENCE",
+      "file": "^cte$"
+    },
+    {
+      "category": "analyzer-bugs",
+      "detail": "UNRESOLVED_COLUMN.*`1`",
+      "file": "^group-by-alias$"
+    },
+    {
+      "category": "analyzer-bugs",
+      "detail": "UNRESOLVED_COLUMN.*`key`",
+      "file": "^limit$"
+    },
+    {
+      "category": "datetime",
+      "detail": "WRONG_NUM_ARGS.*`(date_add|dateadd|datediff|date_diff)`|Cannot resolve routine `(timestampadd|timestampdiff|timediff)`"
+    },
+    {
+      "category": "datetime",
+      "detail": "INVALID_TYPED_LITERAL",
+      "file": "^postgreSQL/date$"
+    },
+    {
+      "category": "subqueries",
+      "detail": "list-query|UNRESOLVED_COLUMN.*`a`\\.`four`"
+    },
+    {
+      "category": "parser-pipe-collate",
+      "query": "(?i)\\|>|\\bcollat(e|ion)\\b|\\|\\s*(select|where|aggregate|extend|set|drop|as|join|union|order|limit|pivot)\\b"
+    },
+    {
+      "category": "parser-pipe-collate",
+      "file": "^(pipe-operators|collations)"
+    },
+    {
+      "category": "parser-tail",
+      "detail": "^parse failed",
+      "query": "(?i)\\b(transform|identifier|tablesample|nearest)\\b|\\btable\\s*\\(|:\\w"
+    },
+    {
+      "category": "fn-string",
+      "detail": "The feature the operator ilike"
+    },
+    {
+      "category": "fn-regex",
+      "detail": "The feature the operator rlike"
+    },
+    {
+      "category": "query-features",
+      "detail": "The feature (VALUES|table-valued functions|NATURAL JOIN|recursive CTEs|LATERAL subqueries|LATERAL joins|PIVOT and UNPIVOT|OFFSET|SELECT \\* EXCEPT|qualified function names|named function arguments|LIKE ANY|FROM with several SELECT|QUALIFY|aggregate FILTER|DISTINCT aggregates over different|JOIN \\.\\.\\. USING)"
+    },
+    {
+      "category": "query-features",
+      "detail": "UNRESOLVED_COLUMN.*`ALL`"
+    },
+    {
+      "category": "nested-interval-types",
+      "detail": "The feature (INTERVAL literals|interval data types|nested data types|row and struct constructors|subscripts|field access|char/varchar)"
+    },
+    {
+      "category": "nested-interval-types",
+      "detail": "INVALID_EXTRACT_BASE_FIELD_TYPE|interval literals in physical plans"
+    },
+    {
+      "category": "nested-interval-types",
+      "detail": "TABLE_OR_VIEW_NOT_FOUND.*`(arraydata|mapdata)`"
+    },
+    {
+      "category": "variant-type",
+      "detail": "The feature the variant data type"
+    },
+    {
+      "category": "time-geo-types",
+      "detail": "The feature (TIME literals|the time data type)"
+    },
+    {
+      "category": "datetime",
+      "detail": "The feature (TIMESTAMP|TIMESTAMP_NTZ|TIMESTAMP_LTZ) literals|The feature date and timestamp arithmetic"
+    },
+    {
+      "category": "cast-matrix",
+      "detail": "The feature (functions of timestamps in a session time zone|casts that read a session time zone|CAST from )"
+    },
+    {
+      "category": "coercion",
+      "detail": "The feature implicit string casts"
+    },
+    {
+      "category": "window",
+      "detail": "The feature (window functions|WINDOW clauses)"
+    },
+    {
+      "category": "grouping-sets",
+      "detail": "The feature ROLLUP"
+    },
+    {
+      "category": "subqueries",
+      "detail": "The feature correlated scalar subqueries"
+    },
+    {
+      "category": "files",
+      "detail": "The feature (glob patterns|reading the subdirectory)"
+    },
+    {
+      "category": "object-stores",
+      "detail": "The feature paths with the scheme"
+    },
+    {
+      "category": "generators",
+      "detail": "The feature (multi-name aliases|LATERAL VIEW)"
+    },
+    {
+      "category": "hof",
+      "detail": "The feature lambda functions"
+    },
+    {
+      "category": "fn-aggregate",
+      "detail": "The feature WITHIN GROUP"
+    },
+    {
+      "category": "fn-regex",
+      "detail": "(The feature function |Cannot resolve routine `)(?i)(regexp\\w*|rlike|split)\\b"
+    },
+    {
+      "category": "fn-string",
+      "family": [
+        "string",
+        "math"
+      ]
+    },
+    {
+      "category": "datetime",
+      "family": [
+        "datetime"
+      ]
+    },
+    {
+      "category": "cast-matrix",
+      "family": [
+        "conversion"
+      ]
+    },
+    {
+      "category": "fn-aggregate",
+      "family": [
+        "agg",
+        "sketch"
+      ]
+    },
+    {
+      "category": "fn-array",
+      "family": [
+        "array",
+        "collection"
+      ]
+    },
+    {
+      "category": "fn-map",
+      "family": [
+        "map"
+      ]
+    },
+    {
+      "category": "fn-struct",
+      "family": [
+        "struct"
+      ]
+    },
+    {
+      "category": "fn-json",
+      "family": [
+        "json"
+      ]
+    },
+    {
+      "category": "generators",
+      "family": [
+        "generator",
+        "table"
+      ]
+    },
+    {
+      "category": "fn-misc",
+      "family": [
+        "misc",
+        "vector",
+        "hash",
+        "conditional"
+      ]
+    },
+    {
+      "category": "hof",
+      "family": [
+        "lambda"
+      ]
+    },
+    {
+      "category": "fn-url-xml-csv",
+      "family": [
+        "url",
+        "xml",
+        "csv",
+        "protobuf"
+      ]
+    },
+    {
+      "category": "time-geo-types",
+      "family": [
+        "st"
+      ]
+    },
+    {
+      "category": "output-names",
+      "detail": "^schema "
+    },
+    {
+      "category": "analyzer-bugs",
+      "detail": "^no error",
+      "file": "^cte$"
+    }
+  ],
+  "spark_tag": "v4.2.0",
+  "cases": {
+    "alias-resolution-edge-cases": {"depends-on-command":[6,7],"fn-string":[2,3],"query-features":[4,5],"sql-commands":[0,1,8,9]},
+    "array": {"depends-on-command":[1,2,3,5,6,7,8,11],"fn-array":[9,10,12,13,14,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,53,54,55,56,57,59,60,63,64,65,66,67,68,69,70,71,74,76,77,78,79,80,83,85,86,87],"fn-string":[15,16,17,18,19,20,21],"nested-interval-types":[22,23,52,72,73,75,81,82,84],"query-features":[62],"sql-commands":[0,4]},
+    "binary": {"cast-matrix":[2],"fn-array":[3],"fn-url-xml-csv":[4,5,6,7]},
+    "binary_base64": {"cast-matrix":[2],"fn-array":[3],"fn-url-xml-csv":[4,5,6,7]},
+    "binary_basic": {"cast-matrix":[2],"fn-array":[3],"fn-url-xml-csv":[4,5,6,7]},
+    "binary_hex": {"cast-matrix":[2],"fn-array":[3],"fn-url-xml-csv":[4,5,6,7]},
+    "binary_hex_discrete": {"cast-matrix":[2],"fn-array":[3],"fn-url-xml-csv":[4,5,6,7]},
+    "bitwise": {"depends-on-command":[21,22,23,24,25,26],"nested-interval-types":[40,41,42]},
+    "cast": {"cast-matrix":[58,59,60,66,67,70,71,130,131],"fn-string":[28,124],"nested-interval-types":[39,40,41,43,44,72,73,74,75,76,77,78,79,80,81,82,84,85,86,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,126,127,132,133,134,135,143],"query-features":[83,87],"sql-commands":[37,38],"time-geo-types":[104,105,106,107,108,109,110,111,112,113,114,115,116,136,137,138,139,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163]},
+    "change-column": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,27]},
+    "charvarchar": {"depends-on-command":[50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80],"fn-string":[85,86],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,48,49,81,82,83,84]},
+    "collations-aliases": {"depends-on-command":[16,17,18,19,20,21,22,23,24,25,26,28,29],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,27,30,31]},
+    "collations-basic": {"depends-on-command":[8,9,10,11,12,13,14,18,34,35,59,60,61,62,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132],"parser-pipe-collate":[21,22,23,24,25,26,27,28,29,30,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56],"sql-commands":[0,1,2,3,4,5,6,7,15,16,17,19,20,31,32,33,36,57,58,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,133,134,135,136]},
+    "collations-padding-trim": {"depends-on-command":[16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,68]},
+    "collations-string-functions": {"depends-on-command":[21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,148,149,150]},
+    "column-resolution-aggregate": {"depends-on-command":[8,10]},
+    "column-resolution-sort": {"depends-on-command":[4]},
+    "columnresolution": {"depends-on-command":[7,8,9,10,11,12,14,15,16,17,18,20,21,22,24,25,26,27,31,32,34,35,37,42,43,44,45,46,47,48,49,50,51],"sql-commands":[0,1,2,3,4,5,6,13,19,23,28,29,30,36,39,40,41,52,53,54]},
+    "columnresolution-negative": {"depends-on-command":[8,9,10,11,12,14,15,16,17,18,21,22,23,25,30,35],"sql-commands":[0,1,2,3,4,5,7,13,20,24,26,27,28,29,31,32,33,34,36,37]},
+    "columnresolution-views": {"depends-on-command":[9,10,11,12,13,14,15],"sql-commands":[8,16]},
+    "conditional-functions": {"depends-on-command":[1,2,3,4,7,10],"sql-commands":[0,17]},
+    "count": {"depends-on-command":[1,2,4,8,9,10,11,12],"legacy-configs":[14,16,20]},
+    "csv-functions": {"depends-on-command":[13],"fn-url-xml-csv":[0,1,2,3,4,5,6,7,8,9,10,11,15,16,17,18,19,20,21,22,33,34,35,36,37,38],"time-geo-types":[23,24,25,26,27,28,29,30,31,32]},
+    "cte": {"analyzer-bugs":[24],"depends-on-command":[16,19,31,32,45,46,47,48],"fn-misc":[22],"query-features":[17],"sql-commands":[3,54],"subqueries":[27]},
+    "cte-command": {"depends-on-command":[1,4,5,7,9,10,11],"sql-commands":[0,6,8,12,13]},
+    "cte-legacy": {"legacy-configs":[3,4,5,6,7,8,12,13,14,15,17,18,19,21]},
+    "cte-nested": {"query-features":[3,4,5]},
+    "cte-nonlegacy": {"legacy-configs":[3,4,5,6,8,12,13,14,15,17,18]},
+    "cte-recursion": {"depends-on-command":[6,12,45,48,49,52,53,61,67],"query-features":[1,2,3,4,8,10,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,31,32,33,34,35,36,37,38,39,40,41,42,43,55,56,57,58,59,63,64,69,70,71,72,73,74,75,77,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100],"sql-commands":[44,46,47,50,51,54,65,66,68]},
+    "cte-with-multi-children-operators": {"depends-on-command":[5,12]},
+    "current_database_catalog": {"fn-misc":[0]},
+    "date": {"cast-matrix":[8,9],"datetime":[3,4,5,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,40,53,59,60,61,62,63,64,65,66,67,70,71,72,73,75,78,79,80,81,82,83,84,85,86,87,90,91,92,93,94,95,96,97,98,99],"depends-on-command":[68,69],"fn-json":[76],"fn-url-xml-csv":[77],"nested-interval-types":[74]},
+    "datetime-formatting": {"datetime":[31,32,33],"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30],"sql-commands":[0]},
+    "datetime-formatting-invalid": {"datetime":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36]},
+    "datetime-formatting-legacy": {"datetime":[31,32,33],"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30],"sql-commands":[0]},
+    "datetime-legacy": {"cast-matrix":[8,9,106,107,108],"datetime":[3,4,5,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,40,53,59,60,61,62,63,64,65,66,67,70,71,72,73,75,78,79,80,81,82,83,84,85,86,87,90,91,92,93,94,95,96,97,98,99,102,109,110,111,112,113,114,115,116,117,118,119,120,121,122,125,126,127,128,129,130,131,134,136,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,161,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,213,214,215,216,217,219,220,221,222,225,226,227,228,231,232,233,234,237,238,239,240],"depends-on-command":[68,69,163,165,166,211,212],"fn-json":[76,223],"fn-url-xml-csv":[77,224],"nested-interval-types":[74,218],"time-geo-types":[123,124,132,133,135,137]},
+    "datetime-parsing": {"datetime":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]},
+    "datetime-parsing-invalid": {"cast-matrix":[27],"datetime":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,19,20,21,22,23,24,25,26],"fn-url-xml-csv":[18]},
+    "datetime-parsing-legacy": {"datetime":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]},
+    "datetime-special": {"datetime":[1,2,3]},
+    "decimalArithmeticOperations": {"depends-on-command":[6,7,30,31],"sql-commands":[4,5,54]},
+    "describe": {"depends-on-command":[42,43,44,45,46,47],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67]},
+    "describe-part-after-analyze": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14]},
+    "describe-query": {"depends-on-command":[15],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,16,17,18]},
+    "describe-table-after-alter-table": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11]},
+    "double-quoted-identifiers": {"nested-interval-types":[20,24],"query-features":[16],"sql-commands":[10,11,12]},
+    "double-quoted-identifiers-enabled": {"nested-interval-types":[24],"query-features":[7,16],"sql-commands":[1,2,3,10,11,12,25,28,29]},
+    "except": {"depends-on-command":[10,11],"sql-commands":[9]},
+    "except-all": {"depends-on-command":[10]},
+    "execute-immediate": {"depends-on-command":[19,29,32,34,37,39,44],"sql-commands":[0,1,4,5,6,7,8,9,13,14,15,16,17,18,23,24,25,26,27,28,31,33,36,38,40,41,43,45,46,48,49,50,51,52,55,58,59,60,62,63,64,65,67,68,69,70,72,76,77,80,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117]},
+    "explain": {"depends-on-command":[6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,29],"query-features":[17],"sql-commands":[0,1,2,3,4,23,24,25,26,27,28,30]},
+    "explain-aqe": {"depends-on-command":[6,7,8,9,10,11,12,13,14,15,16,18,19,20,21,22,29],"query-features":[17],"sql-commands":[0,1,2,3,4,23,24,25,26,27,28,30]},
+    "explain-cbo": {"depends-on-command":[4],"sql-commands":[0,1,2,3,5,6]},
+    "extract": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,127],"nested-interval-types":[102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,128],"sql-commands":[0]},
+    "extract-value-nulltype-single-pass": {"nested-interval-types":[0]},
+    "extract-value-resolution-edge-cases": {"depends-on-command":[1,2],"nested-interval-types":[5,6,7],"query-features":[3],"sql-commands":[0,4]},
+    "generators": {"depends-on-command":[1,2,3,10,11,12,19,20,21,28,29,30,39,40,46,47],"fn-json":[51,52,53,54,55],"generators":[4,5,7,8,13,14,16,17,22,23,25,26,31,32,34,35,41,42,48,49,56,57,58,59,60],"nested-interval-types":[6,9,15,18,24,27,33,36,37,38,43,44,45,50]},
+    "generators-resolution-edge-cases": {"fn-array":[24,25,26,28],"generators":[0,1,2,3,4,5,10,11,12,13,27,29,32,33,34,35,44,45,46,47,48,49],"query-features":[6,7,8,9,14,15,16,17,18,19,20,21,22,23,36,37,38,39,40,41,42,43,50,51,52,53],"window":[30,31]},
+    "group-by": {"depends-on-command":[9,10,14,15,34,35,36,37,38,39,40,41,48,49,50,51,52,61,96,97,98,99,100,101],"fn-aggregate":[42,43,44,45,46,47],"query-features":[16,24,25,26,27,29,30,31,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,82,83,84,85,86,87,88,89,90,91,92,93,94,95],"sql-commands":[1,102]},
+    "group-by-alias": {"depends-on-command":[8,16,17],"query-features":[28,35]},
+    "group-by-all": {"depends-on-command":[1,2,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,23,24,25,26,28],"query-features":[27]},
+    "group-by-all-duckdb": {"depends-on-command":[1,2,3,4,5,6],"query-features":[7,8]},
+    "group-by-all-mosha": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10],"sql-commands":[0]},
+    "group-by-filter": {"depends-on-command":[5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,67,69,70,71,72,73,74,75,76,77,79],"query-features":[68]},
+    "group-by-ordinal": {"depends-on-command":[13]},
+    "grouping_set": {"depends-on-command":[5]},
+    "grouping_set_grand_total_disabled": {"query-features":[0,1]},
+    "having": {"depends-on-command":[3,19,21,22,28,29,30,31,32],"query-features":[6,7,8,9,24,25,33,34,35,36,41,44,45,46,47,49]},
+    "having-and-order-by-recursive-type-name-resolution": {"query-features":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44]},
+    "higher-order-functions": {"depends-on-command":[3,4,5,6,7,9,11,12,13,14,16,17,18,20,22,26,27,28,29,30,31],"hof":[1,2,23,24,34,35,36,38,39,40,42,43,44,46,47,48,50,51,52,54,55,56,58,59,60,62,63,64,66,67,68,70,71,72,74,75,76,78,79,80,82],"nested-interval-types":[8,10,15,19,21,37,41,45,49,53,57,61,65,69,73,77,81],"query-features":[32,33],"sql-commands":[0,25]},
+    "hll": {"depends-on-command":[8,9,10,11,12,13,14,15,16,17],"fn-aggregate":[31,32,33],"query-features":[18,19,20,21,22,23,24,25,26,27,28,29,30],"sql-commands":[0,1,2,3,4,5,6,7,34,35,36]},
+    "identifier-clause": {"depends-on-command":[1,2,3,4,5,6,7,15,16,17,18,22,23,24,40,52,80,85,86,87,88,90,91,92,93,102,103,117,118,119,122,123,124,134,138,140,142,145,177,180,183,215,216,220,221],"sql-commands":[8,9,10,11,12,13,14,19,20,21,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,41,42,43,44,45,46,47,48,49,50,51,53,54,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,81,82,89,95,96,97,98,99,100,101,104,105,106,108,109,110,112,113,133,136,137,139,141,143,144,146,147,148,149,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,179,181,182,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,217,218,219,222,223,224,225,226,228,229,232,236]},
+    "identifier-clause-legacy": {"depends-on-command":[1,2,3,4,5,6,7,15,16,17,18,22,23,24,40,52,80,85,86,87,88,90,91,92,93,102,103,117,118,119,122,177,183],"sql-commands":[8,9,10,11,12,13,14,19,20,21,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,41,42,43,44,45,46,47,48,49,50,51,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,81,82,89,95,96,97,98,99,100,101,104,105,106,107,108,109,110,111,112,113,146,147,149,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,168,169,170,171,172,173,174,175,178,181,184,185,186,187,188,189,190,191,192,193,195,196,197,202,208,209,211,212,213,214,217,218,219,222,223,226,228,229,232,236]},
+    "ilike": {"fn-string":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25]},
+    "ilike-all": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12]},
+    "ilike-any": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12]},
+    "inline-table": {"query-features":[10,14,18,22,23]},
+    "intersect-all": {"depends-on-command":[7,21,22],"sql-commands":[20]},
+    "interval": {"datetime":[0,4,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86],"depends-on-command":[160,161,162,163],"nested-interval-types":[2,3,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,36,37,39,40,42,43,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,87,88,89,90,91,92,93,94,96,97,98,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,121,122,123,124,125,126,127,128,129,130,131,148,150,151,152,153,154,155,156,157,158,164,165,166,167,168,169,170,171,172,173,174,175,176,177,179,189,190,191,192,202,203,204,205,206,209,210,211,212,215,216,217,218,219,220,221,222,223,224,225,226,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,256,257,258,259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,278,279,280,281,282,283,284,285],"query-features":[184,185,186]},
+    "join-empty-relation": {"depends-on-command":[7,14,21]},
+    "join-lateral": {"depends-on-command":[4,5,6,7,8,9,10,11,12,13,14,15,16,19,20,21,22,23,25,26,27,28,29,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,105,106,107,108,110,111,112,113,114,115,116,118,119,120,121,122,125,126,127,128,129,130,131,133,134,135,136,138,139,140,141,142,143,144,145,146,147,148],"query-features":[24,30,104,109,124,149,150,151,152,153],"sql-commands":[0,1,2,3,117,123,154,155,156,157]},
+    "join-nearest-by": {"depends-on-command":[2,3,4,5,6,7,8,9,10,14,15,16,17,18,19,20,22,25],"sql-commands":[0,1,27,28]},
+    "join-resolution-edge-cases": {"depends-on-command":[2,3,4,5,6,7,8,9,10,11,12],"sql-commands":[0,1,13,14]},
+    "json-functions": {"depends-on-command":[20,46],"fn-json":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,21,22,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,73,74,75,76,77,78,79,80,94,95,96,97,98,99,100,101,102,103,104,105],"time-geo-types":[81,82,83,84,85,86,87,88,89,90,91,92,93]},
+    "keywords": {"query-features":[0,1]},
+    "keywords-enforced": {"query-features":[0,1]},
+    "kllquantiles": {"depends-on-command":[12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,68,69,70,71,72,73,74,75,76,77,78,82,83,84,85,92,93,94,95,96,97,98,99,100,101],"fn-aggregate":[36,37,67,79,80,81,86,87,88,89,90,91],"query-features":[33,34,35],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,102,103,104,105,106,107]},
+    "like-all": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12]},
+    "like-any": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12]},
+    "limit": {"nested-interval-types":[1,2],"parser-tail":[6],"query-features":[12]},
+    "linear-regression": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34]},
+    "listagg": {"depends-on-command":[2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,21,41,42,43,44,45,46,47],"query-features":[18,19,20,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,48,49,50]},
+    "listagg-collations": {"parser-pipe-collate":[0,1,3,4,5,6,7,8,10,12,14],"query-features":[2,9,11,13]},
+    "literals": {"datetime":[36,45,52],"fn-array":[48],"fn-map":[47],"fn-struct":[49],"legacy-configs":[59,60],"nested-interval-types":[46]},
+    "map": {"fn-array":[0],"fn-map":[2,3,4,5,6,7,8,9],"nested-interval-types":[1]},
+    "mask-functions": {"fn-string":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,29,30,31,32,33,34,35,36,37,38,39,40,41,42,55,56],"query-features":[15,16,17,18,19,20,21,22,23,24,25,26,27,28,43,44,45,46,47,48,49,50,51,52,53,54]},
+    "max-min-by-k": {"depends-on-command":[1,2,3,4,5,6,8,9,11,12,14,15,17,18,20,21,22,23,24,25]},
+    "metadata_column_resolution": {"depends-on-command":[5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53],"sql-commands":[0,1,2,3,4,54,55,56,57]},
+    "misc-functions": {"datetime":[4],"fn-misc":[0,1,2,3,5,6,7,9,11,16]},
+    "mode": {"depends-on-command":[1,2,3,14,15,16,17,18,19,20,21,22,23,24,26,27],"query-features":[4,5,6,7,8,9,10,11,12,13],"sql-commands":[25]},
+    "name-precedence-in-order-by-and-having-with-conflicting-attributes": {"depends-on-command":[3,4,6,7,10,12,13,15,16,24,25,27,28,31,33,34,36,37],"query-features":[18,19,39,40]},
+    "named-function-arguments": {"depends-on-command":[5,6,7,26],"fn-string":[33],"query-features":[0,1,2,3,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,27,28,29,30,31,32],"sql-commands":[4,25]},
+    "natural-join": {"depends-on-command":[4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30],"query-features":[31,32,33]},
+    "non-excludable-rule": {"query-features":[1,3,5]},
+    "nonansi/array": {"depends-on-command":[1,2,3,5,6,7,8,11],"fn-array":[9,10,12,13,14,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,53,54,55,56,57,59,60,63,64,65,66,67,68,69,70,71,74,76,77,78,79,80,83,85,86,87],"fn-string":[15,16,17,18,19,20,21],"nested-interval-types":[22,23,52,72,73,75,81,82,84],"query-features":[62],"sql-commands":[0,4]},
+    "nonansi/cast": {"cast-matrix":[58,59,60,66,67,70,71,130,131],"fn-string":[28,29,30,31,32,33,34,35,36,124,125],"nested-interval-types":[39,40,41,43,44,72,73,74,75,76,77,78,79,80,81,82,84,85,86,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,126,127,132,133,134,135,143],"query-features":[83,87],"sql-commands":[37,38],"time-geo-types":[104,105,106,107,108,109,110,111,112,113,114,115,116,136,137,138,139,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163]},
+    "nonansi/conditional-functions": {"depends-on-command":[1,2,3,4,7,10],"sql-commands":[0,17]},
+    "nonansi/date": {"cast-matrix":[8,9],"datetime":[3,4,5,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,40,53,59,60,61,62,63,64,65,66,67,70,71,72,73,75,78,79,80,81,82,83,84,85,86,87,90,91,92,93,94,95,96,97,98,99],"depends-on-command":[68,69],"fn-json":[76],"fn-url-xml-csv":[77],"nested-interval-types":[74]},
+    "nonansi/datetime-parsing-invalid": {"cast-matrix":[27],"datetime":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,19,20,21,22,23,24,25,26],"fn-url-xml-csv":[18]},
+    "nonansi/datetime-special": {"datetime":[1,2,3]},
+    "nonansi/decimalArithmeticOperations": {"depends-on-command":[6,7,30,31],"sql-commands":[4,5,54]},
+    "nonansi/double-quoted-identifiers": {"nested-interval-types":[20,24],"query-features":[16],"sql-commands":[10,11,12]},
+    "nonansi/higher-order-functions": {"depends-on-command":[3,4,5,6,7,9,11,12,13,14,16,17,18,20,22,26,27,28,29,30,31],"hof":[1,2,23,24,34,35,36,38,39,40,42,43,44,46,47,48,50,51,52,54,55,56,58,59,60,62,63,64,66,67,68,70,71,72,74,75,76,78,79,80,82],"nested-interval-types":[8,10,15,19,21,37,41,45,49,53,57,61,65,69,73,77,81],"query-features":[32,33],"sql-commands":[0,25]},
+    "nonansi/interval": {"datetime":[0,4,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86],"depends-on-command":[160,161,162,163],"nested-interval-types":[2,3,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,36,37,39,40,42,43,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,87,88,89,90,91,92,93,94,96,97,98,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,121,122,123,124,125,126,127,128,129,130,131,148,150,151,152,153,154,155,156,157,158,164,165,166,167,168,169,170,171,172,173,174,175,176,177,179,189,190,191,192,202,203,204,205,206,209,210,211,212,215,216,217,218,219,220,221,222,223,224,225,226,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,256,257,258,259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,278,279,280,281,282,283,284,285],"query-features":[184,185,186]},
+    "nonansi/keywords": {"query-features":[0,1]},
+    "nonansi/literals": {"datetime":[36,45,52],"fn-array":[48],"fn-map":[47],"fn-struct":[49],"legacy-configs":[59,60],"nested-interval-types":[46]},
+    "nonansi/map": {"fn-array":[0],"fn-map":[2,3,4,5,6,7,8,9],"nested-interval-types":[1]},
+    "nonansi/parse-schema-string": {"fn-json":[2,3],"fn-url-xml-csv":[0,1]},
+    "nonansi/string-functions": {"depends-on-command":[218],"fn-misc":[5],"fn-regex":[13,14,15,16,17,18,19,20,21,22,23,24,25,26],"fn-string":[0,1,6,7,8,9,10,11,12,27,28,29,30,31,32,33,34,35,36,60,61,62,98,101,103,106,109,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,130,133,136,139,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252],"query-features":[37,99,102,104,107,110,128,131,134,137,140]},
+    "nonansi/timestamp": {"cast-matrix":[4,5,6],"datetime":[0,7,8,9,10,11,12,13,14,15,16,17,18,19,20,23,24,25,26,27,28,29,32,34,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,59,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,111,112,113,114,115,117,118,119,120,123,124,125,126,129,130,131,132,135,136,137,138],"depends-on-command":[61,63,64,109,110],"fn-json":[121],"fn-url-xml-csv":[122],"nested-interval-types":[116],"time-geo-types":[21,22,30,31,33,35]},
+    "nonansi/try_aggregates": {"query-features":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]},
+    "nonansi/try_arithmetic": {"cast-matrix":[2,32,43,58],"coercion":[3,33,44,59],"datetime":[11,12,17,18],"nested-interval-types":[13,14,15,16,19,20,21,22,23,24,25,35,36,37,38,39,40,52,53,54,55,67,68,69,70,71,72],"query-features":[10,34,51,66]},
+    "nonansi/try_datetime_functions": {"datetime":[0,1,2,3,4,5]},
+    "nonansi/try_element_at": {"fn-array":[0,1,2,3,4,5,6,7]},
+    "null-handling": {"depends-on-command":[8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29],"sql-commands":[0,1,2,3,4,5,6,7,30]},
+    "operators": {"fn-string":[57,60,65,66,67,68,69,70,71,72,73,74,75,76],"output-names":[55]},
+    "order-by": {"depends-on-command":[4,7,11,15,16,17,18,19,20,21,27],"query-features":[5,6,12,32],"variant-type":[14]},
+    "order-by-alias": {"depends-on-command":[5,11,12]},
+    "order-by-all": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,14],"query-features":[17]},
+    "order-by-and-having-on-top-of-aggregate-with-join": {"depends-on-command":[2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145]},
+    "order-by-nulls-ordering": {"depends-on-command":[2,3,4,5,6,7,8,9,13,14,15],"sql-commands":[0,1,10,11,12,16]},
+    "order-by-ordinal": {"depends-on-command":[18,19,21,24]},
+    "outer-join": {"depends-on-command":[2]},
+    "parameterless-function-name-precedence": {"depends-on-command":[13],"fn-misc":[9,10],"sql-commands":[6,8]},
+    "parameterless-function-name-precedence-legacy": {"depends-on-command":[13],"fn-misc":[9,10],"sql-commands":[6,8]},
+    "parse-query-correctness": {"depends-on-command":[38,40,42,48,50,56,58,60,62,64],"sql-commands":[37,39,41,43,45,47,49,51,53,55]},
+    "parse-query-correctness-old-behavior": {"depends-on-command":[1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,38,40,42,48,50,56,58,60,62,64],"sql-commands":[37,39,41,43,45,47,49,51,53,55]},
+    "parse-schema-string": {"fn-json":[2,3],"fn-url-xml-csv":[0,1]},
+    "percentiles": {"depends-on-command":[2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,36,37,38,39,40,41,42,43,44],"query-features":[45,46,47,48,50,51],"sql-commands":[35]},
+    "pipe-operators": {"depends-on-command":[25,26,27,28,29,30,31,32,33,34,37,38,39,41,42,43,44,45,47,48,49,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,89,92,93,94,95,96,99,100,101,103,105,106,107,113,114,115,116,117,118,119,120,121,122,123,124,125,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,146,147,148,149,152,153,157,158,159,160,161,162,163,164,165,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,184,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,205,206,207,208,209,210,211,212,214,215,218,219,220,233,234,235,238,241,242,250,252,256,257,258,259,260,261,262,263,264,265,266,267,268,269,277,281,282,283,284,285,287,288,290,296,300,301,302,303,304,305,307,308,310,311,312,313],"parser-pipe-collate":[35,40,46,50,90,91,97,98,102,104,166,204,221,222,223,224,225,226,227,228,229,230,231,232,236,237,239,240,255,270,271,272,273,274,275,276,278,279,280,286,306,309],"sql-commands":[0,1,2,3,4,5,6,7,8,12,19,24,314,315,316]},
+    "pivot": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33],"sql-commands":[2]},
+    "postgreSQL/aggregates_part1": {"depends-on-command":[45,46,47,48],"fn-aggregate":[9,10,11,12,13,14,15,16,17,18,35,36,37,38,39,40,41,42,43],"query-features":[19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34],"subqueries":[54,55]},
+    "postgreSQL/aggregates_part2": {"depends-on-command":[2,3,4,5,6,7,8,12,13,14,15],"generators":[27]},
+    "postgreSQL/aggregates_part3": {"query-features":[1,2],"subqueries":[3]},
+    "postgreSQL/aggregates_part4": {"fn-aggregate":[0,1,2,3]},
+    "postgreSQL/boolean": {"cast-matrix":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39],"depends-on-command":[44,45,46,47,49,56,57,58,59,60,61,62,63,64,65,66,67,68,73,76,77,78,79,80,81,82,83,84,85,86,87],"sql-commands":[40,41,42,43,48,50,51,52,53,54,55,69,70,71,72,74,75,88,89,90,91]},
+    "postgreSQL/case": {"depends-on-command":[20,22,23,24,25,26,27,28,29,30,31],"fn-string":[17],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,33,34],"test-udfs":[32]},
+    "postgreSQL/create_view": {"depends-on-command":[11,13,83,84],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,12,14,15,16,17,18,19,20,21,22,23,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192]},
+    "postgreSQL/date": {"datetime":[48,49,50,51,52,53,54,55,56,57,58],"depends-on-command":[16,17,18,46,47],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,59]},
+    "postgreSQL/float4": {"cast-matrix":[6,7,8,9,10,11,12,13,14,15,16,17,30,31,32,33,34,35,36,37,38,39,40,41],"depends-on-command":[18,19,20,21,22,23,24,25,26,27,28,29],"sql-commands":[0,1,2,3,4,5,42]},
+    "postgreSQL/float8": {"cast-matrix":[6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,38,39,40,41,42,43,44,45,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,82,83,84,85,86,87,88,89,90,91,92,93],"depends-on-command":[22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,46,47,49,50,81],"sql-commands":[0,1,2,3,4,5,48,75,76,77,78,79,80,94]},
+    "postgreSQL/groupingsets": {"depends-on-command":[12,13,14,15,16,17,18,19,20,28,29,35,38,39,40,41,42,43,44,46,47],"grouping-sets":[27,34],"sql-commands":[1,2,3,4,5,6,7,51,52,53,54]},
+    "postgreSQL/insert": {"depends-on-command":[5,7],"sql-commands":[0,1,2,3,4,6,8]},
+    "postgreSQL/int2": {"cast-matrix":[29,30,31],"depends-on-command":[6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28],"query-features":[32,33],"sql-commands":[0,1,2,3,4,5,34]},
+    "postgreSQL/int4": {"cast-matrix":[39,40,41,42,46,47,48,49],"depends-on-command":[6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34],"query-features":[50,51],"sql-commands":[0,1,2,3,4,5,52]},
+    "postgreSQL/int8": {"cast-matrix":[62,63,64,69,71,72,77,78,79,80,81,82,83,84,85,86,87],"depends-on-command":[6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,65,66,67,68,70,73],"query-features":[74,75,76,88,89],"sql-commands":[0,1,2,3,4,5,90]},
+    "postgreSQL/interval": {"nested-interval-types":[0,1,2,3,4,5,6,7,8,9,10,11,14,17]},
+    "postgreSQL/join": {"depends-on-command":[28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,65,66,67,68,69,70,71,72,73,74,75,76,96,110,120,122,126,136,141,142,150,151,152,153,154,155,156,176,177,178,179,180,181,182,183,184,185,186,196],"sql-commands":[0,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,55,56,57,58,59,60,61,62,63,64,98,99,100,101,102,108,119,124,125,191,192,193,194,195,197,198]},
+    "postgreSQL/limit": {"depends-on-command":[9,10],"fn-string":[12]},
+    "postgreSQL/numeric": {"cast-matrix":[507,508,509,510,511,512],"depends-on-command":[460,463,466,469,472,475,478,481,484,487,490,493,496,497,505,521,533,538,539,540,541,542,558],"fn-string":[523,524,525,526,527,528,529,530,534,535,536],"query-features":[576,577,578,593,594],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,256,257,258,259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,278,279,280,281,282,283,284,285,286,287,288,289,290,291,292,293,294,295,296,297,298,299,300,301,302,303,304,305,306,307,308,309,310,311,312,313,314,315,316,317,318,319,320,321,322,323,324,325,326,327,328,329,330,331,332,333,334,335,336,337,338,339,340,341,342,343,344,345,346,347,348,349,350,351,352,353,354,355,356,357,358,359,360,361,362,363,364,365,366,367,368,369,370,371,372,373,374,375,376,377,378,379,380,381,382,383,384,385,386,387,388,389,390,391,392,393,394,395,396,397,398,399,400,401,402,403,404,405,406,407,408,409,410,411,412,413,414,415,416,417,418,419,420,421,422,423,424,425,426,427,428,429,430,431,432,433,434,435,436,437,438,439,440,441,442,443,444,445,446,447,448,449,450,451,452,453,454,455,456,457,458,459,461,462,464,465,467,468,470,471,473,474,476,477,479,480,482,483,485,486,488,489,491,492,494,495,498,499,500,501,502,503,504,506,513,514,515,516,517,518,519,520,522,531,532,537,552,553,554,555,556,557,595,596,597,598,599,600,601,602,603,604,605]},
+    "postgreSQL/select": {"sql-commands":[12,36]},
+    "postgreSQL/select_having": {"depends-on-command":[11,12,13,14,15,16,17,18,19,20],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,21]},
+    "postgreSQL/select_implicit": {"depends-on-command":[11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,37]},
+    "postgreSQL/strings": {"cast-matrix":[2,3,4,5,6,7,70,86,87,88,89,90,91,92,93,94,95,96,97,98,99,119,120,121,122],"depends-on-command":[76,77],"fn-string":[14,15,16,17,18,19,79,80,85,100,111,112,113,114,115,116,117,118],"sql-commands":[71,72,73,74,75,123]},
+    "postgreSQL/text": {"cast-matrix":[0,1,7],"datetime":[11],"depends-on-command":[5],"fn-array":[17],"fn-string":[12,13,14,15,16,20,21,22,23,26,27,28,31,32,33,34,35,36,37,38,39,40],"query-features":[18],"sql-commands":[2,3,4,19,41]},
+    "postgreSQL/timestamp": {"datetime":[25,28],"depends-on-command":[8,9,10,17,18,19,20,21,22,23,24,26,27],"sql-commands":[0,1,2,3,4,5,6,7,11,12,13,14,15,16,29]},
+    "postgreSQL/union": {"cast-matrix":[13,15,17,68],"query-features":[53,54,55,56,57,58,59,60,61,62,63,64,67]},
+    "postgreSQL/window_part1": {"depends-on-command":[39],"sql-commands":[38,40]},
+    "postgreSQL/window_part2": {"depends-on-command":[17,18,19,20,21,22,23,24,25,26,27,28],"query-features":[9,10,11,12,13,14],"sql-commands":[0,1,15,16,29,30],"window":[2,3,4,5,6,7,8]},
+    "postgreSQL/window_part3": {"depends-on-command":[12,13,14,15,17,18,19,21,22,24],"sql-commands":[1,2,3,4,10,11,27,28,29],"window":[5,6,7,8]},
+    "postgreSQL/window_part4": {"query-features":[11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,38]},
+    "postgreSQL/with": {"depends-on-command":[5,7,12,23,24,25,26,32,34,38,39,40,43,44,45,46,47,59,60,61,68,69,70,71,72,73,81,86,87,88,89,92,93,97,99,100],"fn-string":[1],"query-features":[2,3,8,9,10,13,28,35,51,52,53,54,55,56,62,63,64,65,66,67,75,78,79],"sql-commands":[4,6,14,15,16,17,18,19,20,21,22,31,33,36,37,41,42,48,49,50,57,58,80,82,83,84,85,90,91,98,101,102,103,104,105,106,107,108,109,110]},
+    "pred-pushdown": {"depends-on-command":[3]},
+    "predicate-functions": {"datetime":[30,31,37,38,44,45,51,52,53,54,55,56,57,80,86],"fn-string":[81,87]},
+    "qualify": {"depends-on-command":[1,2,4,5,6,7,8]},
+    "query_regex_column": {"depends-on-command":[10,11,12,13,14,15,16,17,18,19,20,21,24,25,26,27,29,30]},
+    "random": {"fn-string":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,61,62,63,64,65,66,67,70,71],"query-features":[25,41,42,60,68,69,72,73]},
+    "regexp-functions": {"fn-regex":[7,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,32,42,43,44,45,46,47,62,63,64,65,66,67],"query-features":[31]},
+    "replacing-missing-expression-with-alias": {"query-features":[6,7,8,9,10,11,16,17,18,19]},
+    "runtime-replaceable-edge-cases": {"fn-url-xml-csv":[0]},
+    "scripting/randomly_generated_scripts": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124]},
+    "selectExcept": {"depends-on-command":[2,3,4,5,6,7,8,9,10,12,14,15,16,17,18,21,22,23,24,28,29,30,31,33,38,40,41],"query-features":[11,36],"sql-commands":[0,1,13,25]},
+    "session-variable-precedence": {"depends-on-command":[3,4,5,6],"sql-commands":[0,1,7,8,9]},
+    "show-create-table": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49]},
+    "show-tables": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,15,17,18,19,20,21,22,23,24,25,26]},
+    "show-tblproperties": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,11]},
+    "show-views": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]},
+    "show_columns": {"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24]},
+    "sql-compatibility-functions": {"cast-matrix":[8,9,10,11],"depends-on-command":[13],"query-features":[14],"sql-commands":[12]},
+    "sql-on-files": {"depends-on-command":[4,9,14,19],"files":[2,7,12,17],"object-stores":[22],"sql-commands":[0,1,5,6,10,11,15,16,20,21]},
+    "sql-path": {"depends-on-command":[38,42,47,49,64,66,81,82,87,103,104,108,113],"fn-misc":[0,2,4,6,9,11,14,18,21,23,26,27,125,131,137],"sql-commands":[1,3,5,7,8,10,12,13,15,16,17,19,20,22,24,25,28,29,30,31,32,33,34,35,36,37,39,40,41,43,44,45,46,48,50,51,53,54,55,56,57,58,59,60,61,62,63,65,67,69,70,71,72,73,74,75,76,77,78,79,80,83,84,85,86,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,105,106,107,109,110,111,112,114,115,116,117,118,119,120,121,122,124,126,129,130,133,134,135,138]},
+    "sql-session-variables": {"depends-on-command":[10,12,15,60,63,83,85,87,89,93,134,144,148,197,203,206,235,237,243,244,245,250,264],"sql-commands":[62,64,80,88,92,133,135,142,146,152,153,154,196,202,205,208,211,214,215,259]},
+    "sql-udf": {"depends-on-command":[1,2,4,5,7,9,11,13,17,19,21,23,25,29,30,31,35,39,41,43,44,54,56,66,68,70,72,74,76,78,79,80,82,83,84,86,87,88,90,91,92,94,95,96,98,99,100,102,103,104,106,107,108,111,112,114,115,117,119,120,121,123,124,126,127,129,130,132,133,134,136,137,140,142,144,146,148,150,152,154,156,158,160,162,164,166,168,170,172,174,176,178,180,182,205,206,207,209,211,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,256,257,258,259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,278,279,280,281,282,283,284,285,286,287,288,289,290,291,292,293,295,296,297,298,299,300,303,304,305,306,307,309,310,312,314,315,317,319,324,326,330,336,337,338,342,343,344,349,350,351,352,354,355,356,357,406,407,412,413,414,415,416,417,418,419,420,421,422,423,424,425,426,427,428],"sql-commands":[0,3,6,8,10,12,14,15,16,18,20,22,24,26,27,28,32,33,34,36,37,38,40,42,45,46,47,48,49,50,51,53,55,57,58,60,61,62,63,64,65,67,69,71,73,75,77,81,85,89,93,97,101,105,109,110,113,118,122,125,128,131,135,138,139,141,143,145,147,149,151,153,155,157,159,161,163,165,167,169,171,173,175,177,179,181,183,184,185,186,187,188,189,190,191,192,193,194,202,203,204,208,210,212,213,214,215,216,217,218,219,220,221,222,223,224,225,301,302,308,311,313,316,318,320,321,322,323,325,327,328,329,332,333,334,339,340,341,345,346,347,348,359,360,361,362,363,364,365,366,367,368,369,370,371,372,373,374,376,377,378,379,380,381,382,383,384,385,386,387,388,389,390,391,392,393,394,395,396,397,398,399,400,401,402,403,404,405,408,409,410,411,429,430,431,432,433,434,435,436,437,438,439,440,441,442,443,444,445,446,447,448,449,450,451,452,453,454,455,456,457,458,459,460,461,462,463,464,465,466,467,468,469,470,471,472,473,474,475,476,477,478,479,480,481,482,483,484,485,486,487,488,489,490,491,492,493,494,495,496,497,498,499,500,501,502,503,504,505,506,507,508,509,510,511,512,513,514,515,516,517,518,519,520,521,522,523,524,525,526,527,528,529,530,531,532,533,534,535,536,537,538,539,540,541,542,543,544,545,546,547,548,549,550,551,552,553,554,555,556,557,558,559,560,561,562,563,564,565,566,567,568,569]},
+    "sql-udf-name-precedence": {"depends-on-command":[2,4,6,8,10,14,16,18,20,23,25],"sql-commands":[1,3,5,7,9,11,13,15,17,21,22,24,28,29,30,31,32,33,34,35,36,37,38,39]},
+    "sql-udf-name-precedence-legacy": {"depends-on-command":[2,4,6,8,10,12,14,16,18,20,23,25],"sql-commands":[1,3,5,7,9,11,13,15,17,21,22,24,28,29,30,31,32,33,34,35,36,37,38,39]},
+    "st-functions": {"depends-on-command":[16,17,18,19,20,21,22,23,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,58,59,69,70,71,72,73,84,85,86,87,88,89,90,91,92,96,97,102,103,104,105],"sql-commands":[0,1,2,106],"time-geo-types":[3,4,5,6,7,8,9,10,11,12,13,14,15,24,25,26,27,28,29,30,31,32,33,34,53,54,55,56,57,60,61,62,63,64,65,66,67,68,74,75,76,77,78,79,80,81,82,83,93,94,95,98,99,100,101]},
+    "string-functions": {"depends-on-command":[218],"fn-misc":[5],"fn-regex":[13,14,15,16,17,18,19,20,21,22,23,24,25,26],"fn-string":[0,1,6,7,8,9,10,11,12,27,28,29,30,31,32,33,34,35,36,60,61,62,98,101,103,106,109,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,130,133,136,139,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252],"query-features":[37,99,102,104,107,110,128,131,134,137,140]},
+    "struct": {"depends-on-command":[3,4,5,6,7,8],"nested-interval-types":[1,2,9,11,13],"query-features":[10,12],"sql-commands":[0]},
+    "subexp-elimination": {"depends-on-command":[1,2,3,4,5,6,7,8]},
+    "subquery/exists-subquery/exists-aggregate": {"depends-on-command":[4,5,6,8,9,10,11,12,16,17]},
+    "subquery/exists-subquery/exists-count-bug": {"depends-on-command":[3,4,5,6,7,8,9,11,12,13,14,15,16]},
+    "subquery/exists-subquery/exists-cte": {"depends-on-command":[3]},
+    "subquery/exists-subquery/exists-having": {"depends-on-command":[3,4,5,6,7],"sql-commands":[0,2]},
+    "subquery/exists-subquery/exists-in-join-condition": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48]},
+    "subquery/exists-subquery/exists-joins-and-set-ops": {"depends-on-command":[9,10,11,17,18,19,20,21,22,23,24]},
+    "subquery/exists-subquery/exists-orderby-limit": {"depends-on-command":[5,6,8,9,10,11,16,18,20,21,22,25]},
+    "subquery/exists-subquery/exists-outside-filter": {"depends-on-command":[4,5,6,7,8,9,10,12,14]},
+    "subquery/exists-subquery/exists-within-and-or": {"depends-on-command":[3,4,5,6]},
+    "subquery/in-subquery/in-basic": {"depends-on-command":[4,5,6],"sql-commands":[2]},
+    "subquery/in-subquery/in-count-bug": {"depends-on-command":[3,4,5,6,7,8,9,10,11,13,14,15,16,17,18,19]},
+    "subquery/in-subquery/in-group-by": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/in-having": {"depends-on-command":[3,4,5,6,7,8,9,10,11],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/in-joins": {"depends-on-command":[6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/in-limit": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,36],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/in-multiple-columns": {"depends-on-command":[3,4,5,6,7],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/in-null-semantics": {"depends-on-command":[8,9,10,11,12,13,14,15,16,17,19,20,23,24,25,26,27,28],"sql-commands":[2,3,4,5,6,31,32,33]},
+    "subquery/in-subquery/in-nullability": {"depends-on-command":[4,6,7,8]},
+    "subquery/in-subquery/in-order-by": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/in-set-operations": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/in-subquery-in-join-condition": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44]},
+    "subquery/in-subquery/in-with-cte": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/nested-not-in": {"depends-on-command":[6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]},
+    "subquery/in-subquery/not-in-group-by": {"depends-on-command":[3,4,5,6,7],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/not-in-joins": {"depends-on-command":[3,4,5,6,7,8],"sql-commands":[0,1,2]},
+    "subquery/in-subquery/not-in-unit-tests-multi-column-literal": {"depends-on-command":[1,2,3]},
+    "subquery/in-subquery/simple-in": {"depends-on-command":[3,4,5,6,7,8,9],"sql-commands":[0,1,2]},
+    "subquery/negative-cases/invalid-correlation": {"depends-on-command":[4,5,6,7,9]},
+    "subquery/resolution-edge-cases": {"depends-on-command":[3,4,5,6,7,8,9],"sql-commands":[0,1,2,10,11,12]},
+    "subquery/scalar-subquery/nested-scalar-subquery-count-bug": {"depends-on-command":[5,6,7,8],"sql-commands":[0,1,2,11,12,13]},
+    "subquery/scalar-subquery/scalar-subquery-count-bug": {"depends-on-command":[3,4,5,6,7,8,11,13,15,18,19]},
+    "subquery/scalar-subquery/scalar-subquery-group-by": {"depends-on-command":[3,4,5,6,7,8,9,11,12,13,15,16,17,18,19,22]},
+    "subquery/scalar-subquery/scalar-subquery-predicate": {"depends-on-command":[3,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,58,59],"sql-commands":[4,5,6]},
+    "subquery/scalar-subquery/scalar-subquery-select": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,19,20,21,22,23,24,25,31,32,33,34,37,42,43,44,45,48],"sql-commands":[0,1,2],"subqueries":[40]},
+    "subquery/scalar-subquery/scalar-subquery-set-op": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58]},
+    "subquery/subquery-nested-data": {"depends-on-command":[6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26],"sql-commands":[0,1,2,3,4,5,28,29]},
+    "subquery/subquery-offset": {"depends-on-command":[6,7,8,9,10,11,12,13,16,17,18,19],"sql-commands":[0,1,2,3,4,5,20,21]},
+    "table-valued-functions": {"query-features":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72]},
+    "tablesample-negative": {"sql-commands":[0,1,2,5]},
+    "thetasketch": {"depends-on-command":[18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,80,81,82,83,84,85,86,87,88],"fn-aggregate":[101,102,103,104,105,106],"query-features":[67,68,69,70,71,72,73,74,75,76,77,78,79,89,90,91,92,93,94,95,96,97,98,99,100],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,107,108,109,110,111,112,113,114,115]},
+    "time": {"cast-matrix":[145,146,147],"datetime":[4,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,139,141,220,221,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,252,253,254,255,256,257,258,259,265,271,277,278,280,282],"depends-on-command":[5,142,143,144,222,223,224,225,226,227,228],"sql-commands":[0,2],"time-geo-types":[3,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,140,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,190,191,192,193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,229,230,231,232,233,234,235,260,261,262,263,264,266,267,268,269,270,272,273,274,275,276,279,281,283]},
+    "time-bucket": {"datetime":[13,27],"nested-interval-types":[1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,17,20,21,24,25,26,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64],"query-features":[18,19,22,23,65,66,67,69,70,71,72,73]},
+    "timestamp": {"cast-matrix":[4,5,6],"datetime":[0,7,8,9,10,11,12,13,14,15,16,17,18,19,20,23,24,25,26,27,28,29,32,34,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,59,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,111,112,113,114,115,117,118,119,120,123,124,125,126,129,130,131,132,135,136,137,138],"depends-on-command":[61,63,64,109,110],"fn-json":[121],"fn-url-xml-csv":[122],"nested-interval-types":[116],"time-geo-types":[21,22,30,31,33,35]},
+    "timestamp-ltz": {"datetime":[0,1,2,3,4,5,6,7,9,10,11,12,13,14,15,17,18,19,20,21],"time-geo-types":[8,16]},
+    "timestamp-ntz": {"datetime":[1,2,3,4,5,6,7,9,10,11,12,14,16,17,18,19,20,21,22,26,27,28],"depends-on-command":[32],"sql-commands":[29,30,31,33],"time-geo-types":[8,13,15]},
+    "timestampNTZ/datetime-special": {"datetime":[1,3]},
+    "timestampNTZ/datetime-special-ansi": {"datetime":[1,3]},
+    "timestampNTZ/timestamp": {"cast-matrix":[4,5,6],"datetime":[7,8,9,10,11,12,13,14,15,16,17,18,19,20,23,24,25,26,27,28,29,32,34,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,59,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,111,112,113,114,115,117,118,119,120,123,124,125,126,129,130,131,132,135,136,137,138],"depends-on-command":[61,63,64,109,110],"fn-json":[121],"fn-url-xml-csv":[122],"nested-interval-types":[116],"time-geo-types":[21,22,30,31,33,35]},
+    "timestampNTZ/timestamp-ansi": {"cast-matrix":[4,5,6],"datetime":[7,8,9,10,11,12,13,14,15,16,17,18,19,20,23,24,25,26,27,28,29,32,34,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,59,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,111,112,113,114,115,117,118,119,120,123,124,125,126,129,130,131,132,135,136,137,138],"depends-on-command":[61,63,64,109,110],"fn-json":[121],"fn-url-xml-csv":[122],"nested-interval-types":[116],"time-geo-types":[21,22,30,31,33,35]},
+    "timezone": {"depends-on-command":[13],"sql-commands":[0,3,4,5,6,7,8,9,10,11,12,14]},
+    "to_from_avro": {"depends-on-command":[3,4,5,6,7],"sql-commands":[0,9]},
+    "transform": {"depends-on-command":[3,4,5,6,7,8,10,13,14,15,16,17,18,19,20,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,39,41,43,49,50,51],"parser-tail":[9,38],"sql-commands":[0,11,12,37]},
+    "try-string-functions": {"fn-string":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34]},
+    "try_aggregates": {"query-features":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31]},
+    "try_arithmetic": {"cast-matrix":[2,32,43,58],"datetime":[11,12,17,18],"nested-interval-types":[13,14,15,16,19,20,21,22,23,24,25,35,36,37,38,39,40,52,53,54,55,67,68,69,70,71,72],"query-features":[10,34,51,66]},
+    "try_cast": {"cast-matrix":[22,23,24,27,28],"nested-interval-types":[20,21]},
+    "try_datetime_functions": {"datetime":[0,1,2,3,4,5]},
+    "try_element_at": {"fn-array":[0,1,2,3,4,5,6,7]},
+    "try_reflect": {"fn-misc":[0,1,2,3,4,5,6,7,8,9,10,11]},
+    "tuplesketch": {"depends-on-command":[20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,152,153,154,155,156,157,158,159,162,163,164,165,166,167,168,169,170,171,172,173,175,176,177,178,179,180,181,182,183,184,185,186,187,188,189,195,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,260,262,273,274,275,276,277,279,280,282,283,285,286,287,288,289,290],"fn-aggregate":[174,252,253,254,255,256,257,261,263,270,271,272,278,281,284],"query-features":[120,121,122,123,124,125,126,127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145,146,147,148,149,150,151,160,161,190,191,192,193,194,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,236,237,238,239,240,241,242,243,244,245,246,247,248,249,250,251,258,259,264,265,266,267,268,269],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,291,292,293,294,295,296,297,298,299,300]},
+    "type-coercion-edge-cases": {"depends-on-command":[1,2],"parser-tail":[3],"sql-commands":[0,4]},
+    "typeCoercion/native/arrayJoin": {"datetime":[9],"fn-array":[0,1,2,3,4,5,6,7,8,10]},
+    "typeCoercion/native/binaryComparison": {"depends-on-command":[193,194,195,196,197,198,199,200,201,202,203,204,205,206,207,208,209,210,211,212,213,214,215,216,217,218,219,220,221,222,223,224,225,226,227,228,229,230,231,232,233,234,235,236,237,238,239,240,241,242,243,244,245,246,253,254,255,256,257,258]},
+    "typeCoercion/native/booleanEquality": {"depends-on-command":[8,10,20,22,32,34,44,46,56,58,68,70,80,82,92,94]},
+    "typeCoercion/native/caseWhenCoercion": {"depends-on-command":[93,94,95,104,105,116,118,128,131,132,143]},
+    "typeCoercion/native/concat": {"depends-on-command":[12,13],"query-features":[0,1,2,4,5,6,8,9,10],"sql-commands":[11]},
+    "typeCoercion/native/dateTimeOperations": {"nested-interval-types":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39]},
+    "typeCoercion/native/decimalPrecision": {"depends-on-command":[33,34,35,36,37,38,39,40,81,82,83,84,85,86,87,88,121,122,123,124,125,126,127,128,169,170,171,172,173,174,175,176]},
+    "typeCoercion/native/elt": {"query-features":[0,1,3,5]},
+    "typeCoercion/native/ifCoercion": {"depends-on-command":[93,94,95,104,105,116,118,128,131,132,143]},
+    "typeCoercion/native/implicitTypeCasts": {"depends-on-command":[21,22,31,32,33,34,35,39,40,41,43,46]},
+    "typeCoercion/native/inConversion": {"depends-on-command":[93,94,95,104,105,116,118,128,131,132,143,237,238,239,248,249,260,262,272,275,276,287]},
+    "typeCoercion/native/mapZipWith": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18],"sql-commands":[0]},
+    "typeCoercion/native/mapconcat": {"depends-on-command":[1,2,3,4,5,6,7],"sql-commands":[0]},
+    "typeCoercion/native/promoteStrings": {"depends-on-command":[11,12,23,24,82,83,93,94,147,148,149,158,159,160,170,171,172,181,182,183,193,194,195,205,206,207,217,218,219,229,230,231,241,242,243,253,254,255,265,266,267,277,278,279,289,290,291,301,302,303,308,309,312,313,314,315]},
+    "typeCoercion/native/stringCastAndExpressions": {"depends-on-command":[8,9,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,28,29,30,31]},
+    "typeCoercion/native/widenSetOperationTypes": {"depends-on-command":[93,94,95,104,105,116,118,128,131,132,143]},
+    "typeCoercion/native/windowFrameCoercion": {"depends-on-command":[9,10,11,13,14,15,16,17,18,19,20,21,22,23,24]},
+    "udaf/udaf": {"depends-on-command":[2,3,5],"sql-commands":[1,4,6,7]},
+    "udaf/udaf-group-analytics": {"depends-on-command":[1,2,3,4,6,7,9,10,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38]},
+    "udaf/udaf-group-by": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,14,15,16,18,20,21,22,23,27,28,29,30,31,32,33],"test-udfs":[13,24,25]},
+    "udaf/udaf-group-by-ordinal": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,13,14,15,16,17,18,19,20,21,22,23,24,25,26,28],"test-udfs":[11,12]},
+    "udaf/udaf-grouping-set": {"depends-on-command":[1,2,3,4,5,6,7,8,11,12,13,14]},
+    "udf/postgreSQL/udf-aggregates_part1": {"depends-on-command":[44,45,46,47],"test-udfs":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,49,50,51,52,53,54,55]},
+    "udf/postgreSQL/udf-aggregates_part2": {"depends-on-command":[2,3,4,8,9,10,11],"test-udfs":[12,13,14,15,16,17,18,19,20,21,22,23,24]},
+    "udf/postgreSQL/udf-aggregates_part3": {"test-udfs":[0,1]},
+    "udf/postgreSQL/udf-aggregates_part4": {"test-udfs":[0,1,2,3]},
+    "udf/postgreSQL/udf-case": {"depends-on-command":[21,22,23,24,25,26,27,28,29,30],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,11,32,33],"test-udfs":[12,13,14,15,16,17,18,19,20,31]},
+    "udf/postgreSQL/udf-join": {"depends-on-command":[28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,65,66,67,68,69,70,71,72,73,74,75,76,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,105,106,107,114,117,120,124,126,127,130,131,132,133,137,140,144,145,146,147,148,149,150,151,152,153,154,155,158,159,160,161,164,165,167,168,169,170,171,172,173,174,175,176,177,178,179,180,181,182,183,184,185,186,187,188,194],"sql-commands":[0,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,55,56,57,58,59,60,61,62,63,64,98,99,100,101,102,108,109,110,111,112,113,123,128,129,189,190,191,192,193,195,196],"test-udfs":[138,139]},
+    "udf/postgreSQL/udf-select_having": {"depends-on-command":[11,12,13,14,15,16,17,18,19,20],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,21]},
+    "udf/postgreSQL/udf-select_implicit": {"depends-on-command":[11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36],"sql-commands":[0,1,2,3,4,5,6,7,8,9,10,37]},
+    "udf/udf-count": {"depends-on-command":[1,2,3,4]},
+    "udf/udf-cross-join": {"depends-on-command":[3,4,5,6,11,12]},
+    "udf/udf-except": {"depends-on-command":[2,3,4,5,6,7,8]},
+    "udf/udf-except-all": {"depends-on-command":[4,5,6,7,8,9,10,11,12,13,14,15,17,18,19,20,21,22]},
+    "udf/udf-group-analytics": {"depends-on-command":[1,2,3,4,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28]},
+    "udf/udf-group-by": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,15,16,17,19,21,22,23,24,31,32,33,34,35,36,37,38,43,44,45,46,47,48,49,50,51],"test-udfs":[14,25,26,27,28,29,39,40,41,42]},
+    "udf/udf-having": {"depends-on-command":[1,2,3],"test-udfs":[4]},
+    "udf/udf-inline-table": {"test-udfs":[0,1,2,3,4,5,6,7,8,9,10,12,15,16]},
+    "udf/udf-inner-join": {"depends-on-command":[6],"sql-commands":[4,5]},
+    "udf/udf-intersect-all": {"depends-on-command":[2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18]},
+    "udf/udf-join-empty-relation": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23]},
+    "udf/udf-natural-join": {"depends-on-command":[2,3,4,5]},
+    "udf/udf-outer-join": {"depends-on-command":[2,6]},
+    "udf/udf-pivot": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29],"sql-commands":[2]},
+    "udf/udf-special-values": {"test-udfs":[0,1,2,3,4,5]},
+    "udf/udf-udaf": {"depends-on-command":[2,3,5],"sql-commands":[1,4,6,7]},
+    "udf/udf-union": {"depends-on-command":[2,3,8],"test-udfs":[4,9,10]},
+    "udf/udf-window": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,17,18,19,20,21,22],"sql-commands":[0]},
+    "udtf/udtf": {"depends-on-command":[9,10,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,30,31,32,33,34,35,36,37,38,39,40,41,42,59,60,68],"test-udfs":[4,5,6,7,8,11,12,54,56,57,58,63,64,65,66,67,69,70]},
+    "union": {"depends-on-command":[13,14,15],"fn-array":[11],"fn-map":[10],"sql-commands":[2,12,22]},
+    "union-per-child-output-deduplication": {"depends-on-command":[4,5,6,7,8,9,10,11],"sql-commands":[0,2,3,12,13]},
+    "union-resolution-edge-cases": {"depends-on-command":[2,3,5,6,7,8,9],"sql-commands":[0,1,10,11]},
+    "unpivot": {"depends-on-command":[1,2,3,5,6,7]},
+    "url-functions": {"fn-url-xml-csv":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18]},
+    "using-join": {"depends-on-command":[4,5,6,7,8,10,18,19,20,21,22,24,25,26,27,28,29,30,31,32,34,35,36,37,39],"query-features":[40,41]},
+    "variant-field-extractions": {"depends-on-command":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,33,34,35,36,37,38,39],"sql-commands":[0]},
+    "variant/named-function-arguments": {"query-features":[0,1,2,3,4]},
+    "vector-agg": {"query-features":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]},
+    "vector-distance": {"fn-misc":[0,1,2,3,4,5,6,7,8,9,10,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41],"nested-interval-types":[11,12]},
+    "vector-norm": {"fn-misc":[0,1,2,3,4,5,6,7,8,9,10,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45],"nested-interval-types":[11,12,13,14]},
+    "view-conf": {"depends-on-command":[4,8],"sql-commands":[2]},
+    "view-schema-binding": {"depends-on-command":[3,7,12,16,22,28],"sql-commands":[0,1,2,4,5,6,8,9,10,11,13,14,15,17,19,20,21,23,24,25,26,27,29,31]},
+    "view-schema-binding-config": {"depends-on-command":[18,23,31,37,44,50,56,59,62,68,72,76],"sql-commands":[0,2,3,4,5,6,7,8,9,12,13,15,16,17,19,20,21,22,24,28,29,30,32,33,34,35,36,38,39,41,42,43,45,46,47,48,49,51,52,53,54,55,57,58,60,61,63,64,65,66,67,69,70,71,73,74,75,77,80,82,83,84,86,87,88,94,95,97,98,101]},
+    "view-schema-compensation": {"depends-on-command":[4,9,14,17,20,26,30,34,44,47],"sql-commands":[1,2,3,5,6,7,8,10,11,12,13,15,16,18,19,21,22,23,24,25,27,28,29,31,32,33,35,36,37,38,39,40,41,42,43,45,46,49]},
+    "view-schema-evolution": {"depends-on-command":[4,9,14,20,24,30,35,40,46,50,54,64,70,76,83,86,96],"sql-commands":[0,1,2,3,5,6,7,8,10,11,12,13,15,16,17,18,19,21,22,23,25,26,27,28,29,31,32,33,34,36,37,38,39,41,42,43,44,45,47,48,49,51,52,53,55,56,57,58,59,60,61,62,63,65,66,67,68,69,71,72,73,74,75,77,78,79,80,81,82,84,85,87,88,89,90,91,92,93,94,95,97,99]},
+    "view-schema-type-evolution": {"depends-on-command":[4,9,14,20,24,28,36,42,51,54],"sql-commands":[0,1,2,3,5,6,7,8,10,11,12,13,15,16,17,18,19,21,22,23,25,26,27,29,30,31,32,33,34,35,37,38,39,40,41,43,44,45,46,47,48,49,50,52,53,55,57]},
+    "view-with-default-collation": {"depends-on-command":[2,5,11,12,18,19,25,26,29,30,31,32,37,38,39,40,41,42,46,47,49,56,57,58,61,64,70,71,77,78,84,85,88,89,91,96,97,98,99,100,101,105,106,108,115,116,117],"sql-commands":[1,4,7,8,9,10,14,15,16,17,21,22,23,24,28,33,34,35,36,44,45,48,51,52,53,54,55,66,67,68,69,73,74,75,76,80,81,82,83,92,93,94,95,104,107,110,111,112,114,119]},
+    "window": {"depends-on-command":[3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26,27,28,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,49,50,51,52,53,54,55,56,57,62,63,64,65,66,67,68,69,70],"sql-commands":[0]},
+    "window-with-aggregates": {"query-features":[2,4,5,6,7,8,10,11,12]},
+    "xml-functions": {"depends-on-command":[30],"fn-url-xml-csv":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,15,16,17,18,19,20,21,22,23,24,25,26,27,28,32,33,34,35,36,37,38,39,50,51,52,53,54,55],"time-geo-types":[40,41,42,43,44,45,46,47,48,49]}
+  }
+}
