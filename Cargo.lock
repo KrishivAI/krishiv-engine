@@ -1449,6 +1449,7 @@ dependencies = [
  "krishiv-sql",
  "libmimalloc-sys",
  "mimalloc",
+ "serde_json",
  "tempfile",
 ]
 
@@ -1686,6 +1687,7 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-session",
+ "krishiv-sql",
  "krishiv-types",
  "mimalloc",
  "pyo3",

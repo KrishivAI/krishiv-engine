@@ -28,6 +28,7 @@ use krishiv_exec::{
     ExecConfig, Executor, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler,
     TokioExecutor, WorkloadClass,
 };
+use krishiv_io::csv::CsvFormat;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
@@ -255,7 +256,7 @@ impl SessionBuilder {
                 memory,
                 spill: Mutex::new(None),
                 io,
-                formats: vec![Arc::new(ParquetFormat)],
+                formats: vec![Arc::new(ParquetFormat), Arc::new(CsvFormat)],
                 cwd,
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
@@ -779,8 +780,15 @@ impl Session {
             mode,
             path,
             options,
+            partition_by,
         } = target;
         let mode = SaveMode::parse(&mode)?;
+        if !partition_by.is_empty() {
+            return Err(KrishivUnsupportedFeature {
+                feature: "writing partitioned output".to_owned(),
+            }
+            .into());
+        }
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
         let Some(format) = self
             .state
@@ -910,6 +918,7 @@ pub(crate) struct WriteTarget {
     pub(crate) mode: String,
     pub(crate) path: OptionValue,
     pub(crate) options: BTreeMap<String, OptionValue>,
+    pub(crate) partition_by: Vec<String>,
 }
 
 /// A fresh job id naming a write's files (`part-00000-<id>-c000...`), in

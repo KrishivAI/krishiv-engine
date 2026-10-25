@@ -57,14 +57,6 @@
       "reason": "SELECT to_varchar(454, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "to_varchar#6f3d7f92b81b/ansi_on",
-      "reason": "SELECT to_varchar(encode('abc', 'utf-8'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
-      "id": "to_varchar#6f3d7f92b81b/ansi_off",
-      "reason": "SELECT to_varchar(encode('abc', 'utf-8'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function encode"
-    },
-    {
       "id": "to_varchar#7c5666d685bb/ansi_on",
       "reason": "SELECT to_varchar(454, TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
     },

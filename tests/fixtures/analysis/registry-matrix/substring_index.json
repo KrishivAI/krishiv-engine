@@ -1,0 +1,126 @@
+{
+  "entries": [
+    {
+      "id": "substring_index#13e87a431f92/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#13e87a431f92/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#20de8a49e085/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "substring_index#20de8a49e085/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "substring_index#3891f2bca04a/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', '.', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#3891f2bca04a/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', '.', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#431d84dbcf7a/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', '.', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#431d84dbcf7a/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', '.', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#52f4898847e9/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', '.', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#52f4898847e9/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', '.', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#7e6a015a8b27/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', '.', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#7e6a015a8b27/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', '.', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#8411007d4b99/ansi_on",
+      "reason": "SELECT substring_index(named_struct('a', 1, 'b', 'x'), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#8411007d4b99/ansi_off",
+      "reason": "SELECT substring_index(named_struct('a', 1, 'b', 'x'), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#8dcf07f370c5/ansi_on",
+      "reason": "SELECT substring_index(map('a', 1), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#8dcf07f370c5/ansi_off",
+      "reason": "SELECT substring_index(map('a', 1), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#9c979ef1f520/ansi_on",
+      "reason": "SELECT substring_index(array(1, 2), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#9c979ef1f520/ansi_off",
+      "reason": "SELECT substring_index(array(1, 2), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#a6fe796b7f5b/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#a6fe796b7f5b/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#ab14b0f764a7/ansi_on",
+      "reason": "SELECT substring_index(INTERVAL '1 02:03:04' DAY TO SECOND, '.', 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "substring_index#ab14b0f764a7/ansi_off",
+      "reason": "SELECT substring_index(INTERVAL '1 02:03:04' DAY TO SECOND, '.', 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "substring_index#c76bb482b4cd/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', '.', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#c76bb482b4cd/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', '.', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#cab5bdcf4852/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#cab5bdcf4852/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "substring_index#d5063ca1edaf/ansi_on",
+      "reason": "SELECT substring_index('www.apache.org', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "substring_index#d5063ca1edaf/ansi_off",
+      "reason": "SELECT substring_index('www.apache.org', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "substring_index#f72e5503d6a4/ansi_on",
+      "reason": "SELECT substring_index(INTERVAL '1-2' YEAR TO MONTH, '.', 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "substring_index#f72e5503d6a4/ansi_off",
+      "reason": "SELECT substring_index(INTERVAL '1-2' YEAR TO MONTH, '.', 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "substring_index"
+}

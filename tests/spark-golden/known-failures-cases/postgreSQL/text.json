@@ -11,15 +11,8 @@
     "depends-on-command": [
       5
     ],
-    "fn-array": [
-      17
-    ],
     "fn-string": [
-      12,
       13,
-      14,
-      15,
-      16,
       20,
       21,
       22,
