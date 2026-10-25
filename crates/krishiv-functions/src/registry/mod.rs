@@ -18,6 +18,7 @@ mod catalog;
 mod conditional;
 mod defs;
 mod hashing;
+mod map;
 mod math;
 mod number;
 mod predicate;

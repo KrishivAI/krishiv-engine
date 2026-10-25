@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "hex#210145b407c5/ansi_on",
-      "reason": "SELECT hex(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "hex#210145b407c5/ansi_off",
-      "reason": "SELECT hex(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "hex#2d96fe39d5ac/ansi_on",
       "reason": "SELECT hex(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

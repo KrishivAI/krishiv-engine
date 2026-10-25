@@ -45,14 +45,6 @@
       "reason": "SELECT try_add('abc', 2) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
     {
-      "id": "try_add#2ee9c3a939bc/ansi_on",
-      "reason": "SELECT try_add(map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#2ee9c3a939bc/ansi_off",
-      "reason": "SELECT try_add(map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_add#4525b63c25fb/ansi_on",
       "reason": "SELECT try_add(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 2) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -163,14 +155,6 @@
     {
       "id": "try_add#8b46cf1077d3/ansi_off",
       "reason": "SELECT try_add(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#97c240c3d841/ansi_on",
-      "reason": "SELECT try_add(1, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#97c240c3d841/ansi_off",
-      "reason": "SELECT try_add(1, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#9e05d939ec33/ansi_on",

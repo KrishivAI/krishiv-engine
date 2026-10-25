@@ -74,6 +74,10 @@ message ExprEnv {
   optional sint32 zone = 2;
   sint64 query_start_micros = 3;
   string user = 4;
+  // The session's map-key dedup policy: a worker without the feature keeps
+  // the first value on duplicate map keys.
+  // feature: map_key_dedup_policy
+  optional bool map_key_dedup_last_win = 5;
 }
 
 message ExplainNode {

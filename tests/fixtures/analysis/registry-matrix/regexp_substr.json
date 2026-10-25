@@ -63,22 +63,6 @@
     {
       "id": "regexp_substr#a3caad2c31af/ansi_off",
       "reason": "SELECT regexp_substr(named_struct('a', 1, 'b', 'x'), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_substr#cc9e77840c0c/ansi_on",
-      "reason": "SELECT regexp_substr(map('a', 1), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_substr#cc9e77840c0c/ansi_off",
-      "reason": "SELECT regexp_substr(map('a', 1), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_substr#cd1b17330070/ansi_on",
-      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_substr#cd1b17330070/ansi_off",
-      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

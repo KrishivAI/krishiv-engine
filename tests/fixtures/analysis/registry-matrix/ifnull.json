@@ -58,11 +58,11 @@
     },
     {
       "id": "ifnull#5c3f20483580/ansi_on",
-      "reason": "SELECT ifnull(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT ifnull(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "ifnull#5c3f20483580/ansi_off",
-      "reason": "SELECT ifnull(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT ifnull(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "ifnull#679800a7c1ba/ansi_on",
@@ -191,14 +191,6 @@
     {
       "id": "ifnull#ca112c5b4ed3/ansi_off",
       "reason": "SELECT ifnull(NULL, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "ifnull#d7660483e606/ansi_on",
-      "reason": "SELECT ifnull(NULL, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "ifnull#d7660483e606/ansi_off",
-      "reason": "SELECT ifnull(NULL, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
     {
       "id": "ifnull#d840be61918f/ansi_on",

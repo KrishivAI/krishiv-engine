@@ -9,14 +9,6 @@
       "reason": "SELECT least(10, named_struct('a', 1, 'b', 'x'), 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "least#266447befe5d/ansi_on",
-      "reason": "SELECT least(10, 9, 2, map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "least#266447befe5d/ansi_off",
-      "reason": "SELECT least(10, 9, 2, map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "least#2b19e87dc568/ansi_on",
       "reason": "SELECT least(INTERVAL '1-2' YEAR TO MONTH, 9, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -57,28 +49,12 @@
       "reason": "SELECT least(10, INTERVAL '1-2' YEAR TO MONTH, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "least#5d99bc1c942d/ansi_on",
-      "reason": "SELECT least(map('a', 1), 9, 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "least#5d99bc1c942d/ansi_off",
-      "reason": "SELECT least(map('a', 1), 9, 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "least#64ec2bf5cefb/ansi_on",
       "reason": "SELECT least(10, 9, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "least#64ec2bf5cefb/ansi_off",
       "reason": "SELECT least(10, 9, INTERVAL '1 02:03:04' DAY TO SECOND, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "least#697173b99bea/ansi_on",
-      "reason": "SELECT least(10, 9, 2, 4, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "least#697173b99bea/ansi_off",
-      "reason": "SELECT least(10, 9, 2, 4, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "least#6dbc49b61cae/ansi_on",
@@ -159,22 +135,6 @@
     {
       "id": "least#c9491beacab8/ansi_off",
       "reason": "SELECT least(10, INTERVAL '1 02:03:04' DAY TO SECOND, 2, 4, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "least#d3ab4c4be0fe/ansi_on",
-      "reason": "SELECT least(10, 9, map('a', 1), 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "least#d3ab4c4be0fe/ansi_off",
-      "reason": "SELECT least(10, 9, map('a', 1), 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "least#eb6e2c2c1be6/ansi_on",
-      "reason": "SELECT least(10, map('a', 1), 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "least#eb6e2c2c1be6/ansi_off",
-      "reason": "SELECT least(10, map('a', 1), 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "least#ee82fb8da979/ansi_on",

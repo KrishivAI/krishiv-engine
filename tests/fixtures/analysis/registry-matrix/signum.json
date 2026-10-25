@@ -47,14 +47,6 @@
     {
       "id": "signum#854c4eb019e8/ansi_off",
       "reason": "SELECT signum(CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
-    },
-    {
-      "id": "signum#d0d71adb94f9/ansi_on",
-      "reason": "SELECT signum(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "signum#d0d71adb94f9/ansi_off",
-      "reason": "SELECT signum(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

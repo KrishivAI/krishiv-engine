@@ -63,22 +63,6 @@
     {
       "id": "dateadd#c764c8e633d8/ansi_off",
       "reason": "SELECT dateadd('2016-07-30', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "dateadd#f04884c6faf2/ansi_on",
-      "reason": "SELECT dateadd(map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "dateadd#f04884c6faf2/ansi_off",
-      "reason": "SELECT dateadd(map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "dateadd#fd4dc537aa5b/ansi_on",
-      "reason": "SELECT dateadd('2016-07-30', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "dateadd#fd4dc537aa5b/ansi_off",
-      "reason": "SELECT dateadd('2016-07-30', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,
