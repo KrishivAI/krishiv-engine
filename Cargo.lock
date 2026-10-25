@@ -1687,6 +1687,7 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-session",
+ "krishiv-sql",
  "krishiv-types",
  "mimalloc",
  "pyo3",

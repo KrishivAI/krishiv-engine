@@ -32,6 +32,7 @@ use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::fold;
 use super::resolve::{Attr, Env, Rel, Resolver};
+use super::suggest::closest;
 use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
     AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
@@ -2791,9 +2792,8 @@ fn is_prefix(a: &[String], b: &[String]) -> bool {
 /// `city`, `country` `` for `non_exist`, `` `id`, `name`, `data` `` for
 /// `invalid_column`).
 pub(super) fn unresolved(parts: &[String], scope: &[Attr], origin: Origin) -> AnalysisError {
-    let target = parts.join(".");
     let qualified = parts.len() > 1;
-    let mut ranked: Vec<(usize, String)> = scope
+    let candidates = scope
         .iter()
         .map(|a| {
             let mut p: Vec<String> = a
@@ -2804,20 +2804,17 @@ pub(super) fn unresolved(parts: &[String], scope: &[Attr], origin: Origin) -> An
                 .into_iter()
                 .collect();
             p.push(a.col.name.clone());
-            let q = quoted(&p);
-            (levenshtein(&q, &target), q)
+            p
         })
         .collect();
-    // Closest first; ties in name order, as Spark orders them.
-    ranked.sort();
+    let ranked = closest(&parts.join("."), candidates);
     let object_name = quoted(parts);
     if ranked.is_empty() {
         return AnalysisError::new(UnresolvedColumnWithoutSuggestion { object_name }, origin);
     }
     let proposal = ranked
         .iter()
-        .take(5)
-        .map(|(_, q)| q.clone())
+        .map(|p| quoted(p))
         .collect::<Vec<_>>()
         .join(", ");
     AnalysisError::new(
@@ -2836,21 +2833,6 @@ pub(super) fn names(attrs: &[Attr], _qualified: bool) -> String {
         .map(|a| quoted(std::slice::from_ref(&a.col.name)))
         .collect::<Vec<_>>()
         .join(", ")
-}
-
-fn levenshtein(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, x) in a.chars().enumerate() {
-        let mut prev = row[0];
-        row[0] = i + 1;
-        for (j, y) in b.iter().enumerate() {
-            let cur = row[j + 1];
-            row[j + 1] = (prev + usize::from(x != *y)).min(row[j] + 1).min(cur + 1);
-            prev = cur;
-        }
-    }
-    row[b.len()]
 }
 
 /// The `UNRECOGNIZED_PARAMETER_NAME` proposal for `name`: the parameter
