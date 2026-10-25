@@ -212,7 +212,20 @@ fn strings() -> impl Strategy<Value = Vec<Option<String>>> {
     prop::collection::vec(prop::option::of("[a-c]{0,20}"), 0..60)
 }
 
+fn config() -> ProptestConfig {
+    // Miri interprets each case, so it runs two; no failure file (Miri's
+    // isolation has no file system, so persistence would call `getcwd`).
+    let default = ProptestConfig::default();
+    ProptestConfig {
+        cases: if cfg!(miri) { 2 } else { default.cases },
+        failure_persistence: None,
+        ..default
+    }
+}
+
 proptest! {
+    #![proptest_config(config())]
+
     /// The unrolled widths agree with the general XXH64 bit for bit.
     #[test]
     fn fixed_widths_match_xxh64(v in any::<u128>()) {
