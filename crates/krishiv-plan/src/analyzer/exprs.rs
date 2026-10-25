@@ -13,6 +13,7 @@ use krishiv_common::error::{
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
     DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchUnexpectedInputType,
     InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, NestedAggregateFunction,
     UnresolvedColumnWithSuggestion, UnresolvedColumnWithoutSuggestion, UnresolvedRoutine,
@@ -913,12 +914,27 @@ impl Resolver<'_> {
                 }
                 // A cast-named function (`float(x)`, `int(x)`, ...) is a
                 // cast, never a call: the plan only ever holds the `Cast`
-                // node. `DISTINCT` and `FILTER` stay ordinary calls (they
-                // have no cast form).
-                if !f.distinct
-                    && f.filter.is_none()
-                    && let Some(to) = cast_target(&f.name)
-                {
+                // node. `DISTINCT` and `FILTER` have no cast form: Spark
+                // rejects them as unsupported syntax on the function.
+                if let Some(to) = cast_target(&f.name) {
+                    if f.distinct {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: format!("`{}`", entry.id.name()),
+                                syntax: "DISTINCT".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    if f.filter.is_some() {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: format!("`{}`", entry.id.name()),
+                                syntax: "FILTER".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
                     return self.cast_named_call(&entry, e, f, kids, to);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;

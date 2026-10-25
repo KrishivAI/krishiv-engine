@@ -1718,6 +1718,42 @@ fn cast_named_functions_fail_like_casts() {
     }
 }
 
+/// `DISTINCT` and `FILTER` have no cast form: a cast-named function with
+/// either is unsupported syntax on the function, as for any other
+/// non-aggregate function.
+#[test]
+fn cast_named_functions_reject_distinct_and_filter() {
+    let ctx = ctx();
+    let distinct = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "float".to_owned(),
+        args: vec![Arc::new(c("a"))],
+        distinct: true,
+        filter: None,
+    }));
+    let r = run(LogicalPlan::table(["t"]).project(vec![distinct]), &ctx);
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([
+            "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+            {"prettyName": "`float`", "syntax": "DISTINCT"}
+        ])
+    );
+    let filtered = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "float".to_owned(),
+        args: vec![Arc::new(c("a"))],
+        distinct: false,
+        filter: Some(Arc::new(Literal::Boolean(true).into())),
+    }));
+    let r = run(LogicalPlan::table(["t"]).project(vec![filtered]), &ctx);
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([
+            "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+            {"prettyName": "`float`", "syntax": "FILTER"}
+        ])
+    );
+}
+
 /// A column a projection dropped comes back from below it, as Spark's
 /// missing references do, down to an aggregate's grouping attributes
 /// (which the aggregate then outputs); the result resolves to itself.

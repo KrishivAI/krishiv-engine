@@ -95,7 +95,10 @@ fn cell(batch: &RecordBatch, col: usize) -> String {
         ArrowType::Binary | ArrowType::LargeBinary | ArrowType::BinaryView => {
             format!("{:?}", batch.column(col).as_binary::<i32>().value(0))
         }
-        t => panic!("unrendered {t}"),
+        t => {
+            assert!(false, "unrendered {t}");
+            String::new()
+        }
     }
 }
 
