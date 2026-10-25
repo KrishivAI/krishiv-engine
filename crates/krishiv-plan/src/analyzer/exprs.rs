@@ -2840,3 +2840,84 @@ const fn frame_shape(b: &crate::FrameBound) -> u8 {
         crate::FrameBound::Offset(_) => 3,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::super::{Arity, Constant, ResultType};
+    use super::{Bound, Resolver};
+    use crate::{Expr, ExprNode, FunctionCall, FunctionId, FunctionKind, Literal};
+    use krishiv_types::DataType;
+
+    /// A `FunctionEntry` for `id`: what the session registry builds for the
+    /// built-in window function `ntile` and for a session UDF of that name.
+    fn entry(id: FunctionId) -> super::super::FunctionEntry {
+        let result: ResultType = Arc::new(|_| {
+            Ok(super::super::ArgType {
+                data_type: None,
+                nullable: true,
+            })
+        });
+        super::super::FunctionEntry {
+            id,
+            kind: FunctionKind::Scalar,
+            arity: Arity::any(),
+            inputs: super::super::Inputs::Any,
+            result,
+            deterministic: true,
+        }
+    }
+
+    /// One bound `1 + 1` argument, as `typed_call` passes it.
+    fn kid() -> Bound {
+        let one = || Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(1))));
+        Bound {
+            expr: Arc::new(Expr::new(ExprNode::Function(FunctionCall {
+                name: vec!["+".to_owned()],
+                args: vec![one(), one()],
+                distinct: false,
+                filter: None,
+            }))),
+            ty: super::super::ArgType {
+                data_type: Some(DataType::Integer),
+                nullable: false,
+            },
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        }
+    }
+
+    /// `ntile`'s bucket count folds to its literal for the built-in only: a
+    /// session UDF named `ntile` keeps its arguments as written. The
+    /// difference is analyzer-level (the optimizer folds `1 + 1` either
+    /// way), so it is checked here rather than through query results.
+    #[test]
+    fn folded_ntile_only_folds_for_builtins() {
+        let constants = vec![Some(Constant::Integral(2))];
+        let builtin = entry(FunctionId::Registry {
+            name: "ntile".to_owned(),
+            id: 0,
+        });
+        let folded = Resolver::folded_ntile(&builtin, &constants, vec![kid()]);
+        assert!(
+            matches!(&folded[0].expr.node, ExprNode::Literal(Literal::Integer(2))),
+            "the built-in folds its bucket count"
+        );
+        let udf = entry(FunctionId::Udf {
+            name: "ntile".to_owned(),
+            version: 1,
+        });
+        let kept = Resolver::folded_ntile(&udf, &constants, vec![kid()]);
+        assert!(
+            matches!(
+                &kept[0].expr.node,
+                ExprNode::Function(f) if f.name == ["+".to_owned()]
+            ),
+            "a session UDF keeps its argument as written"
+        );
+    }
+}

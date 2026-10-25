@@ -236,6 +236,33 @@ fn builtins_win_over_a_same_name_udf() {
 }
 
 #[test]
+fn qualified_shadowing_udf_survives_grouping_rewrites() {
+    // `analytics::retype` rebinds a call whose grouping expression was
+    // replaced by its expansion copy. Rebinding by the bare name would
+    // silently run the built-in over a same-name session UDF, so a UDF
+    // call rebinds qualified (`system.session.upper`).
+    let s = Session::new().unwrap();
+    s.register_udf(UpperUdf);
+    let schema = Arc::new(Schema::new(vec![Field::new("s", ArrowType::Utf8, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(vec![Some("a"), Some("b")]))],
+    )
+    .unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    for grouping in ["ROLLUP(s)", "CUBE(s)", "GROUPING SETS ((s), ())"] {
+        let query = format!("SELECT session.upper(s) AS u FROM t GROUP BY {grouping}");
+        let mut got = strings(&collect(&s, &query));
+        got.sort();
+        assert_eq!(
+            got,
+            [None, Some("udf:a".to_owned()), Some("udf:b".to_owned())],
+            "{query}"
+        );
+    }
+}
+
+#[test]
 fn unknown_functions_keep_todays_unresolved_routine() {
     let s = Session::new().unwrap();
     let e = block_on(s.sql("SELECT nosuchfn(1)")).unwrap_err();
@@ -1229,6 +1256,12 @@ impl ScalarUdf for NtileUdf {
         rows: usize,
         _: &InvokeContext,
     ) -> Result<ArrayRef, UdfError> {
+        // Adds 100 whatever the argument shape is: a qualified session UDF
+        // named like a built-in keeps its arguments as written (only the
+        // built-in folds its bucket count to a literal; see
+        // `folded_ntile_only_folds_for_builtins` in `krishiv-plan`, where
+        // the analyzer-level difference is checked — the optimizer folds
+        // `1 + 1` either way, so results agree here).
         let input = args[0].array();
         let input = input
             .as_any()

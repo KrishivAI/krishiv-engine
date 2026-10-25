@@ -9,7 +9,7 @@ use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
-use krishiv_udf_sdk::ScalarUdf;
+use krishiv_udf_sdk::{ScalarUdf, guard_call};
 
 use super::strings::to_view;
 use super::{Input, PhysExpr, Value, literal_array, unsupported_expr};
@@ -57,9 +57,14 @@ pub(super) fn compile_udf(
         (a, b) if a == b => false,
         (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView) => true,
         (a, b) => {
+            // `name` through `guard_call`: a panicking `name` must not
+            // unwind planning from an error message (the mismatch is
+            // already an internal error, so the structured message keeps
+            // it one).
+            let udf_name = guard_call("unknown", "name", || udf.name().to_owned())
+                .unwrap_or_else(|e| e.message().to_owned());
             return Err(internal(&format!(
-                "{} returns {a} where the analyzer typed {b}",
-                udf.name()
+                "{udf_name} returns {a} where the analyzer typed {b}"
             )));
         }
     };

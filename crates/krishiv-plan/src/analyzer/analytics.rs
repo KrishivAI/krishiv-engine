@@ -39,8 +39,8 @@ use super::ops::col_expr;
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, ArgType};
 use crate::{
-    BoundColumn, CastMode, Expr, ExprNode, FunctionCall, FunctionKind, Grouping, Literal,
-    LogicalPlan, Origin, PlanNode, ResolvedExpr,
+    BoundColumn, CastMode, Expr, ExprNode, FunctionCall, FunctionId, FunctionKind, Grouping,
+    Literal, LogicalPlan, Origin, PlanNode, ResolvedExpr,
 };
 
 /// The most grouping expressions one `GROUP BY` takes: the grouping id is a
@@ -677,9 +677,21 @@ impl Resolver<'_> {
         let origin = e.origin;
         match &e.node {
             ExprNode::Resolved(ResolvedExpr::Function(f)) if !has_subquery(&e) => {
+                // Rebind by a name that resolves to the same function: a
+                // bare name finds the built-in first (the search path), so
+                // a session UDF rebinds qualified (`system.session.f`) while
+                // built-ins rebind bare, as before. Without the qualifier
+                // `SELECT session.upper(s) ... GROUP BY ROLLUP(s)` would
+                // silently run the built-in `upper` over the copy.
+                let name = match &f.id {
+                    FunctionId::Udf { name, .. } => {
+                        vec!["system".to_owned(), "session".to_owned(), name.clone()]
+                    }
+                    _ => vec![f.id.name().to_owned()],
+                };
                 let call = Arc::new(
                     Expr::new(ExprNode::Function(FunctionCall {
-                        name: vec![f.id.name().to_owned()],
+                        name,
                         args: f.args.clone(),
                         distinct: f.distinct,
                         filter: f.filter.clone(),

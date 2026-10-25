@@ -43,8 +43,15 @@ impl UdfLibrary {
 
     /// Registers `udf` under its lower-case [`name`](ScalarUdf::name),
     /// replacing any UDF of that name, and bumps the library version.
+    ///
+    /// The `name` call goes through [`guard_call`] like every other trait
+    /// call: a panicking `name` leaves the library unchanged instead of
+    /// unwinding (there is no name to register the UDF under).
     pub fn register(&self, udf: Arc<dyn ScalarUdf>) {
-        let name = udf.name().to_lowercase();
+        let Ok(name) = guard_call("unknown", "name", || udf.name().to_owned()) else {
+            return;
+        };
+        let name = name.to_lowercase();
         let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         inner.udfs.insert(name, udf);
         inner.epoch = inner.epoch.wrapping_add(1);
@@ -189,5 +196,56 @@ mod tests {
             "UdfLibrary { udfs: [\"my_identity@2\"], epoch: 2 }"
         );
         assert_eq!(format!("{}", UdfLibrary::default().version()), "0");
+    }
+
+    /// A UDF whose `name` panics: registration catches it and leaves the
+    /// library unchanged instead of unwinding.
+    #[derive(Debug)]
+    struct PanicName;
+
+    impl ScalarUdf for PanicName {
+        fn name(&self) -> &str {
+            panic!("boom")
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            _: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Err(UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn panicking_name_leaves_the_library_unchanged() {
+        let lib = UdfLibrary::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            lib.register(Arc::new(PanicName));
+        }));
+        assert!(
+            result.is_ok(),
+            "a UDF whose name panics must not unwind registration"
+        );
+        assert!(lib.is_empty());
+        assert_eq!(lib.version(), 0);
     }
 }
