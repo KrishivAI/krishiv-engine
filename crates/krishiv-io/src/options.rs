@@ -12,9 +12,11 @@
 //! the closest known option ("did you mean"); the ignored keys are kept for
 //! `EXPLAIN`. With `krishiv.io.strictOptions=true` they are an error.
 //! Options handled by the file-source framework itself
-//! ([`FILE_SOURCE_OPTIONS`]) and object-store configuration (`fs.*`,
-//! resolved by the store layer from the same option map) are never
-//! reported.
+//! ([`FILE_SOURCE_OPTIONS`]) are never reported. Object-store configuration
+//! (`fs.*`, resolved by the store layer from the same option map) is not a
+//! format option either, but it is kept for `EXPLAIN`: non-secret values
+//! print as given, secrets print redacted, and it is never an error in
+//! strict mode.
 //!
 //! **Secrets** stay [`SecretValue`]s: `Debug` prints them redacted, and the
 //! plaintext is reached only through [`FormatOptions::resolve_secret`]
@@ -29,6 +31,7 @@ use krishiv_common::secret::{OptionValue, SecretString, SecretValue};
 
 use crate::error::{Result, unsupported};
 use crate::io::SecretResolver;
+use crate::io::stores::is_store_option;
 
 /// Options every file source accepts, handled by the framework (listing,
 /// partition discovery, corrupt/missing file handling), never by a format.
@@ -203,10 +206,17 @@ impl OptionSchema {
         for (key, value) in user {
             if let Some(spec) = self.spec(key) {
                 values.insert(spec.name, self.typed(spec, key, value)?);
+            } else if is_store_option(key) {
+                // Object-store configuration (`fs.s3a.*`, `fs.gs.*`,
+                // `fs.azure.*`): resolved by the store layer from the same
+                // option map, never a format option and never an error,
+                // even in strict mode. Kept for `EXPLAIN` as `key=value`:
+                // `OptionValue`'s `Display` prints plain values as given
+                // and secrets redacted, so only non-secrets are visible.
+                ignored.push(format!("{key}={value}"));
             } else if !FILE_SOURCE_OPTIONS
                 .iter()
                 .any(|o| o.eq_ignore_ascii_case(key))
-                && !is_store_option(key)
             {
                 let suggestion = self.closest(key);
                 if strict {
@@ -320,13 +330,6 @@ impl OptionSchema {
             .min_by_key(|(d, _)| *d)
             .map(|(_, n)| n)
     }
-}
-
-/// Whether `key` is object-store configuration (`fs.*`, resolved by the
-/// store layer from the same option map): never a format option, never
-/// reported, even in strict mode.
-fn is_store_option(key: &str) -> bool {
-    key.len() > 3 && key[..3].eq_ignore_ascii_case("fs.")
 }
 
 /// The session value of `key`: a registered key (or Spark alias) through the
@@ -480,7 +483,9 @@ impl FormatOptions {
         Ok(any.then(|| SecretString::new(material).fingerprint()))
     }
 
-    /// Options given but not known to the format (shown by `EXPLAIN`).
+    /// Options given but not known to the format (shown by `EXPLAIN`),
+    /// including object-store configuration (`fs.*`) kept as `key=value`
+    /// with secrets redacted.
     #[must_use]
     pub fn ignored(&self) -> &[String] {
         &self.ignored

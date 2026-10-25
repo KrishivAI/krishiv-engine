@@ -746,7 +746,9 @@ fn strict_mode_rejects_unknown_options() {
     assert!(e.to_string().contains("Did you mean \"mode\"?"));
     let e = parse(&[("zzzzzzzz", OptionValue::from_user("z", "x"))], &strict).unwrap_err();
     assert!(!e.to_string().contains("Did you mean"));
-    // Framework and object-store options are never unknown.
+    // Framework options are never unknown; object-store options are kept
+    // for EXPLAIN (non-secrets visible, secrets redacted), never an error
+    // even in strict mode.
     assert!(parse(&[("PATH", OptionValue::from_user("path", "/x"))], &strict).is_ok());
     let (o, w) = parse(
         &[
@@ -763,7 +765,13 @@ fn strict_mode_rejects_unknown_options() {
     )
     .unwrap();
     assert!(w.is_empty());
-    assert!(o.ignored().is_empty());
+    assert_eq!(
+        o.ignored(),
+        &[
+            "FS.S3A.SECRET.KEY=*********(redacted)".to_owned(),
+            "fs.s3a.endpoint=http://127.0.0.1:9000".to_owned(),
+        ]
+    );
 }
 
 #[test]

@@ -28,13 +28,16 @@
 //! / `df.write.option`, carried by the plan as option values) are honoured
 //! exactly like session config: Spark merges data-source options into the
 //! per-relation Hadoop configuration, so a per-read `fs.*` option overrides
-//! the session value. Option keys match ASCII case-insensitively (Spark's
-//! `CaseInsensitiveStringMap`); empty per-read values count as unset and
-//! fall back to the session value, and values that cannot be typed for the
-//! key they override are ignored the same fail-safe way (the session value
-//! applies). A read whose per-read `fs.*` options are non-empty resolves to
-//! a store id with a non-secret `#hash` suffix, so two reads of one bucket
-//! with different credentials never share a store within the query.
+//! the session value. Option keys match ASCII case-insensitively on both
+//! sides (Spark's `CaseInsensitiveStringMap`); a per-read option is always
+//! a present value, so an empty per-read value is invalid (it fails, never
+//! silently falls back), as is a per-read value of the wrong kind for its
+//! key (a secret, reference or URL where a plain value is required, or the
+//! reverse): both fail with `KRISHIV_INVALID_CONFIG_VALUE`, naming the key
+//! and the redaction marker but never the value. A read whose per-read
+//! `fs.*` options are non-empty resolves to a store id with a non-secret
+//! `#hash` suffix, so two reads of one bucket with different credentials
+//! never share a store within the query.
 //!
 //! | Store | Key | Meaning |
 //! |---|---|---|
@@ -355,8 +358,9 @@ fn build(
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
 ) -> Result<Arc<dyn ObjectStore>> {
-    // Configuration errors keep their class; only storage errors become
-    // `KRISHIV_OBJECT_STORE_REQUEST_FAILED`.
+    // Configuration errors keep their class; only builder failures become
+    // `KRISHIV_OBJECT_STORE_REQUEST_FAILED` (converted in each scheme
+    // builder below).
     let path_style = match url.scheme {
         ObjectScheme::S3 => path_style_access(config, options)?,
         _ => None,
@@ -366,7 +370,6 @@ fn build(
         ObjectScheme::Gcs => gcs_store(config, options, url),
         ObjectScheme::Azure => azure_store(config, options, url),
     }
-    .map_err(|e: object_store::Error| store_failed(&url.display, 1, &e.to_string()))
 }
 
 /// The store id for `base` with per-read `options`: `base` when no `fs.*`
@@ -401,8 +404,9 @@ fn relevant_options<'a>(
 }
 
 /// Whether `key` is store configuration (`fs.*`), matched ASCII
-/// case-insensitively.
-fn is_store_option(key: &str) -> bool {
+/// case-insensitively. Shared with [`crate::options`] (format option
+/// parsing skips these keys the same way).
+pub(crate) fn is_store_option(key: &str) -> bool {
     key.len() > 3 && key[..3].eq_ignore_ascii_case("fs.")
 }
 
@@ -419,9 +423,9 @@ fn find_option<'a>(
 
 /// A non-secret hash of the relevant per-read options: plain values hash by
 /// value, inline secrets by their keyed fingerprint, references by
-/// scope and key, and URLs by their redacted text (they never override, so
-/// distinct secrets in one share the hash, which is the fail-safe
-/// direction). Only the hash ever reaches a store id.
+/// scope and key, and URLs by their redacted text (a wrong-kind per-read
+/// value fails when the store builds, so the hash only isolates the cache
+/// entry). Only the hash ever reaches a store id.
 fn options_hash(relevant: &[(&str, &OptionValue)]) -> u64 {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0100_0000_01b3;
@@ -481,65 +485,117 @@ fn path_style_access(
     if explicit.is_some() {
         return Ok(explicit);
     }
-    Ok(
-        text(config, options, S3_ENDPOINT)
-            .map(|e| allows_http(Some(&e)) || e.contains("localhost")),
-    )
+    Ok(text(config, options, S3_ENDPOINT)?
+        .map(|e| allows_http(Some(&e)) || e.contains("localhost")))
+}
+
+/// The session value of an unregistered `key`: the exact session entry
+/// first, else the first session entry matching ASCII case-insensitively,
+/// so the session side resolves the same way the per-read side does (see
+/// the module docs). Session keys are case-sensitive in Hadoop, but this
+/// layer documents case-insensitive matching and the per-read side already
+/// honours it; resolving both sides the same way keeps one spelling from
+/// meaning different things depending on where it is set.
+fn session_raw(config: &Config, key: &str) -> Option<String> {
+    if let Some(value) = config.get_unregistered(key) {
+        return Some(value.to_owned());
+    }
+    config
+        .explicit_unregistered()
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .map(|(_, v)| v.to_owned())
 }
 
 /// The secret (or plain) value of an unregistered `key`: the per-read
-/// option first, else the session value. Empty values count as unset. This
-/// is the only place the registry's secrets cross from configuration into
+/// option first, else the session value. A per-read value is always
+/// present, so an empty per-read value and a per-read value of the wrong
+/// kind (a `secret('scope', 'key')` reference, which this layer cannot
+/// resolve, or a URL, which is never a credential for these keys) fail
+/// rather than silently falling back to the session value. This is the
+/// only place the registry's secrets cross from configuration into
 /// builders.
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
+/// value (naming the key and the redaction marker, never the value).
 fn cred(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
     key: &str,
-) -> Option<SecretString> {
+) -> Result<Option<SecretString>> {
     if let Some(value) = find_option(options, key) {
-        match value {
-            OptionValue::Plain(plain) if !plain.is_empty() => {
-                return Some(SecretString::new(plain.clone()));
+        return match value {
+            OptionValue::Plain(plain) => {
+                if plain.is_empty() {
+                    Err(invalid_option(key, "expected a non-empty value").into())
+                } else {
+                    Ok(Some(SecretString::new(plain.clone())))
+                }
             }
-            OptionValue::Secret(SecretValue::Inline(secret)) => return Some(secret.clone()),
-            // A reference needs the `SecretProvider` (async) and a URL
-            // value is never a credential for these keys: ignore the
-            // override the fail-safe way and use the session value.
-            OptionValue::Plain(_)
-            | OptionValue::Secret(SecretValue::Reference { .. })
-            | OptionValue::Url(_) => {}
-        }
+            OptionValue::Secret(SecretValue::Inline(secret)) => {
+                // An empty inline secret is a present value too (Hadoop
+                // keeps `""`), and it is invalid for every key read here.
+                if secret.expose_secret().is_empty() {
+                    Err(invalid_option(key, "expected a non-empty value").into())
+                } else {
+                    Ok(Some(secret.clone()))
+                }
+            }
+            OptionValue::Secret(SecretValue::Reference { .. }) => Err(invalid_option(
+                key,
+                "a `secret('scope', 'key')` reference cannot be resolved here",
+            )
+            .into()),
+            OptionValue::Url(_) => {
+                Err(invalid_option(key, "a URL value is not a credential for this key").into())
+            }
+        };
     }
-    let raw = config.get_unregistered(key).filter(|v| !v.is_empty())?;
-    match OptionValue::from_user(key, raw) {
-        OptionValue::Plain(plain) => Some(SecretString::new(plain)),
-        OptionValue::Secret(SecretValue::Inline(secret)) => Some(secret),
-        // Unreachable: `from_user` never builds a reference, and values of
-        // sensitive keys never classify as URLs. Ignoring them is the
-        // fail-safe direction: no value is used that was not typed as the
-        // key demands.
-        OptionValue::Secret(SecretValue::Reference { .. }) | OptionValue::Url(_) => None,
-    }
+    let raw = session_raw(config, key).filter(|v| !v.is_empty());
+    Ok(match raw.as_deref() {
+        None => None,
+        Some(raw) => match OptionValue::from_user(key, raw) {
+            OptionValue::Plain(plain) => Some(SecretString::new(plain)),
+            OptionValue::Secret(SecretValue::Inline(secret)) => Some(secret),
+            // Unreachable: `from_user` never builds a reference, and values of
+            // sensitive keys never classify as URLs. Ignoring them is the
+            // fail-safe direction: no value is used that was not typed as the
+            // key demands.
+            OptionValue::Secret(SecretValue::Reference { .. }) | OptionValue::Url(_) => None,
+        },
+    })
 }
 
 /// The plain value of an unregistered `key`: the per-read option first,
-/// else the session value; trimmed, and empty values count as unset. Only
-/// for keys that are never sensitive (endpoints, regions).
-fn text(config: &Config, options: &BTreeMap<String, OptionValue>, key: &str) -> Option<String> {
-    if let Some(OptionValue::Plain(raw)) = find_option(options, key) {
-        // A secret or URL value for a plain key is never used: fall back to
-        // the session value rather than smuggling credentials into an
-        // endpoint or region.
+/// else the session value; trimmed, and empty values are invalid. Only
+/// for keys that are never sensitive (endpoints, regions). A per-read
+/// secret, reference or URL value for a plain key fails rather than
+/// smuggling credentials into an endpoint or region.
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
+/// value (naming the key and the redaction marker, never the value).
+fn text(
+    config: &Config,
+    options: &BTreeMap<String, OptionValue>,
+    key: &str,
+) -> Result<Option<String>> {
+    if let Some(value) = find_option(options, key) {
+        let Some(raw) = value.as_plain() else {
+            return Err(invalid_option(key, "a secret is not allowed here").into());
+        };
         let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_owned());
+        if trimmed.is_empty() {
+            return Err(invalid_option(key, "expected a non-empty value").into());
         }
+        return Ok(Some(trimmed.to_owned()));
     }
-    config
-        .get_unregistered(key)
+    Ok(session_raw(config, key)
+        .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(str::to_owned)
+        .map(str::to_owned))
 }
 
 /// Whether `text` allows HTTP connections: only an `http://` endpoint does
@@ -549,7 +605,9 @@ fn allows_http(text: Option<&str>) -> bool {
 }
 
 /// Parses a `true`/`false` flag of `key`: the per-read option first, else
-/// the session value.
+/// the session value. A per-read value is always present, so an empty
+/// per-read value and a per-read secret, reference or URL value fail
+/// rather than silently falling back to the session value.
 ///
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` for anything else. The error names the
@@ -559,21 +617,20 @@ fn flag(
     options: &BTreeMap<String, OptionValue>,
     key: &str,
 ) -> Result<Option<bool>> {
-    if let Some(OptionValue::Plain(raw)) = find_option(options, key) {
+    if let Some(value) = find_option(options, key) {
         // Only a plain per-read value overrides: a secret or URL value for
-        // a flag falls back to the session value rather than failing on a
-        // value that was never meant for this key.
-        let trimmed = raw.trim();
-        if !trimmed.is_empty() {
-            return match trimmed.to_ascii_lowercase().as_str() {
-                "true" => Ok(Some(true)),
-                "false" => Ok(Some(false)),
-                _ => Err(invalid_flag(key).into()),
-            };
-        }
+        // a flag fails rather than falling back to the session value.
+        let Some(raw) = value.as_plain() else {
+            return Err(invalid_option(key, "a secret is not allowed here").into());
+        };
+        return match raw.trim().to_ascii_lowercase().as_str() {
+            "true" => Ok(Some(true)),
+            "false" => Ok(Some(false)),
+            _ => Err(invalid_option(key, "expected `true` or `false`").into()),
+        };
     }
-    match config
-        .get_unregistered(key)
+    match session_raw(config, key)
+        .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
     {
@@ -581,134 +638,171 @@ fn flag(
         Some(raw) => match raw.to_ascii_lowercase().as_str() {
             "true" => Ok(Some(true)),
             "false" => Ok(Some(false)),
-            _ => Err(invalid_flag(key).into()),
+            _ => Err(invalid_option(key, "expected `true` or `false`").into()),
         },
     }
 }
 
-/// The `KRISHIV_INVALID_CONFIG_VALUE` for a flag of `key`: the key and the
-/// redaction marker, never the value.
-fn invalid_flag(key: &str) -> KrishivInvalidConfigValue {
+/// The `KRISHIV_INVALID_CONFIG_VALUE` for `key`: the key and the redaction
+/// marker, never the value.
+fn invalid_option(key: &str, reason: &str) -> KrishivInvalidConfigValue {
     KrishivInvalidConfigValue {
         key: format!("\"{key}\""),
         value: format!("'{REDACTED}'"),
-        reason: "expected `true` or `false`".to_owned(),
+        reason: reason.to_owned(),
     }
 }
 
 /// An S3 store for `url`'s bucket.
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
+/// value (see [`cred`]); `KRISHIV_OBJECT_STORE_REQUEST_FAILED` when the
+/// builder rejects the configuration (names the bucket and the endpoint
+/// at most, never a secret).
 fn s3_store(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     path_style: Option<bool>,
-) -> object_store::Result<Arc<dyn ObjectStore>> {
+) -> Result<Arc<dyn ObjectStore>> {
     use object_store::aws::AmazonS3Builder;
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(&url.bucket);
-    if let Some(endpoint) = text(config, options, S3_ENDPOINT) {
+    if let Some(endpoint) = text(config, options, S3_ENDPOINT)? {
         if allows_http(Some(&endpoint)) {
             builder = builder.with_allow_http(true);
         }
         builder = builder.with_endpoint(endpoint);
     }
-    if let Some(key) = cred(config, options, S3_ACCESS_KEY) {
+    if let Some(key) = cred(config, options, S3_ACCESS_KEY)? {
         builder = builder.with_access_key_id(key.expose_secret());
     }
-    if let Some(secret) = cred(config, options, S3_SECRET_KEY) {
+    if let Some(secret) = cred(config, options, S3_SECRET_KEY)? {
         builder = builder.with_secret_access_key(secret.expose_secret());
     }
-    if let Some(token) = cred(config, options, S3_SESSION_TOKEN) {
+    if let Some(token) = cred(config, options, S3_SESSION_TOKEN)? {
         builder = builder.with_token(token.expose_secret());
     }
     if let Some(region) =
-        text(config, options, S3_ENDPOINT_REGION).or_else(|| text(config, options, S3_REGION))
+        text(config, options, S3_ENDPOINT_REGION)?.or(text(config, options, S3_REGION)?)
     {
         builder = builder.with_region(region);
     }
     if let Some(path_style) = path_style {
         builder = builder.with_virtual_hosted_style_request(!path_style);
     }
-    builder.build().map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+    builder
+        .build()
+        .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
 }
 
 /// A GCS store for `url`'s bucket.
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
+/// value (see [`cred`]); `KRISHIV_OBJECT_STORE_REQUEST_FAILED` when the
+/// builder rejects the configuration (never a secret).
 fn gcs_store(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
-) -> object_store::Result<Arc<dyn ObjectStore>> {
+) -> Result<Arc<dyn ObjectStore>> {
     use object_store::gcp::GoogleCloudStorageBuilder;
     let mut builder = GoogleCloudStorageBuilder::from_env().with_bucket_name(url.bucket.clone());
-    if let Some(path) = cred(config, options, GCS_KEYFILE) {
+    if let Some(path) = cred(config, options, GCS_KEYFILE)? {
         builder = builder.with_service_account_path(path.expose_secret());
     }
-    if let Some(key) = cred(config, options, GCS_KEY) {
+    if let Some(key) = cred(config, options, GCS_KEY)? {
         builder = builder.with_service_account_key(key.expose_secret());
     }
     if let Some(base) =
-        text(config, options, GCS_STORAGE_ROOT_URL).or_else(|| text(config, options, GCS_ENDPOINT))
+        text(config, options, GCS_STORAGE_ROOT_URL)?.or(text(config, options, GCS_ENDPOINT)?)
     {
         builder = builder.with_base_url(&base);
     }
-    builder.build().map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+    builder
+        .build()
+        .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
 }
 
 /// An Azure Blob store for `url`'s container.
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
+/// value (see [`cred`]); `KRISHIV_OBJECT_STORE_REQUEST_FAILED` when the
+/// builder rejects the configuration (never a secret).
 fn azure_store(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
-) -> object_store::Result<Arc<dyn ObjectStore>> {
+) -> Result<Arc<dyn ObjectStore>> {
     use object_store::azure::MicrosoftAzureBuilder;
     let mut builder = MicrosoftAzureBuilder::from_env().with_container_name(url.bucket.clone());
     let account = url
         .account
         .clone()
-        .or_else(|| text(config, options, AZURE_ACCOUNT_NAME));
+        .or(text(config, options, AZURE_ACCOUNT_NAME)?);
     if let Some(account) = &account {
         builder = builder.with_account(account);
     }
-    if let Some(key) = azure_key(config, options, url, account.as_deref()) {
+    if let Some(key) = azure_key(config, options, url, account.as_deref())? {
         builder = builder.with_access_key(key.expose_secret());
     }
-    if let Some(sas) = azure_sas(config, options, url, account.as_deref()) {
-        let pairs = sas_pairs(&sas).map_err(|reason| object_store::Error::Generic {
-            store: "AZURE",
-            source: reason.into(),
-        })?;
+    if let Some(sas) = azure_sas(config, options, url, account.as_deref())? {
+        let pairs = sas_pairs(&sas).map_err(|reason| store_failed(&url.display, 1, &reason))?;
         builder = builder.with_sas_authorization(pairs);
     }
-    if let Some(endpoint) = text(config, options, AZURE_ENDPOINT) {
+    if let Some(endpoint) = text(config, options, AZURE_ENDPOINT)? {
         if allows_http(Some(&endpoint)) {
             builder = builder.with_allow_http(true);
         }
         builder = builder.with_endpoint(endpoint);
     }
-    builder.build().map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+    builder
+        .build()
+        .map(|s| Arc::new(s) as Arc<dyn ObjectStore>)
+        .map_err(|e| store_failed(&url.display, 1, &e.to_string()))
 }
 
 /// The Azure account key: the dotted `fs.azure.account.key.<account>.*`
 /// forms first, then the bare fallback.
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
+/// value (see [`cred`]).
 fn azure_key(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     account: Option<&str>,
-) -> Option<SecretString> {
-    dotted(config, options, "fs.azure.account.key", url, account)
-        .or_else(|| cred(config, options, AZURE_ACCOUNT_KEY))
+) -> Result<Option<SecretString>> {
+    Ok(
+        dotted(config, options, "fs.azure.account.key", url, account)?.or(cred(
+            config,
+            options,
+            AZURE_ACCOUNT_KEY,
+        )?),
+    )
 }
 
 /// The Azure shared access signature: the dotted `fs.azure.sas.*` forms
 /// first, then the bare fallback.
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
+/// value (see [`cred`]).
 fn azure_sas(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
     url: &ParsedUrl,
     account: Option<&str>,
-) -> Option<SecretString> {
-    dotted(config, options, "fs.azure.sas", url, account)
-        .or_else(|| cred(config, options, AZURE_SAS))
+) -> Result<Option<SecretString>> {
+    Ok(
+        dotted(config, options, "fs.azure.sas", url, account)?
+            .or(cred(config, options, AZURE_SAS)?),
+    )
 }
 
 /// The value of the most specific dotted key for `prefix`:
@@ -717,25 +811,31 @@ fn azure_sas(
 /// `<prefix>.<container>.<account>`, then `<prefix>.<account>` when the URL
 /// carries an account. Per-read options override the session value for each
 /// candidate key.
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
+/// value (see [`cred`]).
 fn dotted(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
     prefix: &str,
     url: &ParsedUrl,
     account: Option<&str>,
-) -> Option<SecretString> {
-    let account = account?;
+) -> Result<Option<SecretString>> {
+    let Some(account) = account else {
+        return Ok(None);
+    };
     for key in [
         format!("{prefix}.{}.{account}.dfs.core.windows.net", url.bucket),
         format!("{prefix}.{}.{account}.blob.core.windows.net", url.bucket),
         format!("{prefix}.{}.{account}", url.bucket),
         format!("{prefix}.{account}"),
     ] {
-        if let Some(value) = cred(config, options, &key) {
-            return Some(value);
+        if let Some(value) = cred(config, options, &key)? {
+            return Ok(Some(value));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Splits a SAS token (`sv=..&sig=..`) into its query pairs, redacting any
@@ -954,7 +1054,7 @@ mod tests {
             (S3_ACCESS_KEY, CANARY),
         ]);
         for key in [GCS_KEYFILE, GCS_KEY, S3_ACCESS_KEY] {
-            let secret = cred(&cfg, &BTreeMap::new(), key).unwrap();
+            let secret = cred(&cfg, &BTreeMap::new(), key).unwrap().unwrap();
             assert_eq!(secret.expose_secret(), CANARY);
             assert!(!format!("{secret:?}").contains(CANARY), "{key}");
         }
@@ -1090,11 +1190,117 @@ mod tests {
         assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
         assert!(error.to_string().contains(S3_PATH_STYLE_ACCESS));
         assert!(!error.to_string().contains("banana"));
-        // An empty per-read value counts as unset: the session value applies.
-        registry
+        // An empty per-read value is a present value, so it fails rather
+        // than falling back to the session value (Hadoop keeps `""` too).
+        let error = registry
             .store_with_options(&url, &read_options(&[(S3_PATH_STYLE_ACCESS, "")]))
-            .unwrap();
+            .unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
+        assert!(error.to_string().contains(S3_PATH_STYLE_ACCESS));
         assert_eq!(url.scheme, ObjectScheme::S3);
+    }
+
+    #[test]
+    fn session_keys_match_case_insensitively_like_per_read_keys() {
+        // The session side resolves the same case-insensitive way the
+        // per-read side does: one spelling means the same thing in both.
+        let registry = StoreRegistry::new(config(&[("FS.S3A.PATH.STYLE.ACCESS", "true")]));
+        let url = parse_object_url("s3://bucket/k").unwrap();
+        registry.store(&url).unwrap();
+        let registry = StoreRegistry::new(config(&[("fs.s3a.path.style.access", "true")]));
+        registry
+            .store_with_options(
+                &url,
+                &read_options(&[("FS.S3A.PATH.STYLE.ACCESS", "false")]),
+            )
+            .unwrap();
+        // An invalid value under another spelling still fails, naming the key.
+        let error = registry
+            .store_with_options(
+                &url,
+                &read_options(&[("FS.S3A.PATH.STYLE.ACCESS", "banana")]),
+            )
+            .unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    }
+
+    #[test]
+    fn mistyped_per_read_values_fail_naming_the_key() {
+        // Every per-read value below would have fallen back to the valid
+        // session value before: now each fails with a typed invalid-option
+        // error that names the key but never the value.
+        let session = config(&[
+            (S3_ACCESS_KEY, "session-key"),
+            (S3_ENDPOINT, "http://127.0.0.1:9000"),
+            (S3_PATH_STYLE_ACCESS, "true"),
+        ]);
+        // A reference where a credential is required: this layer cannot
+        // resolve it, so it fails rather than using the session value.
+        let mut options = BTreeMap::new();
+        options.insert(
+            S3_ACCESS_KEY.to_owned(),
+            OptionValue::reference("scope", CANARY),
+        );
+        let error = cred(&session, &options, S3_ACCESS_KEY).unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
+        assert!(error.to_string().contains(S3_ACCESS_KEY));
+        assert!(!error.to_string().contains(CANARY));
+        // A URL value is never a credential for these keys.
+        let mut options = BTreeMap::new();
+        options.insert(
+            S3_ACCESS_KEY.to_owned(),
+            OptionValue::from_user(S3_ENDPOINT, "https://user:pw@host"),
+        );
+        let error = cred(&session, &options, S3_ACCESS_KEY).unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
+        assert!(error.to_string().contains(S3_ACCESS_KEY));
+        assert!(!error.to_string().contains("pw"));
+        // A secret where a plain endpoint is required.
+        let mut options = BTreeMap::new();
+        options.insert(
+            S3_ENDPOINT.to_owned(),
+            OptionValue::from_user(S3_SECRET_KEY, CANARY),
+        );
+        let error = text(&session, &options, S3_ENDPOINT).unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
+        assert!(error.to_string().contains(S3_ENDPOINT));
+        assert!(!error.to_string().contains(CANARY));
+        // A secret where a flag is required.
+        let mut options = BTreeMap::new();
+        options.insert(
+            S3_PATH_STYLE_ACCESS.to_owned(),
+            OptionValue::from_user(S3_SECRET_KEY, CANARY),
+        );
+        let error = flag(&session, &options, S3_PATH_STYLE_ACCESS).unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
+        assert!(error.to_string().contains(S3_PATH_STYLE_ACCESS));
+        assert!(!error.to_string().contains(CANARY));
+    }
+
+    #[test]
+    fn empty_per_read_values_are_present_values() {
+        // Hadoop keeps `""` as a value: an empty per-read value is invalid
+        // for these keys, so it fails rather than falling back to the
+        // valid session value.
+        let session = config(&[
+            (S3_ACCESS_KEY, "session-key"),
+            (S3_ENDPOINT, "http://127.0.0.1:9000"),
+            (S3_PATH_STYLE_ACCESS, "true"),
+        ]);
+        let error = cred(
+            &session,
+            &read_options(&[(S3_ACCESS_KEY, "")]),
+            S3_ACCESS_KEY,
+        )
+        .unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
+        assert!(error.to_string().contains(S3_ACCESS_KEY));
+        let error = text(&session, &read_options(&[(S3_ENDPOINT, "")]), S3_ENDPOINT).unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
+        assert!(error.to_string().contains(S3_ENDPOINT));
+        // Whitespace-only endpoints trim to empty, so they fail too.
+        let error = text(&session, &read_options(&[(S3_ENDPOINT, "  ")]), S3_ENDPOINT).unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
     }
 
     #[test]
