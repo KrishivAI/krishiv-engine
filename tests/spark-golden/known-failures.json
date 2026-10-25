@@ -1,10 +1,5 @@
 {
   "categories": {
-    "analyzer-bugs": {
-      "kind": "bug",
-      "owner": "analyzer follow-up of P2-T071a",
-      "summary": "analyzer resolution differs from Spark: an unused CTE definition over a missing relation is not analyzed, so TABLE_OR_VIEW_NOT_FOUND is not raised (cte#16, cte#24), GROUP BY a backquoted output alias `1`, LIMIT over a column reports UNRESOLVED_COLUMN instead of IS_UNFOLDABLE"
-    },
     "cast-matrix": {
       "kind": "unsupported",
       "summary": "the full cast matrix: casts not in P2a, cast-named functions, region time zones",
@@ -207,21 +202,6 @@
       "file": "^transform$"
     },
     {
-      "category": "analyzer-bugs",
-      "detail": "AMBIGUOUS_REFERENCE",
-      "file": "^cte$"
-    },
-    {
-      "category": "analyzer-bugs",
-      "detail": "UNRESOLVED_COLUMN.*`1`",
-      "file": "^group-by-alias$"
-    },
-    {
-      "category": "analyzer-bugs",
-      "detail": "UNRESOLVED_COLUMN.*`key`",
-      "file": "^limit$"
-    },
-    {
       "category": "datetime",
       "detail": "WRONG_NUM_ARGS.*`(date_add|dateadd|datediff|date_diff)`|Cannot resolve routine `(timestampadd|timestampdiff|timediff)`"
     },
@@ -422,11 +402,6 @@
     {
       "category": "output-names",
       "detail": "^schema "
-    },
-    {
-      "category": "analyzer-bugs",
-      "detail": "^no error",
-      "file": "^cte$"
     }
   ],
   "spark_tag": "v4.2.0",
@@ -454,7 +429,7 @@
     "conditional-functions": {"depends-on-command":[1,2,3,4,7,10],"sql-commands":[0,17]},
     "count": {"depends-on-command":[1,2,4,8,9,10,11,12],"legacy-configs":[14,16,20]},
     "csv-functions": {"depends-on-command":[13],"fn-url-xml-csv":[0,1,2,3,4,5,6,7,8,9,10,11,15,16,17,18,19,20,21,22,33,34,35,36,37,38],"time-geo-types":[23,24,25,26,27,28,29,30,31,32]},
-    "cte": {"analyzer-bugs":[24],"depends-on-command":[16,19,31,32,45,46,47,48],"fn-misc":[22],"query-features":[17],"sql-commands":[3,54],"subqueries":[27]},
+    "cte": {"depends-on-command":[19,31,32,45,46,47,48],"fn-misc":[22],"query-features":[17],"sql-commands":[3,54],"subqueries":[27]},
     "cte-command": {"depends-on-command":[1,4,5,7,9,10,11],"sql-commands":[0,6,8,12,13]},
     "cte-legacy": {"legacy-configs":[3,4,5,6,7,8,12,13,14,15,17,18,19,21]},
     "cte-nested": {"query-features":[3,4,5]},
@@ -498,7 +473,7 @@
     "group-by-ordinal": {"depends-on-command":[13]},
     "grouping_set": {"depends-on-command":[5]},
     "grouping_set_grand_total_disabled": {"query-features":[0,1]},
-    "having": {"depends-on-command":[3,19,21,22,28,29,30,31,32],"query-features":[6,7,8,9,24,25,33,34,35,36,41,44,45,46,49]},
+    "having": {"depends-on-command":[3,19,21,22,28,29,30,31,32],"query-features":[6,7,8,9,33,34,35,36,41,44,45,46,49]},
     "having-and-order-by-recursive-type-name-resolution": {"query-features":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44]},
     "higher-order-functions": {"depends-on-command":[3,4,5,6,7,9,11,12,13,14,16,17,18,20,22,26,27,28,29,30,31],"hof":[1,2,23,24,34,35,36,38,39,40,42,43,44,46,47,48,50,51,52,54,55,56,58,59,60,62,63,64,66,67,68,70,71,72,74,75,76,78,79,80,82],"nested-interval-types":[8,10,15,19,21,37,41,45,49,53,57,61,65,69,73,77,81],"query-features":[32,33],"sql-commands":[0,25]},
     "hll": {"depends-on-command":[8,9,10,11,12,13,14,15,16,17],"fn-aggregate":[31,32,33],"query-features":[18,19,20,21,22,23,24,25,26,27,28,29,30],"sql-commands":[0,1,2,3,4,5,6,7,34,35,36]},
