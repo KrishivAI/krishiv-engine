@@ -1,6 +1,6 @@
 ---
 source: crates/krishiv-sql/src/tests/commands.rs
-expression: "snapshot_stmts(&[\"CACHE TABLE t\", \"CACHE LAZY TABLE t\",\n\"CACHE TABLE t AS SELECT * FROM s\",\n\"CACHE TABLE t OPTIONS (storageLevel 'MEMORY_AND_DISK') AS SELECT * FROM s\",\n\"CACHE TABLE IDENTIFIER('ta' || 'b')\", \"UNCACHE TABLE t\",\n\"UNCACHE TABLE IDENTIFIER('ta' || 'b')\", \"CLEAR CACHE\", \"REFRESH TABLE t\",\n\"REFRESH TABLE t ASYNC\", \"REFRESH FUNCTION f\",\n\"REFRESH FUNCTION IDENTIFIER('ident.' || 'myDoubleAvg')\",\n\"REFRESH RESOURCE '/path/to.jar'\", \"REFRESH '/path/to/data'\",\n\"ANALYZE TABLE t COMPUTE STATISTICS\",\n\"ANALYZE TABLE t PARTITION (ds = '2017-08-01', hr = 10) COMPUTE STATISTICS\",\n\"ANALYZE TABLE t PARTITION (ds, hr) COMPUTE STATISTICS\",\n\"ANALYZE TABLE t COMPUTE STATISTICS NOSCAN\",\n\"ANALYZE TABLE t COMPUTE STATISTICS FOR COLUMNS c1, c2\",\n\"ANALYZE TABLE t COMPUTE STATISTICS FOR ALL COLUMNS\", \"MSCK REPAIR TABLE t\",\n\"REPAIR TABLE t\", \"REPAIR TABLE t ADD PARTITIONS\",\n\"REPAIR TABLE t DROP PARTITIONS\", \"MSCK REPAIR TABLE t SYNC PARTITIONS\",\n\"ADD JAR '/path/to.jar'\", \"ADD FILE '/path/to/file'\",\n\"ADD ARCHIVE '/path/to.tgz'\", \"LIST JAR\", \"LIST JAR '/path'\", \"LIST FILE\",])"
+expression: "snapshot_stmts(&[\"CACHE TABLE t\", \"CACHE LAZY TABLE t\",\n\"CACHE TABLE t AS SELECT * FROM s\",\n\"CACHE TABLE t OPTIONS (storageLevel 'MEMORY_AND_DISK') AS SELECT * FROM s\",\n\"CACHE TABLE IDENTIFIER('ta' || 'b')\", \"UNCACHE TABLE t\",\n\"UNCACHE TABLE IDENTIFIER('ta' || 'b')\", \"UNCACHE TABLE IF EXISTS t\",\n\"CLEAR CACHE\", \"REFRESH TABLE t\", \"REFRESH FUNCTION f\",\n\"REFRESH FUNCTION IDENTIFIER('ident.' || 'myDoubleAvg')\",\n\"REFRESH '/path/to/data'\", \"ANALYZE TABLE t COMPUTE STATISTICS\",\n\"ANALYZE TABLE t PARTITION (ds = '2017-08-01', hr = 10) COMPUTE STATISTICS\",\n\"ANALYZE TABLE t PARTITION (ds, hr) COMPUTE STATISTICS\",\n\"ANALYZE TABLE t COMPUTE STATISTICS NOSCAN\",\n\"ANALYZE TABLE t COMPUTE STATISTICS FOR COLUMNS c1, c2\",\n\"ANALYZE TABLE t COMPUTE STATISTICS FOR ALL COLUMNS\", \"MSCK REPAIR TABLE t\",\n\"REPAIR TABLE t\", \"REPAIR TABLE t ADD PARTITIONS\",\n\"REPAIR TABLE t DROP PARTITIONS\", \"MSCK REPAIR TABLE t SYNC PARTITIONS\",\n\"LIST JAR\", \"LIST FILE\", \"LIST FILES\",])"
 ---
 -- CACHE TABLE t
 Cache(
@@ -318,6 +318,7 @@ Cache(
 Cache(
     Cache {
         kind: Uncache {
+            if_exists: false,
             name: Parts(
                 ObjectName {
                     parts: [
@@ -339,6 +340,7 @@ Cache(
 Cache(
     Cache {
         kind: Uncache {
+            if_exists: false,
             name: Dynamic(
                 DynamicName {
                     expr: Expr {
@@ -371,6 +373,28 @@ Cache(
         span: 0..37,
     },
 )
+-- UNCACHE TABLE IF EXISTS t
+Cache(
+    Cache {
+        kind: Uncache {
+            if_exists: true,
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 24..25,
+                        },
+                    ],
+                    span: 24..25,
+                },
+            ),
+            span: 8..25,
+        },
+        span: 0..25,
+    },
+)
 -- CLEAR CACHE
 Cache(
     Cache {
@@ -394,32 +418,9 @@ Refresh(
                     span: 14..15,
                 },
             ),
-            async_refresh: false,
             span: 8..15,
         },
         span: 0..15,
-    },
-)
--- REFRESH TABLE t ASYNC
-Refresh(
-    Refresh {
-        kind: Table {
-            name: Parts(
-                ObjectName {
-                    parts: [
-                        Ident {
-                            value: "t",
-                            quoted: false,
-                            span: 14..15,
-                        },
-                    ],
-                    span: 14..15,
-                },
-            ),
-            async_refresh: true,
-            span: 8..21,
-        },
-        span: 0..21,
     },
 )
 -- REFRESH FUNCTION f
@@ -477,16 +478,6 @@ Refresh(
             span: 8..54,
         },
         span: 0..54,
-    },
-)
--- REFRESH RESOURCE '/path/to.jar'
-Refresh(
-    Refresh {
-        kind: Resource {
-            path: "/path/to.jar",
-            span: 8..31,
-        },
-        span: 0..31,
     },
 )
 -- REFRESH '/path/to/data'
@@ -811,53 +802,27 @@ Repair(
         span: 0..35,
     },
 )
--- ADD JAR '/path/to.jar'
-AddResource(
-    AddResource {
-        kind: Jar,
-        path: "/path/to.jar",
-        span: 0..22,
-    },
-)
--- ADD FILE '/path/to/file'
-AddResource(
-    AddResource {
-        kind: File,
-        path: "/path/to/file",
-        span: 0..24,
-    },
-)
--- ADD ARCHIVE '/path/to.tgz'
-AddResource(
-    AddResource {
-        kind: Archive,
-        path: "/path/to.tgz",
-        span: 0..26,
-    },
-)
 -- LIST JAR
 ListResource(
     ListResource {
         kind: Jar,
-        path: None,
+        paths: [],
         span: 0..8,
-    },
-)
--- LIST JAR '/path'
-ListResource(
-    ListResource {
-        kind: Jar,
-        path: Some(
-            "/path",
-        ),
-        span: 0..16,
     },
 )
 -- LIST FILE
 ListResource(
     ListResource {
         kind: File,
-        path: None,
+        paths: [],
         span: 0..9,
+    },
+)
+-- LIST FILES
+ListResource(
+    ListResource {
+        kind: File,
+        paths: [],
+        span: 0..10,
     },
 )

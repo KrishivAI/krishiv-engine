@@ -54,15 +54,18 @@ use krishiv_common::error::{
     InvalidSqlSyntaxEmptyInPredicate, InvalidSqlSyntaxEmptyPartitionValue,
     InvalidSqlSyntaxInvalidWindowReference, InvalidSqlSyntaxRepetitiveWindowDefinition,
     InvalidSqlSyntaxUnresolvedWindowReference, InvalidSqlSyntaxVariableTypeOrDefaultRequired,
-    InvalidStatementOrClause, KrishivError, LegacyErrorTemp0035, LegacyErrorTemp0051,
-    LegacyErrorTemp0064, UnsupportedFeatureDescTableColumnJson,
+    InvalidSqlSyntaxShowFunctionsInvalidPattern, InvalidStatementOrClause, KrishivError,
+    LegacyErrorTemp0035, LegacyErrorTemp0051, LegacyErrorTemp0064, LegacyErrorTemp1292,
+    UnsupportedFeatureSchemaLevelCollations, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
+    UnsupportedFeatureDescTableColumnJson,
     UnsupportedFeatureDescTableColumnPartition, UnsupportedFeatureLateralJoinUsing,
 };
 
 pub(crate) use self::types::data_type;
 use crate::ParserOptions;
 use crate::ast::{
-    AlterColumnAction, AlterTable, AlterTableAction, AlterView, AlterViewAction, CacheKind,
+    AlterColumnAction, AlterNamespaceAction, AlterTable, AlterTableAction, AlterView,
+    AlterViewAction, CacheKind, RefreshKind, Show, ShowKind,
     ChangeColumnAction, ColumnConstraintKind, ColumnDef, ColumnName, CreatePermanentView,
     CreateTable, CreateTableLike, DdlName, Delete, Describe, DescribeKind, Expr, ExprKind,
     FileFormat, FileFormatKind, FrameBoundKind, FromClause, Function, GeneratedKind, GroupBy,
@@ -109,13 +112,36 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::DropNamespace(_)
             | Statement::Use(_)
             | Statement::DropVariable(_)
-            | Statement::DropPermanentView(_)
-            | Statement::AlterNamespace(_)
-            | Statement::Show(_)
-            | Statement::Refresh(_)
-            | Statement::Repair(_)
             | Statement::AddResource(_)
             | Statement::ListResource(_) => return Ok(()),
+            Statement::DropPermanentView(v) => return Checker { sql, opts }.ddl_name(&v.name),
+            Statement::AlterNamespace(a) => {
+                let checker = Checker { sql, opts };
+                checker.ddl_name(&a.name)?;
+                match &a.action {
+                    AlterNamespaceAction::SetProperties(properties) => {
+                        property_shapes(properties, true, a.span)?;
+                        checker.option_values(properties)?;
+                    }
+                    // Schema-level collations are off in Spark 4.2
+                    // (`spark.sql.schemaLevelCollations.enabled`).
+                    AlterNamespaceAction::DefaultCollation(_) => {
+                        return Err(at(UnsupportedFeatureSchemaLevelCollations {}, a.span));
+                    }
+                    _ => {}
+                }
+                return Ok(());
+            }
+            Statement::Show(s) => return Checker { sql, opts }.show(s),
+            Statement::Refresh(r) => {
+                return match &r.kind {
+                    RefreshKind::Table { name, .. } | RefreshKind::Function { name, .. } => {
+                        Checker { sql, opts }.ddl_name(name)
+                    }
+                    _ => Ok(()),
+                };
+            }
+            Statement::Repair(r) => return Checker { sql, opts }.ddl_name(&r.table),
             Statement::CreatePermanentView(v) => {
                 return Checker { sql, opts }.create_permanent_view(v);
             }
@@ -128,8 +154,14 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             Statement::Truncate(t) => return Checker { sql, opts }.truncate(t),
             Statement::Describe(d) => return Checker { sql, opts }.describe(d),
             Statement::Cache(c) => match &c.kind {
-                CacheKind::Cache { query, options, .. } => {
+                CacheKind::Cache {
+                    name,
+                    query,
+                    options,
+                    ..
+                } => {
                     let checker = Checker { sql, opts };
+                    checker.ddl_name(name)?;
                     options
                         .iter()
                         .filter_map(|o| o.value.as_ref())
@@ -139,10 +171,12 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                     }
                     return Ok(());
                 }
+                CacheKind::Uncache { name, .. } => return Checker { sql, opts }.ddl_name(name),
                 _ => return Ok(()),
             },
             Statement::Analyze(a) => {
                 let checker = Checker { sql, opts };
+                checker.ddl_name(&a.table)?;
                 checker.partition_values(a.partition.as_ref())?;
                 return Ok(());
             }
@@ -377,18 +411,57 @@ impl Checker<'_> {
         Err(at(InvalidStatementOrClause { operation }, statement))
     }
 
-    /// A `CREATE VIEW` beyond the legacy temporary views: its names, its
-    /// option values and its query, in the order Spark's builder visits
-    /// them. A column type reads only for datasource (`USING`) views.
+    /// A `CREATE VIEW` beyond the legacy temporary views, in the order
+    /// Spark's builder checks it. `createView` (`AS query`): `PARTITIONED
+    /// ON`, a duplicate clause, `OR REPLACE` with `IF NOT EXISTS`,
+    /// `TBLPROPERTIES` or `WITH SCHEMA` on a temporary view, the names,
+    /// options and query, then `IF NOT EXISTS` on a temporary view and its
+    /// qualifier. `createTempViewUsing`: the names, types and options,
+    /// then the qualifier.
     fn create_permanent_view(&self, v: &CreatePermanentView) -> R {
+        if v.query.is_some() {
+            if v.partitioned_on {
+                return Err(at(
+                    InvalidStatementOrClause {
+                        operation: "CREATE VIEW ... PARTITIONED ON".to_owned(),
+                    },
+                    v.span,
+                ));
+            }
+            if let Some(clause) = v.duplicate_clause {
+                return Err(at(
+                    DuplicateClauses {
+                        clause_name: clause.to_owned(),
+                    },
+                    v.span,
+                ));
+            }
+            if v.if_not_exists && v.or_replace {
+                return Err(error::create_view_with_if_not_exists_and_replace(
+                    ddl_label(&v.name, self.sql),
+                    v.span,
+                ));
+            }
+            if v.temporary && !v.tblproperties.is_empty() {
+                return Err(at(
+                    LegacyErrorTemp0035 {
+                        message: "TBLPROPERTIES can't coexist with CREATE TEMPORARY VIEW"
+                            .to_owned(),
+                    },
+                    v.span,
+                ));
+            }
+            if v.temporary && v.schema_binding.is_some() {
+                return Err(at(
+                    UnsupportedFeatureTemporaryViewWithSchemaBindingMode {},
+                    v.span,
+                ));
+            }
+        }
         self.ddl_name(&v.name)?;
         for c in &v.columns {
             self.column_name(&c.name)?;
             if let Some(t) = &c.data_type {
-                if v.using.is_none() {
-                    let text = self.sql.get(t.span.range()).unwrap_or("type");
-                    return Err(error::syntax_error(text.to_owned(), String::new(), t.span));
-                }
                 data_type(t)?;
             }
         }
@@ -399,8 +472,48 @@ impl Checker<'_> {
             .try_for_each(|e| self.expr(e))?;
         if let Some(q) = &v.query {
             self.query(q)?;
+            if v.temporary && v.if_not_exists {
+                return Err(error::temp_view_if_not_exists(v.span));
+            }
         }
-        Ok(())
+        if !v.temporary {
+            return Ok(());
+        }
+        let DdlName::Parts(name) = &v.name else {
+            return Ok(());
+        };
+        let words: Vec<&str> = name.parts.iter().map(|p| p.value.as_str()).collect();
+        if v.global && v.query.is_none() {
+            // A global datasource view keeps its database, which Spark
+            // rejects when it builds the command.
+            if words.len() > 1 {
+                return Err(at(
+                    LegacyErrorTemp1292 {
+                        table_ident: words.iter().map(|w| quote(w)).collect::<Vec<_>>().join("."),
+                    },
+                    v.span,
+                ));
+            }
+            return Ok(());
+        }
+        // `normalizeTempViewIdentifier`: `session.v` and
+        // `system.session.v` are a temporary view's own qualifiers.
+        let allowed = match words.as_slice() {
+            [_] => true,
+            [s, _] => s.eq_ignore_ascii_case("session"),
+            [c, s, _] => c.eq_ignore_ascii_case("system") && s.eq_ignore_ascii_case("session"),
+            _ => false,
+        };
+        if allowed {
+            return Ok(());
+        }
+        let (last, init) = words.split_last().unwrap_or((&"", &[]));
+        Err(error::invalid_temp_obj_qualifier(
+            "VIEW",
+            quote(last),
+            init.iter().map(|w| quote(w)).collect::<Vec<_>>().join("."),
+            v.span,
+        ))
     }
 
     /// An `ALTER TABLE`: its name, then its action's expressions.
@@ -434,8 +547,23 @@ impl Checker<'_> {
                 }
             }
             AlterTableAction::SetTblProperties(properties)
-            | AlterTableAction::SetSerdeProperties(properties) => self.option_values(properties),
-            AlterTableAction::UnsetTblProperties { keys, .. } => self.option_values(keys),
+            | AlterTableAction::SetSerdeProperties(properties) => {
+                property_shapes(properties, true, a.span)?;
+                self.option_values(properties)
+            }
+            AlterTableAction::SetPartitionSerdeProperties {
+                partition,
+                properties,
+                ..
+            } => {
+                self.partition_values(Some(partition))?;
+                property_shapes(properties, true, a.span)?;
+                self.option_values(properties)
+            }
+            AlterTableAction::UnsetTblProperties { keys, .. } => {
+                property_shapes(keys, false, a.span)?;
+                self.option_values(keys)
+            }
             AlterTableAction::AddPartition { parts, .. } => parts
                 .iter()
                 .try_for_each(|p| self.partition_values(Some(&p.spec))),
@@ -458,8 +586,14 @@ impl Checker<'_> {
         self.ddl_name(&a.name)?;
         match &a.action {
             AlterViewAction::SetQuery { query, .. } => self.query(query),
-            AlterViewAction::SetTblProperties(properties) => self.option_values(properties),
-            AlterViewAction::UnsetTblProperties { keys, .. } => self.option_values(keys),
+            AlterViewAction::SetTblProperties(properties) => {
+                property_shapes(properties, true, a.span)?;
+                self.option_values(properties)
+            }
+            AlterViewAction::UnsetTblProperties { keys, .. } => {
+                property_shapes(keys, false, a.span)?;
+                self.option_values(keys)
+            }
             AlterViewAction::SetSchemaBinding(_) | AlterViewAction::RenameTo { .. } => Ok(()),
         }
     }
@@ -472,17 +606,49 @@ impl Checker<'_> {
         Ok(())
     }
 
-    /// One `INSERT INTO|OVERWRITE` clause.
+    /// One `INSERT INTO|OVERWRITE` clause, in Spark's order: the query,
+    /// then the head (`withInsertInto`): names, partition values, `IF NOT
+    /// EXISTS` (rejected for `INTO`, and for `OVERWRITE` with a dynamic
+    /// partition) and the `REPLACE WHERE` condition.
     fn insert_clause(&self, c: &InsertClause) -> R {
+        self.query(&c.query)?;
         self.ddl_name(&c.name)?;
         for column in &c.columns {
             self.column_name(column)?;
         }
         self.partition_values(c.partition.as_ref())?;
+        if c.if_not_exists && !c.overwrite {
+            return Err(at(
+                InvalidStatementOrClause {
+                    operation: "INSERT INTO ... IF NOT EXISTS".to_owned(),
+                },
+                c.head_span,
+            ));
+        }
+        if c.if_not_exists {
+            let dynamic: Vec<&str> = c
+                .partition
+                .iter()
+                .flat_map(|s| &s.parts)
+                .filter(|p| p.value.is_none())
+                .map(|p| p.key.value.as_str())
+                .collect();
+            if !dynamic.is_empty() {
+                return Err(at(
+                    LegacyErrorTemp0035 {
+                        message: format!(
+                            "IF NOT EXISTS with dynamic partitions: {}",
+                            dynamic.join(", ")
+                        ),
+                    },
+                    c.head_span,
+                ));
+            }
+        }
         if let Some(e) = &c.replace_where {
             self.expr(e)?;
         }
-        self.query(&c.query)
+        Ok(())
     }
 
     /// A `DELETE`: its table and its filter.
@@ -569,6 +735,7 @@ impl Checker<'_> {
                         .filter_map(|p| p.value.as_ref())
                         .try_for_each(|e| self.expr(e))?;
                 }
+                column.iter().try_for_each(|c| self.column_name(c))?;
                 if *as_json && mode.is_none() {
                     return Err(at(
                         DescribeJsonNotExtended {
@@ -577,10 +744,10 @@ impl Checker<'_> {
                         d.span,
                     ));
                 }
-                if *as_json && column.is_some() {
+                if *as_json && !column.is_empty() {
                     return Err(at(UnsupportedFeatureDescTableColumnJson {}, d.span));
                 }
-                if column.is_some() && partition.is_some() {
+                if !column.is_empty() && partition.is_some() {
                     return Err(at(UnsupportedFeatureDescTableColumnPartition {}, d.span));
                 }
                 Ok(())
@@ -589,6 +756,60 @@ impl Checker<'_> {
                 self.ddl_name(name)
             }
             DescribeKind::Query { query, .. } => self.query(query),
+        }
+    }
+
+    /// A `SHOW`: its names and partition values; for `SHOW FUNCTIONS`, a
+    /// legacy (name) pattern beside a namespace is
+    /// `INVALID_SQL_SYNTAX.SHOW_FUNCTIONS_INVALID_PATTERN` at the statement.
+    fn show(&self, s: &Show) -> R {
+        match &s.kind {
+            ShowKind::Tables { namespace, .. } | ShowKind::Views { namespace, .. } => {
+                namespace.iter().try_for_each(|n| self.ddl_name(n))
+            }
+            ShowKind::TableExtended {
+                namespace,
+                partition,
+                ..
+            } => {
+                namespace.iter().try_for_each(|n| self.ddl_name(n))?;
+                self.partition_values(partition.as_ref())
+            }
+            ShowKind::Columns {
+                table, namespace, ..
+            } => {
+                self.ddl_name(table)?;
+                namespace.iter().try_for_each(|n| self.ddl_name(n))
+            }
+            ShowKind::Functions {
+                namespace,
+                legacy_pattern,
+                ..
+            } => {
+                if let (Some(_), Some(legacy)) = (namespace, legacy_pattern) {
+                    let pattern = legacy
+                        .parts
+                        .iter()
+                        .map(|p| quote(&p.value))
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    return Err(at(
+                        InvalidSqlSyntaxShowFunctionsInvalidPattern { pattern },
+                        s.span,
+                    ));
+                }
+                namespace.iter().try_for_each(|n| self.ddl_name(n))
+            }
+            ShowKind::CreateTable { name, .. } | ShowKind::TblProperties { name, .. } => {
+                self.ddl_name(name)
+            }
+            ShowKind::Partitions {
+                name, partition, ..
+            } => {
+                self.ddl_name(name)?;
+                self.partition_values(partition.as_ref())
+            }
+            _ => Ok(()),
         }
     }
 
@@ -1280,6 +1501,38 @@ fn foldable(e: &Expr) -> bool {
 }
 
 /// A name as Spark quotes it in errors: `` `name` ``.
+/// `SET` property lists need a value for every key, `UNSET` lists take
+/// none (Spark's `visitPropertyKeyValues` / `visitPropertyKeys`):
+/// `_LEGACY_ERROR_TEMP_0035` naming the offending keys, at `statement`.
+fn property_shapes(properties: &[TableOption], set: bool, statement: Span) -> R {
+    let bad: Vec<String> = properties
+        .iter()
+        .filter(|o| o.value.is_some() != set)
+        .map(|o| {
+            o.key
+                .parts
+                .iter()
+                .map(|p| p.value.as_str())
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .collect();
+    if bad.is_empty() {
+        return Ok(());
+    }
+    let what = if set {
+        "Values must be specified for key(s)"
+    } else {
+        "Values should not be specified for key(s)"
+    };
+    Err(at(
+        LegacyErrorTemp0035 {
+            message: format!("{what}: [{}]", bad.join(",")),
+        },
+        statement,
+    ))
+}
+
 fn quote(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }

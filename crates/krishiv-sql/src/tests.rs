@@ -1500,9 +1500,10 @@ fn create_view_statements() {
         ErrorClass::CreateViewWithIfNotExistsAndReplace
     );
     assert_eq!(e.error.sql_state(), Some("42601"));
+    // Spark names the view by its unquoted parts.
     assert_eq!(
         e.error.message_parameters(),
-        [("viewName", "`v`".to_owned())]
+        [("viewName", "v".to_owned())]
     );
     // The view's query gets Spark's post-parse checks.
     let e = parse_statement("CREATE TEMP VIEW v AS SELECT DATE '2020-02-30'", &d).unwrap_err();
@@ -1516,15 +1517,16 @@ fn create_view_statements() {
         "It is not allowed to define a TEMPORARY view with IF NOT EXISTS."
     );
     // A qualified name parses and fails with
-    // `INVALID_TEMP_OBJ_QUALIFIER`, as in Spark.
+    // `INVALID_TEMP_OBJ_QUALIFIER`, naming the last part and its
+    // qualifier, as in Spark 4.2.0.
     let e = parse_statement("CREATE TEMP VIEW a.b AS SELECT 1", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::InvalidTempObjQualifier);
     assert_eq!(e.error.sql_state(), Some("42602"));
     assert_eq!(
         e.error.message_parameters(),
         [
-            ("objectType", "view".to_owned()),
-            ("objectName", "`a`.`b`".to_owned()),
+            ("objectType", "VIEW".to_owned()),
+            ("objectName", "`b`".to_owned()),
             ("qualifier", "`a`".to_owned()),
         ]
     );
@@ -1541,10 +1543,15 @@ fn create_view_statements() {
     let e = fail("CREATE TEMP VIEW v AS");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     assert_eq!(e.span.range(), 21..21);
-    // The column list is names (with comments), not types.
+    // A typed column list is a datasource view's, which needs `USING`
+    // (Spark 4.2.0: at `AS`, "missing 'USING'").
     let e = fail("CREATE TEMP VIEW v (a INT) AS SELECT 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
-    assert_eq!(e.span.range(), 22..25);
+    assert_eq!(e.span.range(), 27..29);
+    assert_eq!(
+        e.error.message_parameters(),
+        [("error", "'AS'".to_owned()), ("hint", ": missing 'USING'".to_owned())]
+    );
     let e = fail("CREATE TEMP VIEW v () AS SELECT 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);
     let e = fail("CREATE TEMP VIEW v (a COMMENT 1) AS SELECT 1");

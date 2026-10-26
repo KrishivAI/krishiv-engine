@@ -1,6 +1,6 @@
 ---
 source: crates/krishiv-sql/src/tests/commands.rs
-expression: "snapshot_stmts(&[\"ALTER TABLE t ADD COLUMN c INT\",\n\"ALTER TABLE t ADD COLUMNS (a INT COMMENT 'the a', b STRING)\",\n\"ALTER TABLE t DROP COLUMN c\", \"ALTER TABLE t DROP COLUMNS (a, b)\",\n\"ALTER TABLE t RENAME COLUMN a TO b\", \"ALTER TABLE t RENAME a TO b\",\n\"ALTER TABLE t RENAME TO t2\", \"ALTER TABLE t CHANGE a TYPE STRING\",\n\"ALTER TABLE t CHANGE COLUMN a COMMENT 'the a'\",\n\"ALTER TABLE t CHANGE a FIRST\", \"ALTER TABLE t CHANGE a AFTER b\",\n\"ALTER TABLE t CHANGE a SET NOT NULL\", \"ALTER TABLE t CHANGE a DROP NOT NULL\",\n\"ALTER TABLE t ALTER COLUMN a COMMENT 'the a'\",\n\"ALTER TABLE t ALTER a SET NOT NULL\", \"ALTER TABLE t ALTER a DROP NOT NULL\",\n\"ALTER TABLE t ALTER a SET DEFAULT 1\", \"ALTER TABLE t ALTER a DROP DEFAULT\",\n\"ALTER TABLE t SET TBLPROPERTIES ('yes' = 'no')\",\n\"ALTER TABLE t UNSET TBLPROPERTIES ('yes')\",\n\"ALTER TABLE t UNSET TBLPROPERTIES IF EXISTS ('a', 'b')\",\n\"ALTER TABLE t SET SERDEPROPERTIES ('yes' = 'no')\",\n\"ALTER TABLE t SET LOCATION 'loc'\",\n\"ALTER TABLE t ADD PARTITION (c = 'Us', d = 1)\",\n\"ALTER TABLE t ADD IF NOT EXISTS PARTITION (c = 'Us') LOCATION 'loc1' PARTITION (d = 2)\",\n\"ALTER TABLE t DROP PARTITION (c = 'Us')\",\n\"ALTER TABLE t DROP IF EXISTS PARTITION (c = 'Us') PARTITION (d = 2) PURGE\",\n\"ALTER TABLE t PARTITION (c = 'Us') RENAME TO PARTITION (c = 'Them')\",\n\"ALTER TABLE t PARTITION (c = 'Us', d = 1) SET LOCATION 'loc2'\",\n\"ALTER TABLE t RECOVER PARTITIONS\",\n\"ALTER TABLE IDENTIFIER('ta' || 'b') ADD COLUMN c2 INT\",\n\"ALTER TABLE IDENTIFIER('tab') RENAME TO IDENTIFIER('tab_renamed')\",])"
+expression: "snapshot_stmts(&[\"ALTER TABLE t ADD COLUMN c INT\",\n\"ALTER TABLE t ADD COLUMNS (a INT COMMENT 'the a', b STRING)\",\n\"ALTER TABLE t DROP COLUMN c\", \"ALTER TABLE t DROP COLUMNS (a, b)\",\n\"ALTER TABLE t RENAME COLUMN a TO b\", \"ALTER TABLE t RENAME TO t2\",\n\"ALTER TABLE t CHANGE a TYPE STRING\",\n\"ALTER TABLE t CHANGE COLUMN a COMMENT 'the a'\",\n\"ALTER TABLE t CHANGE a FIRST\", \"ALTER TABLE t CHANGE a AFTER b\",\n\"ALTER TABLE t CHANGE a SET NOT NULL\", \"ALTER TABLE t CHANGE a DROP NOT NULL\",\n\"ALTER TABLE t ALTER COLUMN a COMMENT 'the a'\",\n\"ALTER TABLE t ALTER a SET NOT NULL\", \"ALTER TABLE t ALTER a DROP NOT NULL\",\n\"ALTER TABLE t ALTER a SET DEFAULT 1\", \"ALTER TABLE t ALTER a DROP DEFAULT\",\n\"ALTER TABLE t SET TBLPROPERTIES ('yes' = 'no')\",\n\"ALTER TABLE t UNSET TBLPROPERTIES ('yes')\",\n\"ALTER TABLE t UNSET TBLPROPERTIES IF EXISTS ('a', 'b')\",\n\"ALTER TABLE t SET SERDEPROPERTIES ('yes' = 'no')\",\n\"ALTER TABLE t SET LOCATION 'loc'\",\n\"ALTER TABLE t ADD PARTITION (c = 'Us', d = 1)\",\n\"ALTER TABLE t ADD IF NOT EXISTS PARTITION (c = 'Us') LOCATION 'loc1' PARTITION (d = 2)\",\n\"ALTER TABLE t DROP PARTITION (c = 'Us')\",\n\"ALTER TABLE t DROP IF EXISTS PARTITION (c = 'Us'), PARTITION (d = 2) PURGE\",\n\"ALTER TABLE t PARTITION (c = 'Us') SET SERDEPROPERTIES ('yes' = 'no')\",\n\"ALTER TABLE t PARTITION (c = 'Us') RENAME TO PARTITION (c = 'Them')\",\n\"ALTER TABLE t PARTITION (c = 'Us', d = 1) SET LOCATION 'loc2'\",\n\"ALTER TABLE t RECOVER PARTITIONS\",\n\"ALTER TABLE IDENTIFIER('ta' || 'b') ADD COLUMN c2 INT\",\n\"ALTER TABLE IDENTIFIER('tab') RENAME TO IDENTIFIER('tab_renamed')\",])"
 ---
 -- ALTER TABLE t ADD COLUMN c INT
 AlterTable(
@@ -218,41 +218,6 @@ AlterTable(
             span: 14..34,
         },
         span: 0..34,
-    },
-)
--- ALTER TABLE t RENAME a TO b
-AlterTable(
-    AlterTable {
-        table: Parts(
-            ObjectName {
-                parts: [
-                    Ident {
-                        value: "t",
-                        quoted: false,
-                        span: 12..13,
-                    },
-                ],
-                span: 12..13,
-            },
-        ),
-        action: RenameColumn {
-            from: Ident(
-                Ident {
-                    value: "a",
-                    quoted: false,
-                    span: 21..22,
-                },
-            ),
-            to: Ident(
-                Ident {
-                    value: "b",
-                    quoted: false,
-                    span: 26..27,
-                },
-            ),
-            span: 14..27,
-        },
-        span: 0..27,
     },
 )
 -- ALTER TABLE t RENAME TO t2
@@ -1043,7 +1008,7 @@ AlterTable(
         span: 0..39,
     },
 )
--- ALTER TABLE t DROP IF EXISTS PARTITION (c = 'Us') PARTITION (d = 2) PURGE
+-- ALTER TABLE t DROP IF EXISTS PARTITION (c = 'Us'), PARTITION (d = 2) PURGE
 AlterTable(
     AlterTable {
         table: Parts(
@@ -1090,7 +1055,7 @@ AlterTable(
                             key: Ident {
                                 value: "d",
                                 quoted: false,
-                                span: 61..62,
+                                span: 62..63,
                             },
                             value: Some(
                                 Expr {
@@ -1100,19 +1065,89 @@ AlterTable(
                                             kind: Int,
                                         },
                                     ),
-                                    span: 65..66,
+                                    span: 66..67,
                                 },
                             ),
-                            span: 61..66,
+                            span: 62..67,
                         },
                     ],
-                    span: 50..67,
+                    span: 51..68,
                 },
             ],
             purge: true,
-            span: 14..73,
+            span: 14..74,
         },
-        span: 0..73,
+        span: 0..74,
+    },
+)
+-- ALTER TABLE t PARTITION (c = 'Us') SET SERDEPROPERTIES ('yes' = 'no')
+AlterTable(
+    AlterTable {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        action: SetPartitionSerdeProperties {
+            partition: PartitionSpec {
+                parts: [
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "c",
+                            quoted: false,
+                            span: 25..26,
+                        },
+                        value: Some(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "Us",
+                                    ),
+                                ),
+                                span: 29..33,
+                            },
+                        ),
+                        span: 25..33,
+                    },
+                ],
+                span: 14..34,
+            },
+            properties: [
+                TableOption {
+                    key: OptionKey {
+                        parts: [
+                            Ident {
+                                value: "yes",
+                                quoted: true,
+                                span: 56..61,
+                            },
+                        ],
+                        is_string: true,
+                        span: 56..61,
+                    },
+                    value: Some(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "no",
+                                ),
+                            ),
+                            span: 64..68,
+                        },
+                    ),
+                    span: 56..68,
+                },
+            ],
+            span: 14..69,
+        },
+        span: 0..69,
     },
 )
 -- ALTER TABLE t PARTITION (c = 'Us') RENAME TO PARTITION (c = 'Them')

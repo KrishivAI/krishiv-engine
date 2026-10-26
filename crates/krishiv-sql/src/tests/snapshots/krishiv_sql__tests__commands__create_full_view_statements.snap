@@ -1,6 +1,6 @@
 ---
 source: crates/krishiv-sql/src/tests/commands.rs
-expression: "snapshot_stmts(&[\"CREATE VIEW v AS SELECT * FROM t\",\n\"CREATE OR REPLACE VIEW v AS SELECT 1\",\n\"CREATE VIEW IF NOT EXISTS v AS SELECT 1\",\n\"CREATE VIEW v (a COMMENT 'the a', b) AS SELECT 1, 2\",\n\"CREATE VIEW v COMMENT 'the view' TBLPROPERTIES ('p' = 'v') AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA BINDING AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA EVOLUTION AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA COMPENSATION AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA TYPE EVOLUTION AS SELECT 1\",\n\"CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1\",\n\"CREATE OR REPLACE GLOBAL TEMP VIEW v AS SELECT 1\",\n\"CREATE TEMPORARY VIEW v USING parquet\",\n\"CREATE TEMPORARY VIEW v (a) USING parquet OPTIONS (k = 'v')\",\n\"CREATE TEMPORARY VIEW v (e INT) USING parquet\",\n\"CREATE TEMPORARY VIEW v USING org.apache.spark.sql.sources.DDLScanSource OPTIONS (From '1', To '10', Table 'test1')\",\n\"CREATE TEMPORARY VIEW v DEFAULT COLLATION UNICODE AS SELECT CAST(c1 AS STRING)\",\n\"CREATE VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE OR REPLACE VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE TEMPORARY VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE VIEW v (IDENTIFIER('c1')) AS VALUES (1)\",\n\"CREATE VIEW db.v AS SELECT * FROM t\",])"
+expression: "snapshot_stmts(&[\"CREATE VIEW v AS SELECT * FROM t\",\n\"CREATE OR REPLACE VIEW v AS SELECT 1\",\n\"CREATE VIEW IF NOT EXISTS v AS SELECT 1\",\n\"CREATE VIEW v (a COMMENT 'the a', b) AS SELECT 1, 2\",\n\"CREATE VIEW v COMMENT 'the view' TBLPROPERTIES ('p' = 'v') AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA BINDING AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA EVOLUTION AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA COMPENSATION AS SELECT 1\",\n\"CREATE VIEW v WITH SCHEMA TYPE EVOLUTION AS SELECT 1\",\n\"CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1\",\n\"CREATE OR REPLACE GLOBAL TEMP VIEW v AS SELECT 1\",\n\"CREATE TEMPORARY VIEW v USING parquet\",\n\"CREATE TEMPORARY VIEW v (a INT) USING parquet OPTIONS (k = 'v')\",\n\"CREATE TEMPORARY VIEW v (e INT) USING parquet\",\n\"CREATE OR REPLACE TEMPORARY VIEW v (a INT NOT NULL) USING parquet\",\n\"CREATE VIEW v TBLPROPERTIES ('a' = 'b') COMMENT 'c' AS SELECT 1\",\n\"CREATE TEMPORARY VIEW v USING org.apache.spark.sql.sources.DDLScanSource OPTIONS (From '1', To '10', Table 'test1')\",\n\"CREATE TEMPORARY VIEW v DEFAULT COLLATION UNICODE AS SELECT CAST(c1 AS STRING)\",\n\"CREATE VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE OR REPLACE VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE TEMPORARY VIEW IDENTIFIER('v') (c1) AS VALUES (1)\",\n\"CREATE VIEW v (IDENTIFIER('c1')) AS VALUES (1)\",\n\"CREATE VIEW db.v AS SELECT * FROM t\",])"
 ---
 -- CREATE VIEW v AS SELECT * FROM t
 CreatePermanentView(
@@ -28,6 +28,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -134,6 +136,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -209,6 +213,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -287,6 +293,7 @@ CreatePermanentView(
                     },
                 ),
                 data_type: None,
+                not_null: false,
                 comment: Some(
                     "the a",
                 ),
@@ -301,6 +308,7 @@ CreatePermanentView(
                     },
                 ),
                 data_type: None,
+                not_null: false,
                 comment: None,
                 span: 34..35,
             },
@@ -311,6 +319,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -426,6 +436,8 @@ CreatePermanentView(
             },
         ],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -503,6 +515,8 @@ CreatePermanentView(
         schema_binding: Some(
             Binding,
         ),
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -580,6 +594,8 @@ CreatePermanentView(
         schema_binding: Some(
             Evolution,
         ),
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -657,6 +673,8 @@ CreatePermanentView(
         schema_binding: Some(
             Compensation,
         ),
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -734,6 +752,8 @@ CreatePermanentView(
         schema_binding: Some(
             TypeEvolution,
         ),
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -809,6 +829,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -884,6 +906,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -970,11 +994,13 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: None,
         span: 0..37,
     },
 )
--- CREATE TEMPORARY VIEW v (a) USING parquet OPTIONS (k = 'v')
+-- CREATE TEMPORARY VIEW v (a INT) USING parquet OPTIONS (k = 'v')
 CreatePermanentView(
     CreatePermanentView {
         or_replace: false,
@@ -1002,9 +1028,19 @@ CreatePermanentView(
                         span: 25..26,
                     },
                 ),
-                data_type: None,
+                data_type: Some(
+                    DataTypeSpec {
+                        kind: Primitive {
+                            name: "int",
+                            args: [],
+                        },
+                        collation: None,
+                        span: 27..30,
+                    },
+                ),
+                not_null: false,
                 comment: None,
-                span: 25..26,
+                span: 25..30,
             },
         ],
         collation: None,
@@ -1014,10 +1050,10 @@ CreatePermanentView(
                     Ident {
                         value: "parquet",
                         quoted: false,
-                        span: 34..41,
+                        span: 38..45,
                     },
                 ],
-                span: 34..41,
+                span: 38..45,
             },
         ),
         options: [
@@ -1027,11 +1063,11 @@ CreatePermanentView(
                         Ident {
                             value: "k",
                             quoted: false,
-                            span: 51..52,
+                            span: 55..56,
                         },
                     ],
                     is_string: false,
-                    span: 51..52,
+                    span: 55..56,
                 },
                 value: Some(
                     Expr {
@@ -1040,17 +1076,19 @@ CreatePermanentView(
                                 "v",
                             ),
                         ),
-                        span: 55..58,
+                        span: 59..62,
                     },
                 ),
-                span: 51..58,
+                span: 55..62,
             },
         ],
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: None,
-        span: 0..59,
+        span: 0..63,
     },
 )
 -- CREATE TEMPORARY VIEW v (e INT) USING parquet
@@ -1091,6 +1129,7 @@ CreatePermanentView(
                         span: 27..30,
                     },
                 ),
+                not_null: false,
                 comment: None,
                 span: 25..30,
             },
@@ -1112,8 +1151,180 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: None,
         span: 0..45,
+    },
+)
+-- CREATE OR REPLACE TEMPORARY VIEW v (a INT NOT NULL) USING parquet
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: true,
+        global: false,
+        temporary: true,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 33..34,
+                    },
+                ],
+                span: 33..34,
+            },
+        ),
+        columns: [
+            PermanentViewColumn {
+                name: Ident(
+                    Ident {
+                        value: "a",
+                        quoted: false,
+                        span: 36..37,
+                    },
+                ),
+                data_type: Some(
+                    DataTypeSpec {
+                        kind: Primitive {
+                            name: "int",
+                            args: [],
+                        },
+                        collation: None,
+                        span: 38..41,
+                    },
+                ),
+                not_null: true,
+                comment: None,
+                span: 36..50,
+            },
+        ],
+        collation: None,
+        using: Some(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "parquet",
+                        quoted: false,
+                        span: 58..65,
+                    },
+                ],
+                span: 58..65,
+            },
+        ),
+        options: [],
+        comment: None,
+        tblproperties: [],
+        schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
+        query: None,
+        span: 0..65,
+    },
+)
+-- CREATE VIEW v TBLPROPERTIES ('a' = 'b') COMMENT 'c' AS SELECT 1
+CreatePermanentView(
+    CreatePermanentView {
+        or_replace: false,
+        global: false,
+        temporary: false,
+        if_not_exists: false,
+        name: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "v",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        columns: [],
+        collation: None,
+        using: None,
+        options: [],
+        comment: Some(
+            "c",
+        ),
+        tblproperties: [
+            TableOption {
+                key: OptionKey {
+                    parts: [
+                        Ident {
+                            value: "a",
+                            quoted: true,
+                            span: 29..32,
+                        },
+                    ],
+                    is_string: true,
+                    span: 29..32,
+                },
+                value: Some(
+                    Expr {
+                        kind: Literal(
+                            String(
+                                "b",
+                            ),
+                        ),
+                        span: 35..38,
+                    },
+                ),
+                span: 29..38,
+            },
+        ],
+        schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
+        query: Some(
+            Query {
+                with: None,
+                body: SetExpr {
+                    kind: Select(
+                        Select {
+                            hints: [],
+                            quantifier: None,
+                            projection: [
+                                SelectItem {
+                                    expr: Expr {
+                                        kind: Literal(
+                                            Number {
+                                                text: "1",
+                                                kind: Int,
+                                            },
+                                        ),
+                                        span: 62..63,
+                                    },
+                                    alias: None,
+                                    span: 62..63,
+                                },
+                            ],
+                            from: None,
+                            lateral_views: [],
+                            selection: None,
+                            group_by: None,
+                            having: None,
+                            windows: [],
+                            qualify: None,
+                            span: 55..63,
+                        },
+                    ),
+                    span: 55..63,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 55..63,
+            },
+        ),
+        span: 0..63,
     },
 )
 -- CREATE TEMPORARY VIEW v USING org.apache.spark.sql.sources.DDLScanSource OPTIONS (From '1', To '10', Table 'test1')
@@ -1251,6 +1462,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: None,
         span: 0..115,
     },
@@ -1367,6 +1580,7 @@ CreatePermanentView(
                     },
                 ),
                 data_type: None,
+                not_null: false,
                 comment: None,
                 span: 29..31,
             },
@@ -1377,6 +1591,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -1449,6 +1665,7 @@ CreatePermanentView(
                     },
                 ),
                 data_type: None,
+                not_null: false,
                 comment: None,
                 span: 40..42,
             },
@@ -1459,6 +1676,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -1598,6 +1817,7 @@ CreatePermanentView(
                     },
                 ),
                 data_type: None,
+                not_null: false,
                 comment: None,
                 span: 15..31,
             },
@@ -1608,6 +1828,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,
@@ -1681,6 +1903,8 @@ CreatePermanentView(
         comment: None,
         tblproperties: [],
         schema_binding: None,
+        partitioned_on: false,
+        duplicate_clause: None,
         query: Some(
             Query {
                 with: None,

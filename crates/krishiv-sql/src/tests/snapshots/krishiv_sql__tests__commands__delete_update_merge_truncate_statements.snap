@@ -938,14 +938,24 @@ Merge(
                 action: Insert(
                     Values {
                         columns: [
-                            Ident {
-                                value: "c1",
-                                quoted: false,
+                            ObjectName {
+                                parts: [
+                                    Ident {
+                                        value: "c1",
+                                        quoted: false,
+                                        span: 89..91,
+                                    },
+                                ],
                                 span: 89..91,
                             },
-                            Ident {
-                                value: "c2",
-                                quoted: false,
+                            ObjectName {
+                                parts: [
+                                    Ident {
+                                        value: "c2",
+                                        quoted: false,
+                                        span: 93..95,
+                                    },
+                                ],
                                 span: 93..95,
                             },
                         ],

@@ -988,21 +988,29 @@ pub struct CreatePermanentView {
     pub tblproperties: Vec<TableOption>,
     /// `WITH SCHEMA ...`.
     pub schema_binding: Option<SchemaBinding>,
-    /// The `AS query`; `None` for a datasource view without one.
+    /// `PARTITIONED ON (...)` was written (Spark rejects it after
+    /// parsing).
+    pub partitioned_on: bool,
+    /// The first clause written twice, by Spark's check order (`COMMENT`,
+    /// `DEFAULT COLLATION`, `WITH SCHEMA`, `PARTITIONED ON`,
+    /// `TBLPROPERTIES`), if any.
+    pub duplicate_clause: Option<&'static str>,
+    /// The `AS query`; `None` for a datasource view (which has none).
     pub query: Option<Box<Query>>,
     /// Source text, from `CREATE` to the end of the statement.
     pub span: Span,
 }
 
-/// `name [type] [COMMENT '...']` in a [`CreatePermanentView`] column
-/// list. A type reads only for datasource (`USING`) views; anywhere else
-/// Spark rejects it where it stands.
+/// `name [COMMENT '...']`, or in a datasource (`USING`) view `name type
+/// [NOT NULL] [COMMENT '...']`, in a [`CreatePermanentView`] column list.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PermanentViewColumn {
     /// The column alias.
     pub name: ColumnName,
-    /// Its type, if written.
+    /// Its type (datasource views only).
     pub data_type: Option<DataTypeSpec>,
+    /// `NOT NULL` (datasource views only).
+    pub not_null: bool,
     /// Its comment, if written.
     pub comment: Option<String>,
     /// Source text.
@@ -1101,6 +1109,15 @@ pub enum AlterTableAction {
     },
     /// `SET SERDEPROPERTIES (...)`.
     SetSerdeProperties(Vec<TableOption>),
+    /// `PARTITION (...) SET SERDEPROPERTIES (...)`.
+    SetPartitionSerdeProperties {
+        /// The partition.
+        partition: PartitionSpec,
+        /// The properties.
+        properties: Vec<TableOption>,
+        /// Source text.
+        span: Span,
+    },
     /// `SET LOCATION '...'`.
     SetLocation(String),
     /// `ADD [IF NOT EXISTS] PARTITION ... [LOCATION ...] ...`.
@@ -1308,12 +1325,17 @@ pub struct InsertClause {
     pub columns: Vec<ColumnName>,
     /// `PARTITION (...)`.
     pub partition: Option<PartitionSpec>,
+    /// `IF NOT EXISTS` after the partition (Spark rejects it after
+    /// parsing for `INTO`, and for `OVERWRITE` with dynamic partitions).
+    pub if_not_exists: bool,
     /// `REPLACE WHERE ...`.
     pub replace_where: Option<Expr>,
     /// `BY NAME`.
     pub by_name: bool,
     /// The rows to write.
     pub query: Box<Query>,
+    /// Source text of the clause head, from `INSERT` to the query.
+    pub head_span: Span,
     /// Source text, from `INSERT` to the end of the clause.
     pub span: Span,
 }
@@ -1432,6 +1454,8 @@ pub enum MergeMatched {
 pub enum MergeAction {
     /// `UPDATE SET ...`.
     Update(Vec<UpdateAssignment>),
+    /// `UPDATE SET *` (only after `WHEN MATCHED`).
+    UpdateStar,
     /// `DELETE`.
     Delete,
     /// `INSERT ...`.
@@ -1444,10 +1468,10 @@ pub enum MergeAction {
 pub enum MergeInsert {
     /// `INSERT *`.
     Star,
-    /// `INSERT [(columns)] VALUES (...)`.
+    /// `INSERT (columns) VALUES (...)`.
     Values {
-        /// The target columns; empty for none.
-        columns: Vec<Ident>,
+        /// The target columns (dotted names), at least one.
+        columns: Vec<ObjectName>,
         /// The row to insert.
         values: Vec<Expr>,
         /// Source text.
@@ -1508,27 +1532,31 @@ pub enum ShowKind {
         /// Source text.
         span: Span,
     },
-    /// `SHOW COLUMNS [{FROM | IN} table] [{FROM | IN} namespace]`.
+    /// `SHOW COLUMNS {FROM | IN} table [{FROM | IN} namespace]`.
     Columns {
-        /// The table, if written.
-        table: Option<DdlName>,
+        /// The table.
+        table: DdlName,
         /// The namespace, if written.
         namespace: Option<DdlName>,
         /// Source text.
         span: Span,
     },
-    /// `SHOW [scope.] [USER|SYSTEM|ALL] FUNCTIONS [LIKE pattern]
-    /// [{FROM | IN} namespace]`.
+    /// `SHOW [scope.] [USER|SYSTEM|ALL] FUNCTIONS [{FROM | IN} namespace]
+    /// [[LIKE] {pattern | name}]`.
     Functions {
         /// The scope, if written (never a computed name: Spark rejects
         /// `IDENTIFIER(...)` here).
         scope: Option<ObjectName>,
         /// `USER`, `SYSTEM` or `ALL`, if written.
         system: Option<FunctionScope>,
-        /// The pattern, if written.
-        pattern: Option<ShowPattern>,
         /// The namespace, if written.
         namespace: Option<DdlName>,
+        /// The pattern, if written as a string.
+        pattern: Option<ShowPattern>,
+        /// The legacy pattern, if written as a (dotted) name: its last
+        /// part is the pattern, the others the namespace. Spark rejects
+        /// it beside a `FROM`/`IN` namespace.
+        legacy_pattern: Option<ObjectName>,
         /// Source text.
         span: Span,
     },
@@ -1624,8 +1652,9 @@ pub enum DescribeKind {
         table: DdlName,
         /// `PARTITION ...`, if written.
         partition: Option<PartitionSpec>,
-        /// The column, if written.
-        column: Option<ColumnName>,
+        /// The column's name parts (a nested field is dotted); empty for
+        /// none.
+        column: Vec<ColumnName>,
         /// `AS JSON`.
         as_json: bool,
         /// Source text.
@@ -1697,8 +1726,10 @@ pub enum CacheKind {
         /// Source text.
         span: Span,
     },
-    /// `UNCACHE TABLE name`.
+    /// `UNCACHE TABLE [IF EXISTS] name`.
     Uncache {
+        /// `IF EXISTS`.
+        if_exists: bool,
         /// The table.
         name: DdlName,
         /// Source text.
@@ -1721,12 +1752,10 @@ pub struct Refresh {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RefreshKind {
-    /// `REFRESH TABLE name [ASYNC]`.
+    /// `REFRESH TABLE name`.
     Table {
         /// The table.
         name: DdlName,
-        /// `ASYNC`.
-        async_refresh: bool,
         /// Source text.
         span: Span,
     },
@@ -1737,14 +1766,8 @@ pub enum RefreshKind {
         /// Source text.
         span: Span,
     },
-    /// `REFRESH RESOURCE path`.
-    Resource {
-        /// The path.
-        path: String,
-        /// Source text.
-        span: Span,
-    },
-    /// `REFRESH 'path'`.
+    /// `REFRESH path`: one string literal, or the rest of the statement as
+    /// an unquoted path.
     Path {
         /// The path.
         path: String,
@@ -1817,24 +1840,24 @@ pub enum ResourceType {
     Archive,
 }
 
-/// `ADD JAR|FILE|ARCHIVE 'path'`.
+/// `ADD JAR[S]|FILE[S]|ARCHIVE[S] paths`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AddResource {
     /// What to add.
     pub kind: ResourceType,
-    /// The path.
-    pub path: String,
+    /// The paths, quoted or not (quoted ones unescaped); may be empty.
+    pub paths: Vec<String>,
     /// Source text, from `ADD` to the end of the statement.
     pub span: Span,
 }
 
-/// `LIST JAR|FILE|ARCHIVE ['path']`.
+/// `LIST JAR[S]|FILE[S]|ARCHIVE[S] [paths]`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ListResource {
     /// What to list.
     pub kind: ResourceType,
-    /// The path, if written.
-    pub path: Option<String>,
+    /// The paths, quoted or not (quoted ones unescaped); empty for all.
+    pub paths: Vec<String>,
     /// Source text, from `LIST` to the end of the statement.
     pub span: Span,
 }

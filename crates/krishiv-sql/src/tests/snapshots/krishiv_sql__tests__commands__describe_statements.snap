@@ -1,6 +1,6 @@
 ---
 source: crates/krishiv-sql/src/tests/commands.rs
-expression: "snapshot_stmts(&[\"DESCRIBE t\", \"DESC t\", \"DESC TABLE t\", \"DESC EXTENDED t\",\n\"DESC FORMATTED t\", \"DESC t PARTITION (c = 'Us', d = 1)\",\n\"DESC FORMATTED t PARTITION (c = 'Us', d = 1)\",\n\"DESC TABLE EXTENDED f PARTITION (B = 'SPARK', C = TIMESTAMP '2018-11-17 13:33:33') AS JSON\",\n\"DESCRIBE EXTENDED t AS JSON\", \"DESCRIBE t b\", \"DESC FORMATTED t c\",\n\"DESC IDENTIFIER('test_desc')\", \"DESCRIBE FUNCTION f\",\n\"DESCRIBE FUNCTION EXTENDED f\",\n\"DESCRIBE FUNCTION IDENTIFIER('ident.' || 'myDoubleAvg')\",\n\"DESCRIBE SCHEMA s\", \"DESCRIBE SCHEMA EXTENDED test_schema\",\n\"DESCRIBE DATABASE d\", \"DESCRIBE NAMESPACE n\",\n\"DESCRIBE QUERY SELECT * FROM t\", \"DESC SELECT * FROM t\",\n\"DESC WITH s AS (SELECT 'hello' AS col1) SELECT * FROM s\",\n\"DESCRIBE QUERY WITH s AS (SELECT * FROM t) SELECT * FROM s\",])"
+expression: "snapshot_stmts(&[\"DESCRIBE t\", \"DESC t\", \"DESC TABLE t\", \"DESC EXTENDED t\",\n\"DESC FORMATTED t\", \"DESC t PARTITION (c = 'Us', d = 1)\",\n\"DESC FORMATTED t PARTITION (c = 'Us', d = 1)\",\n\"DESC TABLE EXTENDED f PARTITION (B = 'SPARK', C = TIMESTAMP '2018-11-17 13:33:33') AS JSON\",\n\"DESCRIBE EXTENDED t AS JSON\", \"DESCRIBE t b\", \"DESC FORMATTED t c\",\n\"DESC t s.field\", \"DESCRIBE EXTENDED t a.`b c`.d\",\n\"DESC IDENTIFIER('test_desc')\", \"DESCRIBE FUNCTION f\",\n\"DESCRIBE FUNCTION EXTENDED f\",\n\"DESCRIBE FUNCTION IDENTIFIER('ident.' || 'myDoubleAvg')\",\n\"DESCRIBE SCHEMA s\", \"DESCRIBE SCHEMA EXTENDED test_schema\",\n\"DESCRIBE DATABASE d\", \"DESCRIBE NAMESPACE n\",\n\"DESCRIBE QUERY SELECT * FROM t\", \"DESC SELECT * FROM t\",\n\"DESC WITH s AS (SELECT 'hello' AS col1) SELECT * FROM s\",\n\"DESCRIBE QUERY WITH s AS (SELECT * FROM t) SELECT * FROM s\",])"
 ---
 -- DESCRIBE t
 Describe(
@@ -20,7 +20,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: None,
+            column: [],
             as_json: false,
             span: 9..10,
         },
@@ -45,7 +45,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: None,
+            column: [],
             as_json: false,
             span: 5..6,
         },
@@ -70,7 +70,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: None,
+            column: [],
             as_json: false,
             span: 11..12,
         },
@@ -97,7 +97,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: None,
+            column: [],
             as_json: false,
             span: 5..15,
         },
@@ -124,7 +124,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: None,
+            column: [],
             as_json: false,
             span: 5..16,
         },
@@ -192,7 +192,7 @@ Describe(
                     span: 7..34,
                 },
             ),
-            column: None,
+            column: [],
             as_json: false,
             span: 5..34,
         },
@@ -262,7 +262,7 @@ Describe(
                     span: 17..44,
                 },
             ),
-            column: None,
+            column: [],
             as_json: false,
             span: 5..44,
         },
@@ -336,7 +336,7 @@ Describe(
                     span: 22..82,
                 },
             ),
-            column: None,
+            column: [],
             as_json: true,
             span: 11..90,
         },
@@ -363,7 +363,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: None,
+            column: [],
             as_json: true,
             span: 9..27,
         },
@@ -388,7 +388,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: Some(
+            column: [
                 Ident(
                     Ident {
                         value: "b",
@@ -396,7 +396,7 @@ Describe(
                         span: 11..12,
                     },
                 ),
-            ),
+            ],
             as_json: false,
             span: 9..12,
         },
@@ -423,7 +423,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: Some(
+            column: [
                 Ident(
                     Ident {
                         value: "c",
@@ -431,11 +431,100 @@ Describe(
                         span: 17..18,
                     },
                 ),
-            ),
+            ],
             as_json: false,
             span: 5..18,
         },
         span: 0..18,
+    },
+)
+-- DESC t s.field
+Describe(
+    Describe {
+        kind: Table {
+            mode: None,
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 5..6,
+                        },
+                    ],
+                    span: 5..6,
+                },
+            ),
+            partition: None,
+            column: [
+                Ident(
+                    Ident {
+                        value: "s",
+                        quoted: false,
+                        span: 7..8,
+                    },
+                ),
+                Ident(
+                    Ident {
+                        value: "field",
+                        quoted: false,
+                        span: 9..14,
+                    },
+                ),
+            ],
+            as_json: false,
+            span: 5..14,
+        },
+        span: 0..14,
+    },
+)
+-- DESCRIBE EXTENDED t a.`b c`.d
+Describe(
+    Describe {
+        kind: Table {
+            mode: Some(
+                Extended,
+            ),
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                    ],
+                    span: 18..19,
+                },
+            ),
+            partition: None,
+            column: [
+                Ident(
+                    Ident {
+                        value: "a",
+                        quoted: false,
+                        span: 20..21,
+                    },
+                ),
+                Ident(
+                    Ident {
+                        value: "b c",
+                        quoted: true,
+                        span: 22..27,
+                    },
+                ),
+                Ident(
+                    Ident {
+                        value: "d",
+                        quoted: false,
+                        span: 28..29,
+                    },
+                ),
+            ],
+            as_json: false,
+            span: 9..29,
+        },
+        span: 0..29,
     },
 )
 -- DESC IDENTIFIER('test_desc')
@@ -457,7 +546,7 @@ Describe(
                 },
             ),
             partition: None,
-            column: None,
+            column: [],
             as_json: false,
             span: 5..28,
         },

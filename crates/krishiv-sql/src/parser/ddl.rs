@@ -20,9 +20,11 @@ use crate::ast::{
     MergeClause, MergeInsert, MergeMatched, MergeSource, NamespaceKind, PartitionSpec,
     PartitionSpecPart, PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind,
     Relation, RelationExt, Repair, RepairAction, ResourceType, SchemaBinding, SetExprKind, Show,
-    ShowKind, ShowPattern, Statement, Truncate, Update, UpdateAssignment,
+    ShowKind, ShowPattern, Span, Statement, Truncate, Update, UpdateAssignment,
 };
-use crate::error;
+use krishiv_common::error::{LegacyErrorTemp0035, LegacyErrorTemp0064, MergeWithoutWhen};
+
+use crate::error::{self, ParseError};
 use crate::lexer::{Sym, TokenKind};
 
 impl<'s> Parser<'s> {
@@ -46,10 +48,7 @@ impl<'s> Parser<'s> {
             self.merge_command()
         } else if self.kw_at(0, "TRUNCATE") {
             self.truncate_command()
-        } else if self.kw_at(0, "CACHE")
-            || self.kw_at(0, "UNCACHE")
-            || (self.kw_at(0, "CLEAR") && self.kw_at(1, "CACHE"))
-        {
+        } else if self.any_kw_at(0, &["CACHE", "UNCACHE", "CLEAR"]) {
             self.cache_command()
         } else if self.kw_at(0, "REFRESH") {
             self.refresh_command()
@@ -102,17 +101,37 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// `[AS] alias` where a bare alias reads only before `terminator`
-    /// (`UPDATE t x SET ...` names `x`, while `UPDATE t SET ...` has no
-    /// alias, as `SET` alone is no identifier position).
+    /// `kw`, or a syntax error here with ANTLR's "missing" hint when the
+    /// token here could follow it (`follows`).
+    fn expect_kw_or_missing(&mut self, kw: &'static str, display: &'static str, follows: bool) -> PR<()> {
+        if self.eat_kw(kw) {
+            return Ok(());
+        }
+        if follows {
+            self.missing = Some((self.pos, display));
+        }
+        self.fail()
+    }
+
+    /// Whether a name starts here (the token after a missing keyword that
+    /// a name follows).
+    fn name_here(&self) -> bool {
+        matches!(
+            self.kind(0),
+            Some(TokenKind::Word | TokenKind::QuotedIdent)
+        )
+    }
+
+    /// `[AS] alias`: any identifier but `terminator` (`UPDATE t x SET ...`
+    /// names `x`, while `UPDATE t SET ...` has no alias).
     fn stmt_alias(&mut self, terminator: &str) -> PR<Option<crate::ast::Ident>> {
         if self.eat_kw("AS") {
             return self.any_ident().map(Some);
         }
-        if self.is_ident_at(0, true)
-            && (self.kw_at(1, terminator)
-                || matches!(self.kind(1), None | Some(TokenKind::Sym(Sym::Semi))))
-        {
+        // Spark's `tableAlias` takes any identifier but the clause keyword
+        // that follows (`UPDATE t c1 = 2` names `t` `c1`, then wants
+        // `SET`).
+        if self.is_ident_at(0, true) && !self.kw_at(0, terminator) {
             return self.any_ident().map(Some);
         }
         Ok(None)
@@ -237,18 +256,12 @@ impl<'s> Parser<'s> {
         }
         if self.eat_kw("DROP") {
             // `DROP [COLUMN|COLUMNS] ...` or `DROP [IF EXISTS] PARTITION
-            // ... [PURGE]`.
+            // ..., PARTITION ... [PURGE]`.
             if self.eat_kw("COLUMN") || self.eat_kw("COLUMNS") {
                 return self.alter_drop_columns();
             }
             let if_exists = self.eat_if_exists();
-            let mut specs = Vec::new();
-            loop {
-                specs.push(self.partition_spec()?);
-                if !self.kw_at(0, "PARTITION") {
-                    break;
-                }
-            }
+            let specs = self.comma_sep(Self::partition_spec)?;
             let purge = self.eat_kw("PURGE");
             return Ok(AlterTableAction::DropPartition {
                 if_exists,
@@ -258,14 +271,15 @@ impl<'s> Parser<'s> {
             });
         }
         if self.eat_kw("RENAME") {
-            // `RENAME TO name` or `RENAME [COLUMN] from TO to`.
+            // `RENAME TO name` or `RENAME COLUMN from TO to` (`COLUMN` is
+            // required, as in Spark's grammar).
             if self.eat_kw("TO") {
                 return Ok(AlterTableAction::RenameTo {
                     name: self.rename_target()?,
                     span: self.span_from(start),
                 });
             }
-            self.eat_kw("COLUMN");
+            self.expect_kw("COLUMN")?;
             let from = self.column_name()?;
             self.expect_kw("TO")?;
             let to = self.column_name()?;
@@ -419,8 +433,18 @@ impl<'s> Parser<'s> {
                     span: self.span_from(start),
                 });
             }
-            if self.kw_at(0, "SET") && self.kw_at(1, "LOCATION") {
-                self.pos += 2;
+            if !self.eat_kw("SET") {
+                return self.fail();
+            }
+            if self.eat_kw("SERDEPROPERTIES") {
+                let properties = self.property_list(false)?;
+                return Ok(AlterTableAction::SetPartitionSerdeProperties {
+                    partition: from,
+                    properties,
+                    span: self.span_from(start),
+                });
+            }
+            if self.eat_kw("LOCATION") {
                 let location = self.string_after()?;
                 return Ok(AlterTableAction::SetPartitionLocation {
                     partition: from,
@@ -564,120 +588,160 @@ impl<'s> Parser<'s> {
             p.expect_kw("VIEW")?;
             let if_not_exists = p.eat_if_not_exists();
             let name = p.ddl_name()?;
+            // Spark has two rules: `createTempViewUsing` (temporary, no
+            // `IF NOT EXISTS`, typed columns, `USING`) and `createView`
+            // (untyped columns, `AS query`). ANTLR picks the first by the
+            // first column: a typed one reads a typed list.
+            // `createTempViewUsing` names the view with `tableIdentifier`
+            // (at most two parts).
+            let using_name = match &name {
+                DdlName::Parts(n) => n.parts.len() <= 2,
+                DdlName::Dynamic(_) => true,
+            };
+            let typed = temporary && !if_not_exists && using_name && p.view_column_typed();
             let columns = if p.sym_at(0, Sym::LParen) {
-                p.paren_list(Self::full_view_column)?
+                p.paren_list(|p| p.full_view_column(typed, temporary && !if_not_exists))?
             } else {
                 Vec::new()
             };
-            let collation = if p.kw_at(0, "DEFAULT") && p.kw_at(1, "COLLATION") {
-                p.pos += 2;
-                Some(p.table_name()?)
-            } else {
-                None
+            let using_rule = typed
+                || (temporary
+                    && !if_not_exists
+                    && using_name
+                    && columns.is_empty()
+                    && p.kw_at(0, "USING"));
+            let mut view = CreatePermanentView {
+                or_replace,
+                global,
+                temporary,
+                if_not_exists,
+                name,
+                columns,
+                collation: None,
+                using: None,
+                options: Vec::new(),
+                comment: None,
+                tblproperties: Vec::new(),
+                schema_binding: None,
+                partitioned_on: false,
+                duplicate_clause: None,
+                query: None,
+                span: Span::new(start, start),
             };
-            let using = if p.eat_kw("USING") {
-                Some(p.table_name()?)
-            } else {
-                None
-            };
-            let mut options = Vec::new();
-            if p.eat_kw("OPTIONS") {
-                options = p.property_list(true)?;
-            }
-            let comment = if p.eat_kw("COMMENT") {
-                Some(p.string_after()?)
-            } else {
-                None
-            };
-            let mut tblproperties = Vec::new();
-            if p.eat_kw("TBLPROPERTIES") {
-                tblproperties = p.property_list(false)?;
-            }
-            let schema_binding = if p.kw_at(0, "WITH") && p.kw_at(1, "SCHEMA") {
-                p.pos += 2;
-                Some(p.schema_binding()?)
-            } else {
-                None
-            };
-            let query = if p.eat_kw("AS") {
-                Some(Box::new(p.query()?))
-            } else {
-                None
-            };
-            if query.is_none() && using.is_none() {
-                return p.fail();
-            }
-            if !temporary && using.is_some() {
-                // A datasource view is always temporary, as in Spark.
-                return p.fail();
-            }
-            let span = p.span_from(start);
-            if temporary {
-                if let DdlName::Parts(name) = &name
-                    && name.parts.len() > 1
-                {
-                    let object_name: Vec<String> = name
-                        .parts
-                        .iter()
-                        .map(|q| super::quote_ident(&q.value))
-                        .collect();
-                    let qualifier: Vec<String> = name.parts[..name.parts.len() - 1]
-                        .iter()
-                        .map(|q| super::quote_ident(&q.value))
-                        .collect();
-                    return Self::fatal(error::invalid_temp_obj_qualifier(
-                        "view",
-                        object_name.join("."),
-                        qualifier.join("."),
-                        span,
-                    ));
+            if using_rule {
+                if !p.kw_at(0, "USING") {
+                    p.missing = Some((p.pos, "'USING'"));
+                    return p.fail();
                 }
-                if if_not_exists && or_replace {
-                    return Self::fatal(error::create_view_with_if_not_exists_and_replace(
-                        super::quote_ident(&view_name_label(&name, p.src)),
-                        span,
-                    ));
+                p.bump();
+                view.using = Some(p.table_name()?);
+                if p.eat_kw("OPTIONS") {
+                    view.options = p.property_list(true)?;
                 }
-                if if_not_exists {
-                    return Self::fatal(error::temp_view_if_not_exists(span));
-                }
+            } else {
+                p.view_clauses(&mut view)?;
+                p.expect_kw("AS")?;
+                view.query = Some(Box::new(p.query()?));
             }
+            view.span = p.span_from(start);
             p.command_end()?;
-            Ok(Statement::CreatePermanentView(Box::new(
-                CreatePermanentView {
-                    or_replace,
-                    global,
-                    temporary,
-                    if_not_exists,
-                    name,
-                    columns,
-                    collation,
-                    using,
-                    options,
-                    comment,
-                    tblproperties,
-                    schema_binding,
-                    query,
-                    span,
-                },
-            )))
+            Ok(Statement::CreatePermanentView(Box::new(view)))
         })
     }
 
-    /// `name [type] [COMMENT '...']` in a [`CreatePermanentView`]
-    /// column list.
-    fn full_view_column(&mut self) -> PR<PermanentViewColumn> {
+    /// Whether the column list here (if any) starts with a typed column:
+    /// a name followed by anything but `,`, `)` or `COMMENT`.
+    fn view_column_typed(&self) -> bool {
+        if !self.sym_at(0, Sym::LParen) {
+            return false;
+        }
+        let after = if self.kw_at(1, "IDENTIFIER") && self.sym_at(2, Sym::LParen) {
+            match self.closers.get(self.pos + 2) {
+                Some(&close) if close != usize::MAX => close + 1 - self.pos,
+                _ => return false,
+            }
+        } else {
+            2
+        };
+        !(self.sym_at(after, Sym::Comma)
+            || self.sym_at(after, Sym::RParen)
+            || self.kw_at(after, "COMMENT"))
+    }
+
+    /// `createView`'s clauses, in any order: `COMMENT`, `WITH SCHEMA`,
+    /// `DEFAULT COLLATION`, `PARTITIONED ON (...)`, `TBLPROPERTIES`. A
+    /// clause written twice is recorded for validation (Spark checks after
+    /// parsing).
+    fn view_clauses(&mut self, view: &mut CreatePermanentView) -> PR<()> {
+        // In Spark's check order, with how often each was written.
+        let mut seen = [
+            ("COMMENT", 0u8),
+            ("DEFAULT COLLATION", 0),
+            ("WITH SCHEMA", 0),
+            ("PARTITIONED ON", 0),
+            ("TBLPROPERTIES", 0),
+        ];
+        loop {
+            let clause = if self.eat_kw("COMMENT") {
+                view.comment = Some(self.string_after()?);
+                0
+            } else if self.kw_at(0, "DEFAULT") && self.kw_at(1, "COLLATION") {
+                self.pos += 2;
+                view.collation = Some(self.table_name()?);
+                1
+            } else if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") {
+                self.pos += 2;
+                view.schema_binding = Some(self.schema_binding()?);
+                2
+            } else if self.kw_at(0, "PARTITIONED") && self.kw_at(1, "ON") {
+                self.pos += 2;
+                self.paren_list(Self::any_ident)?;
+                view.partitioned_on = true;
+                3
+            } else if self.eat_kw("TBLPROPERTIES") {
+                view.tblproperties = self.property_list(false)?;
+                4
+            } else {
+                break;
+            };
+            if let Some(entry) = seen.get_mut(clause) {
+                entry.1 = entry.1.saturating_add(1);
+            }
+        }
+        view.duplicate_clause = seen.iter().find(|(_, n)| *n > 1).map(|(c, _)| *c);
+        Ok(())
+    }
+
+    /// A column of a [`CreatePermanentView`] list: `name type [NOT NULL]
+    /// [COMMENT '...']` in a `typed` list (`colTypeList`), else `name
+    /// [COMMENT '...']`. A type in an untyped list fails where it stands
+    /// (as "extra input" when `extra_hint`: ANTLR's recovery in a
+    /// temporary view's list); an untyped column in a typed list fails
+    /// after its name.
+    fn full_view_column(&mut self, typed: bool, extra_hint: bool) -> PR<PermanentViewColumn> {
         let start = self.start();
         let name = self.column_name()?;
-        // A type reads only for datasource (`USING`) views; the check
-        // runs in validation, where the whole statement is known.
-        let data_type = if self.kw_at(0, "COMMENT")
-            || self.sym_at(0, Sym::Comma)
-            || self.sym_at(0, Sym::RParen)
-        {
-            None
+        let ends = |p: &Self| p.sym_at(0, Sym::Comma) || p.sym_at(0, Sym::RParen);
+        let (data_type, not_null) = if typed {
+            if ends(self) {
+                return self.fail();
+            }
+            let t = self.data_type()?;
+            let not_null = if self.kw_at(0, "NOT") && self.kw_at(1, "NULL") {
+                self.pos += 2;
+                true
+            } else {
+                false
+            };
+            (Some(t), not_null)
         } else {
-            Some(self.data_type()?)
+            if !(ends(self) || self.kw_at(0, "COMMENT")) {
+                if extra_hint {
+                    self.extra = Some(self.pos);
+                }
+                return self.fail();
+            }
+            (None, false)
         };
         let comment = if self.eat_kw("COMMENT") {
             Some(self.string_after()?)
@@ -687,6 +751,7 @@ impl<'s> Parser<'s> {
         Ok(PermanentViewColumn {
             name,
             data_type,
+            not_null,
             comment,
             span: self.span_from(start),
         })
@@ -763,8 +828,11 @@ impl<'s> Parser<'s> {
             });
         }
         if self.eat_kw("COLUMNS") {
-            // `SHOW COLUMNS [{FROM | IN} table] [{FROM | IN} namespace]`.
-            let table = self.show_namespace()?;
+            // `SHOW COLUMNS {FROM | IN} table [{FROM | IN} namespace]`.
+            if !(self.eat_kw("FROM") || self.eat_kw("IN")) {
+                return self.fail();
+            }
+            let table = self.ddl_name()?;
             let namespace = self.show_namespace()?;
             return Ok(ShowKind::Columns {
                 table,
@@ -892,13 +960,28 @@ impl<'s> Parser<'s> {
             }
         }
         self.expect_kw("FUNCTIONS")?;
-        let pattern = self.show_pattern_opt()?;
+        // The namespace reads before the pattern; the pattern is a string
+        // or (Spark's legacy form) a dotted name.
         let namespace = self.show_namespace()?;
+        let pattern_start = self.start();
+        let like = self.eat_kw("LIKE");
+        let mut pattern = None;
+        let mut legacy_pattern = None;
+        if let Some(text) = self.string_lit() {
+            pattern = Some(ShowPattern {
+                like,
+                pattern: text,
+                span: self.span_from(pattern_start),
+            });
+        } else if like || !self.item_end_at(0) {
+            legacy_pattern = Some(self.table_name()?);
+        }
         Ok(ShowKind::Functions {
             scope,
             system,
-            pattern,
             namespace,
+            pattern,
+            legacy_pattern,
             span: self.span_from(start),
         })
     }
@@ -1028,16 +1111,19 @@ impl<'s> Parser<'s> {
                 mode,
                 table,
                 partition,
-                column: None,
+                column: Vec::new(),
                 as_json: true,
                 span: self.span_from(start),
             });
         }
-        let column = if self.kw_at(0, "JSON") || self.item_end_at(0) {
-            None
-        } else {
-            Some(self.column_name()?)
-        };
+        // `describeColName`: a dotted name (a nested field).
+        let mut column = Vec::new();
+        if !(self.kw_at(0, "JSON") || self.item_end_at(0)) {
+            column.push(self.column_name()?);
+            while self.eat_sym(Sym::Dot) {
+                column.push(self.column_name()?);
+            }
+        }
         let as_json = if self.kw_at(0, "AS") && self.kw_at(1, "JSON") {
             self.pos += 2;
             true
@@ -1061,7 +1147,7 @@ impl<'s> Parser<'s> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("INSERT")?;
-            let clause = p.insert_clause(start)?;
+            let clause = p.insert_clause(start, false)?;
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::Insert(Box::new(Insert {
@@ -1084,14 +1170,17 @@ impl<'s> Parser<'s> {
                 p.strip_insert_alias(relation);
             }
             let mut clauses = Vec::new();
-            loop {
+            let outer = std::mem::replace(&mut p.insert_bodies, true);
+            let read: PR<()> = (|| loop {
                 let clause_start = p.start();
                 p.expect_kw("INSERT")?;
-                clauses.push(p.insert_clause(clause_start)?);
+                clauses.push(p.insert_clause(clause_start, true)?);
                 if !p.kw_at(0, "INSERT") {
-                    break;
+                    return Ok(());
                 }
-            }
+            })();
+            p.insert_bodies = outer;
+            read?;
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::Insert(Box::new(Insert {
@@ -1155,11 +1244,14 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// `INTO|OVERWRITE [TABLE] name [(columns)] [PARTITION ...] [REPLACE
-    /// WHERE ...] [BY NAME] query`, after the `INSERT` at `clause_start`.
-    /// A `(` opening a query reads as the query (it consumes its own
-    /// parens), anything else as a column list.
-    fn insert_clause(&mut self, clause_start: usize) -> PR<InsertClause> {
+    /// After the `INSERT` at `clause_start`, Spark's `insertInto` then the
+    /// query: `OVERWRITE [TABLE] name [PARTITION ... [IF NOT EXISTS]]
+    /// [BY NAME | (columns)] query`, `INTO [TABLE] name [PARTITION ...]
+    /// [IF NOT EXISTS] [BY NAME | (columns)] query`, or `INTO [TABLE] name
+    /// [BY NAME] REPLACE WHERE ... query`. A `(` opening a query reads as
+    /// the query (it consumes its own parens), anything else as a column
+    /// list.
+    fn insert_clause(&mut self, clause_start: usize, multi: bool) -> PR<InsertClause> {
         let overwrite = if self.eat_kw("OVERWRITE") {
             true
         } else {
@@ -1168,7 +1260,61 @@ impl<'s> Parser<'s> {
         };
         self.eat_kw("TABLE");
         let name = self.ddl_name()?;
-        let (columns, paren_query) = if self.sym_at(0, Sym::LParen) && self.query_follows(1) {
+        let replace_at = if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+            2
+        } else {
+            0
+        };
+        if !overwrite && self.kw_at(replace_at, "REPLACE") && self.kw_at(replace_at + 1, "WHERE") {
+            let where_at = self.pos + replace_at + 1;
+            self.pos += replace_at + 2;
+            let replace_where = Some(self.expr()?);
+            if replace_at == 0 && self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+                // `BY NAME` goes before `REPLACE`: ANTLR's prediction
+                // rejects the reverse order at the `WHERE`.
+                self.pos = where_at;
+                self.far = where_at;
+                self.matched = None;
+                self.extra = None;
+                self.missing = None;
+                return Err(Fail::Syntax);
+            }
+            let head_span = self.span_from(clause_start);
+            let query = self.insert_query(multi)?;
+            return Ok(InsertClause {
+                overwrite,
+                name,
+                columns: Vec::new(),
+                partition: None,
+                if_not_exists: false,
+                replace_where,
+                by_name: replace_at == 2,
+                query: Box::new(query),
+                head_span,
+                span: self.span_from(clause_start),
+            });
+        }
+        let partition = if self.kw_at(0, "PARTITION") {
+            Some(self.partition_spec()?)
+        } else {
+            None
+        };
+        // `IF NOT EXISTS` follows a partition for `OVERWRITE`; for `INTO`
+        // it parses anywhere here and fails after parsing.
+        let if_not_exists = (!overwrite || partition.is_some()) && self.eat_if_not_exists();
+        let by_name = if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+            self.pos += 2;
+            true
+        } else {
+            false
+        };
+        let head_before_columns = self.span_from(clause_start);
+        let (columns, paren_query) = if by_name {
+            (Vec::new(), None)
+        } else if multi && self.sym_at(0, Sym::LParen) && self.query_follows(1) {
+            // A multi-table insert body is no parenthesized query.
+            return self.fail();
+        } else if self.sym_at(0, Sym::LParen) && self.query_follows(1) {
             let save = self.checkpoint();
             match self.query() {
                 Ok(query) => {
@@ -1186,42 +1332,44 @@ impl<'s> Parser<'s> {
         } else {
             (Vec::new(), None)
         };
-        let partition = if self.kw_at(0, "PARTITION") {
-            Some(self.partition_spec()?)
+        let head_span = if columns.is_empty() {
+            head_before_columns
         } else {
-            None
-        };
-        // `REPLACE WHERE ...` before `BY NAME`, as in Spark's grammar.
-        let replace_where = if self.kw_at(0, "REPLACE") && self.kw_at(1, "WHERE") {
-            self.pos += 2;
-            Some(self.expr()?)
-        } else {
-            None
-        };
-        let by_name = if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
-            self.pos += 2;
-            true
-        } else {
-            false
+            self.span_from(clause_start)
         };
         let query = match paren_query {
             Some(query) => query,
-            None => {
-                let mut query = self.query()?;
-                self.strip_query_insert_alias(&mut query);
-                query
-            }
+            None => self.insert_query(multi)?,
         };
         Ok(InsertClause {
             overwrite,
             name,
             columns,
             partition,
-            replace_where,
+            if_not_exists,
+            replace_where: None,
             by_name,
             query: Box::new(query),
+            head_span,
             span: self.span_from(clause_start),
         })
+    }
+
+    /// The rows of an insert clause: a query, or for a multi-table insert
+    /// (`multi`) Spark's `fromStatementBody` (a `SELECT` or `TRANSFORM`
+    /// without `FROM` or set operators, then `queryOrganization`).
+    fn insert_query(&mut self, multi: bool) -> PR<Query> {
+        if !multi {
+            let mut query = self.query()?;
+            self.strip_query_insert_alias(&mut query);
+            return Ok(query);
+        }
+        let start = self.start();
+        let body = self.select_kind(start, false)?;
+        let mut query = Self::bare_query(body, start);
+        self.organization(&mut query)?;
+        query.span = self.span_from(start);
+        Ok(query)
     }
 
     // ---- DELETE / UPDATE / MERGE / TRUNCATE ------------------------------
@@ -1231,7 +1379,8 @@ impl<'s> Parser<'s> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("DELETE")?;
-            p.expect_kw("FROM")?;
+            let follows = p.name_here();
+            p.expect_kw_or_missing("FROM", "'FROM'", follows)?;
             let table = p.ddl_name()?;
             let alias = p.stmt_alias("WHERE")?;
             let where_clause = p.opt_clause("WHERE")?;
@@ -1300,11 +1449,15 @@ impl<'s> Parser<'s> {
             while p.eat_kw("WHEN") {
                 clauses.push(p.merge_clause()?);
             }
-            if clauses.is_empty() {
-                return p.fail();
-            }
             let span = p.span_from(start);
             p.command_end()?;
+            if clauses.is_empty() {
+                // Spark's builder, after parsing: `MERGE_WITHOUT_WHEN`.
+                return Self::fatal(ParseError {
+                    error: MergeWithoutWhen {}.into(),
+                    span,
+                });
+            }
             Ok(Statement::Merge(Box::new(Merge {
                 target,
                 target_alias,
@@ -1398,6 +1551,9 @@ impl<'s> Parser<'s> {
         let start = self.start();
         if self.kw_at(0, "UPDATE") && self.kw_at(1, "SET") {
             self.pos += 2;
+            if matched == MergeMatched::Matched && self.eat_sym(Sym::Star) {
+                return Ok(MergeAction::UpdateStar);
+            }
             let mut assignments = vec![self.update_assignment()?];
             while self.eat_sym(Sym::Comma) {
                 assignments.push(self.update_assignment()?);
@@ -1408,15 +1564,14 @@ impl<'s> Parser<'s> {
             return Ok(MergeAction::Delete);
         }
         if self.eat_kw("INSERT") {
-            // `INSERT *` or `INSERT [(columns)] VALUES (...)`.
+            // `INSERT *` or `INSERT (columns) VALUES (...)`.
             if self.eat_sym(Sym::Star) {
                 return Ok(MergeAction::Insert(MergeInsert::Star));
             }
-            let columns = if self.sym_at(0, Sym::LParen) {
-                self.paren_list(Self::any_ident)?
-            } else {
-                Vec::new()
-            };
+            if !self.sym_at(0, Sym::LParen) {
+                return self.fail();
+            }
+            let columns = self.paren_list(Self::table_name)?;
             self.expect_kw("VALUES")?;
             self.expect_sym(Sym::LParen)?;
             let values = self.comma_sep(Self::expr)?;
@@ -1435,7 +1590,8 @@ impl<'s> Parser<'s> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("TRUNCATE")?;
-            p.expect_kw("TABLE")?;
+            let follows = p.name_here();
+            p.expect_kw_or_missing("TABLE", "'TABLE'", follows)?;
             let table = p.ddl_name()?;
             let partition = if p.kw_at(0, "PARTITION") {
                 Some(p.partition_spec()?)
@@ -1481,14 +1637,17 @@ impl<'s> Parser<'s> {
                 }
             } else if p.eat_kw("UNCACHE") {
                 let kind_start = p.start();
-                p.expect_kw("TABLE")?;
+                let follows = p.name_here();
+                p.expect_kw_or_missing("TABLE", "'TABLE'", follows)?;
+                let if_exists = p.eat_if_exists();
                 let name = p.ddl_name()?;
                 CacheKind::Uncache {
+                    if_exists,
                     name,
                     span: p.span_from(kind_start),
                 }
-            } else if p.kw_at(0, "CLEAR") && p.kw_at(1, "CACHE") {
-                p.pos += 2;
+            } else if p.eat_kw("CLEAR") {
+                p.expect_kw("CACHE")?;
                 CacheKind::Clear
             } else {
                 return p.fail();
@@ -1505,28 +1664,84 @@ impl<'s> Parser<'s> {
             let start = p.start();
             p.expect_kw("REFRESH")?;
             let kind_start = p.start();
-            let kind = if p.eat_kw("TABLE") {
-                let name = p.ddl_name()?;
-                let async_refresh = p.eat_kw("ASYNC");
-                RefreshKind::Table {
-                    name,
-                    async_refresh,
-                    span: p.span_from(kind_start),
-                }
-            } else if p.eat_kw("FUNCTION") {
-                let name = p.ddl_name()?;
-                RefreshKind::Function {
-                    name,
-                    span: p.span_from(kind_start),
-                }
-            } else if p.eat_kw("RESOURCE") {
-                let path = p.string_after()?;
-                RefreshKind::Resource {
-                    path,
-                    span: p.span_from(kind_start),
+            // `REFRESH TABLE|FUNCTION name` only when the name ends the
+            // statement; anything else is `refreshResource`, which takes
+            // the rest of the text (`REFRESH TABLE t ASYNC` is a path).
+            let save = p.checkpoint();
+            let table = p.eat_kw("TABLE");
+            if table || p.eat_kw("FUNCTION") {
+                match p.ddl_name() {
+                    Ok(name)
+                        if (0..)
+                            .map_while(|n| p.kind(n))
+                            .all(|k| k == TokenKind::Sym(Sym::Semi)) =>
+                    {
+                        p.commit(save);
+                        let span = p.span_from(kind_start);
+                        let kind = if table {
+                            RefreshKind::Table { name, span }
+                        } else {
+                            RefreshKind::Function { name, span }
+                        };
+                        let span = p.span_from(start);
+                        p.command_end()?;
+                        return Ok(Statement::Refresh(Refresh { kind, span }));
+                    }
+                    Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                    _ => p.restore(save),
                 }
             } else {
-                let path = p.string_after()?;
+                p.restore(save);
+            }
+            let kind = {
+                // One string literal is the path; anything else is the
+                // rest of the statement as an unquoted path, which must be
+                // non-empty and hold no whitespace (Spark's
+                // `extractUnquotedResourcePath`).
+                let string_alone = matches!(
+                    p.kind(0),
+                    Some(TokenKind::String | TokenKind::DoubleQuoted)
+                ) && (1..)
+                    .map_while(|n| p.kind(n))
+                    .all(|k| k == TokenKind::Sym(Sym::Semi));
+                let path = if string_alone {
+                    p.string_after()?
+                } else {
+                    let after = p
+                        .toks
+                        .get(p.pos.wrapping_sub(1))
+                        .map_or(0, |t| t.span.range().end);
+                    let path = p
+                        .src
+                        .get(after..)
+                        .unwrap_or_default()
+                        .trim_matches(|c: char| c <= ' ')
+                        .to_owned();
+                    p.pos = p.toks.len();
+                    let message = if path.is_empty() {
+                        Some(
+                            "Resource paths cannot be empty in REFRESH statements. \
+                             Use / to match everything",
+                        )
+                    } else if path.contains([' ', '\n', '\r', '\t']) {
+                        Some(
+                            "REFRESH statements cannot contain ' ', '\\n', '\\r', '\\t' \
+                             inside unquoted resource paths",
+                        )
+                    } else {
+                        None
+                    };
+                    if let Some(msg) = message {
+                        return Self::fatal(ParseError {
+                            error: LegacyErrorTemp0064 {
+                                msg: msg.to_owned(),
+                            }
+                            .into(),
+                            span: p.span_from(start),
+                        });
+                    }
+                    path
+                };
                 RefreshKind::Path {
                     path,
                     span: p.span_from(kind_start),
@@ -1551,7 +1766,9 @@ impl<'s> Parser<'s> {
                 None
             };
             p.expect_kw("COMPUTE")?;
-            p.expect_kw("STATISTICS")?;
+            let follows = matches!(p.kind(0), None | Some(TokenKind::Sym(Sym::Semi)))
+                || p.any_kw_at(0, &["NOSCAN", "FOR"]);
+            p.expect_kw_or_missing("STATISTICS", "'STATISTICS'", follows)?;
             let mut noscan = false;
             let mut columns = AnalyzeColumns::All;
             if p.eat_kw("NOSCAN") {
@@ -1587,7 +1804,8 @@ impl<'s> Parser<'s> {
             let start = p.start();
             let msck = p.eat_kw("MSCK");
             p.expect_kw("REPAIR")?;
-            p.expect_kw("TABLE")?;
+            let follows = p.name_here();
+            p.expect_kw_or_missing("TABLE", "'TABLE'", follows)?;
             let table = p.ddl_name()?;
             let action = if p.eat_kw("ADD") {
                 p.expect_kw("PARTITIONS")?;
@@ -1612,7 +1830,9 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// `ADD JAR|FILE|ARCHIVE ...` or `LIST JAR|FILE|ARCHIVE [...]`.
+    /// `ADD|LIST kind paths`: Spark reads the kind as any identifier and
+    /// the rest of the statement as raw text, split into quoted and
+    /// unquoted paths (`SparkSqlAstBuilder.visitManageResource`).
     fn resource_command(&mut self) -> PR<Statement> {
         self.nested(|p| {
             let start = p.start();
@@ -1620,40 +1840,79 @@ impl<'s> Parser<'s> {
             if !add && !p.eat_kw("LIST") {
                 return p.fail();
             }
-            let kind = if p.eat_kw("JAR") {
-                ResourceType::Jar
-            } else if p.eat_kw("FILE") {
-                ResourceType::File
-            } else if p.eat_kw("ARCHIVE") {
-                ResourceType::Archive
-            } else {
-                return p.fail();
+            let word = p.any_ident()?;
+            let rest = p.src.get(word.span.range().end..).unwrap_or_default();
+            let paths = resource_paths(rest);
+            p.pos = p.toks.len();
+            let span = p.span_from(start);
+            let kind = match word.value.to_ascii_lowercase().as_str() {
+                "jar" | "jars" => ResourceType::Jar,
+                "file" | "files" => ResourceType::File,
+                "archive" | "archives" => ResourceType::Archive,
+                other => {
+                    let op = if add { "ADD" } else { "LIST" };
+                    return Self::fatal(ParseError {
+                        error: LegacyErrorTemp0035 {
+                            message: format!("{op} with resource type '{other}'"),
+                        }
+                        .into(),
+                        span,
+                    });
+                }
             };
             if add {
-                let path = p.string_after()?;
-                let span = p.span_from(start);
-                p.command_end()?;
-                Ok(Statement::AddResource(AddResource { kind, path, span }))
+                Ok(Statement::AddResource(AddResource { kind, paths, span }))
             } else {
-                let path = p.string_lit();
-                let span = p.span_from(start);
-                p.command_end()?;
-                Ok(Statement::ListResource(ListResource { kind, path, span }))
+                Ok(Statement::ListResource(ListResource { kind, paths, span }))
             }
         })
     }
 }
 
-/// The name of a [`DdlName`], for error parameters: the dotted parts, or
-/// the text of a computed name.
-fn view_name_label(name: &DdlName, src: &str) -> String {
-    match name {
-        DdlName::Parts(name) => name
-            .parts
-            .iter()
-            .map(|p| p.value.clone())
-            .collect::<Vec<_>>()
-            .join("."),
-        DdlName::Dynamic(name) => name.span.text(src).to_owned(),
+/// The paths of an `ADD`/`LIST` resource command's raw argument text, as
+/// Spark's `"(".*?[^\\]"|'.*?[^\\]'|[^ \n\r\t"']+)"` finds them in the
+/// trimmed text: a quoted path is unescaped, an unquoted one kept as is.
+fn resource_paths(raw: &str) -> Vec<String> {
+    let s: Vec<char> = raw.trim_matches(|c: char| c <= ' ').chars().collect();
+    let is_space = |c: char| matches!(c, ' ' | '\n' | '\r' | '\t');
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(&c) = s.get(i) {
+        if c == '"' || c == '\'' {
+            // `q.*?[^\\]q`: the first closing quote after at least one
+            // character that is not preceded by a backslash; `.` stops at
+            // a line break.
+            let mut k = i + 1;
+            let mut end = None;
+            while let Some(&ck) = s.get(k) {
+                if ck != '\\' && s.get(k + 1) == Some(&c) {
+                    end = Some(k + 1);
+                    break;
+                }
+                if matches!(ck, '\n' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}') {
+                    break;
+                }
+                k += 1;
+            }
+            if let Some(end) = end {
+                let quoted: String = s.get(i..=end).unwrap_or_default().iter().collect();
+                out.push(crate::lexer::unescape_string(&quoted, true));
+                i = end + 1;
+            } else {
+                i += 1;
+            }
+        } else if is_space(c) {
+            i += 1;
+        } else {
+            let run: String = s
+                .get(i..)
+                .unwrap_or_default()
+                .iter()
+                .take_while(|&&ch| !is_space(ch) && ch != '"' && ch != '\'')
+                .collect();
+            i += run.chars().count();
+            out.push(run);
+        }
     }
+    out
 }
