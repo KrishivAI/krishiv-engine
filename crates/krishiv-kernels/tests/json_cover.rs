@@ -308,7 +308,7 @@ fn binary_base64_lengths_and_bad_inputs() {
     let col: ArrayRef = Arc::new(BinaryViewArray::from(vec![
         Some(b"".as_slice()),
         Some(b"f".as_slice()),
-        Some(b"fo".as_slice()),
+        Some(&b"foo"[..2]),
         Some(b"foo".as_slice()),
         Some(b"foob".as_slice()),
         None,
@@ -505,7 +505,7 @@ fn escapes_numbers_and_literals() {
         "{\"a\":1e}",
         "{\"a\":1e+}",
         "{\"a\":01}",
-        "{\"a\":truX}",
+        "{\"a\":trvX}",
         "{\"a\":nul}",
         "{\"a\":trueX}",
         "{\"a\":--1}",
