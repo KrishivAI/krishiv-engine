@@ -1,22 +1,6 @@
 {
   "entries": [
     {
-      "id": "elt#0698e8c3c45b/ansi_on",
-      "reason": "SELECT elt(named_struct('a', 1, 'b', 'x'), 'scala', 'java') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#0698e8c3c45b/ansi_off",
-      "reason": "SELECT elt(named_struct('a', 1, 'b', 'x'), 'scala', 'java') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#0843d495d889/ansi_on",
-      "reason": "SELECT elt(1, 'scala', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#0843d495d889/ansi_off",
-      "reason": "SELECT elt(1, 'scala', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "elt#088805bde507/ansi_on",
       "reason": "SELECT elt(1, array(1, 2), 'java') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -111,14 +95,6 @@
     {
       "id": "elt#f20a314e8e06/ansi_off",
       "reason": "SELECT elt(1, map('a', 1), 'java') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#f9e9ac1c9295/ansi_on",
-      "reason": "SELECT elt(1, named_struct('a', 1, 'b', 'x'), 'java') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#f9e9ac1c9295/ansi_off",
-      "reason": "SELECT elt(1, named_struct('a', 1, 'b', 'x'), 'java') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

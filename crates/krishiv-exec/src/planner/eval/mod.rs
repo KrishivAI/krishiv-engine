@@ -25,6 +25,7 @@
 mod arith;
 mod cast;
 mod cond;
+mod field;
 mod func;
 mod logic;
 mod nested_cast;
@@ -36,7 +37,9 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
 use arrow_schema::{DataType as ArrowType, SchemaRef};
-use krishiv_common::config::{ANSI_ENABLED, Config, SESSION_TIME_ZONE};
+use krishiv_common::config::{
+    ANSI_ENABLED, Config, LEGACY_STATISTICAL_AGGREGATE, SESSION_TIME_ZONE,
+};
 use krishiv_kernels::KernelCtx;
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
@@ -154,6 +157,8 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
 pub(crate) struct EvalEnv {
     /// `spark.sql.ansi.enabled`.
     pub(crate) ansi: bool,
+    /// `spark.sql.legacy.statisticalAggregate`.
+    pub(crate) legacy_statistical_aggregate: bool,
     /// The session time zone as a fixed offset in seconds, when it is one
     /// (`UTC`, `+hh:mm`); region zones need the tz database (P2-T021b).
     pub(crate) zone: Option<i32>,
@@ -172,6 +177,10 @@ impl EvalEnv {
             .get(&ANSI_ENABLED)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let legacy_statistical_aggregate = config
+            .get(&LEGACY_STATISTICAL_AGGREGATE)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(false);
         let zone = config
             .get(&SESSION_TIME_ZONE)
             .and_then(|v| v.as_str())
@@ -183,6 +192,7 @@ impl EvalEnv {
             .unwrap_or_default();
         Self {
             ansi,
+            legacy_statistical_aggregate,
             zone,
             kernels: KernelCtx::new(),
             query_start_micros,
@@ -194,6 +204,7 @@ impl EvalEnv {
     pub(crate) fn from_plan(env: &ExprEnv) -> Self {
         Self {
             ansi: env.ansi,
+            legacy_statistical_aggregate: env.legacy_statistical_aggregate,
             zone: env.zone,
             kernels: KernelCtx::new(),
             query_start_micros: env.query_start_micros,
@@ -205,6 +216,7 @@ impl EvalEnv {
     pub(crate) fn to_plan(&self) -> ExprEnv {
         ExprEnv {
             ansi: self.ansi,
+            legacy_statistical_aggregate: self.legacy_statistical_aggregate,
             zone: self.zone,
             query_start_micros: self.query_start_micros,
             user: Arc::clone(&self.user),
@@ -248,6 +260,18 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             }))
         }
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
+        ExprNode::Resolved(ResolvedExpr::Field {
+            base,
+            ordinal,
+            data_type,
+            nullable,
+            ..
+        }) => field::compile(
+            compile(base, input)?,
+            *ordinal,
+            &data_type.to_arrow(),
+            *nullable,
+        ),
         ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
             let args = f

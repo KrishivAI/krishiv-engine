@@ -85,14 +85,7 @@ fn availability_follows_the_release_lines() {
         assert!(matches!(r.lookup("QUOTE", p), Lookup::Found(d) if d.name == "quote"));
     }
     // What stays unimplemented is known, not missing.
-    for name in [
-        "format_string",
-        "printf",
-        "parse_url",
-        "sentences",
-        "split",
-        "collate",
-    ] {
+    for name in ["format_string", "printf", "sentences", "split", "collate"] {
         assert!(
             matches!(r.lookup(name, SparkProfile::V4_2), Lookup::KnownUnsupported),
             "{name}"

@@ -49,28 +49,12 @@
       "reason": "SELECT regexp_extract('100-200', array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "regexp_extract#4d31ef6296af/ansi_on",
-      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_extract#4d31ef6296af/ansi_off",
-      "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp_extract#74bd57081b89/ansi_on",
       "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp_extract#74bd57081b89/ansi_off",
       "reason": "SELECT regexp_extract('100-200', '(\\\\d+)-(\\\\d+)', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_extract#79c755b3b667/ansi_on",
-      "reason": "SELECT regexp_extract(named_struct('a', 1, 'b', 'x'), '(\\\\d+)-(\\\\d+)', 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_extract#79c755b3b667/ansi_off",
-      "reason": "SELECT regexp_extract(named_struct('a', 1, 'b', 'x'), '(\\\\d+)-(\\\\d+)', 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp_extract#8abf01d909ed/ansi_on",
@@ -95,14 +79,6 @@
     {
       "id": "regexp_extract#a63edbab1015/ansi_off",
       "reason": "SELECT regexp_extract('100-200', map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_extract#bbaba3d221ce/ansi_on",
-      "reason": "SELECT regexp_extract('100-200', named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_extract#bbaba3d221ce/ansi_off",
-      "reason": "SELECT regexp_extract('100-200', named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp_extract#e4b7e0aa5c1b/ansi_on",

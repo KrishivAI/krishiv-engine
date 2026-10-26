@@ -15,7 +15,7 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
     DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
-    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
     NamedParametersNotSupported, NestedAggregateFunction, RequiredParameterNotFound,
@@ -694,7 +694,10 @@ impl Resolver<'_> {
     }
 
     /// A call with `*` arguments, rewritten: `count(*)` is `count(1)`, any
-    /// other call takes the input columns.
+    /// other call takes the input columns. A qualified star of a struct
+    /// column in `struct`/`named_struct` (the `STRUCT(t.*)` syntax) takes
+    /// the struct's fields instead; in `named_struct` it replaces a
+    /// preceding placeholder name from that same syntax.
     fn star_args(&mut self, e: &Expr, cx: &Cx<'_>) -> Result<Option<Arc<Expr>>, AnalysisError> {
         let ExprNode::Function(f) = &e.node else {
             return Ok(None);
@@ -704,6 +707,8 @@ impl Resolver<'_> {
         }
         let count_star = f.name.eq_ignore_ascii_case("count")
             && matches!(&f.args[..], [a] if matches!(&a.node, ExprNode::Star(s) if s.qualifier.is_empty() && s.plan_id.is_none()));
+        let struct_star =
+            f.name.eq_ignore_ascii_case("struct") || f.name.eq_ignore_ascii_case("named_struct");
         let mut args = Vec::new();
         let mut arg_names = Vec::new();
         for (i, a) in f.args.iter().enumerate() {
@@ -714,6 +719,32 @@ impl Resolver<'_> {
                         Expr::literal(Literal::Integer(1)).with_origin(a.origin),
                     ));
                     arg_names.push(name);
+                }
+                ExprNode::Star(s) if struct_star => {
+                    let is_named = f.name.eq_ignore_ascii_case("named_struct");
+                    // A `STRUCT(t.*)` placeholder name precedes the star in
+                    // a `named_struct` the syntax lowered: the expansion
+                    // carries its own names.
+                    if is_named
+                        && matches!(
+                            args.last().map(|a| &a.node),
+                            Some(ExprNode::Literal(Literal::String(_)))
+                        )
+                    {
+                        args.pop();
+                        arg_names.pop();
+                    }
+                    for (name, field) in self.struct_star(s, cx, a.origin)? {
+                        if is_named {
+                            args.push(Arc::new(
+                                Expr::new(ExprNode::Literal(Literal::String(name)))
+                                    .with_origin(a.origin),
+                            ));
+                            arg_names.push(None);
+                        }
+                        args.push(field);
+                        arg_names.push(None);
+                    }
                 }
                 ExprNode::Star(s) => {
                     for attr in self.expand(s, cx, a.origin)? {
@@ -742,6 +773,80 @@ impl Resolver<'_> {
         Ok(Some(Arc::new(
             Expr::new(ExprNode::Function(call)).with_origin(e.origin),
         )))
+    }
+
+    /// The fields of the struct `s` (a qualified `t.*`) names, as resolved
+    /// field expressions. An unqualified star, a star with `EXCEPT` or a
+    /// DataFrame star, a qualifier no column has, or a qualifier of a
+    /// non-struct column falls back to the input columns
+    /// ([`Self::expand_star_as_columns`]): an unqualified star is all of
+    /// them, while a qualified one that is not a struct errors there when
+    /// nothing matches.
+    fn struct_star(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Vec<(String, Arc<Expr>)>, AnalysisError> {
+        let st = match s.qualifier[..] {
+            [] => None,
+            [..] if !s.except.is_empty() || s.plan_id.is_some() => None,
+            _ => match self.find(cx.scope, &s.qualifier, origin, false)? {
+                Some((a, used)) if used == s.qualifier.len() => match &a.col.data_type {
+                    DataType::Struct(st) => Some((a.clone(), st.clone())),
+                    _ => return self.columns_with_names(s, cx, origin),
+                },
+                _ => return self.columns_with_names(s, cx, origin),
+            },
+        };
+        let Some((attr, st)) = st else {
+            return self.columns_with_names(s, cx, origin);
+        };
+        self.used(&attr);
+        Ok(st
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(ordinal, field)| {
+                let nullable = field.nullable() || attr.col.nullable;
+                let name = field.name().to_owned();
+                let field = Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                        base: Arc::new(
+                            Expr::new(ExprNode::Resolved(ResolvedExpr::Column(attr.col.clone())))
+                                .with_origin(origin),
+                        ),
+                        ordinal,
+                        name: name.clone(),
+                        data_type: field.data_type().clone(),
+                        nullable,
+                    }))
+                    .with_origin(origin),
+                );
+                (name, field)
+            })
+            .collect())
+    }
+
+    /// [`Self::expand`] as resolved column expressions with their names.
+    fn columns_with_names(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Vec<(String, Arc<Expr>)>, AnalysisError> {
+        Ok(self
+            .expand(s, cx, origin)?
+            .into_iter()
+            .map(|attr| {
+                let name = attr.col.name.clone();
+                let expr = Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Column(attr.col)))
+                        .with_origin(origin),
+                );
+                (name, expr)
+            })
+            .collect())
     }
 
     /// The attributes `*`, `t.*` or `df["*"]` stands for.
@@ -992,6 +1097,54 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
+            ExprNode::Field { base: _, name } => {
+                let b = &kids[0];
+                let st = match &b.ty.data_type {
+                    Some(DataType::Struct(st)) => st.clone(),
+                    _ => {
+                        let other =
+                            b.ty.data_type
+                                .as_ref()
+                                .map_or_else(|| "VOID".to_owned(), DataType::sql);
+                        return Err(AnalysisError::new(
+                            InvalidExtractBaseFieldType {
+                                base: format!(
+                                    "\"{}\"",
+                                    pretty(&b.shown(), self.ctx.conf.session_zone)
+                                ),
+                                other: format!("\"{other}\""),
+                            },
+                            e.origin,
+                        ));
+                    }
+                };
+                let cs = self.ctx.conf.case_sensitive;
+                let Some((ordinal, field)) = st
+                    .fields()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, f)| same(f.name(), name, cs))
+                else {
+                    return Err(unresolved_field(
+                        &[pretty(&b.shown(), self.ctx.conf.session_zone), name.clone()],
+                        &st,
+                        e.origin,
+                    ));
+                };
+                let ty = arg_type(field.data_type().clone(), field.nullable() || b.ty.nullable);
+                let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Field {
+                    base: Arc::clone(&b.expr),
+                    ordinal,
+                    name: name.clone(),
+                    data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                    nullable: ty.nullable,
+                }));
+                Bound {
+                    expr,
+                    ty: ty.clone(),
+                    ..keep(ty)
+                }
+            }
             ExprNode::Function(f) => {
                 let n = f.args.len();
                 if let Some(filter) = kids.get(n)
@@ -1080,6 +1233,31 @@ impl Resolver<'_> {
                 if !window_fn {
                     call_checks(&entry, e, &kids, n)?;
                 }
+                // `struct(a, ...)`: children with names keep them (a column
+                // contributes its name, a struct field its field name), so a
+                // call with any named child becomes `named_struct(name, ...)`
+                // with `colN` defaults; all-default calls stay `struct`.
+                if entry.id.name() == "struct"
+                    && let Some(rewritten) = self.struct_names(f, &kids[..n], e.origin)
+                {
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&rewritten, cx)?;
+                    for k in &kids[..n] {
+                        b.agg = b.agg.or(k.agg);
+                        b.win = b.win.or(k.win);
+                        b.outer = match (b.outer, k.outer) {
+                            (Some(x), Some(y)) => Some(x.min(y)),
+                            (x, y) => x.or(y),
+                        };
+                        for id in &k.lateral {
+                            if !b.lateral.contains(id) {
+                                b.lateral.push(*id);
+                            }
+                        }
+                    }
+                    return Ok(b);
+                }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
                 // Spark's constructor materializes the default message, so
                 // the schema names it (`assert_true(true, 'true' is not
@@ -1125,6 +1303,26 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 3)
+                } else if entry.id.name() == "named_struct" && n > 0 {
+                    owned = kids.clone();
+                    // A foldable name that is not a literal becomes one, so
+                    // the executor binds it (the result rule already read it
+                    // folded; the shown form keeps the written argument for
+                    // error quotes).
+                    for k in owned.iter_mut().step_by(2) {
+                        if !matches!(k.expr.node, ExprNode::Literal(_))
+                            && let Some(Constant::String(name)) =
+                                self.fold(&k.expr, self.ctx.conf.ansi)
+                        {
+                            let lit = Arc::new(
+                                Expr::new(ExprNode::Literal(Literal::String(name)))
+                                    .with_origin(k.expr.origin),
+                            );
+                            k.shown = Some(Arc::clone(&k.expr));
+                            k.expr = lit;
+                        }
+                    }
+                    (&owned[..], n)
                 } else {
                     (&kids[..], n)
                 };
@@ -1132,6 +1330,11 @@ impl Resolver<'_> {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
+                // `schema_of_csv(lit)` resolves below to the DDL literal.
+                // The registry lookup is ASCII case-insensitive and
+                // `id.name()` is the canonical lower-case name, so a
+                // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
+                let is_schema_of_csv = entry.id.name() == "schema_of_csv";
                 if lookup_name.eq_ignore_ascii_case("mask") {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
@@ -1149,7 +1352,7 @@ impl Resolver<'_> {
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 let shown = self.call_shown(lookup_name, &expr, kids, &call_kids);
-                Bound {
+                let mut bound = Bound {
                     agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
                     } else {
@@ -1158,7 +1361,14 @@ impl Resolver<'_> {
                     shown,
                     expr,
                     ..keep(ty)
+                };
+                // `schema_of_csv(lit)` resolves during analysis (Spark's
+                // `SchemaOfCsv` evaluates its foldable child): the DDL
+                // literal, shown as the call.
+                if is_schema_of_csv {
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound)?;
                 }
+                bound
             }
             ExprNode::Cast { to, mode, .. } => {
                 let mode = match mode {
@@ -1253,6 +1463,11 @@ impl Resolver<'_> {
                 ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => column(c),
                 ResolvedExpr::Alias { output, .. } => column(output),
                 ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+                ResolvedExpr::Field {
+                    data_type,
+                    nullable,
+                    ..
+                } => arg_type(data_type.clone(), *nullable),
             }),
         };
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
@@ -1356,6 +1571,56 @@ impl Resolver<'_> {
             );
         }
         kids
+    }
+
+    /// `schema_of_csv(csv)` as the DDL literal it resolves to (Spark's
+    /// `SchemaOfCsv` evaluates its foldable child during analysis, keeping
+    /// the call as the output name). The signature's result rule already
+    /// rejected a non-foldable, null or non-string child, so anything but
+    /// a folded string here (a custom registry's rule) keeps the call;
+    /// that call has no scalar binding and fails at execution binding, so
+    /// it never resolves silently. Only the one-argument form resolves
+    /// here: the two-argument options form is rejected by the signature
+    /// (options are a map, which Krishiv cannot type yet), so the default
+    /// options below always match the accepted call. Out of line: it is on
+    /// the path of every call.
+    #[inline(never)]
+    fn resolve_schema_of_csv(
+        &self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        bound: &mut Bound,
+    ) -> Result<(), AnalysisError> {
+        if kids.len() != 1 {
+            return Ok(());
+        }
+        let csv = kids
+            .first()
+            .and_then(|k| self.fold(&k.expr, self.ctx.conf.ansi));
+        let Some(Constant::String(csv)) = csv else {
+            return Ok(());
+        };
+        let options = krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema());
+        let ddl = krishiv_io::csv::ddl_of_string(&csv, &options).map_err(|err| {
+            AnalysisError::new(
+                match err {
+                    krishiv_io::FormatError::Other(e) => e,
+                    other => InternalError {
+                        message: other.to_string(),
+                    }
+                    .into(),
+                },
+                e.origin,
+            )
+        })?;
+        // Keep the form the call already shows (a session variable's name,
+        // not its value); otherwise show the call itself.
+        if bound.shown.is_none() {
+            bound.shown = Some(Arc::clone(&bound.expr));
+        }
+        bound.expr =
+            Arc::new(Expr::new(ExprNode::Literal(Literal::String(ddl))).with_origin(e.origin));
+        Ok(())
     }
 
     /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,
@@ -2497,12 +2762,7 @@ impl Resolver<'_> {
             let lenient = cx.lenient && i == 0;
             if let Some((a, used)) = self.find(level, &c.name, origin, lenient)? {
                 self.used(&a);
-                let col = renamed(&a, &c.name, used);
-                return Ok(bound(
-                    ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
-                    &col,
-                    None,
-                ));
+                return self.resolve_attr(&a, used, &c.name, origin, None);
             }
         }
         // A name no input column has may be a function written without
@@ -2580,12 +2840,7 @@ impl Resolver<'_> {
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
-                let col = renamed(&a, &c.name, used);
-                return Ok(bound(
-                    ExprNode::Resolved(ResolvedExpr::OuterColumn(col.clone())),
-                    &col,
-                    Some(level),
-                ));
+                return self.resolve_attr(&a, used, &c.name, origin, Some(level));
             }
         }
         // A name no column or outer reference has may be a session
@@ -2672,7 +2927,9 @@ impl Resolver<'_> {
     /// The attribute `parts` names in `scope` and how many parts it used:
     /// with a qualifier of 3, 2 or 1 parts (a suffix of the attribute's),
     /// then by name alone; the first form with any match decides. Several
-    /// matches are `AMBIGUOUS_REFERENCE`, or no match when `lenient`.
+    /// matches are `AMBIGUOUS_REFERENCE`, or no match when `lenient`. A
+    /// single match with leftover parts resolves them as struct fields in
+    /// [`Self::resolve_attr`].
     fn find(
         &self,
         scope: &[Attr],
@@ -2699,15 +2956,10 @@ impl Resolver<'_> {
             match hits[..] {
                 [] => continue,
                 [a] if parts.len() > q + 1 => {
-                    // Struct fields: no nested types exist yet, so any
-                    // field access is on a non-struct column.
-                    return Err(AnalysisError::new(
-                        InvalidExtractBaseFieldType {
-                            base: format!("\"{}\"", parts[q]),
-                            other: format!("\"{}\"", a.col.data_type.sql()),
-                        },
-                        origin,
-                    ));
+                    // A longer path may name struct fields below the
+                    // column; the caller resolves them (or reports the
+                    // base type when the column is not a struct).
+                    return Ok(Some((a.clone(), q + 1)));
                 }
                 [a] => return Ok(Some((a.clone(), q + 1))),
                 _ if lenient => return Ok(None),
@@ -2732,6 +2984,133 @@ impl Resolver<'_> {
             }
         }
         Ok(None)
+    }
+
+    /// `struct` with named children as `named_struct`, or `None` when every
+    /// child defaults to `colN`: a column contributes its (written) name, a
+    /// struct field its field name, an alias its output name.
+    fn struct_names(&self, f: &FunctionCall, kids: &[Bound], origin: Origin) -> Option<Arc<Expr>> {
+        let mut names = Vec::with_capacity(kids.len());
+        for (i, k) in kids.iter().enumerate() {
+            let name = match &k.expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                    c.name.clone()
+                }
+                ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
+                ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
+                _ => format!("col{}", i + 1),
+            };
+            names.push(name);
+        }
+        if names
+            .iter()
+            .enumerate()
+            .all(|(i, n)| *n == format!("col{}", i + 1))
+        {
+            return None;
+        }
+        let mut args = Vec::with_capacity(2 * kids.len());
+        for (name, k) in names.into_iter().zip(kids) {
+            args.push(Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(name))).with_origin(origin),
+            ));
+            args.push(Arc::clone(&k.expr));
+        }
+        Some(Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                name: "named_struct".to_owned(),
+                qualifier: Vec::new(),
+                args,
+                arg_names: Vec::new(),
+                distinct: f.distinct,
+                filter: None,
+            }))
+            .with_origin(origin),
+        ))
+    }
+
+    /// The attribute `a` matched with `used` of `parts`: the column itself,
+    /// or the struct fields the leftover parts name below it (Spark's
+    /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
+    /// `outer` is `Some` for a column of the enclosing query.
+    fn resolve_attr(
+        &mut self,
+        a: &Attr,
+        used: usize,
+        parts: &[String],
+        origin: Origin,
+        outer: Option<usize>,
+    ) -> Result<Bound, AnalysisError> {
+        // A reference keeps the spelling it was written with.
+        let mut col = a.col.clone();
+        col.name.clone_from(&parts[used - 1]);
+        let node = match outer {
+            None => ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
+            Some(_) => ExprNode::Resolved(ResolvedExpr::OuterColumn(col.clone())),
+        };
+        if used == parts.len() {
+            return Ok(Bound {
+                expr: Arc::new(Expr::new(node).with_origin(origin)),
+                ty: column(&col),
+                agg: None,
+                win: None,
+                outer,
+                lateral: Vec::new(),
+                shown: None,
+            });
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let mut ty = column(&col);
+        let mut base = Arc::new(Expr::new(node).with_origin(origin));
+        let mut parent = parts[used - 1].clone();
+        for part in &parts[used..] {
+            let st = match &ty.data_type {
+                Some(DataType::Struct(st)) => st.clone(),
+                _ => {
+                    let other = ty
+                        .data_type
+                        .as_ref()
+                        .map_or_else(|| "VOID".to_owned(), DataType::sql);
+                    return Err(AnalysisError::new(
+                        InvalidExtractBaseFieldType {
+                            base: format!("\"{parent}\""),
+                            other: format!("\"{other}\""),
+                        },
+                        origin,
+                    ));
+                }
+            };
+            let Some((ordinal, field)) = st
+                .fields()
+                .iter()
+                .enumerate()
+                .find(|(_, f)| same(f.name(), part, cs))
+            else {
+                return Err(unresolved_field(parts, &st, origin));
+            };
+            parent.clone_from(part);
+            let field_ty = arg_type(field.data_type().clone(), field.nullable() || ty.nullable);
+            base = Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                    base: Arc::clone(&base),
+                    ordinal,
+                    name: part.clone(),
+                    data_type: field_ty.data_type.clone().unwrap_or(DataType::Null),
+                    nullable: field_ty.nullable,
+                }))
+                .with_origin(origin),
+            );
+            ty = field_ty;
+        }
+        Ok(Bound {
+            expr: base,
+            ty,
+            agg: None,
+            win: None,
+            outer,
+            lateral: Vec::new(),
+            shown: None,
+        })
     }
 
     pub(super) fn sub_env(&mut self, cx: &Cx<'_>) -> Arc<Env> {
@@ -2782,6 +3161,30 @@ fn fold_case(name: &str, case_sensitive: bool) -> String {
 /// Whether folded path `a` is a prefix of (or equal to) folded path `b`.
 fn is_prefix(a: &[String], b: &[String]) -> bool {
     a.len() <= b.len() && a.iter().zip(b).all(|(x, y)| x == y)
+}
+
+/// `UNRESOLVED_COLUMN` for a struct field `parts` names below a struct
+/// with `fields` (Spark's `GetStructField` by an unknown name): the full
+/// path as the object, up to five of the struct's fields as the proposal.
+fn unresolved_field(
+    parts: &[String],
+    fields: &krishiv_types::StructType,
+    origin: Origin,
+) -> AnalysisError {
+    let proposal = fields
+        .fields()
+        .iter()
+        .take(5)
+        .map(|f| quoted(std::slice::from_ref(&f.name().to_owned())))
+        .collect::<Vec<_>>()
+        .join(", ");
+    AnalysisError::new(
+        UnresolvedColumnWithSuggestion {
+            object_name: quoted(parts),
+            proposal,
+        },
+        origin,
+    )
 }
 
 /// `UNRESOLVED_COLUMN`, with up to five of `scope`'s columns ranked by edit
@@ -3057,6 +3460,9 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             format!("{cast}({} AS {})", k[0], to.sql())
         }
         ExprNode::Alias { .. } | ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
+        ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
+            format!("{}.{}", k[0], name)
+        }
         ExprNode::Subquery { kind, plan } => {
             // Spark lists the outer references.
             let outer = outer_names(plan);

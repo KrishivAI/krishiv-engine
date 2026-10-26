@@ -67,6 +67,15 @@ pub enum ExprNode {
     Star(Star),
     /// An unresolved function call, operators included.
     Function(FunctionCall),
+    /// An unresolved `expr.field`: the field `name` of the struct `base`
+    /// (Spark's `GetStructField`). A `Column` base lowers to a longer
+    /// [`ColumnRef`] instead; anything else becomes this node.
+    Field {
+        /// The struct value.
+        base: Arc<Expr>,
+        /// The field name, as written.
+        name: String,
+    },
     /// `CAST(expr AS to)`; `TRY_CAST` is [`CastMode::Try`].
     Cast {
         /// The value to cast.
@@ -384,6 +393,20 @@ pub enum ResolvedExpr {
     OuterColumn(BoundColumn),
     /// A function bound to its identity and result type.
     Function(ResolvedFunction),
+    /// The field `name` (position `ordinal`) of the struct `base` (Spark's
+    /// `GetStructField`), resolved under `spark.sql.caseSensitive`.
+    Field {
+        /// The struct value.
+        base: Arc<Expr>,
+        /// The field's position in the struct.
+        ordinal: usize,
+        /// The field's name.
+        name: String,
+        /// The field's type.
+        data_type: DataType,
+        /// Whether the field (or the struct) may be null.
+        nullable: bool,
+    },
     /// `expr AS name`, producing a new attribute.
     Alias {
         /// The aliased expression.
@@ -497,7 +520,10 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
-            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => f(expr),
+            | ExprNode::Field { base: expr, .. }
+            | ExprNode::Resolved(
+                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+            ) => f(expr),
             ExprNode::Subquery { kind, .. } => match kind {
                 SubqueryKind::In(values) => values.iter().for_each(f),
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}
@@ -537,7 +563,10 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
-            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => f(expr),
+            | ExprNode::Field { base: expr, .. }
+            | ExprNode::Resolved(
+                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+            ) => f(expr),
             ExprNode::Subquery { kind, .. } => match kind {
                 SubqueryKind::In(values) => values.iter_mut().for_each(f),
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}

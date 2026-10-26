@@ -17,28 +17,12 @@
       "reason": "SELECT nvl2(INTERVAL '1-2' YEAR TO MONTH, 2, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "nvl2#3c48eb611259/ansi_on",
-      "reason": "SELECT nvl2(NULL, named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl2#3c48eb611259/ansi_off",
-      "reason": "SELECT nvl2(NULL, named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "nvl2#4e8e95ac7957/ansi_on",
       "reason": "SELECT nvl2(NULL, 2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl2#4e8e95ac7957/ansi_off",
       "reason": "SELECT nvl2(NULL, 2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl2#59e0d7c638d1/ansi_on",
-      "reason": "SELECT nvl2(named_struct('a', 1, 'b', 'x'), 2, 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "nvl2#59e0d7c638d1/ansi_off",
-      "reason": "SELECT nvl2(named_struct('a', 1, 'b', 'x'), 2, 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
       "id": "nvl2#5ba4dfd6249b/ansi_on",
@@ -87,14 +71,6 @@
     {
       "id": "nvl2#b713cf78a1f7/ansi_off",
       "reason": "SELECT nvl2(NULL, 2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl2#ccee962457df/ansi_on",
-      "reason": "SELECT nvl2(NULL, 2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl2#ccee962457df/ansi_off",
-      "reason": "SELECT nvl2(NULL, 2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl2#d68aaefed581/ansi_on",

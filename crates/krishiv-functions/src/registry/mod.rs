@@ -16,12 +16,15 @@
 mod bitwise;
 mod catalog;
 mod conditional;
+mod csv;
 mod defs;
 mod hashing;
 mod math;
 mod number;
 mod predicate;
+mod r#struct;
 mod text;
+mod url;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -67,6 +70,24 @@ pub enum Aggregate {
     First,
     /// `last` / `last_value`; `ignoreNulls` is the second argument.
     Last,
+    /// `stddev` / `std` / `stddev_samp`.
+    StddevSamp,
+    /// `stddev_pop`.
+    StddevPop,
+    /// `variance` / `var_samp`.
+    VarSamp,
+    /// `var_pop`.
+    VarPop,
+    /// `skewness`.
+    Skewness,
+    /// `kurtosis`.
+    Kurtosis,
+    /// `corr`.
+    Corr,
+    /// `covar_samp`.
+    CovarSamp,
+    /// `covar_pop`.
+    CovarPop,
     /// `any_value`; `ignoreNulls` is the second argument.
     AnyValue,
     /// `max_by(x, y)`.

@@ -17,6 +17,7 @@ use crate::physical::{ExprEnv, PhysNode};
 fn env() -> ExprEnv {
     ExprEnv {
         ansi: true,
+        legacy_statistical_aggregate: false,
         zone: Some(0),
         query_start_micros: 0,
         user: Arc::from("u"),
