@@ -74,11 +74,11 @@
     },
     {
       "id": "try_to_binary#719e0afabb80/ansi_on",
-      "reason": "SELECT try_to_binary('abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT try_to_binary('abc', named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "try_to_binary#719e0afabb80/ansi_off",
-      "reason": "SELECT try_to_binary('abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT try_to_binary('abc', named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "try_to_binary#7bab63436c23/ansi_on",
@@ -87,14 +87,6 @@
     {
       "id": "try_to_binary#7bab63436c23/ansi_off",
       "reason": "SELECT try_to_binary('abc', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "try_to_binary#86dda6ef86a5/ansi_on",
-      "reason": "SELECT try_to_binary(named_struct('a', 1, 'b', 'x'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_to_binary#86dda6ef86a5/ansi_off",
-      "reason": "SELECT try_to_binary(named_struct('a', 1, 'b', 'x'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_to_binary#912b6e81d88a/ansi_on",

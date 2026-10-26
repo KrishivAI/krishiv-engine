@@ -41,14 +41,6 @@
       "reason": "SELECT map(array(1, 2), '2', 3.0, '4') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
     },
     {
-      "id": "map#631c2dc341f0/ansi_on",
-      "reason": "SELECT map(1.0, '2', named_struct('a', 1, 'b', 'x'), '4') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
-    },
-    {
-      "id": "map#631c2dc341f0/ansi_off",
-      "reason": "SELECT map(1.0, '2', named_struct('a', 1, 'b', 'x'), '4') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
-    },
-    {
       "id": "map#699668f72fbb/ansi_on",
       "reason": "SELECT map(1.0, '2', 3.0, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
     },
@@ -63,22 +55,6 @@
     {
       "id": "map#7154d4b8d187/ansi_off",
       "reason": "SELECT map(1.0, '2', 3.0, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "map#71af2e5ab842/ansi_on",
-      "reason": "SELECT map(1.0, named_struct('a', 1, 'b', 'x'), 3.0, '4') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
-    },
-    {
-      "id": "map#71af2e5ab842/ansi_off",
-      "reason": "SELECT map(1.0, named_struct('a', 1, 'b', 'x'), 3.0, '4') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
-    },
-    {
-      "id": "map#8f4bedf919eb/ansi_on",
-      "reason": "SELECT map(1.0, '2', 3.0, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
-    },
-    {
-      "id": "map#8f4bedf919eb/ansi_off",
-      "reason": "SELECT map(1.0, '2', 3.0, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
     },
     {
       "id": "map#a2e94f046ddf/ansi_on",
@@ -119,14 +95,6 @@
     {
       "id": "map#ec90a5e7058d/ansi_off",
       "reason": "SELECT map(1.0, INTERVAL '1 02:03:04' DAY TO SECOND, 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "map#fc4adcf269b3/ansi_on",
-      "reason": "SELECT map(named_struct('a', 1, 'b', 'x'), '2', 3.0, '4') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
-    },
-    {
-      "id": "map#fc4adcf269b3/ansi_off",
-      "reason": "SELECT map(named_struct('a', 1, 'b', 'x'), '2', 3.0, '4') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
     }
   ],
   "format_version": 1,

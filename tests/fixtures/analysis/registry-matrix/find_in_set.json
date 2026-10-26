@@ -9,14 +9,6 @@
       "reason": "SELECT find_in_set(INTERVAL '1-2' YEAR TO MONTH,'abc,b,ab,c,def') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "find_in_set#1184e82b27ec/ansi_on",
-      "reason": "SELECT find_in_set(named_struct('a', 1, 'b', 'x'),'abc,b,ab,c,def') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "find_in_set#1184e82b27ec/ansi_off",
-      "reason": "SELECT find_in_set(named_struct('a', 1, 'b', 'x'),'abc,b,ab,c,def') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "find_in_set#13c7df199694/ansi_on",
       "reason": "SELECT find_in_set('ab',INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -31,14 +23,6 @@
     {
       "id": "find_in_set#202d1b26addc/ansi_off",
       "reason": "SELECT find_in_set(array(1, 2),'abc,b,ab,c,def') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "find_in_set#2c5d7b3ee95f/ansi_on",
-      "reason": "SELECT find_in_set('ab',named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "find_in_set#2c5d7b3ee95f/ansi_off",
-      "reason": "SELECT find_in_set('ab',named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "find_in_set#73fb1df4d3b1/ansi_on",

@@ -37,6 +37,7 @@ mod predicate;
 mod regex;
 mod session;
 mod string;
+mod r#struct;
 mod url;
 
 pub use regex::{extract_all_pieces, split_regex};
@@ -58,12 +59,11 @@ use args::{Inputs, broadcast, internal, unsupported};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum BindArg {
-    /// A value computed per row, of this type; `nullable` is whether it
-    /// may be null (the map family reads it for the value nullability of
-    /// the map type it returns).
+    /// A value computed per row, of this type; `nullable` whether it may be
+    /// null (struct construction copies it into its fields).
     Column {
         /// The argument's Arrow type.
-        data_type: DataType,
+        ty: DataType,
         /// Whether the argument may be null.
         nullable: bool,
     },
@@ -77,18 +77,17 @@ impl BindArg {
     #[must_use]
     pub fn data_type(&self) -> DataType {
         match self {
-            Self::Column { data_type, .. } => data_type.clone(),
+            Self::Column { ty, .. } => ty.clone(),
             Self::Literal(a) => a.data_type().clone(),
         }
     }
 
-    /// Whether the argument may be null: the flag for a column, whether
-    /// the value is null for a literal.
+    /// Whether the argument may be null: the column flag, or a null literal.
     #[must_use]
     pub fn nullable(&self) -> bool {
         match self {
             Self::Column { nullable, .. } => *nullable,
-            Self::Literal(a) => a.data_type() == &DataType::Null || a.null_count() > 0,
+            Self::Literal(a) => a.logical_null_count() > 0,
         }
     }
 }
@@ -96,7 +95,7 @@ impl BindArg {
 impl From<DataType> for BindArg {
     fn from(t: DataType) -> Self {
         Self::Column {
-            data_type: t,
+            ty: t,
             nullable: true,
         }
     }
@@ -319,7 +318,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 14] = [
+const FAMILIES: [(&[&str], Binder); 15] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
@@ -333,6 +332,7 @@ const FAMILIES: [(&[&str], Binder); 14] = [
     (number::NAMES, number::bind),
     (chars::NAMES, chars::bind),
     (codec::NAMES, codec::bind),
+    (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
 ];
 
@@ -350,7 +350,7 @@ pub fn scalar_names() -> Vec<&'static str> {
 
 /// Whether the result of the scalar function `name` depends only on its
 /// arguments and `spark.sql.ansi.enabled`: the string (with its character and
-/// encoding families), math, arithmetic and map families (the map family also reads
+/// encoding families), math, arithmetic, struct and map families (the map family also reads
 /// `spark.sql.mapKeyDedupPolicy`). The datetime, session and
 /// hash families read the session time zone, the user or the query start, so a
 /// caller that evaluates a call before execution (constant folding) must not
@@ -365,6 +365,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         math::NAMES,
         arith::NAMES,
         map::NAMES,
+        r#struct::NAMES,
     ]
     .iter()
     .any(|names| names.contains(&lower.as_str()))

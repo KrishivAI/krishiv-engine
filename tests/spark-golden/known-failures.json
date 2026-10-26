@@ -60,11 +60,6 @@
       "summary": "string and math-tail functions not in P2a (hex, conv, bin, width_bucket, ...)",
       "task": "P2-T023"
     },
-    "fn-struct": {
-      "kind": "unsupported",
-      "summary": "struct functions",
-      "task": "P2-T030"
-    },
     "fn-url-xml-csv": {
       "kind": "unsupported",
       "summary": "URL, XML, CSV and protobuf functions",
@@ -357,12 +352,6 @@
       "family": [
         "array",
         "collection"
-      ]
-    },
-    {
-      "category": "fn-struct",
-      "family": [
-        "struct"
       ]
     },
     {

@@ -468,11 +468,11 @@ fn levenshtein_threshold_nulls() {
     let null = ints(&[None]);
     let args = [
         BindArg::Column {
-            data_type: DataType::Utf8,
+            ty: DataType::Utf8,
             nullable: true,
         },
         BindArg::Column {
-            data_type: DataType::Utf8,
+            ty: DataType::Utf8,
             nullable: true,
         },
         BindArg::Literal(Arc::clone(&null)),

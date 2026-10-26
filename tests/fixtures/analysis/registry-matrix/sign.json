@@ -25,14 +25,6 @@
       "reason": "SELECT sign(CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
     },
     {
-      "id": "sign#55187ec8b52a/ansi_on",
-      "reason": "SELECT sign(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sign#55187ec8b52a/ansi_off",
-      "reason": "SELECT sign(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "sign#71aec8bd236a/ansi_on",
       "reason": "SELECT sign(INTERVAL -'100' YEAR) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

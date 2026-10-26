@@ -17,22 +17,6 @@
       "reason": "SELECT map_concat(INTERVAL '1 02:03:04' DAY TO SECOND, map(3, 'c')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.MAP_CONCAT_DIFF_TYPES"
     },
     {
-      "id": "map_concat#9581dd8cd692/ansi_on",
-      "reason": "SELECT map_concat(map(1, 'a', 2, 'b'), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.MAP_CONCAT_DIFF_TYPES"
-    },
-    {
-      "id": "map_concat#9581dd8cd692/ansi_off",
-      "reason": "SELECT map_concat(map(1, 'a', 2, 'b'), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.MAP_CONCAT_DIFF_TYPES"
-    },
-    {
-      "id": "map_concat#a6b461959131/ansi_on",
-      "reason": "SELECT map_concat(named_struct('a', 1, 'b', 'x'), map(3, 'c')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.MAP_CONCAT_DIFF_TYPES"
-    },
-    {
-      "id": "map_concat#a6b461959131/ansi_off",
-      "reason": "SELECT map_concat(named_struct('a', 1, 'b', 'x'), map(3, 'c')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.MAP_CONCAT_DIFF_TYPES"
-    },
-    {
       "id": "map_concat#b1105302ff18/ansi_on",
       "reason": "SELECT map_concat(INTERVAL '1-2' YEAR TO MONTH, map(3, 'c')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.MAP_CONCAT_DIFF_TYPES"
     },

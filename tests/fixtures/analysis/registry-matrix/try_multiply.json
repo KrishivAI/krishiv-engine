@@ -9,14 +9,6 @@
       "reason": "SELECT try_multiply(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "try_multiply#28dbd7c5a497/ansi_on",
-      "reason": "SELECT try_multiply(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_multiply#28dbd7c5a497/ansi_off",
-      "reason": "SELECT try_multiply(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_multiply#2a85c0d45242/ansi_on",
       "reason": "SELECT try_multiply(2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -75,14 +67,6 @@
     {
       "id": "try_multiply#aaf5bd990a45/ansi_off",
       "reason": "SELECT try_multiply('1', 3) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "try_multiply#bb56f48ad04e/ansi_on",
-      "reason": "SELECT try_multiply(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_multiply#bb56f48ad04e/ansi_off",
-      "reason": "SELECT try_multiply(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_multiply#c3b02618e954/ansi_on",

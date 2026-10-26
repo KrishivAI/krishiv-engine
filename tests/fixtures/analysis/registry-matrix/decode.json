@@ -74,11 +74,11 @@
     },
     {
       "id": "decode#038328c307cf/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', named_struct('a', 1, 'b', 'x'), 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', named_struct('a', 1, 'b', 'x'), 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#038328c307cf/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', named_struct('a', 1, 'b', 'x'), 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', named_struct('a', 1, 'b', 'x'), 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#03c73798239d/ansi_on",
@@ -146,11 +146,11 @@
     },
     {
       "id": "decode#06859147bcac/ansi_on",
-      "reason": "SELECT decode(6, named_struct('a', 1, 'b', 'x'), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, named_struct('a', 1, 'b', 'x'), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#06859147bcac/ansi_off",
-      "reason": "SELECT decode(6, named_struct('a', 1, 'b', 'x'), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, named_struct('a', 1, 'b', 'x'), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#07a4a37224f3/ansi_on",
@@ -530,11 +530,11 @@
     },
     {
       "id": "decode#197b181d16e7/ansi_on",
-      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#197b181d16e7/ansi_off",
-      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#19b1d3e28a8d/ansi_on",
@@ -770,11 +770,11 @@
     },
     {
       "id": "decode#23157012a0a0/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', named_struct('a', 1, 'b', 'x'), 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', named_struct('a', 1, 'b', 'x'), 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#23157012a0a0/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', named_struct('a', 1, 'b', 'x'), 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', named_struct('a', 1, 'b', 'x'), 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#23cd5b1596f4/ansi_on",
@@ -794,11 +794,11 @@
     },
     {
       "id": "decode#2484d1367889/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#2484d1367889/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#24d470d88a50/ansi_on",
@@ -1314,11 +1314,11 @@
     },
     {
       "id": "decode#3f64d95b2904/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, named_struct('a', 1, 'b', 'x'), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, named_struct('a', 1, 'b', 'x'), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#3f64d95b2904/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, named_struct('a', 1, 'b', 'x'), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, named_struct('a', 1, 'b', 'x'), 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#3f76fd31601b/ansi_on",
@@ -1354,11 +1354,11 @@
     },
     {
       "id": "decode#44329e3b5fa1/ansi_on",
-      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#44329e3b5fa1/ansi_off",
-      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#445bbe5fbac5/ansi_on",
@@ -1370,11 +1370,11 @@
     },
     {
       "id": "decode#44ff9ded68aa/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', named_struct('a', 1, 'b', 'x'), 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', named_struct('a', 1, 'b', 'x'), 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#44ff9ded68aa/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', named_struct('a', 1, 'b', 'x'), 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', named_struct('a', 1, 'b', 'x'), 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#453ccb5f2f9d/ansi_on",
@@ -1482,11 +1482,11 @@
     },
     {
       "id": "decode#4a013094b38c/ansi_on",
-      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 6, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 6, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#4a013094b38c/ansi_off",
-      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 6, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 6, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#4a0c370427ac/ansi_on",
@@ -1674,11 +1674,11 @@
     },
     {
       "id": "decode#50efe84b2341/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, named_struct('a', 1, 'b', 'x'), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, named_struct('a', 1, 'b', 'x'), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#50efe84b2341/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, named_struct('a', 1, 'b', 'x'), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, named_struct('a', 1, 'b', 'x'), 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#5164ec6d5dc1/ansi_on",
@@ -2154,11 +2154,11 @@
     },
     {
       "id": "decode#67f6daa18a36/ansi_on",
-      "reason": "SELECT decode(2, named_struct('a', 1, 'b', 'x'), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, named_struct('a', 1, 'b', 'x'), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#67f6daa18a36/ansi_off",
-      "reason": "SELECT decode(2, named_struct('a', 1, 'b', 'x'), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, named_struct('a', 1, 'b', 'x'), 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#682e00eaebeb/ansi_on",
@@ -2218,11 +2218,11 @@
     },
     {
       "id": "decode#6b7651164d6d/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', named_struct('a', 1, 'b', 'x'), 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', named_struct('a', 1, 'b', 'x'), 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#6b7651164d6d/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', named_struct('a', 1, 'b', 'x'), 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', named_struct('a', 1, 'b', 'x'), 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#6c4a9ea68ac7/ansi_on",
@@ -2242,11 +2242,11 @@
     },
     {
       "id": "decode#6cc3f534ba3b/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, named_struct('a', 1, 'b', 'x'), 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, named_struct('a', 1, 'b', 'x'), 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#6cc3f534ba3b/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, named_struct('a', 1, 'b', 'x'), 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, named_struct('a', 1, 'b', 'x'), 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#6cea09485d12/ansi_on",
@@ -2810,11 +2810,11 @@
     },
     {
       "id": "decode#8ae4f5f853cb/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#8ae4f5f853cb/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#8b1aad345c1f/ansi_on",
@@ -2914,11 +2914,11 @@
     },
     {
       "id": "decode#929f738ae275/ansi_on",
-      "reason": "SELECT decode(null, named_struct('a', 1, 'b', 'x'), 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT decode(null, named_struct('a', 1, 'b', 'x'), 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#929f738ae275/ansi_off",
-      "reason": "SELECT decode(null, named_struct('a', 1, 'b', 'x'), 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT decode(null, named_struct('a', 1, 'b', 'x'), 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#92b795867739/ansi_on",
@@ -3066,11 +3066,11 @@
     },
     {
       "id": "decode#99665367d9ed/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', named_struct('a', 1, 'b', 'x'), 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', named_struct('a', 1, 'b', 'x'), 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#99665367d9ed/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', named_struct('a', 1, 'b', 'x'), 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', named_struct('a', 1, 'b', 'x'), 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#99887f172f0a/ansi_on",
@@ -3106,11 +3106,11 @@
     },
     {
       "id": "decode#9a977b64470d/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', named_struct('a', 1, 'b', 'x'), 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', named_struct('a', 1, 'b', 'x'), 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#9a977b64470d/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', named_struct('a', 1, 'b', 'x'), 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', named_struct('a', 1, 'b', 'x'), 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#9afc3a12fcad/ansi_on",
@@ -3122,11 +3122,11 @@
     },
     {
       "id": "decode#9bb3267bf981/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x'), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x'), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#9bb3267bf981/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x'), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, named_struct('a', 1, 'b', 'x'), 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#9c018a341b18/ansi_on",
@@ -3258,19 +3258,19 @@
     },
     {
       "id": "decode#a16ebd738b05/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', named_struct('a', 1, 'b', 'x'), 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', named_struct('a', 1, 'b', 'x'), 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#a16ebd738b05/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', named_struct('a', 1, 'b', 'x'), 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', named_struct('a', 1, 'b', 'x'), 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "decode#a21d429fc92f/ansi_on",
-      "reason": "SELECT decode(null, 6, named_struct('a', 1, 'b', 'x'), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, named_struct('a', 1, 'b', 'x'), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#a21d429fc92f/ansi_off",
-      "reason": "SELECT decode(null, 6, named_struct('a', 1, 'b', 'x'), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, named_struct('a', 1, 'b', 'x'), NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#a248e80e482e/ansi_on",
@@ -3415,14 +3415,6 @@
     {
       "id": "decode#a967f7018aa0/ansi_off",
       "reason": "SELECT decode(null, NULL, 'Spark', NULL, 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
-    },
-    {
-      "id": "decode#aa787789c869/ansi_on",
-      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "decode#aa787789c869/ansi_off",
-      "reason": "SELECT decode(named_struct('a', 1, 'b', 'x'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "decode#ab7fd91c307b/ansi_on",
@@ -3735,14 +3727,6 @@
     {
       "id": "decode#bb5cc118588a/ansi_off",
       "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, CAST(X'C328FF' AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
-    },
-    {
-      "id": "decode#bb75b1ebc159/ansi_on",
-      "reason": "SELECT decode(encode('abc', 'utf-8'), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "decode#bb75b1ebc159/ansi_off",
-      "reason": "SELECT decode(encode('abc', 'utf-8'), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "decode#bbd4c9299114/ansi_on",
@@ -4090,11 +4074,11 @@
     },
     {
       "id": "decode#c9aa0aa91212/ansi_on",
-      "reason": "SELECT decode(2, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#c9aa0aa91212/ansi_off",
-      "reason": "SELECT decode(2, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', 'Non domestic') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#cca0cba0688a/ansi_on",
@@ -4138,11 +4122,11 @@
     },
     {
       "id": "decode#cd5c44ff4279/ansi_on",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#cd5c44ff4279/ansi_off",
-      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(2, 1, 'Southlake', 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#ce0287be402e/ansi_on",
@@ -4170,11 +4154,11 @@
     },
     {
       "id": "decode#cfb15a486d75/ansi_on",
-      "reason": "SELECT decode(6, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#cfb15a486d75/ansi_off",
-      "reason": "SELECT decode(6, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, named_struct('a', 1, 'b', 'x'), 2, 'San Francisco', 3, 'New Jersey', 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#cffbd5083400/ansi_on",
@@ -4394,11 +4378,11 @@
     },
     {
       "id": "decode#d82b0d4de689/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#d82b0d4de689/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(null, 6, 'Spark', NULL, 'SQL', 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#d82c077e487a/ansi_on",
@@ -4770,11 +4754,11 @@
     },
     {
       "id": "decode#eb08e0976c63/ansi_on",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#eb08e0976c63/ansi_off",
-      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT decode(6, 1, 'Southlake', 2, 'San Francisco', 3, named_struct('a', 1, 'b', 'x'), 4, 'Seattle') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "decode#eb4ebd4ac658/ansi_on",
@@ -4906,11 +4890,11 @@
     },
     {
       "id": "decode#f06976db6b0e/ansi_on",
-      "reason": "SELECT decode(null, 6, 'Spark', named_struct('a', 1, 'b', 'x'), 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT decode(null, 6, 'Spark', named_struct('a', 1, 'b', 'x'), 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#f06976db6b0e/ansi_off",
-      "reason": "SELECT decode(null, 6, 'Spark', named_struct('a', 1, 'b', 'x'), 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT decode(null, 6, 'Spark', named_struct('a', 1, 'b', 'x'), 'SQL', 4, 'rocks') | KRISHIV_UNSUPPORTED_FEATURE: decode with search and result arguments"
     },
     {
       "id": "decode#f0d4360ed5e8/ansi_on",

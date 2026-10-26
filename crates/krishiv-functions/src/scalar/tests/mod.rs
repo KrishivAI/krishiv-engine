@@ -593,6 +593,7 @@ mod families;
 mod map;
 mod number;
 mod predicate;
+mod r#struct;
 mod text;
 mod url;
 

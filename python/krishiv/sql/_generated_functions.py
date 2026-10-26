@@ -150,6 +150,7 @@ __all__ = [
     "month",
     "monthname",
     "months_between",
+    "named_struct",
     "nanvl",
     "negative",
     "next_day",
@@ -216,6 +217,7 @@ __all__ = [
     "stddev_pop",
     "stddev_samp",
     "str_to_map",
+    "struct",
     "substr",
     "substring",
     "substring_index",
@@ -903,6 +905,11 @@ def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool = Tr
     return _call("months_between", _named(date1, "date1"), _named(date2, "date2"), _lit(roundOff, "roundOff"))
 
 
+def named_struct(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``named_struct``."""
+    return _call("named_struct", *_cols(cols))
+
+
 def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column:
     """Calls the registry function ``nanvl``."""
     return _call("nanvl", _named(col1, "col1"), _named(col2, "col2"))
@@ -1246,6 +1253,11 @@ def str_to_map(
         *_opt(_named, pairDelim, "pairDelim"),
         *_opt(_named, keyValueDelim, "keyValueDelim"),
     )
+
+
+def struct(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``struct``."""
+    return _call("struct", *_cols(cols))
 
 
 def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None = None) -> Column:

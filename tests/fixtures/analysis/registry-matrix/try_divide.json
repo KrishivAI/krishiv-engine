@@ -37,22 +37,6 @@
       "reason": "SELECT try_divide(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "try_divide#81d0c3c5406d/ansi_on",
-      "reason": "SELECT try_divide(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_divide#81d0c3c5406d/ansi_off",
-      "reason": "SELECT try_divide(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_divide#8bf27b6a8b99/ansi_on",
-      "reason": "SELECT try_divide(3, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_divide#8bf27b6a8b99/ansi_off",
-      "reason": "SELECT try_divide(3, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_divide#9dd353d73dc5/ansi_on",
       "reason": "SELECT try_divide(3, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },

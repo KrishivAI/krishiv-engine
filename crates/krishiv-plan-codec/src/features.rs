@@ -126,6 +126,7 @@ registry! {
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -167,6 +168,8 @@ pub enum Construct<'a> {
     Frame(&'a WindowFrame),
     /// An aggregate function (of an aggregate or a window).
     Aggregate(AggregateFunction),
+    /// A resolved expression (a struct field access needs its feature).
+    Expr(&'a Expr),
     /// A Spark type in an expression or a column.
     Type(&'a DataType),
     /// An Arrow type the plan carries as IPC bytes (an aggregate's argument,
@@ -266,6 +269,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // `array<variant>` needs it too.
         Construct::Type(t) => t.is_nested().then_some(Feature::NestedTypes),
         Construct::ArrowType(t) => arrow_nested(t).then_some(Feature::NestedTypes),
+        Construct::Expr(e) => match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),
+            _ => None,
+        },
         // The `Window` node's format carries every frame between unbounded
         // and current-row bounds; an offset bound is newer. `FrameBound` is
         // non-exhaustive, so a bound added later counts as newer too.
@@ -348,6 +355,9 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
     for t in arrow_types_of(node) {
         f(Construct::ArrowType(t));
     }
+    for e in exprs_of(node) {
+        f(Construct::Expr(e));
+    }
 }
 
 /// The Arrow types `node` carries as IPC bytes.
@@ -391,6 +401,28 @@ fn arrow_types_of(node: &PhysNode) -> Vec<&arrow_schema::DataType> {
 /// The Spark types `node` holds: those of its scan columns and of every
 /// expression in it (columns, casts, functions, aliases, typed NULLs).
 fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
+    let mut out: Vec<&'a DataType> = Vec::new();
+    for e in exprs_of(node) {
+        match &e.node {
+            ExprNode::Cast { to, .. } => out.push(to),
+            ExprNode::Literal(Literal::Null(Some(t))) => out.push(t),
+            ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                out.push(&c.data_type);
+            }
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
+            ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => out.push(data_type),
+            _ => {}
+        }
+    }
+    if let PhysNode::Scan(scan) = node {
+        out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+    }
+    out
+}
+
+/// Every expression `node` holds, each once (shared subtrees visited once).
+fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
     fn items(items: &[ProjectItemPlan]) -> impl Iterator<Item = &Arc<Expr>> {
         items.iter().filter_map(|i| match i {
             ProjectItemPlan::Expr { expr, .. } => Some(expr),
@@ -398,10 +430,8 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
         })
     }
     let mut roots: Vec<&'a Arc<Expr>> = Vec::new();
-    let mut out: Vec<&'a DataType> = Vec::new();
     match node {
         PhysNode::Scan(scan) => {
-            out.extend(scan.scan.output.iter().map(|c| &c.data_type));
             roots.extend(scan.filter.iter().map(|f| &f.predicate));
         }
         PhysNode::Filter { predicate, .. } => roots.push(predicate),
@@ -426,20 +456,12 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     // Expressions share subtrees: each is visited once.
     let mut seen = std::collections::HashSet::new();
     let mut stack = roots;
+    let mut out = Vec::new();
     while let Some(e) = stack.pop() {
         if !seen.insert(Arc::as_ptr(e)) {
             continue;
         }
-        match &e.node {
-            ExprNode::Cast { to, .. } => out.push(to),
-            ExprNode::Literal(Literal::Null(Some(t))) => out.push(t),
-            ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
-                out.push(&c.data_type);
-            }
-            ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
-            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
-            _ => {}
-        }
+        out.push(e);
         e.for_each_child(&mut |c| stack.push(c));
     }
     out

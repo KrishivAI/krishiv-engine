@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "try_to_number#14343461e39f/ansi_on",
-      "reason": "SELECT try_to_number(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_to_number#14343461e39f/ansi_off",
-      "reason": "SELECT try_to_number(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_to_number#3536c73e6919/ansi_on",
       "reason": "SELECT try_to_number('454', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
     },
@@ -23,14 +15,6 @@
     {
       "id": "try_to_number#37653a0a3375/ansi_off",
       "reason": "SELECT try_to_number(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_to_number#432866f79de1/ansi_on",
-      "reason": "SELECT try_to_number('454', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_to_number#432866f79de1/ansi_off",
-      "reason": "SELECT try_to_number('454', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_to_number#69b8cbb7518e/ansi_on",

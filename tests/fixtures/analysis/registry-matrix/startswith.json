@@ -1,22 +1,6 @@
 {
   "entries": [
     {
-      "id": "startswith#00800f83fb84/ansi_on",
-      "reason": "SELECT startswith(named_struct('a', 1, 'b', 'x'), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "startswith#00800f83fb84/ansi_off",
-      "reason": "SELECT startswith(named_struct('a', 1, 'b', 'x'), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "startswith#02100ce52833/ansi_on",
-      "reason": "SELECT startswith('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "startswith#02100ce52833/ansi_off",
-      "reason": "SELECT startswith('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "startswith#19b35e358339/ansi_on",
       "reason": "SELECT startswith(INTERVAL '1-2' YEAR TO MONTH, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "coalesce#180ee04bc98b/ansi_on",
-      "reason": "SELECT coalesce(NULL, 1, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "coalesce#180ee04bc98b/ansi_off",
-      "reason": "SELECT coalesce(NULL, 1, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "coalesce#31842a9dbd4d/ansi_on",
       "reason": "SELECT coalesce(NULL, INTERVAL '1 02:03:04' DAY TO SECOND, NULL) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -49,14 +41,6 @@
       "reason": "SELECT coalesce(NULL, array(1, 2), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
-      "id": "coalesce#96e065bc5266/ansi_on",
-      "reason": "SELECT coalesce(named_struct('a', 1, 'b', 'x'), 1, NULL) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "coalesce#96e065bc5266/ansi_off",
-      "reason": "SELECT coalesce(named_struct('a', 1, 'b', 'x'), 1, NULL) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "coalesce#a8ec93040e68/ansi_on",
       "reason": "SELECT coalesce(INTERVAL '1-2' YEAR TO MONTH, 1, NULL) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -87,14 +71,6 @@
     {
       "id": "coalesce#c5de409dc37c/ansi_off",
       "reason": "SELECT coalesce(NULL, 1, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "coalesce#f707a07bd88b/ansi_on",
-      "reason": "SELECT coalesce(NULL, named_struct('a', 1, 'b', 'x'), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "coalesce#f707a07bd88b/ansi_off",
-      "reason": "SELECT coalesce(NULL, named_struct('a', 1, 'b', 'x'), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     }
   ],
   "format_version": 1,

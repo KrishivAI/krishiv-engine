@@ -23,14 +23,6 @@
     {
       "id": "ltrim#866327adf4da/ansi_off",
       "reason": "SELECT ltrim(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "ltrim#bf0dac2666b9/ansi_on",
-      "reason": "SELECT ltrim(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "ltrim#bf0dac2666b9/ansi_off",
-      "reason": "SELECT ltrim(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

@@ -338,11 +338,11 @@
     },
     {
       "id": "map_from_arrays#e4e788aa552f/ansi_on",
-      "reason": "SELECT map_from_arrays(named_struct('a', 1, 'b', 'x'), array('2', '4')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT map_from_arrays(named_struct('a', 1, 'b', 'x'), array('2', '4')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "map_from_arrays#e4e788aa552f/ansi_off",
-      "reason": "SELECT map_from_arrays(named_struct('a', 1, 'b', 'x'), array('2', '4')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT map_from_arrays(named_struct('a', 1, 'b', 'x'), array('2', '4')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "map_from_arrays#e6f367131816/ansi_on",

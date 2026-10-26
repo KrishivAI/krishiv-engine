@@ -33,14 +33,6 @@
       "reason": "SELECT (INTERVAL '1 02:03:04' DAY TO SECOND) << 1 | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "<<#7bd9d416790a/ansi_on",
-      "reason": "SELECT 2 << (named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "<<#7bd9d416790a/ansi_off",
-      "reason": "SELECT 2 << (named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "<<#7e74e30d017a/ansi_on",
       "reason": "SELECT 2 << (INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -55,14 +47,6 @@
     {
       "id": "<<#83a6d37169a0/ansi_off",
       "reason": "SELECT (array(1, 2)) << 1 | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "<<#c2978426938d/ansi_on",
-      "reason": "SELECT (named_struct('a', 1, 'b', 'x')) << 1 | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "<<#c2978426938d/ansi_off",
-      "reason": "SELECT (named_struct('a', 1, 'b', 'x')) << 1 | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

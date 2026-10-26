@@ -17,14 +17,6 @@
       "reason": "SELECT rpad('hi', array(1, 2), '??') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "rpad#0aa877274e17/ansi_on",
-      "reason": "SELECT rpad('hi', 5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#0aa877274e17/ansi_off",
-      "reason": "SELECT rpad('hi', 5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "rpad#0dde82949852/ansi_on",
       "reason": "SELECT rpad('hi', INTERVAL '1 02:03:04' DAY TO SECOND, '??') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -39,14 +31,6 @@
     {
       "id": "rpad#114a2010afe6/ansi_off",
       "reason": "SELECT rpad('hi', INTERVAL '1-2' YEAR TO MONTH, '??') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#2a85c2a68718/ansi_on",
-      "reason": "SELECT rpad('hi', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#2a85c2a68718/ansi_off",
-      "reason": "SELECT rpad('hi', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "rpad#2df795636485/ansi_on",
@@ -71,14 +55,6 @@
     {
       "id": "rpad#4b9f09ad06a5/ansi_off",
       "reason": "SELECT rpad('hi', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#6948ac2f6fa7/ansi_on",
-      "reason": "SELECT rpad(named_struct('a', 1, 'b', 'x'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#6948ac2f6fa7/ansi_off",
-      "reason": "SELECT rpad(named_struct('a', 1, 'b', 'x'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "rpad#888e9eeec49f/ansi_on",
@@ -113,14 +89,6 @@
       "reason": "SELECT rpad(INTERVAL '1-2' YEAR TO MONTH, 5, '??') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "rpad#beab7c982e30/ansi_on",
-      "reason": "SELECT rpad('hi', named_struct('a', 1, 'b', 'x'), '??') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#beab7c982e30/ansi_off",
-      "reason": "SELECT rpad('hi', named_struct('a', 1, 'b', 'x'), '??') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "rpad#c2dc63c23dd1/ansi_on",
       "reason": "SELECT rpad('hi', 5, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -135,14 +103,6 @@
     {
       "id": "rpad#c36fcf5d02d6/ansi_off",
       "reason": "SELECT rpad(array(1, 2), 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#e1759fee6985/ansi_on",
-      "reason": "SELECT rpad(named_struct('a', 1, 'b', 'x'), 5, '??') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#e1759fee6985/ansi_off",
-      "reason": "SELECT rpad(named_struct('a', 1, 'b', 'x'), 5, '??') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "rpad#e70e9a4e3801/ansi_on",

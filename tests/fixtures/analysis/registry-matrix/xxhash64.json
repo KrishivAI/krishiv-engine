@@ -41,14 +41,6 @@
       "reason": "SELECT xxhash64(CAST(1.5 AS FLOAT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
-      "id": "xxhash64#1799a60ab0d0/ansi_on",
-      "reason": "SELECT xxhash64('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "xxhash64#1799a60ab0d0/ansi_off",
-      "reason": "SELECT xxhash64('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
       "id": "xxhash64#1c0a6e612b22/ansi_on",
       "reason": "SELECT xxhash64('Spark', array(123), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
@@ -410,11 +402,11 @@
     },
     {
       "id": "xxhash64#eea7d24d6cde/ansi_on",
-      "reason": "SELECT xxhash64(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT xxhash64(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#eea7d24d6cde/ansi_off",
-      "reason": "SELECT xxhash64(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
+      "reason": "SELECT xxhash64(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#f20293a2a3c7/ansi_on",

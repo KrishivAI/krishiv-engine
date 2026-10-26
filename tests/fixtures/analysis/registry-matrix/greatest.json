@@ -49,28 +49,12 @@
       "reason": "SELECT greatest(10, 9, 2, INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "greatest#3e8a4db111a2/ansi_on",
-      "reason": "SELECT greatest(10, 9, 2, 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "greatest#3e8a4db111a2/ansi_off",
-      "reason": "SELECT greatest(10, 9, 2, 4, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "greatest#4516360b05de/ansi_on",
       "reason": "SELECT greatest(10, 9, 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "greatest#4516360b05de/ansi_off",
       "reason": "SELECT greatest(10, 9, 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "greatest#4d83881cdb71/ansi_on",
-      "reason": "SELECT greatest(10, named_struct('a', 1, 'b', 'x'), 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "greatest#4d83881cdb71/ansi_off",
-      "reason": "SELECT greatest(10, named_struct('a', 1, 'b', 'x'), 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "greatest#69f9244398a6/ansi_on",
@@ -81,28 +65,12 @@
       "reason": "SELECT greatest(10, 9, 2, 4, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "greatest#7421d8bc18eb/ansi_on",
-      "reason": "SELECT greatest(10, 9, named_struct('a', 1, 'b', 'x'), 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "greatest#7421d8bc18eb/ansi_off",
-      "reason": "SELECT greatest(10, 9, named_struct('a', 1, 'b', 'x'), 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "greatest#80f86bb7e057/ansi_on",
       "reason": "SELECT greatest(10, 9, 2, 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "greatest#80f86bb7e057/ansi_off",
       "reason": "SELECT greatest(10, 9, 2, 4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "greatest#84abe3fe1684/ansi_on",
-      "reason": "SELECT greatest(10, 9, 2, named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "greatest#84abe3fe1684/ansi_off",
-      "reason": "SELECT greatest(10, 9, 2, named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "greatest#91ff7769043f/ansi_on",
@@ -143,14 +111,6 @@
     {
       "id": "greatest#b51e4d0651cf/ansi_off",
       "reason": "SELECT greatest(10, 9, array(1, 2), 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "greatest#b9d968efd344/ansi_on",
-      "reason": "SELECT greatest(named_struct('a', 1, 'b', 'x'), 9, 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "greatest#b9d968efd344/ansi_off",
-      "reason": "SELECT greatest(named_struct('a', 1, 'b', 'x'), 9, 2, 4, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "greatest#d2ab6b7ae5ae/ansi_on",

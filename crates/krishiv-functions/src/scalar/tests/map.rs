@@ -96,11 +96,11 @@ fn map_value_nullability_follows_the_arguments() {
     // Nullable value columns give nullable map values; literals do not.
     let bound = vec![
         BindArg::Column {
-            data_type: DataType::Int32,
+            ty: DataType::Int32,
             nullable: false,
         },
         BindArg::Column {
-            data_type: DataType::Utf8,
+            ty: DataType::Utf8,
             nullable: true,
         },
     ];

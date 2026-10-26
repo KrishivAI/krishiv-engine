@@ -125,14 +125,6 @@
       "reason": "SELECT try_subtract(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_subtract#72e38bf391ff/ansi_on",
-      "reason": "SELECT try_subtract(named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#72e38bf391ff/ansi_off",
-      "reason": "SELECT try_subtract(named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_subtract#756b9b8d8ece/ansi_on",
       "reason": "SELECT try_subtract(2, DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -211,14 +203,6 @@
     {
       "id": "try_subtract#cf94932b9ee9/ansi_off",
       "reason": "SELECT try_subtract(INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#d2e2eff78bc1/ansi_on",
-      "reason": "SELECT try_subtract(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#d2e2eff78bc1/ansi_off",
-      "reason": "SELECT try_subtract(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_subtract#d6e583e2358c/ansi_on",

@@ -9,14 +9,6 @@
       "reason": "SELECT atan2(array(1, 2), 0) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "atan2#2efc7af90017/ansi_on",
-      "reason": "SELECT atan2(0, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#2efc7af90017/ansi_off",
-      "reason": "SELECT atan2(0, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "atan2#4f62ee0e6c22/ansi_on",
       "reason": "SELECT atan2(0, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -39,14 +31,6 @@
     {
       "id": "atan2#764f8550bc52/ansi_off",
       "reason": "SELECT atan2(0, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#7692bbe02cfb/ansi_on",
-      "reason": "SELECT atan2(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#7692bbe02cfb/ansi_off",
-      "reason": "SELECT atan2(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "atan2#b02563140a11/ansi_on",

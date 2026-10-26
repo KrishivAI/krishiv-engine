@@ -23,14 +23,6 @@
     {
       "id": "is_valid_utf8#c6ecf8beba2a/ansi_off",
       "reason": "SELECT is_valid_utf8(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "is_valid_utf8#f9105e1d54d9/ansi_on",
-      "reason": "SELECT is_valid_utf8(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "is_valid_utf8#f9105e1d54d9/ansi_off",
-      "reason": "SELECT is_valid_utf8(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

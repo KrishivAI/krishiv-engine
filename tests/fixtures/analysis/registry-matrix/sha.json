@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "sha#0948c7b0df37/ansi_on",
-      "reason": "SELECT sha(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sha#0948c7b0df37/ansi_off",
-      "reason": "SELECT sha(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "sha#2112efaa84c9/ansi_on",
       "reason": "SELECT sha(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

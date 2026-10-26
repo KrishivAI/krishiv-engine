@@ -23,14 +23,6 @@
     {
       "id": "make_valid_utf8#a999163e1d68/ansi_off",
       "reason": "SELECT make_valid_utf8(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "make_valid_utf8#f117670fb848/ansi_on",
-      "reason": "SELECT make_valid_utf8(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_valid_utf8#f117670fb848/ansi_off",
-      "reason": "SELECT make_valid_utf8(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

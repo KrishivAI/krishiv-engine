@@ -1,28 +1,12 @@
 {
   "entries": [
     {
-      "id": "repeat#35e3458a080f/ansi_on",
-      "reason": "SELECT repeat(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "repeat#35e3458a080f/ansi_off",
-      "reason": "SELECT repeat(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "repeat#76f3acd3a580/ansi_on",
       "reason": "SELECT repeat(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "repeat#76f3acd3a580/ansi_off",
       "reason": "SELECT repeat(INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "repeat#7a83ebf5b4fb/ansi_on",
-      "reason": "SELECT repeat('123', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "repeat#7a83ebf5b4fb/ansi_off",
-      "reason": "SELECT repeat('123', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "repeat#86be454ecd74/ansi_on",
