@@ -29,7 +29,6 @@
     "depends-on-command": [
       18,
       19,
-      20,
       21,
       22,
       23,
@@ -41,13 +40,11 @@
       29
     ],
     "sql-commands": [
-      0,
       1,
       2,
       3,
       4,
-      5,
-      42
+      5
     ]
   },
   "file": "postgreSQL/float4",

@@ -28,12 +28,10 @@
       85
     ],
     "sql-commands": [
-      71,
       72,
       73,
       74,
-      75,
-      123
+      75
     ]
   },
   "file": "postgreSQL/strings",

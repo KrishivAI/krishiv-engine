@@ -5,13 +5,11 @@
       7
     ],
     "sql-commands": [
-      0,
       1,
       2,
       3,
       4,
-      6,
-      8
+      6
     ]
   },
   "file": "postgreSQL/insert",

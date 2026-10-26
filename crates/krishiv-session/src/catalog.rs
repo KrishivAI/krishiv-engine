@@ -13,18 +13,31 @@
 //! A query lists the files of each read (and view) once, before it is
 //! planned, and scans them as a [`FileTable`] whose footers give the
 //! optimizer its statistics.
+//!
+//! Permanent state lives in a [`CatalogStore`] (one per session, owned by
+//! [`SessionCatalog`], never shared between sessions or processes): namespaces
+//! and file-backed tables created by `CREATE DATABASE` and `CREATE TABLE`.
+//! A table read plans as an ordinary read by path ([`ReadSource::Files`])
+//! with the stored columns as its schema, the same way a temporary view
+//! over files works today: analysis reads no files, and a plan never holds
+//! a handle into the catalog. The store's epoch is part of the
+//! query-context fingerprint, so cached analyses do not survive DDL.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::{
-    InternalError, KrishivError, KrishivReservedTempViewName, KrishivUnsupportedFeature,
-    RecursiveView, TableOrViewNotFound,
+    ErrorClass, InternalError, KrishivError, KrishivReservedTempViewName,
+    KrishivUnsupportedFeature, RecursiveView, SchemaAlreadyExists, SchemaNotEmpty, SchemaNotFound,
+    TableOrViewAlreadyExists, TableOrViewNotFound,
 };
+use krishiv_common::secret::OptionValue;
 use krishiv_exec::files::FileReads;
 use krishiv_exec::planner::{FileTable, MemoryTable, TableProvider, TableProviderResolver};
 use krishiv_io::IoContext;
@@ -84,16 +97,17 @@ pub(crate) fn is_hidden_name(name: &str) -> bool {
         .is_some_and(|prefix| prefix.eq_ignore_ascii_case(HIDDEN_PREFIX))
 }
 
-/// The temporary tables and views of a session, by lower-case name.
+/// The temporary tables and views of a session, by lower-case name:
+/// single-part names only, resolved before the [`CatalogStore`].
 #[derive(Debug, Default)]
-pub(crate) struct SessionCatalog {
+pub(crate) struct TempViews {
     tables: RwLock<BTreeMap<String, (String, Arc<TempTable>)>>,
     epoch: AtomicU64,
     /// Hidden names handed out for snapshot pins (see [`SessionCatalog::put_view`]).
     hidden: AtomicU64,
 }
 
-impl SessionCatalog {
+impl TempViews {
     /// Adds or replaces `name`, removing the snapshot pins the old entry
     /// owned that no other live view still owns.
     pub(crate) fn put(&self, name: &str, table: TempTable) {
@@ -227,11 +241,781 @@ impl SessionCatalog {
     }
 }
 
-/// What a query reads files for: a view (by lower-case name) or a read by
+/// Whether a table is managed (its directory is the warehouse's, and
+/// dropping the table deletes it) or external (its `LOCATION` is the
+/// user's, and dropping the table keeps it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CatalogTableKind {
+    /// A managed table.
+    Managed,
+    /// An external table.
+    External,
+}
+
+/// A permanent, file-backed table: its files live at `location`, read in
+/// `provider` with `options` under the stored `columns` (plans hold this
+/// read, never a handle into the catalog). Comments, defaults, properties
+/// and the rest are metadata only.
+#[derive(Debug, Clone)]
+pub(crate) struct CatalogTable {
+    /// Its identity, as the catalog spells it: `spark_catalog`,
+    /// one namespace part, the name.
+    pub(crate) ident: TableIdent,
+    /// Managed or external.
+    pub(crate) kind: CatalogTableKind,
+    /// The file format, lower-case (`parquet`, `csv`, `json`, `text`).
+    pub(crate) provider: String,
+    /// The table directory, absolute.
+    pub(crate) location: String,
+    /// The columns, as declared or as the CTAS query returned them.
+    pub(crate) columns: Vec<TableColumn>,
+    /// Each column's comment, if written.
+    pub(crate) col_comments: Vec<Option<String>>,
+    /// Each column's default, as SQL text, if written.
+    pub(crate) col_defaults: Vec<Option<String>>,
+    /// The `OPTIONS`, typed as secrets where Spark redacts them.
+    pub(crate) options: BTreeMap<String, OptionValue>,
+    /// The `TBLPROPERTIES`.
+    pub(crate) properties: BTreeMap<String, String>,
+    /// The `COMMENT`, if written.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by DESCRIBE and SHOW, which the engine does not run yet"
+        )
+    )]
+    pub(crate) comment: Option<String>,
+    /// When the table was created, as seconds (and nanos) since the epoch.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by DESCRIBE and SHOW, which the engine does not run yet"
+        )
+    )]
+    pub(crate) created_at: String,
+    /// Who created the table.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by DESCRIBE and SHOW, which the engine does not run yet"
+        )
+    )]
+    pub(crate) owner: String,
+}
+
+/// How [`CatalogStore::create_table`] treats an existing table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CreateMode {
+    /// Fail with `TABLE_OR_VIEW_ALREADY_EXISTS`.
+    ErrorIfExists,
+    /// Keep the existing table.
+    IfNotExists,
+    /// Replace the existing table.
+    Replace,
+}
+
+/// A namespace: its comment, its directory and its properties.
+#[derive(Debug, Clone)]
+pub(crate) struct NamespaceMeta {
+    /// The name, as written.
+    pub(crate) name: String,
+    /// The `COMMENT`, if written.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by DESCRIBE, which the engine does not run yet"
+        )
+    )]
+    pub(crate) comment: Option<String>,
+    /// The namespace directory, absolute.
+    pub(crate) location: String,
+    /// The `DBPROPERTIES`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by DESCRIBE, which the engine does not run yet"
+        )
+    )]
+    pub(crate) properties: BTreeMap<String, String>,
+}
+
+/// The permanent state of a session's catalog: namespaces and file-backed
+/// tables. One store per session, owned by [`SessionCatalog`]: no shared
+/// process state, no static. Every change bumps [`epoch`](Self::epoch),
+/// which is part of the query-context fingerprint, so cached analyses do
+/// not survive DDL.
+pub(crate) trait CatalogStore {
+    /// Bumped on every change.
+    fn epoch(&self) -> u64;
+    /// The namespaces, as written, in order.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by SHOW NAMESPACES, which the engine does not run yet"
+        )
+    )]
+    fn namespaces(&self) -> Vec<String>;
+    /// Whether namespace `name` exists: ignoring case unless
+    /// `case_sensitive`, when the name must be as created.
+    fn namespace_exists(&self, name: &str, case_sensitive: bool) -> bool;
+    /// The directory of namespace `name`, if it exists.
+    fn namespace_location(&self, name: &str, case_sensitive: bool) -> Option<String>;
+    /// Creates namespace `ns`; `true` when it was created. An existing
+    /// namespace fails with `SCHEMA_ALREADY_EXISTS` unless `if_not_exists`.
+    fn create_namespace(
+        &mut self,
+        ns: NamespaceMeta,
+        if_not_exists: bool,
+        case_sensitive: bool,
+    ) -> Result<bool, KrishivError>;
+    /// Drops namespace `name` with `behavior`: without `CASCADE` a
+    /// non-empty namespace fails with `SCHEMA_NOT_EMPTY`; with it the
+    /// namespace and its tables' metadata go. Returns the dropped tables
+    /// (the caller deletes managed data afterwards). A missing namespace
+    /// fails with `SCHEMA_NOT_FOUND` unless `if_exists`.
+    fn drop_namespace(
+        &mut self,
+        name: &str,
+        if_exists: bool,
+        cascade: bool,
+        case_sensitive: bool,
+    ) -> Result<Vec<CatalogTable>, KrishivError>;
+    /// The tables of namespace `name`, as written, in order, or
+    /// `SCHEMA_NOT_FOUND`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by SHOW TABLES, which the engine does not run yet"
+        )
+    )]
+    fn list_tables(&self, name: &str, case_sensitive: bool) -> Result<Vec<String>, KrishivError>;
+    /// The table `name` in namespace `ns`: ignoring case unless
+    /// `case_sensitive`, when both names must be as created.
+    fn table(&self, ns: &str, name: &str, case_sensitive: bool) -> Option<CatalogTable>;
+    /// Inserts `table`; `true` when it was inserted or replaced. An
+    /// existing table fails with `TABLE_OR_VIEW_ALREADY_EXISTS` under
+    /// [`CreateMode::ErrorIfExists`], is kept under
+    /// [`CreateMode::IfNotExists`], and is replaced under
+    /// [`CreateMode::Replace`]. The namespace must exist
+    /// (`SCHEMA_NOT_FOUND` otherwise).
+    fn create_table(
+        &mut self,
+        table: CatalogTable,
+        mode: CreateMode,
+        case_sensitive: bool,
+    ) -> Result<bool, KrishivError>;
+    /// Runs `update` on the table `name` in namespace `ns` (bumping the
+    /// epoch); `false` when there is no such table.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "run by ALTER TABLE, which the engine does not run yet"
+        )
+    )]
+    fn alter_table(
+        &mut self,
+        ns: &str,
+        name: &str,
+        case_sensitive: bool,
+        update: impl FnOnce(&mut CatalogTable),
+    ) -> bool;
+    /// Removes the table `name` in namespace `ns` (and bumps the epoch);
+    /// the removed table, if any.
+    fn drop_table(&mut self, ns: &str, name: &str, case_sensitive: bool) -> Option<CatalogTable>;
+}
+
+/// The [`CatalogStore`]: namespaces and tables in memory, keyed
+/// lower-case like Spark's session catalog.
+#[derive(Debug, Default)]
+pub(crate) struct InMemoryCatalogStore {
+    /// Bumped on every change.
+    epoch: u64,
+    /// The namespaces, by lower-case name.
+    namespaces: BTreeMap<String, NamespaceMeta>,
+    /// The tables, by (lower-case namespace, lower-case name).
+    tables: BTreeMap<(String, String), CatalogTable>,
+}
+
+impl InMemoryCatalogStore {
+    /// An empty store with the `default` namespace.
+    fn with_default() -> Self {
+        let mut store = Self::default();
+        store.namespaces.insert(
+            NAMESPACE.to_owned(),
+            NamespaceMeta {
+                name: NAMESPACE.to_owned(),
+                comment: None,
+                location: String::new(),
+                properties: BTreeMap::new(),
+            },
+        );
+        store
+    }
+
+    /// Bumps the epoch.
+    fn bump(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+
+    /// The entry of namespace `name`: ignoring case unless
+    /// `case_sensitive`, when the name must be as created.
+    fn namespace_entry(&self, name: &str, case_sensitive: bool) -> Option<&NamespaceMeta> {
+        let entry = self.namespaces.get(&name.to_lowercase())?;
+        (!case_sensitive || entry.name == name).then_some(entry)
+    }
+
+    /// The key of table `name` in namespace `ns`.
+    fn table_key(ns: &str, name: &str) -> (String, String) {
+        (ns.to_lowercase(), name.to_lowercase())
+    }
+
+    /// Whether `stored` (as created) matches `written` (as read).
+    fn matches(stored: &str, written: &str, case_sensitive: bool) -> bool {
+        stored == written || !case_sensitive && stored.eq_ignore_ascii_case(written)
+    }
+}
+
+impl CatalogStore for InMemoryCatalogStore {
+    fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
+    fn namespaces(&self) -> Vec<String> {
+        self.namespaces.values().map(|n| n.name.clone()).collect()
+    }
+
+    fn namespace_exists(&self, name: &str, case_sensitive: bool) -> bool {
+        self.namespace_entry(name, case_sensitive).is_some()
+    }
+
+    fn namespace_location(&self, name: &str, case_sensitive: bool) -> Option<String> {
+        self.namespace_entry(name, case_sensitive)
+            .map(|n| n.location.clone())
+    }
+
+    fn create_namespace(
+        &mut self,
+        ns: NamespaceMeta,
+        if_not_exists: bool,
+        case_sensitive: bool,
+    ) -> Result<bool, KrishivError> {
+        if self.namespace_entry(&ns.name, case_sensitive).is_some() {
+            if if_not_exists {
+                return Ok(false);
+            }
+            return Err(SchemaAlreadyExists {
+                schema_name: quote(&ns.name),
+            }
+            .into());
+        }
+        self.namespaces.insert(ns.name.to_lowercase(), ns);
+        self.bump();
+        Ok(true)
+    }
+
+    fn drop_namespace(
+        &mut self,
+        name: &str,
+        if_exists: bool,
+        cascade: bool,
+        case_sensitive: bool,
+    ) -> Result<Vec<CatalogTable>, KrishivError> {
+        if name.eq_ignore_ascii_case(NAMESPACE) {
+            // The `default` namespace always exists: it cannot be dropped.
+            return Err(unsupported("dropping the default namespace"));
+        }
+        let Some(entry) = self.namespace_entry(name, case_sensitive) else {
+            if if_exists {
+                return Ok(Vec::new());
+            }
+            return Err(SchemaNotFound {
+                schema_name: quote(name),
+            }
+            .into());
+        };
+        let key = entry.name.to_lowercase();
+        let tables: Vec<(String, String)> = self
+            .tables
+            .keys()
+            .filter(|(ns, _)| *ns == key)
+            .cloned()
+            .collect();
+        if !cascade && !tables.is_empty() {
+            return Err(SchemaNotEmpty {
+                schema_name: quote(name),
+            }
+            .into());
+        }
+        let mut dropped = Vec::with_capacity(tables.len());
+        for k in tables {
+            if let Some(t) = self.tables.remove(&k) {
+                dropped.push(t);
+            }
+        }
+        self.namespaces.remove(&key);
+        self.bump();
+        Ok(dropped)
+    }
+
+    fn list_tables(&self, name: &str, case_sensitive: bool) -> Result<Vec<String>, KrishivError> {
+        let Some(entry) = self.namespace_entry(name, case_sensitive) else {
+            return Err(SchemaNotFound {
+                schema_name: quote(name),
+            }
+            .into());
+        };
+        let key = entry.name.to_lowercase();
+        Ok(self
+            .tables
+            .iter()
+            .filter(|((ns, _), _)| *ns == key)
+            .map(|(_, t)| t.ident.name.clone())
+            .collect())
+    }
+
+    fn table(&self, ns: &str, name: &str, case_sensitive: bool) -> Option<CatalogTable> {
+        let found = self.tables.get(&Self::table_key(ns, name))?;
+        let ident_ns = found
+            .ident
+            .namespace
+            .first()
+            .map(String::as_str)
+            .unwrap_or("");
+        (Self::matches(ident_ns, ns, case_sensitive)
+            && Self::matches(&found.ident.name, name, case_sensitive))
+        .then(|| found.clone())
+    }
+
+    fn create_table(
+        &mut self,
+        table: CatalogTable,
+        mode: CreateMode,
+        case_sensitive: bool,
+    ) -> Result<bool, KrishivError> {
+        let ns = table
+            .ident
+            .namespace
+            .first()
+            .map(String::as_str)
+            .unwrap_or("");
+        if self.namespace_entry(ns, case_sensitive).is_none() {
+            return Err(SchemaNotFound {
+                schema_name: quote(ns),
+            }
+            .into());
+        }
+        let key = Self::table_key(ns, &table.ident.name);
+        if let Some(existing) = self.tables.get(&key)
+            && Self::matches(
+                existing
+                    .ident
+                    .namespace
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or(""),
+                ns,
+                case_sensitive,
+            )
+            && Self::matches(&existing.ident.name, &table.ident.name, case_sensitive)
+        {
+            match mode {
+                CreateMode::ErrorIfExists => {
+                    return Err(TableOrViewAlreadyExists {
+                        relation_name: quote(&table.ident.name),
+                    }
+                    .into());
+                }
+                CreateMode::IfNotExists => return Ok(false),
+                CreateMode::Replace => {}
+            }
+        }
+        self.tables.insert(key, table);
+        self.bump();
+        Ok(true)
+    }
+
+    fn alter_table(
+        &mut self,
+        ns: &str,
+        name: &str,
+        case_sensitive: bool,
+        update: impl FnOnce(&mut CatalogTable),
+    ) -> bool {
+        let key = Self::table_key(ns, name);
+        let Some(found) = self.tables.get_mut(&key) else {
+            return false;
+        };
+        let ident_ns = found
+            .ident
+            .namespace
+            .first()
+            .map(String::as_str)
+            .unwrap_or("");
+        if !Self::matches(ident_ns, ns, case_sensitive)
+            || !Self::matches(&found.ident.name.clone(), name, case_sensitive)
+        {
+            return false;
+        }
+        update(found);
+        self.bump();
+        true
+    }
+
+    fn drop_table(&mut self, ns: &str, name: &str, case_sensitive: bool) -> Option<CatalogTable> {
+        let key = Self::table_key(ns, name);
+        let found = self.tables.get(&key)?;
+        let ident_ns = found
+            .ident
+            .namespace
+            .first()
+            .map(String::as_str)
+            .unwrap_or("");
+        if !Self::matches(ident_ns, ns, case_sensitive)
+            || !Self::matches(&found.ident.name.clone(), name, case_sensitive)
+        {
+            return None;
+        }
+        let removed = self.tables.remove(&key);
+        if removed.is_some() {
+            self.bump();
+        }
+        removed
+    }
+}
+
+/// The session's warehouse directory: created under the system temporary
+/// directory when the session is built (unless
+/// `spark.sql.warehouse.dir` names one), and deleted when the session is
+/// dropped.
+#[derive(Debug)]
+pub(crate) struct WarehouseDir {
+    /// The directory; created by [`Self::new`] unless creation failed, in
+    /// which case table creation fails with the I/O error when it creates
+    /// the table's directory.
+    dir: PathBuf,
+    /// Whether this session created `dir` (and deletes it on drop).
+    owned: bool,
+}
+
+impl WarehouseDir {
+    /// A fresh directory for one session.
+    fn new() -> Self {
+        static COUNT: AtomicU64 = AtomicU64::new(0);
+        let n = COUNT.fetch_add(1, Ordering::Relaxed);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "krishiv-warehouse-{}-{n}-{nanos}",
+            std::process::id()
+        ));
+        let owned = std::fs::create_dir_all(&dir).is_ok();
+        Self { dir, owned }
+    }
+
+    /// The directory.
+    fn root(&self) -> &PathBuf {
+        &self.dir
+    }
+}
+
+impl Drop for WarehouseDir {
+    fn drop(&mut self) {
+        if self.owned {
+            drop(std::fs::remove_dir_all(&self.dir));
+        }
+    }
+}
+
+/// The catalog of a session: the [`TempViews`], the [`CatalogStore`], the
+/// current namespace (`USE`), and the warehouse directory. Each session
+/// owns one store: no shared process state, and plans hold reads, never
+/// handles into it.
+#[derive(Debug)]
+pub(crate) struct SessionCatalog {
+    /// The temporary tables and views.
+    pub(crate) temp: TempViews,
+    /// The namespaces and file-backed tables.
+    store: RwLock<InMemoryCatalogStore>,
+    /// The current namespace, as written.
+    current: RwLock<String>,
+    /// The warehouse directory.
+    warehouse: WarehouseDir,
+}
+
+impl Default for SessionCatalog {
+    fn default() -> Self {
+        Self {
+            temp: TempViews::default(),
+            store: RwLock::new(InMemoryCatalogStore::with_default()),
+            current: RwLock::new(NAMESPACE.to_owned()),
+            warehouse: WarehouseDir::new(),
+        }
+    }
+}
+
+impl SessionCatalog {
+    /// The temporary tables and views.
+    pub(crate) fn temp_views(&self) -> &TempViews {
+        &self.temp
+    }
+
+    /// The current namespace, as written.
+    pub(crate) fn current_namespace(&self) -> String {
+        self.current
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Sets the current namespace (`USE` checks it exists first), bumping
+    /// the epoch so cached analyses (which resolved under the old
+    /// namespace) are not reused.
+    pub(crate) fn set_current_namespace(&self, ns: &str) {
+        *self.current.write().unwrap_or_else(PoisonError::into_inner) = ns.to_owned();
+        self.store
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .bump();
+    }
+
+    /// The warehouse root: `spark.sql.warehouse.dir` when it names one
+    /// (relative to `cwd`), else the session's temporary directory.
+    pub(crate) fn warehouse_root(&self, config: &Config, cwd: &str) -> PathBuf {
+        let configured =
+            crate::conf::get(config, "spark.sql.warehouse.dir").filter(|d| !d.is_empty());
+        match configured {
+            Some(dir) => {
+                let path = PathBuf::from(&dir);
+                if path.is_absolute() {
+                    path
+                } else {
+                    PathBuf::from(cwd).join(path)
+                }
+            }
+            None => self.warehouse.root().clone(),
+        }
+    }
+
+    /// The session's temporary warehouse directory (tests only).
+    #[cfg(test)]
+    pub(crate) fn warehouse_dir(&self) -> PathBuf {
+        self.warehouse.root().clone()
+    }
+
+    /// Every temporary or store change bumps the epoch (see
+    /// [`TempViews::put`] and [`CatalogStore::epoch`]).
+    pub(crate) fn epoch(&self) -> u64 {
+        self.temp.epoch().wrapping_add(
+            self.store
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .epoch(),
+        )
+    }
+
+    /// Adds or replaces `name`, removing the snapshot pins the old entry
+    /// owned that no other live view still owns.
+    pub(crate) fn put(&self, name: &str, table: TempTable) {
+        self.temp.put(name, table);
+    }
+
+    /// Adds or replaces `name` with a view over `plan` and `columns` that
+    /// owns `pins`, inserting `new_pins` in the same critical section.
+    pub(crate) fn put_view(
+        &self,
+        name: &str,
+        plan: Arc<LogicalPlan>,
+        columns: Vec<TableColumn>,
+        pins: Vec<String>,
+        new_pins: Vec<(String, Arc<TempTable>)>,
+    ) {
+        self.temp.put_view(name, plan, columns, pins, new_pins);
+    }
+
+    /// Removes `name` (and the snapshot pins it owned that no other live
+    /// view still owns); whether it existed.
+    pub(crate) fn drop_table(&self, name: &str) -> bool {
+        self.temp.drop_table(name)
+    }
+
+    /// The names, as registered, in order, without snapshot pins.
+    pub(crate) fn names(&self) -> Vec<String> {
+        self.temp.names()
+    }
+
+    /// The entry `name`: case-insensitively unless `case_sensitive`.
+    pub(crate) fn get(&self, name: &str, case_sensitive: bool) -> Option<Arc<TempTable>> {
+        self.temp.get(name, case_sensitive)
+    }
+
+    /// Whether an entry `name` exists: case-insensitively unless
+    /// `case_sensitive`.
+    pub(crate) fn exists(&self, name: &str, case_sensitive: bool) -> bool {
+        self.temp.exists(name, case_sensitive)
+    }
+
+    /// The number of temporary entries, snapshot pins included: tests only.
+    #[cfg(test)]
+    pub(crate) fn entry_count(&self) -> usize {
+        self.temp.entry_count()
+    }
+
+    /// Whether namespace `name` exists.
+    pub(crate) fn namespace_exists(&self, name: &str, case_sensitive: bool) -> bool {
+        self.store
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .namespace_exists(name, case_sensitive)
+    }
+
+    /// The directory of namespace `name`, if it exists.
+    pub(crate) fn namespace_location(&self, name: &str, case_sensitive: bool) -> Option<String> {
+        self.store
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .namespace_location(name, case_sensitive)
+    }
+
+    /// The namespaces, as written, in order.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by SHOW NAMESPACES, which the engine does not run yet"
+        )
+    )]
+    pub(crate) fn namespaces(&self) -> Vec<String> {
+        self.store
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .namespaces()
+    }
+
+    /// Creates namespace `ns`; `true` when it was created.
+    pub(crate) fn create_namespace(
+        &self,
+        ns: NamespaceMeta,
+        if_not_exists: bool,
+        case_sensitive: bool,
+    ) -> Result<bool, KrishivError> {
+        self.store
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .create_namespace(ns, if_not_exists, case_sensitive)
+    }
+
+    /// Drops namespace `name` (see [`CatalogStore::drop_namespace`]).
+    pub(crate) fn drop_namespace(
+        &self,
+        name: &str,
+        if_exists: bool,
+        cascade: bool,
+        case_sensitive: bool,
+    ) -> Result<Vec<CatalogTable>, KrishivError> {
+        self.store
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drop_namespace(name, if_exists, cascade, case_sensitive)
+    }
+
+    /// The tables of namespace `name`, as written, in order.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by SHOW TABLES, which the engine does not run yet"
+        )
+    )]
+    pub(crate) fn list_tables(
+        &self,
+        name: &str,
+        case_sensitive: bool,
+    ) -> Result<Vec<String>, KrishivError> {
+        self.store
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .list_tables(name, case_sensitive)
+    }
+
+    /// The table `name` in namespace `ns`.
+    pub(crate) fn get_table(
+        &self,
+        ns: &str,
+        name: &str,
+        case_sensitive: bool,
+    ) -> Option<CatalogTable> {
+        self.store
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .table(ns, name, case_sensitive)
+    }
+
+    /// Inserts `table` (see [`CatalogStore::create_table`]).
+    pub(crate) fn create_table(
+        &self,
+        table: CatalogTable,
+        mode: CreateMode,
+        case_sensitive: bool,
+    ) -> Result<bool, KrishivError> {
+        self.store
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .create_table(table, mode, case_sensitive)
+    }
+
+    /// Runs `update` on the table `name` in namespace `ns`; `false` when
+    /// there is no such table.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "run by ALTER TABLE, which the engine does not run yet"
+        )
+    )]
+    pub(crate) fn alter_store_table(
+        &self,
+        ns: &str,
+        name: &str,
+        case_sensitive: bool,
+        update: impl FnOnce(&mut CatalogTable),
+    ) -> bool {
+        self.store
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .alter_table(ns, name, case_sensitive, update)
+    }
+
+    /// Removes the table `name` in namespace `ns`; the removed table, if
+    /// any.
+    pub(crate) fn drop_store_table(
+        &self,
+        ns: &str,
+        name: &str,
+        case_sensitive: bool,
+    ) -> Option<CatalogTable> {
+        self.store
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drop_table(ns, name, case_sensitive)
+    }
+}
+
+/// What a query reads files for: a temporary view (by lower-case name), a
+/// permanent table (by lower-case namespace and name), or a read by
 /// path.
 #[derive(Debug, Clone, PartialEq)]
 enum FilesKey {
     View(String),
+    Table(String, String),
     Read(ReadSource),
 }
 
@@ -248,17 +1032,58 @@ pub(crate) struct FileScans {
     pub(crate) runtime: tokio::runtime::Handle,
 }
 
+/// What a query loaded: a temporary entry, or a permanent table. Scans
+/// find their entry by its canonical parts (see
+/// [`LoadedEntry::parts`]).
+#[derive(Debug, Clone)]
+enum LoadedEntry {
+    /// A temporary table or view, with the identity the analyzer bound.
+    Temp {
+        /// The identity the analyzer bound.
+        ident: TableIdent,
+        /// The entry.
+        table: Arc<TempTable>,
+    },
+    /// A permanent, file-backed table (boxed: the temporary entry is far
+    /// smaller).
+    Table(Box<CatalogTable>),
+}
+
+impl LoadedEntry {
+    /// The canonical parts of the entry: what the analyzer names its
+    /// scans, so a scan always finds the entry that produced it, even
+    /// when a temporary table and a permanent table share every part.
+    fn parts(&self) -> Vec<String> {
+        match self {
+            Self::Temp { ident, .. } => ident.parts(),
+            Self::Table(t) => t.ident.parts(),
+        }
+    }
+}
+
+/// What a query loaded, by lower-case name: a temporary entry by name, a
+/// permanent table by namespace and name.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum LoadedKey {
+    /// A temporary entry.
+    Temp(String),
+    /// A permanent table.
+    Table(String, String),
+}
+
 /// The session catalog as one query sees it: the catalog resolver and the
 /// table providers of its scans.
 pub(crate) struct QueryCatalog {
     session: Arc<SessionCatalog>,
     files: Arc<FileReads>,
     scans: FileScans,
-    /// Entries loaded by this query, by lower-case name.
-    loaded: Mutex<HashMap<String, Arc<TempTable>>>,
+    /// Entries loaded by this query.
+    loaded: Mutex<HashMap<LoadedKey, LoadedEntry>>,
     /// The file tables of the query's scans, opened before planning.
     opened: Mutex<Vec<(FilesKey, Arc<FileTable>)>>,
     epoch: u64,
+    /// The current namespace the query reads in.
+    current: Vec<String>,
 }
 
 impl fmt::Debug for QueryCatalog {
@@ -274,6 +1099,7 @@ impl QueryCatalog {
         session: Arc<SessionCatalog>,
         files: Arc<FileReads>,
         scans: FileScans,
+        current: Vec<String>,
     ) -> Self {
         let epoch = session.epoch();
         Self {
@@ -283,14 +1109,23 @@ impl QueryCatalog {
             loaded: Mutex::new(HashMap::new()),
             opened: Mutex::new(Vec::new()),
             epoch,
+            current,
         }
     }
 
-    fn loaded(&self, name: &str) -> Option<Arc<TempTable>> {
+    /// The loaded entry a scan of `name` reads: by canonical parts, as
+    /// the analyzer names the scans it produces. A single-part scan is a
+    /// re-bound snapshot pin (see [`pin_temp_tables`]): pins are the only
+    /// single-part scans, matched by name.
+    fn find_loaded(&self, name: &[String]) -> Option<LoadedEntry> {
         self.loaded
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get(&name.to_lowercase())
+            .values()
+            .find(|e| match (name, e) {
+                ([one], LoadedEntry::Temp { ident, .. }) => *one == ident.name,
+                _ => e.parts() == name,
+            })
             .cloned()
     }
 
@@ -315,26 +1150,45 @@ impl QueryCatalog {
             else {
                 continue;
             };
-            let listing = self.files.listing(format, paths, options).await?;
-            let opened = open_table(
-                Arc::clone(&listing.format),
-                self.scans.clone(),
-                table,
-                listing.files.to_vec(),
-                listing.options.clone(),
-            )
-            .await?;
-            self.opened
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .push((key, Arc::new(opened)));
+            match self.files.listing(format, paths, options).await {
+                Ok(listing) => {
+                    let opened = open_table(
+                        Arc::clone(&listing.format),
+                        self.scans.clone(),
+                        table,
+                        listing.files.to_vec(),
+                        listing.options.clone(),
+                    )
+                    .await?;
+                    self.opened
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push((key, Arc::new(opened)));
+                }
+                // An empty table has no files to infer a schema from: its
+                // stored columns are the schema. By-path reads and
+                // temporary file views keep the inference error.
+                Err(e)
+                    if matches!(key, FilesKey::Table(..))
+                        && e.error_class() == ErrorClass::UnableToInferSchema =>
+                {
+                    let (format, options) = self.files.prepared(format, options)?;
+                    let opened =
+                        open_table(format, self.scans.clone(), table, Vec::new(), options).await?;
+                    self.opened
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push((key, Arc::new(opened)));
+                }
+                Err(e) => return Err(e),
+            }
         }
         Ok(())
     }
 
     /// The scans of files in `plan`: what each reads, and the columns the
-    /// analyzer bound (the view's, for a view), which the files map to by
-    /// name.
+    /// analyzer bound (a view's, or a table's, for those), which the files
+    /// map to by name.
     fn file_scans(&self, plan: &LogicalPlan) -> Vec<(FilesKey, ReadSource, SchemaRef)> {
         let mut scans = Vec::new();
         collect_scans(plan, &mut scans);
@@ -342,14 +1196,27 @@ impl QueryCatalog {
             .into_iter()
             .filter_map(|scan| {
                 let (key, source) = match &scan.source {
-                    ReadSource::Table { name, .. } => {
-                        let last = name.last().map_or("", String::as_str);
-                        let table = self.loaded(last)?;
-                        let TempTable::Files { source, .. } = &*table else {
-                            return None;
-                        };
-                        (FilesKey::View(last.to_lowercase()), source.clone())
-                    }
+                    ReadSource::Table { name, .. } => match self.find_loaded(name)? {
+                        LoadedEntry::Temp { table, ident: _ } => {
+                            let TempTable::Files { source, .. } = &*table else {
+                                return None;
+                            };
+                            let last = name.last().map_or("", String::as_str);
+                            (FilesKey::View(last.to_lowercase()), source.clone())
+                        }
+                        LoadedEntry::Table(t) => {
+                            let ns = t
+                                .ident
+                                .namespace
+                                .first()
+                                .map_or("", String::as_str)
+                                .to_lowercase();
+                            (
+                                FilesKey::Table(ns, t.ident.name.to_lowercase()),
+                                files_source(&t),
+                            )
+                        }
+                    },
                     source @ ReadSource::Files { .. } => {
                         (FilesKey::Read(source.clone()), source.clone())
                     }
@@ -366,14 +1233,18 @@ impl QueryCatalog {
             .collect()
     }
 
-    /// Whether this query loaded a file view: its files are listed again
-    /// by the next query, so an analysis that did must not be reused.
+    /// Whether this query loaded a file view or a permanent table: their
+    /// files are listed again by the next query, so an analysis that did
+    /// must not be reused.
     pub(crate) fn loaded_file_views(&self) -> bool {
         self.loaded
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .values()
-            .any(|t| matches!(&**t, TempTable::Files { .. }))
+            .any(|e| match e {
+                LoadedEntry::Temp { table, .. } => matches!(&**table, TempTable::Files { .. }),
+                LoadedEntry::Table(_) => true,
+            })
     }
 
     fn opened(&self, key: &FilesKey) -> Option<Arc<FileTable>> {
@@ -462,24 +1333,51 @@ fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
     plan.for_each_child(&mut |c| collect_scans(c, out));
 }
 
-/// The table `name`: the one this query already loaded, so every spelling
-/// of a name binds one table even if another thread replaces it meanwhile,
-/// else the session's.
+/// A permanent table as a read by path: its provider, its location and
+/// its options, with the stored columns as its schema. Analysis reads no
+/// files for it, the same way a temporary view over files works.
+fn files_source(t: &CatalogTable) -> ReadSource {
+    ReadSource::Files {
+        format: t.provider.clone(),
+        paths: vec![OptionValue::from_user("path", &t.location)],
+        options: t.options.clone(),
+    }
+}
+
+/// The temporary table `name`: the one this query already loaded, so every
+/// spelling of a name binds one table even if another thread replaces it
+/// meanwhile, else the session's. Returns the identity the analyzer binds
+/// (in [`NAMESPACE`], lower-case, as before) and the entry.
 fn resolve(
-    loaded: &Mutex<HashMap<String, Arc<TempTable>>>,
+    loaded: &Mutex<HashMap<LoadedKey, LoadedEntry>>,
     session: &SessionCatalog,
     name: &str,
     form: NameForm,
-) -> Option<Arc<TempTable>> {
-    let first = loaded
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(&name.to_lowercase())
-        .cloned();
+) -> Option<(TableIdent, Arc<TempTable>)> {
+    let key = LoadedKey::Temp(name.to_lowercase());
+    let loaded = loaded.lock().unwrap_or_else(PoisonError::into_inner);
+    let first = loaded.get(&key);
+    // A temporary entry under another spelling does not shadow: with case
+    // sensitivity the loaded entry only counts when the session still has
+    // it under this spelling.
     match first {
-        Some(t) if !form.case_sensitive || session.get(name, true).is_some() => Some(t),
+        Some(LoadedEntry::Temp { table, .. })
+            if !form.case_sensitive || session.get(name, true).is_some() =>
+        {
+            Some(Arc::clone(table))
+        }
         _ => session.get(name, form.case_sensitive),
     }
+    .map(|table| {
+        (
+            TableIdent {
+                catalog: CATALOG.to_owned(),
+                namespace: vec![NAMESPACE.to_owned()],
+                name: name.to_lowercase(),
+            },
+            table,
+        )
+    })
 }
 
 fn unsupported(feature: &str) -> KrishivError {
@@ -509,36 +1407,59 @@ impl Catalog for QueryCatalog {
         form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
-            // Temporary views resolve for unqualified names only: Spark
+            // Temporary entries resolve for unqualified names only: Spark
             // finds `v` but not `default.v` or `spark_catalog.default.v`.
-            let found = if form.qualified {
-                None
-            } else {
-                resolve(&self.loaded, &self.session, &id.name, form)
-            };
-            let Some(table) = found else {
+            if !form.qualified
+                && let Some((ident, table)) = resolve(&self.loaded, &self.session, &id.name, form)
+            {
+                let (columns, kind) = match &*table {
+                    TempTable::Memory { columns, .. } | TempTable::Files { columns, .. } => {
+                        (columns.clone(), TableKind::Table)
+                    }
+                    TempTable::View { columns, .. } => (columns.clone(), TableKind::View),
+                };
+                self.loaded
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(
+                        LoadedKey::Temp(id.name.to_lowercase()),
+                        LoadedEntry::Temp {
+                            ident: ident.clone(),
+                            table,
+                        },
+                    );
+                return Ok(Some(TableMeta {
+                    ident,
+                    columns,
+                    version: None,
+                    kind,
+                }));
+            }
+            // Anything else is a permanent table in its namespace: a
+            // single-part name reads the current namespace, after the
+            // temporary entries above. (A namespace of more than one part
+            // never reaches the catalog: the analyzer rejects it first.)
+            if id.namespace.len() != 1 {
+                return Ok(None);
+            }
+            let ns = id.namespace[0].clone();
+            let Some(found) = self.session.get_table(&ns, &id.name, form.case_sensitive) else {
                 return Ok(None);
             };
-            let (columns, kind) = match &*table {
-                TempTable::Memory { columns, .. } | TempTable::Files { columns, .. } => {
-                    (columns.clone(), TableKind::Table)
-                }
-                TempTable::View { columns, .. } => (columns.clone(), TableKind::View),
+            let meta = TableMeta {
+                ident: found.ident.clone(),
+                columns: found.columns.clone(),
+                version: None,
+                kind: TableKind::Table,
             };
             self.loaded
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .insert(id.name.to_lowercase(), table);
-            Ok(Some(TableMeta {
-                ident: TableIdent {
-                    catalog: CATALOG.to_owned(),
-                    namespace: vec![NAMESPACE.to_owned()],
-                    name: id.name.to_lowercase(),
-                },
-                columns,
-                version: None,
-                kind,
-            }))
+                .insert(
+                    LoadedKey::Table(ns.to_lowercase(), id.name.to_lowercase()),
+                    LoadedEntry::Table(Box::new(found)),
+                );
+            Ok(Some(meta))
         })
     }
 }
@@ -553,8 +1474,7 @@ impl CatalogResolver for QueryCatalogs {
     }
 
     fn current_namespace(&self) -> &[String] {
-        static DEFAULT: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-        DEFAULT.get_or_init(|| vec![NAMESPACE.to_owned()])
+        &self.0.current
     }
 
     fn catalog(&self, name: &str) -> Option<Arc<dyn Catalog>> {
@@ -571,32 +1491,46 @@ impl TableProviderResolver for QueryCatalog {
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>, KrishivError> {
         match &scan.source {
             ReadSource::Table { name, .. } => {
-                let last = name.last().map_or("", String::as_str);
-                // Analysis loaded every table a scan names.
-                let Some(table) = self.loaded(last) else {
+                // Analysis loaded every table a scan names; the scan
+                // carries the canonical parts of its entry.
+                let Some(entry) = self.find_loaded(name) else {
                     return Err(InternalError {
-                        message: format!("the scanned table {last} was not loaded"),
+                        message: format!("the scanned table {} was not loaded", name.join(".")),
                     }
                     .into());
                 };
-                match &*table {
-                    TempTable::Memory { table, .. } => {
-                        Ok(Arc::clone(table) as Arc<dyn TableProvider>)
+                match entry {
+                    LoadedEntry::Temp { table, .. } => match &*table {
+                        TempTable::Memory { table, .. } => {
+                            Ok(Arc::clone(table) as Arc<dyn TableProvider>)
+                        }
+                        TempTable::Files { .. } => {
+                            let last = name.last().map_or("", String::as_str);
+                            self.files_provider(&FilesKey::View(last.to_lowercase()))
+                        }
+                        // Views are inlined as subqueries before analysis, so
+                        // no scan ever reads one.
+                        TempTable::View { .. } => Err(InternalError {
+                            message: "a scan of a temporary view that was not inlined".to_owned(),
+                        }
+                        .into()),
+                    },
+                    LoadedEntry::Table(t) => {
+                        let ns = t
+                            .ident
+                            .namespace
+                            .first()
+                            .map_or("", String::as_str)
+                            .to_lowercase();
+                        self.files_provider(&FilesKey::Table(ns, t.ident.name.to_lowercase()))
                     }
-                    TempTable::Files { .. } => {
-                        self.files_provider(&FilesKey::View(last.to_lowercase()))
-                    }
-                    // Views are inlined as subqueries before analysis, so
-                    // no scan ever reads one.
-                    TempTable::View { .. } => Err(InternalError {
-                        message: "a scan of a temporary view that was not inlined".to_owned(),
-                    }
-                    .into()),
                 }
             }
             source @ ReadSource::Files { .. } => {
                 self.files_provider(&FilesKey::Read(source.clone()))
             }
+            // `ReadSource` is non-exhaustive: a later variant reads no
+            // catalog entry.
             _ => Err(unsupported("this scan")),
         }
     }
@@ -615,12 +1549,14 @@ impl TableProviderResolver for QueryCatalog {
 /// # Errors
 /// `INTERNAL_ERROR` for a view that reads itself.
 pub(crate) fn expand_temp_views(
-    catalog: &SessionCatalog,
+    catalog: &TempViews,
+    current: &str,
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     Expander {
         catalog,
+        current,
         case_sensitive,
         path: Vec::new(),
     }
@@ -630,7 +1566,8 @@ pub(crate) fn expand_temp_views(
 /// [`expand_temp_views`]: the views on the current expansion path, by
 /// lower-case name, for cycle detection.
 struct Expander<'a> {
-    catalog: &'a SessionCatalog,
+    catalog: &'a TempViews,
+    current: &'a str,
     case_sensitive: bool,
     path: Vec<String>,
 }
@@ -656,7 +1593,7 @@ impl Expander<'_> {
         {
             return Err(TableOrViewNotFound {
                 relation_name: quote(view),
-                search_path: search_path(),
+                search_path: search_path(self.current),
             }
             .into());
         }
@@ -783,7 +1720,7 @@ impl Expander<'_> {
 /// # Errors
 /// `RECURSIVE_VIEW` naming the view and the cycle.
 pub(crate) fn check_view_cycle(
-    catalog: &SessionCatalog,
+    catalog: &TempViews,
     name: &str,
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
@@ -801,7 +1738,7 @@ pub(crate) fn check_view_cycle(
 /// [`check_view_cycle`]: the views on the current expansion path from the
 /// new view down (by name as read), and the `WITH` definitions in scope.
 struct Checker<'a> {
-    catalog: &'a SessionCatalog,
+    catalog: &'a TempViews,
     case_sensitive: bool,
     target: &'a str,
     stack: Vec<String>,
@@ -912,7 +1849,7 @@ type PinnedPlan = (Arc<LogicalPlan>, Vec<String>, Vec<(String, Arc<TempTable>)>)
 /// # Errors
 /// `INTERNAL_ERROR` for a scan of a temporary view that was not inlined.
 pub(crate) fn pin_temp_tables(
-    catalog: &SessionCatalog,
+    catalog: &TempViews,
     plan: &Arc<LogicalPlan>,
     case_sensitive: bool,
 ) -> Result<PinnedPlan, KrishivError> {
@@ -931,7 +1868,7 @@ pub(crate) fn pin_temp_tables(
 /// name, every hidden name the pinned plan reads, and the hidden entries
 /// to store with the owning view.
 struct Pinner<'a> {
-    catalog: &'a SessionCatalog,
+    catalog: &'a TempViews,
     case_sensitive: bool,
     pins: HashMap<String, String>,
     owned: BTreeSet<String>,
@@ -1011,9 +1948,10 @@ fn quote(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
-/// Spark's search path, as analysis reports it for a missing table.
-fn search_path() -> String {
-    format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{NAMESPACE}`]")
+/// Spark's search path, as analysis reports it for a missing table in
+/// `current`.
+fn search_path(current: &str) -> String {
+    format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{current}`]")
 }
 
 /// `name` rejected as a temporary table or view name: it starts with the
@@ -1098,7 +2036,7 @@ mod tests {
     fn expanding_a_cycle_is_an_internal_error() {
         // `CREATE TEMPORARY VIEW` rejects recursive views itself; the
         // expansion guard stays for anything else that closes a cycle.
-        let session = SessionCatalog::default();
+        let session = TempViews::default();
         let view = |name: &str| TempTable::View {
             plan: Arc::new(LogicalPlan::table([name])),
             columns: Vec::new(),
@@ -1107,7 +2045,7 @@ mod tests {
         session.put("a", view("b"));
         session.put("b", view("a"));
         let plan = Arc::new(LogicalPlan::table(["a"]));
-        let e = expand_temp_views(&session, &plan, false).unwrap_err();
+        let e = expand_temp_views(&session, "default", &plan, false).unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::InternalError);
         assert!(e.message().contains("`a`"), "{e}");
     }
@@ -1121,11 +2059,14 @@ mod tests {
             case_sensitive: false,
             qualified: false,
         };
-        let t = resolve(&loaded, &session, "people", form).unwrap();
-        loaded.lock().unwrap().insert("people".to_owned(), t);
+        let (ident, t) = resolve(&loaded, &session, "people", form).unwrap();
+        loaded.lock().unwrap().insert(
+            LoadedKey::Temp("people".to_owned()),
+            LoadedEntry::Temp { ident, table: t },
+        );
         // Another thread replaces the table.
         session.put("people", files("b"));
-        let again = resolve(&loaded, &session, "PEOPLE", form).unwrap();
+        let (_, again) = resolve(&loaded, &session, "PEOPLE", form).unwrap();
         assert_eq!(first_column(&again), "a");
         // A case-sensitive spelling that is not registered does not resolve
         // through the loaded entry.
@@ -1308,5 +2249,197 @@ mod tests {
             .register_batches("__KRISHIV_SNAPSHOT_7", schema, vec![batch])
             .unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::KrishivReservedTempViewName);
+    }
+
+    /// A table for the store tests: `ns.name` over `provider` at
+    /// `/tmp/name`.
+    fn store_table(ns: &str, name: &str) -> CatalogTable {
+        CatalogTable {
+            ident: TableIdent {
+                catalog: CATALOG.to_owned(),
+                namespace: vec![ns.to_owned()],
+                name: name.to_owned(),
+            },
+            kind: CatalogTableKind::Managed,
+            provider: "parquet".to_owned(),
+            location: format!("/tmp/{name}"),
+            columns: Vec::new(),
+            col_comments: Vec::new(),
+            col_defaults: Vec::new(),
+            options: BTreeMap::new(),
+            properties: BTreeMap::new(),
+            comment: None,
+            created_at: "0".to_owned(),
+            owner: "u".to_owned(),
+        }
+    }
+
+    /// A namespace for the store tests.
+    fn store_namespace(name: &str) -> NamespaceMeta {
+        NamespaceMeta {
+            name: name.to_owned(),
+            comment: None,
+            location: format!("/tmp/{name}.db"),
+            properties: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn store_namespaces_tables_and_modes() {
+        let mut store = InMemoryCatalogStore::with_default();
+        let epoch = store.epoch();
+        // `default` always exists.
+        assert!(store.namespace_exists("default", false));
+        assert!(store.namespace_exists("DEFAULT", false));
+        assert!(!store.namespace_exists("DEFAULT", true));
+        assert!(
+            !store
+                .create_namespace(store_namespace("default"), true, false)
+                .unwrap(),
+            "IF NOT EXISTS keeps the existing namespace"
+        );
+        assert_eq!(store.epoch(), epoch, "no change bumps no epoch");
+        assert!(
+            store
+                .create_namespace(store_namespace("MyDb"), false, false)
+                .unwrap()
+        );
+        assert!(store.namespace_exists("mydb", false));
+        assert!(store.namespace_exists("MyDb", false));
+        assert!(store.namespace_exists("MyDb", true));
+        assert!(!store.namespace_exists("MYDB", true));
+        // Comments and properties round-trip.
+        assert!(
+            store
+                .create_namespace(
+                    NamespaceMeta {
+                        name: "WithMeta".to_owned(),
+                        comment: Some("c".to_owned()),
+                        location: "/tmp/withmeta.db".to_owned(),
+                        properties: BTreeMap::from([("k".to_owned(), "v".to_owned())]),
+                    },
+                    false,
+                    false,
+                )
+                .unwrap()
+        );
+        let meta = store.namespaces.get("withmeta").unwrap();
+        assert_eq!(meta.comment.as_deref(), Some("c"));
+        assert_eq!(meta.properties.get("k").map(String::as_str), Some("v"));
+        assert_eq!(meta.location, "/tmp/withmeta.db");
+        store
+            .drop_namespace("withmeta", false, true, false)
+            .unwrap();
+        assert_eq!(
+            store
+                .create_namespace(store_namespace("mydb"), false, false)
+                .unwrap_err()
+                .error_class(),
+            ErrorClass::SchemaAlreadyExists
+        );
+        assert!(store.namespaces().contains(&"MyDb".to_owned()));
+        // Tables need their namespace.
+        assert_eq!(
+            store
+                .create_table(
+                    store_table("missing", "t"),
+                    CreateMode::ErrorIfExists,
+                    false
+                )
+                .unwrap_err()
+                .error_class(),
+            ErrorClass::SchemaNotFound
+        );
+        assert!(
+            store
+                .create_table(store_table("MyDb", "T"), CreateMode::ErrorIfExists, false)
+                .unwrap()
+        );
+        assert!(store.table("mydb", "t", false).is_some());
+        assert!(store.table("MyDb", "T", false).is_some());
+        assert!(store.table("MyDb", "T", true).is_some());
+        assert!(store.table("MYDB", "T", true).is_none());
+        assert!(store.table("mydb", "T", true).is_none());
+        assert_eq!(store.list_tables("mydb", false).unwrap(), ["T"]);
+        assert_eq!(
+            store
+                .list_tables("missing", false)
+                .unwrap_err()
+                .error_class(),
+            ErrorClass::SchemaNotFound
+        );
+        assert_eq!(
+            store
+                .create_table(store_table("mydb", "t"), CreateMode::ErrorIfExists, false)
+                .unwrap_err()
+                .error_class(),
+            ErrorClass::TableOrViewAlreadyExists
+        );
+        assert!(
+            !store
+                .create_table(store_table("mydb", "t"), CreateMode::IfNotExists, false)
+                .unwrap()
+        );
+        assert!(
+            store
+                .create_table(store_table("mydb", "t"), CreateMode::Replace, false)
+                .unwrap()
+        );
+        assert!(store.alter_table("mydb", "t", false, |t| {
+            t.comment = Some("c".to_owned());
+        }));
+        assert_eq!(
+            store.table("mydb", "t", false).unwrap().comment.as_deref(),
+            Some("c")
+        );
+        assert!(!store.alter_table("mydb", "missing", false, |_| {}));
+        assert!(store.drop_table("mydb", "missing", false).is_none());
+        assert!(store.drop_table("mydb", "t", false).is_some());
+        assert!(store.table("mydb", "t", false).is_none());
+        // A non-empty namespace needs `CASCADE`.
+        assert!(
+            store
+                .create_table(store_table("MyDb", "u"), CreateMode::ErrorIfExists, false)
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .drop_namespace("mydb", false, false, false)
+                .unwrap_err()
+                .error_class(),
+            ErrorClass::SchemaNotEmpty
+        );
+        let dropped = store.drop_namespace("mydb", false, true, false).unwrap();
+        assert_eq!(dropped.len(), 1);
+        assert!(!store.namespace_exists("mydb", false));
+        // `default` cannot be dropped, however it is spelled; a missing
+        // namespace fails unless `IF EXISTS`.
+        assert_eq!(
+            store
+                .drop_namespace("default", false, true, false)
+                .unwrap_err()
+                .error_class(),
+            ErrorClass::KrishivUnsupportedFeature
+        );
+        assert_eq!(
+            store
+                .drop_namespace("DEFAULT", true, true, false)
+                .unwrap_err()
+                .error_class(),
+            ErrorClass::KrishivUnsupportedFeature
+        );
+        assert_eq!(
+            store
+                .drop_namespace("missing", false, true, false)
+                .unwrap_err()
+                .error_class(),
+            ErrorClass::SchemaNotFound
+        );
+        assert!(
+            store
+                .drop_namespace("missing", true, true, false)
+                .unwrap()
+                .is_empty()
+        );
     }
 }

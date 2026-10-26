@@ -34,7 +34,7 @@ use krishiv_sql::ast::{
 };
 use krishiv_types::{DataType, DecimalType};
 
-use crate::catalog::{CATALOG, NAMESPACE, TempTable};
+use crate::catalog::{CATALOG, TempTable};
 use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::dataframe::DataFrame;
@@ -246,7 +246,7 @@ impl Session {
         }
         let plan = krishiv_sql::lower(&v.query, self.next_source_id()).map_err(|e| e.error)?;
         crate::catalog::check_view_cycle(
-            &self.state.catalog,
+            self.state.catalog.temp_views(),
             &v.name.value,
             plan.root(),
             env.analysis.conf.case_sensitive,
@@ -328,7 +328,7 @@ impl Session {
         } else if !v.if_exists {
             return Err(TableOrViewNotFound {
                 relation_name: quote(&v.name.value),
-                search_path: search_path(),
+                search_path: search_path(&self.state.catalog.current_namespace()),
             }
             .into());
         }
@@ -638,7 +638,7 @@ impl Session {
 
     /// An empty result with no columns, as Spark's `CREATE VIEW`,
     /// `DROP VIEW` and `RESET` return.
-    async fn empty_frame(&self) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn empty_frame(&self) -> Result<DataFrame, KrishivError> {
         let df = DataFrame::new(
             self.clone(),
             Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
@@ -738,9 +738,10 @@ fn unique_view_columns(columns: &[TableColumn], case_sensitive: bool) -> Result<
     Ok(())
 }
 
-/// Spark's search path, as analysis reports it for a missing table.
-fn search_path() -> String {
-    format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{NAMESPACE}`]")
+/// Spark's search path, as analysis reports it for a missing table in
+/// `current`.
+fn search_path(current: &str) -> String {
+    format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{current}`]")
 }
 
 /// `name` on `search_path`, which it is not shaped like, as Spark reports

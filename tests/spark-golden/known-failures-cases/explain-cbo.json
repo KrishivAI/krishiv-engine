@@ -4,12 +4,8 @@
       4
     ],
     "sql-commands": [
-      0,
-      1,
       2,
-      3,
-      5,
-      6
+      3
     ]
   },
   "file": "explain-cbo",

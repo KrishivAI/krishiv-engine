@@ -35,11 +35,9 @@
       18
     ],
     "sql-commands": [
-      2,
       3,
       4,
-      19,
-      41
+      19
     ]
   },
   "file": "postgreSQL/text",

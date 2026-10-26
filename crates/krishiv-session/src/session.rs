@@ -29,7 +29,9 @@ use krishiv_exec::{
     TokioExecutor, WorkloadClass,
 };
 use krishiv_io::csv::CsvFormat;
+use krishiv_io::json::JsonFormat;
 use krishiv_io::parquet::ParquetFormat;
+use krishiv_io::text_format::TextFormat;
 use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
@@ -256,7 +258,12 @@ impl SessionBuilder {
                 memory,
                 spill: Mutex::new(None),
                 io,
-                formats: vec![Arc::new(ParquetFormat), Arc::new(CsvFormat)],
+                formats: vec![
+                    Arc::new(ParquetFormat),
+                    Arc::new(CsvFormat),
+                    Arc::new(JsonFormat),
+                    Arc::new(TextFormat),
+                ],
                 cwd,
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
@@ -316,6 +323,16 @@ impl Session {
         RuntimeConf::new(Arc::clone(&self.state.conf))
     }
 
+    /// The working directory local paths resolve against.
+    pub(crate) fn cwd(&self) -> &str {
+        &self.state.cwd
+    }
+
+    /// Who runs this session's queries.
+    pub(crate) fn owner_name(&self) -> &str {
+        &self.state.principal.name
+    }
+
     /// Runs `query` as Spark's `spark.sql` does: parses and analyzes it now
     /// (errors surface here) and returns its rows as a lazy [`DataFrame`].
     ///
@@ -359,6 +376,13 @@ impl Session {
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
             Statement::DropView(v) => self.exec_drop_view(&v).await,
+            Statement::CreateTable(t) => self.exec_create_table(&t, query, &redacted).await,
+            Statement::CreateTableLike(t) => self.exec_create_table_like(&t, query).await,
+            Statement::DropTable(t) => self.exec_drop_table(&t).await,
+            Statement::CreateNamespace(n) => self.exec_create_namespace(&n).await,
+            Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
+            Statement::Use(u) => self.exec_use(&u).await,
+            Statement::Show(s) => self.exec_show(&s).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, &redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, &redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, &redacted).await,
@@ -590,6 +614,7 @@ impl Session {
             Arc::clone(&self.state.catalog),
             Arc::clone(&files),
             scans,
+            vec![self.state.catalog.current_namespace()],
         ));
         let resolution = {
             let values = conf_values(&config, &ResolutionConf::KEYS);
@@ -636,7 +661,8 @@ impl Session {
         // Temporary views over queries inline as subqueries, so the
         // analyzer sees one plan however the view was made.
         let plan = crate::catalog::expand_temp_views(
-            &self.state.catalog,
+            self.state.catalog.temp_views(),
+            &self.state.catalog.current_namespace(),
             plan,
             env.analysis.conf.case_sensitive,
         )?;

@@ -152,17 +152,19 @@ def test_partition_by_with_bogus_mode_raises_invalid_save_mode(df: DataFrame, tm
 
 
 def test_unknown_format_raises_unsupported(df: DataFrame, tmp_path: Any) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.write.json(str(tmp_path / "j"))
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    assert "writing the json format" in str(bad.value)
+    path = str(tmp_path / "j")
+    df.write.json(path)
+    assert os.path.exists(os.path.join(path, "_SUCCESS"))
 
-    for format in ("text", "orc"):
-        path = str(tmp_path / format)
-        with pytest.raises(errors.UnsupportedOperationException) as bad:
-            df.write.format(format).save(path)
-        assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-        assert not os.path.exists(path)
+    with pytest.raises(errors.SparkRuntimeException) as bad:
+        df.write.format("text").save(str(tmp_path / "text"))
+    assert bad.value.getCondition() == "_LEGACY_ERROR_TEMP_1290"
+
+    path = str(tmp_path / "orc")
+    with pytest.raises(errors.UnsupportedOperationException) as bad:
+        df.write.format("orc").save(path)
+    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+    assert not os.path.exists(path)
 
 
 def test_csv_modes(df: DataFrame, tmp_path: Any) -> None:

@@ -216,6 +216,33 @@ impl FileReads {
         }
     }
 
+    /// The format `format` with `options` parsed, without listing any
+    /// files: for opening a table with a stored schema and no files to
+    /// infer from (an empty table).
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for an unknown format, and the
+    /// format's option errors.
+    pub fn prepared(
+        &self,
+        format: &str,
+        options: &BTreeMap<String, OptionValue>,
+    ) -> Result<(Arc<dyn FileFormat>, FormatOptions), KrishivError> {
+        let Some(found) = self
+            .formats
+            .iter()
+            .find(|f| f.name().eq_ignore_ascii_case(format))
+        else {
+            return Err(KrishivUnsupportedFeature {
+                feature: format!("the {format} file format"),
+            }
+            .into());
+        };
+        let format = Arc::clone(found);
+        let (options, _) = format.options().parse(options, &self.session)?;
+        Ok((format, options))
+    }
+
     /// The listing of reading `paths` as `format` with `options`: listed
     /// on the first call, the same listing after.
     ///
@@ -270,20 +297,12 @@ impl FileReads {
             self.list_path(&at, &mut files).await?;
         }
         files.sort_by(|a, b| a.path.as_ref().cmp(b.path.as_ref()));
-        let Some(f) = self
-            .formats
-            .iter()
-            .find(|f| f.name().eq_ignore_ascii_case(format))
-        else {
-            return Err(unsupported(format!("the {format} file format")));
-        };
-        let format = Arc::clone(f);
-        if self.merges_schemas(format.name(), options) {
+        if self.merges_schemas(format, options) {
             return Err(unsupported(
                 "merging the schemas of files (mergeSchema)".to_owned(),
             ));
         }
-        let (options, _) = format.options().parse(options, &self.session)?;
+        let (format, options) = self.prepared(format, options)?;
         if files.is_empty() {
             return Err(UnableToInferSchema {
                 format: display_name(format.name()),

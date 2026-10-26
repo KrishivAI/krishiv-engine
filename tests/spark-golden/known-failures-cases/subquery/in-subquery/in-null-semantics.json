@@ -21,14 +21,8 @@
       28
     ],
     "sql-commands": [
-      2,
       3,
-      4,
-      5,
-      6,
-      31,
-      32,
-      33
+      5
     ]
   },
   "file": "subquery/in-subquery/in-null-semantics",

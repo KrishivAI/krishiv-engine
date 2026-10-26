@@ -14,6 +14,7 @@ Paths are relative to this crate.
 - `src/session.rs` `Session` and the query pipeline entry
 - `src/conf.rs` configuration snapshot taken per query
 - `src/catalog.rs` session catalog (temporary tables and views)
+- `src/ddl.rs` `CREATE/DROP TABLE`, `CREATE/DROP DATABASE|SCHEMA|NAMESPACE`, `USE` and `SHOW CURRENT NAMESPACE`
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
 - `src/explain.rs` EXPLAIN; `src/profile.rs` profile for EXPLAIN ANALYZE
 - `tests/session.rs`, `tests/explain_analyze.rs`, `tests/spill.rs`, `tests/tpch_q1.rs` and `tests/window_goldens.rs` (window functions against Spark goldens) end-to-end tests

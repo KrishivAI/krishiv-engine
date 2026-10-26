@@ -805,23 +805,16 @@ fn explain_runs_commands() {
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 
-/// DDL and `USE` statements parse but have no execution yet: `Session::sql`
-/// rejects them with `KRISHIV_UNSUPPORTED_FEATURE`, never a parse error.
+/// DDL, `USE` and `SHOW CURRENT NAMESPACE` parse and execute: partitioned
+/// tables stay unsupported, while namespaces, tables and `USE` run.
 #[test]
-fn unexecuted_commands_parse_and_report_unsupported() {
+fn ddl_and_use_execute() {
     let s = session();
+    // Partitioned CTAS stays unsupported.
     for sql in [
         "CREATE TABLE t (a INT NOT NULL DEFAULT 1, b STRING COMMENT 'x') USING parquet \
          PARTITIONED BY (a) TBLPROPERTIES ('k' = 'v')",
         "CREATE TABLE t USING parquet PARTITIONED BY (a) AS SELECT id AS a FROM people",
-        "CREATE TABLE t LIKE people",
-        "DROP TABLE IF EXISTS t PURGE",
-        "CREATE DATABASE IF NOT EXISTS db COMMENT 'c'",
-        "CREATE SCHEMA s",
-        "DROP SCHEMA IF EXISTS s CASCADE",
-        "USE s",
-        "USE NAMESPACE s",
-        "EXPLAIN CREATE TABLE t (a INT)",
     ] {
         let e = block_on(s.sql(sql)).unwrap_err();
         assert_eq!(
@@ -829,6 +822,22 @@ fn unexecuted_commands_parse_and_report_unsupported() {
             ErrorClass::KrishivUnsupportedFeature,
             "{sql}"
         );
-        assert!(e.to_string().contains("in sessions"), "{sql}: {e}");
     }
+    // Namespaces, tables, `USE` and `SHOW CURRENT NAMESPACE` run. `LIKE`
+    // a temporary table fails: only permanent tables are sources.
+    let e = block_on(s.sql("CREATE TABLE t LIKE people")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+    block_on(s.sql("CREATE DATABASE IF NOT EXISTS db COMMENT 'c'")).unwrap();
+    block_on(s.sql("CREATE SCHEMA s")).unwrap();
+    block_on(s.sql("CREATE TABLE s.t (a INT) USING parquet")).unwrap();
+    block_on(s.sql("USE s")).unwrap();
+    block_on(s.sql("SHOW CURRENT NAMESPACE")).unwrap();
+    block_on(s.sql("USE NAMESPACE default")).unwrap();
+    block_on(s.sql("DROP TABLE IF EXISTS t PURGE")).unwrap();
+    block_on(s.sql("DROP TABLE s.t")).unwrap();
+    block_on(s.sql("DROP SCHEMA IF EXISTS s CASCADE")).unwrap();
+    block_on(s.sql("DROP SCHEMA IF EXISTS db CASCADE")).unwrap();
+    // `EXPLAIN` of DDL stays unsupported.
+    let e = block_on(s.sql("EXPLAIN CREATE TABLE t (a INT)")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }

@@ -46,13 +46,11 @@
       51
     ],
     "sql-commands": [
-      0,
       1,
       2,
       3,
       4,
-      5,
-      52
+      5
     ]
   },
   "file": "postgreSQL/int4",
