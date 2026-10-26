@@ -1241,6 +1241,20 @@ fn python_wheel_tests_follow_python_and_the_bindings_crate() {
     assert!(script.contains("/bin/pytest"), "{script}");
     let fast = make_plan(&detect(&["python/krishiv/a.py"]), &opts(&["--fast"]), true);
     assert_eq!(skip_reason(&fast, "python-wheel-tests"), Some("--fast"));
+    // A Rust-only change reaching `krishiv-python` through a dependency plans
+    // the wheel tests; one that does not reach it does not.
+    let mut with_bindings = pkgs();
+    with_bindings.push(pkg("krishiv-python", &["exec"]));
+    let rust_only = |path: &str| {
+        let p = vec![path.to_owned()];
+        make_plan(&Changes::detect(&p, &with_bindings), &opts(&[]), true)
+    };
+    let reaches = rust_only("crates/common/src/lib.rs");
+    assert!(matches!(
+        step(&reaches, "python-wheel-tests").action,
+        Action::Run(_)
+    ));
+    assert!(skip_reason(&rust_only("crates/other/src/lib.rs"), "python-wheel-tests").is_some());
 }
 
 #[test]

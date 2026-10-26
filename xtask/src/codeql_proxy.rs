@@ -452,8 +452,23 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
     }
     let mb = String::from_utf8_lossy(&mb.stdout).trim().to_owned();
     // Working tree against the merge base: committed and uncommitted changes alike.
-    let diff = git_output(root, &["diff", "-U0", "--no-color", &mb, "--", "*.rs"])
-        .map_err(|e| format!("git diff failed: {e}"))?;
+    let diff = git_output(
+        root,
+        &[
+            "diff",
+            "-U0",
+            "--no-color",
+            // Pinned: user config (`diff.mnemonicPrefix`, `diff.external`)
+            // must not change the file names or the diff format read below.
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            &mb,
+            "--",
+            "*.rs",
+        ],
+    )
+    .map_err(|e| format!("git diff failed: {e}"))?;
     // Files git does not track yet are all new: scan them whole.
     let untracked = git_output(
         root,
@@ -777,6 +792,27 @@ mod tests {
         git(d, &["commit", "-q", "-m", "tracked"]);
         git(d, &["branch", "base", "HEAD~1"]);
         let err = run(d, &["--base", "base"]).unwrap_err();
+        assert!(err.contains("1 line(s)"), "{err}");
+    }
+
+    #[test]
+    fn user_diff_config_does_not_change_the_scanned_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        git(d, &["init", "-q", "-b", "main"]);
+        std::fs::write(d.join("a.rs"), "fn a() {}\n").unwrap();
+        git(d, &["add", "."]);
+        git(d, &["commit", "-q", "-m", "base"]);
+        git(d, &["config", "diff.mnemonicPrefix", "true"]);
+        git(d, &["config", "diff.external", "/bin/false"]);
+        let w = word();
+        std::fs::write(
+            d.join("a.rs"),
+            format!("fn a() {{\n    println!(\n        \"v: {{}}\",\n        {w}\n    );\n}}\n"),
+        )
+        .unwrap();
+        // The multi-line call is found only through the file named in the diff.
+        let err = run(d, &["--base", "main"]).unwrap_err();
         assert!(err.contains("1 line(s)"), "{err}");
     }
 }
