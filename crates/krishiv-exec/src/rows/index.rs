@@ -378,6 +378,26 @@ impl JoinIndex {
     }
 }
 
+#[cfg(test)]
+impl JoinIndex {
+    /// The probe run of a row with stored hash `h` in a salted directory:
+    /// the occupied slots from its first slot to the next empty one, which
+    /// bounds the slots any lookup of it reads; `None` for the flat index.
+    pub(crate) fn probe_run(&self, h: u64) -> Option<usize> {
+        let Kind::Salted(slots) = &self.kind else {
+            return None;
+        };
+        let mask = slots.len() - 1;
+        let mut i = low(finalize(h, self.seed), mask);
+        let mut run = 0;
+        while slots[i] != 0 && run < slots.len() {
+            run += 1;
+            i = (i + 1) & mask;
+        }
+        Some(run)
+    }
+}
+
 /// A directory of twice the slots holding the slots of `old`, re-inserted
 /// from the table-local hashes `g` of their rows (no key reads).
 fn grow_salted(old: &[u64], g: impl Fn(u32) -> u64) -> Result<Vec<u64>> {

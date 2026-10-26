@@ -41,28 +41,12 @@
       "reason": "SELECT sha2('Spark', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "sha2#b5556c9204ad/ansi_on",
-      "reason": "SELECT sha2('Spark', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sha2#b5556c9204ad/ansi_off",
-      "reason": "SELECT sha2('Spark', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "sha2#e27329169b2b/ansi_on",
       "reason": "SELECT sha2(INTERVAL '1 02:03:04' DAY TO SECOND, 256) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sha2#e27329169b2b/ansi_off",
       "reason": "SELECT sha2(INTERVAL '1 02:03:04' DAY TO SECOND, 256) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sha2#ff168ae5f3c1/ansi_on",
-      "reason": "SELECT sha2(named_struct('a', 1, 'b', 'x'), 256) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sha2#ff168ae5f3c1/ansi_off",
-      "reason": "SELECT sha2(named_struct('a', 1, 'b', 'x'), 256) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

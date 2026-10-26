@@ -29,7 +29,7 @@ pub(super) fn compile(
         .map(|(ir, compiled)| match &ir.node {
             ExprNode::Literal(l) => literal_array(l).map(BindArg::Literal),
             _ => Ok(BindArg::Column {
-                data_type: compiled.data_type().clone(),
+                ty: compiled.data_type().clone(),
                 nullable: compiled.nullable(),
             }),
         })

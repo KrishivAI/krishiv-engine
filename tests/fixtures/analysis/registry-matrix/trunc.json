@@ -17,14 +17,6 @@
       "reason": "SELECT trunc(map('a', 1), 'week') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "trunc#96fb0c7ae0b1/ansi_on",
-      "reason": "SELECT trunc(named_struct('a', 1, 'b', 'x'), 'week') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "trunc#96fb0c7ae0b1/ansi_off",
-      "reason": "SELECT trunc(named_struct('a', 1, 'b', 'x'), 'week') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "trunc#a25de6ca5aa9/ansi_on",
       "reason": "SELECT trunc(INTERVAL '1-2' YEAR TO MONTH, 'week') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -55,14 +47,6 @@
     {
       "id": "trunc#f97ad1a4af70/ansi_off",
       "reason": "SELECT trunc('2019-08-04', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "trunc#f9cb63b83a00/ansi_on",
-      "reason": "SELECT trunc('2019-08-04', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "trunc#f9cb63b83a00/ansi_off",
-      "reason": "SELECT trunc('2019-08-04', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

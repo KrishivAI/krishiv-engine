@@ -168,6 +168,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | ExprNode::Star(_)
                 | ExprNode::TypedLiteral { .. }
                 | ExprNode::Function(_)
+                | ExprNode::Field { .. }
                 | ExprNode::Alias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
                     CastMode::Default => false,
@@ -389,7 +390,10 @@ impl Teardown {
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
             | ExprNode::Lambda { body: expr, .. }
-            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => self.exprs.push(expr),
+            | ExprNode::Field { base: expr, .. }
+            | ExprNode::Resolved(
+                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+            ) => self.exprs.push(expr),
             ExprNode::Subquery { kind, plan } => {
                 self.plans.push(plan);
                 match kind {

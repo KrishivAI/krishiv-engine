@@ -9,14 +9,6 @@
       "reason": "SELECT shiftleft(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "shiftleft#2746189b8521/ansi_on",
-      "reason": "SELECT shiftleft(named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftleft#2746189b8521/ansi_off",
-      "reason": "SELECT shiftleft(named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "shiftleft#75289f56a862/ansi_on",
       "reason": "SELECT shiftleft(map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -39,14 +31,6 @@
     {
       "id": "shiftleft#8f93aab047c7/ansi_off",
       "reason": "SELECT shiftleft(INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftleft#a50b885c79f6/ansi_on",
-      "reason": "SELECT shiftleft(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftleft#a50b885c79f6/ansi_off",
-      "reason": "SELECT shiftleft(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "shiftleft#afabf3aa4e4e/ansi_on",

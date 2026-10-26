@@ -9,22 +9,6 @@
       "reason": "SELECT getbit(INTERVAL '1-2' YEAR TO MONTH, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "getbit#2756ff2fb808/ansi_on",
-      "reason": "SELECT getbit(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "getbit#2756ff2fb808/ansi_off",
-      "reason": "SELECT getbit(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "getbit#34593c66c6d1/ansi_on",
-      "reason": "SELECT getbit(11, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "getbit#34593c66c6d1/ansi_off",
-      "reason": "SELECT getbit(11, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "getbit#62e5bcef8380/ansi_on",
       "reason": "SELECT getbit(11, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 14 };
+        let kinds = if depth == 0 { 5 } else { 16 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -249,6 +249,17 @@ impl Gen<'_> {
                 params: vec![self.bound()],
                 body: Arc::new(self.expr(d)),
             },
+            13 => ExprNode::Field {
+                base: Arc::new(self.expr(d)),
+                name: self.name(),
+            },
+            14 => ExprNode::Resolved(ResolvedExpr::Field {
+                base: Arc::new(self.expr(d)),
+                ordinal: usize::from(self.pick(9)),
+                name: self.name(),
+                data_type: self.data_type(),
+                nullable: self.flag(),
+            }),
             11 => ExprNode::Window(WindowExpr {
                 function: Arc::new(self.expr(d)),
                 window: if self.flag() {
@@ -763,6 +774,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             );
             params.iter_mut().any(|p| m_bound(p, w)) || m_expr(body, w)
         }
+        ExprNode::Field { base, name } => m_string(name, w) || m_expr(base, w),
         ExprNode::Subquery { kind, plan } => {
             let other = match kind {
                 SubqueryKind::Scalar => SubqueryKind::Exists,
@@ -820,6 +832,17 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 m_type(data_type, w) || m_exprs(args, w) || m_filter(filter, w)
             }
             ResolvedExpr::Alias { expr, output } => m_bound(output, w) || m_expr(expr, w),
+            ResolvedExpr::Field {
+                base,
+                ordinal,
+                name,
+                data_type,
+                nullable,
+            } => {
+                site!(w, *ordinal = ordinal.wrapping_add(1));
+                site!(w, *nullable = !*nullable);
+                m_string(name, w) || m_type(data_type, w) || m_expr(base, w)
+            }
         },
     }
 }

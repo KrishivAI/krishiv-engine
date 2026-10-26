@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "convert_timezone#0d1618ccfa4c/ansi_on",
-      "reason": "SELECT convert_timezone('Europe/Brussels', named_struct('a', 1, 'b', 'x'), timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#0d1618ccfa4c/ansi_off",
-      "reason": "SELECT convert_timezone('Europe/Brussels', named_struct('a', 1, 'b', 'x'), timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "convert_timezone#147a06c5b92b/ansi_on",
       "reason": "SELECT convert_timezone(INTERVAL '1-2' YEAR TO MONTH, timestamp_ntz'2021-12-05 15:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -17,28 +9,12 @@
       "reason": "SELECT convert_timezone(INTERVAL '1-2' YEAR TO MONTH, timestamp_ntz'2021-12-05 15:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "convert_timezone#1da32c16d231/ansi_on",
-      "reason": "SELECT convert_timezone('Europe/Brussels', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#1da32c16d231/ansi_off",
-      "reason": "SELECT convert_timezone('Europe/Brussels', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "convert_timezone#2661b7e18ccc/ansi_on",
       "reason": "SELECT convert_timezone(INTERVAL '1 02:03:04' DAY TO SECOND, 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "convert_timezone#2661b7e18ccc/ansi_off",
       "reason": "SELECT convert_timezone(INTERVAL '1 02:03:04' DAY TO SECOND, 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "convert_timezone#2ce1fe39e775/ansi_on",
-      "reason": "SELECT convert_timezone(named_struct('a', 1, 'b', 'x'), 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#2ce1fe39e775/ansi_off",
-      "reason": "SELECT convert_timezone(named_struct('a', 1, 'b', 'x'), 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "convert_timezone#31f607cee435/ansi_on",
@@ -55,14 +31,6 @@
     {
       "id": "convert_timezone#3e6e01c59b02/ansi_off",
       "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1 02:03:04' DAY TO SECOND, timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "convert_timezone#4356f6fb86ef/ansi_on",
-      "reason": "SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#4356f6fb86ef/ansi_off",
-      "reason": "SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "convert_timezone#4b75798678ba/ansi_on",
@@ -143,14 +111,6 @@
     {
       "id": "convert_timezone#d074d150b0ec/ansi_off",
       "reason": "SELECT convert_timezone(INTERVAL '1-2' YEAR TO MONTH, 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "convert_timezone#de6ad2d4213f/ansi_on",
-      "reason": "SELECT convert_timezone(named_struct('a', 1, 'b', 'x'), timestamp_ntz'2021-12-05 15:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "convert_timezone#de6ad2d4213f/ansi_off",
-      "reason": "SELECT convert_timezone(named_struct('a', 1, 'b', 'x'), timestamp_ntz'2021-12-05 15:00:00') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "convert_timezone#f9774a50969a/ansi_on",

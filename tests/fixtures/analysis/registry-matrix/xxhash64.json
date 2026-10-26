@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "xxhash64#1799a60ab0d0/ansi_on",
-      "reason": "SELECT xxhash64('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "xxhash64#1799a60ab0d0/ansi_off",
-      "reason": "SELECT xxhash64('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
       "id": "xxhash64#27bf617616cb/ansi_on",
       "reason": "SELECT xxhash64('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
@@ -41,14 +33,6 @@
       "reason": "SELECT xxhash64(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "xxhash64#6c62c17e8044/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "xxhash64#6c62c17e8044/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
       "id": "xxhash64#89b3d078d407/ansi_on",
       "reason": "SELECT xxhash64('Spark', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -71,14 +55,6 @@
     {
       "id": "xxhash64#e69ca7f985b4/ansi_off",
       "reason": "SELECT xxhash64('Spark', array(123), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#eea7d24d6cde/ansi_on",
-      "reason": "SELECT xxhash64(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "xxhash64#eea7d24d6cde/ansi_off",
-      "reason": "SELECT xxhash64(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
       "id": "xxhash64#f5d3d559ad3a/ansi_on",

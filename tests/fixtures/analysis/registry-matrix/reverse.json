@@ -17,14 +17,6 @@
       "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "reverse#2a2c3e312d76/ansi_on",
-      "reason": "SELECT reverse(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "reverse#2a2c3e312d76/ansi_off",
-      "reason": "SELECT reverse(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "reverse#58b4d7850388/ansi_on",
       "reason": "SELECT reverse(array(2, 1, 4, 3)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

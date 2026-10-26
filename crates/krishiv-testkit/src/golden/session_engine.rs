@@ -2,8 +2,8 @@
 //! The [`Engine`] over the real query pipeline: a `krishiv-session` [`Session`] per run.
 //!
 //! * [`Engine::reset`] builds a fresh session with the run's configs and registers the fixture
-//!   tables the file declares ([`super::fixtures`]). A fixture whose column types the session
-//!   cannot hold yet (arrays, maps) is not registered; the statements that read it then fail with
+//!   tables the file declares ([`super::fixtures`]). A fixture whose column types need arrays,
+//!   maps or structs as inputs is not registered; the statements that read it then fail with
 //!   the analyzer's `TABLE_OR_VIEW_NOT_FOUND`, which is what the engine would answer.
 //! * [`Engine::parse`] runs `krishiv-sql`'s statement parser under the session's parser options.
 //! * [`Engine::execute`] is `Session::sql` followed by `collect`. `SET key=value` and `RESET`

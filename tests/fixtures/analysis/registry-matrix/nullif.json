@@ -25,22 +25,6 @@
       "reason": "SELECT nullif(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "nullif#b3db8a371f39/ansi_on",
-      "reason": "SELECT nullif(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "nullif#b3db8a371f39/ansi_off",
-      "reason": "SELECT nullif(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "nullif#dddf827b7218/ansi_on",
-      "reason": "SELECT nullif(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "nullif#dddf827b7218/ansi_off",
-      "reason": "SELECT nullif(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "nullif#f2b5a3646a34/ansi_on",
       "reason": "SELECT nullif(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },

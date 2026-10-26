@@ -57,14 +57,6 @@
       "reason": "SELECT translate(INTERVAL '1 02:03:04' DAY TO SECOND, 'abc', '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "translate#9eb0f98c2e68/ansi_on",
-      "reason": "SELECT translate(named_struct('a', 1, 'b', 'x'), 'abc', '123') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#9eb0f98c2e68/ansi_off",
-      "reason": "SELECT translate(named_struct('a', 1, 'b', 'x'), 'abc', '123') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "translate#c45b98070c1c/ansi_on",
       "reason": "SELECT translate('AaBbCc', INTERVAL '1 02:03:04' DAY TO SECOND, '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -79,22 +71,6 @@
     {
       "id": "translate#c7809497221c/ansi_off",
       "reason": "SELECT translate('AaBbCc', INTERVAL '1-2' YEAR TO MONTH, '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "translate#d598ab5ce7d7/ansi_on",
-      "reason": "SELECT translate('AaBbCc', named_struct('a', 1, 'b', 'x'), '123') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#d598ab5ce7d7/ansi_off",
-      "reason": "SELECT translate('AaBbCc', named_struct('a', 1, 'b', 'x'), '123') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#e49a6f843004/ansi_on",
-      "reason": "SELECT translate('AaBbCc', 'abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#e49a6f843004/ansi_off",
-      "reason": "SELECT translate('AaBbCc', 'abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

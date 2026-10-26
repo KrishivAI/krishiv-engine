@@ -25,22 +25,6 @@
       "reason": "SELECT next_day(map('a', 1), 'TU') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "next_day#699c67a69753/ansi_on",
-      "reason": "SELECT next_day('2015-01-14', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "next_day#699c67a69753/ansi_off",
-      "reason": "SELECT next_day('2015-01-14', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "next_day#7e553d3ccfa7/ansi_on",
-      "reason": "SELECT next_day(named_struct('a', 1, 'b', 'x'), 'TU') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "next_day#7e553d3ccfa7/ansi_off",
-      "reason": "SELECT next_day(named_struct('a', 1, 'b', 'x'), 'TU') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "next_day#a1ede256fcb7/ansi_on",
       "reason": "SELECT next_day('2015-01-14', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

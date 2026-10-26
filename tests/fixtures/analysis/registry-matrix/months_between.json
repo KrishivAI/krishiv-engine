@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "months_between#134fa8953972/ansi_on",
-      "reason": "SELECT months_between(named_struct('a', 1, 'b', 'x'), '1996-10-30', false) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#134fa8953972/ansi_off",
-      "reason": "SELECT months_between(named_struct('a', 1, 'b', 'x'), '1996-10-30', false) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "months_between#1cf30befe281/ansi_on",
       "reason": "SELECT months_between('1997-02-28 10:30:00', '1996-10-30', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -23,30 +15,6 @@
     {
       "id": "months_between#1de399a111e8/ansi_off",
       "reason": "SELECT months_between('1997-02-28 10:30:00', map('a', 1), false) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#2ceaa662f9ec/ansi_on",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#2ceaa662f9ec/ansi_off",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#32a84dc75bcd/ansi_on",
-      "reason": "SELECT months_between(named_struct('a', 1, 'b', 'x'), '1996-10-30') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#32a84dc75bcd/ansi_off",
-      "reason": "SELECT months_between(named_struct('a', 1, 'b', 'x'), '1996-10-30') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#349680301d58/ansi_on",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', named_struct('a', 1, 'b', 'x'), false) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#349680301d58/ansi_off",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', named_struct('a', 1, 'b', 'x'), false) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "months_between#3b4d3579db12/ansi_on",
@@ -143,14 +111,6 @@
     {
       "id": "months_between#c35328709bd8/ansi_off",
       "reason": "SELECT months_between(INTERVAL '1-2' YEAR TO MONTH, '1996-10-30', false) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#ddea5cc586ad/ansi_on",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', '1996-10-30', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#ddea5cc586ad/ansi_off",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', '1996-10-30', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "months_between#e058bee10448/ansi_on",

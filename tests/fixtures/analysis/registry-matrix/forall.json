@@ -23,14 +23,6 @@
     {
       "id": "forall#a88594001a66/ansi_off",
       "reason": "SELECT forall(INTERVAL '1-2' YEAR TO MONTH, x -> x % 2 == 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "forall#b9b4aee34cc6/ansi_on",
-      "reason": "SELECT forall(named_struct('a', 1, 'b', 'x'), x -> x % 2 == 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "forall#b9b4aee34cc6/ansi_off",
-      "reason": "SELECT forall(named_struct('a', 1, 'b', 'x'), x -> x % 2 == 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

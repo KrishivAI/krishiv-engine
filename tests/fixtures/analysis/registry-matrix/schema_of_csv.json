@@ -2,11 +2,11 @@
   "entries": [
     {
       "id": "schema_of_csv#3397f55f32f3/ansi_on",
-      "reason": "SELECT schema_of_csv(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT schema_of_csv(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "schema_of_csv#3397f55f32f3/ansi_off",
-      "reason": "SELECT schema_of_csv(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT schema_of_csv(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "schema_of_csv#6dd58f097201/ansi_on",
@@ -34,11 +34,11 @@
     },
     {
       "id": "schema_of_csv#8df93023554a/ansi_on",
-      "reason": "SELECT schema_of_csv(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT schema_of_csv(array(1, 2)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "schema_of_csv#8df93023554a/ansi_off",
-      "reason": "SELECT schema_of_csv(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT schema_of_csv(array(1, 2)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "schema_of_csv#c528f58d61a7/ansi_on",

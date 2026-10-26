@@ -9,14 +9,6 @@
       "reason": "SELECT transform(INTERVAL '1-2' YEAR TO MONTH, x -> x + 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "transform#49d49cb35e55/ansi_on",
-      "reason": "SELECT transform(named_struct('a', 1, 'b', 'x'), x -> x + 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "transform#49d49cb35e55/ansi_off",
-      "reason": "SELECT transform(named_struct('a', 1, 'b', 'x'), x -> x + 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "transform#5724275e0d67/ansi_on",
       "reason": "SELECT transform(INTERVAL '1 02:03:04' DAY TO SECOND, x -> x + 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

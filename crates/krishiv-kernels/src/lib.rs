@@ -56,6 +56,7 @@ pub mod policy;
 pub mod reference;
 pub mod specialize;
 pub mod string;
+pub mod r#struct;
 pub mod text;
 mod unsafe_dispatch;
 pub mod version;

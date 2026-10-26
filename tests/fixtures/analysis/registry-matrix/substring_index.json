@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "substring_index#13e87a431f92/ansi_on",
-      "reason": "SELECT substring_index('www.apache.org', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#13e87a431f92/ansi_off",
-      "reason": "SELECT substring_index('www.apache.org', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "substring_index#20de8a49e085/ansi_on",
       "reason": "SELECT substring_index('www.apache.org', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -31,22 +23,6 @@
     {
       "id": "substring_index#52f4898847e9/ansi_off",
       "reason": "SELECT substring_index('www.apache.org', '.', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#7e6a015a8b27/ansi_on",
-      "reason": "SELECT substring_index('www.apache.org', '.', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#7e6a015a8b27/ansi_off",
-      "reason": "SELECT substring_index('www.apache.org', '.', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#8411007d4b99/ansi_on",
-      "reason": "SELECT substring_index(named_struct('a', 1, 'b', 'x'), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#8411007d4b99/ansi_off",
-      "reason": "SELECT substring_index(named_struct('a', 1, 'b', 'x'), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "substring_index#8dcf07f370c5/ansi_on",

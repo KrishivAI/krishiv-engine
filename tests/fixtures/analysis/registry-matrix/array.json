@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "array#35a6602b4e47/ansi_on",
-      "reason": "SELECT array(1, named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "array#35a6602b4e47/ansi_off",
-      "reason": "SELECT array(1, named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "array#3776c9b2bbb5/ansi_on",
       "reason": "SELECT array(INTERVAL '1 02:03:04' DAY TO SECOND, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -47,22 +39,6 @@
     {
       "id": "array#56b5cfdc3f32/ansi_off",
       "reason": "SELECT array(1, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "array#69efbf1e4dd3/ansi_on",
-      "reason": "SELECT array(1, 2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "array#69efbf1e4dd3/ansi_off",
-      "reason": "SELECT array(1, 2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "array#8037a1c4aa19/ansi_on",
-      "reason": "SELECT array(named_struct('a', 1, 'b', 'x'), 2, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "array#8037a1c4aa19/ansi_off",
-      "reason": "SELECT array(named_struct('a', 1, 'b', 'x'), 2, 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "array#9cfb954ccb6e/ansi_on",

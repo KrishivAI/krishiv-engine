@@ -25,6 +25,7 @@
 mod arith;
 mod cast;
 mod cond;
+mod field;
 mod func;
 mod hof;
 mod logic;
@@ -270,6 +271,18 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         // higher-order call compiled around the body (see `hof`).
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => column(input, c),
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
+        ExprNode::Resolved(ResolvedExpr::Field {
+            base,
+            ordinal,
+            data_type,
+            nullable,
+            ..
+        }) => field::compile(
+            compile(base, input)?,
+            *ordinal,
+            &data_type.to_arrow(),
+            *nullable,
+        ),
         ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
             if let FunctionId::Registry { name, .. } = &f.id

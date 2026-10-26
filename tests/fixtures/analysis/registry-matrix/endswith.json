@@ -17,22 +17,6 @@
       "reason": "SELECT endswith('Spark SQL', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "endswith#3d0b927b5d71/ansi_on",
-      "reason": "SELECT endswith('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "endswith#3d0b927b5d71/ansi_off",
-      "reason": "SELECT endswith('Spark SQL', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "endswith#4e2ec4ba4758/ansi_on",
-      "reason": "SELECT endswith(named_struct('a', 1, 'b', 'x'), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "endswith#4e2ec4ba4758/ansi_off",
-      "reason": "SELECT endswith(named_struct('a', 1, 'b', 'x'), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "endswith#7e3b0530126c/ansi_on",
       "reason": "SELECT endswith(map('a', 1), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

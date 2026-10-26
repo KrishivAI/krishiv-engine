@@ -23,14 +23,6 @@
     {
       "id": "unhex#4fe2346478a2/ansi_off",
       "reason": "SELECT decode(unhex(INTERVAL '1 02:03:04' DAY TO SECOND), 'UTF-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "unhex#924fd7467cd0/ansi_on",
-      "reason": "SELECT decode(unhex(named_struct('a', 1, 'b', 'x')), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "unhex#924fd7467cd0/ansi_off",
-      "reason": "SELECT decode(unhex(named_struct('a', 1, 'b', 'x')), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

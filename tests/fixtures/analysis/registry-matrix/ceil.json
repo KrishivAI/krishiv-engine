@@ -1,22 +1,6 @@
 {
   "entries": [
     {
-      "id": "ceil#1fccd13497ba/ansi_on",
-      "reason": "SELECT ceil(3.1411, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "ceil#1fccd13497ba/ansi_off",
-      "reason": "SELECT ceil(3.1411, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "ceil#3ed3ac5ba694/ansi_on",
-      "reason": "SELECT ceil(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "ceil#3ed3ac5ba694/ansi_off",
-      "reason": "SELECT ceil(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "ceil#4ca9bc16d90d/ansi_on",
       "reason": "SELECT ceil(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -39,14 +23,6 @@
     {
       "id": "ceil#5b3a37a449f4/ansi_off",
       "reason": "SELECT ceil(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "ceil#7b7739e2b4bb/ansi_on",
-      "reason": "SELECT ceil(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "ceil#7b7739e2b4bb/ansi_off",
-      "reason": "SELECT ceil(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "ceil#bb23a5bd68bf/ansi_on",

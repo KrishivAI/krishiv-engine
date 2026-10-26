@@ -40,7 +40,7 @@ use std::sync::Arc;
 
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggregateFunction, is_moment};
-use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, Literal, ResolvedExpr};
 use krishiv_types::DataType;
@@ -121,10 +121,12 @@ registry! {
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
+    (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
     (lambda_functions, LambdaFunctions, POST_MIGRATION_READER_VERSION, Semantic, "Lambda expressions (`x -> body`) and variables: the bound bodies of higher-order function arguments (`transform`, `filter`, `exists`, `forall`)."),
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -166,6 +168,8 @@ pub enum Construct<'a> {
     Frame(&'a WindowFrame),
     /// An aggregate function (of an aggregate or a window).
     Aggregate(AggregateFunction),
+    /// A resolved expression (a struct field access needs its feature).
+    Expr(&'a Expr),
     /// A Spark type in an expression or a column.
     Type(&'a DataType),
     /// An Arrow type the plan carries as IPC bytes (an aggregate's argument,
@@ -239,8 +243,11 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             }
         },
         Construct::Partitioning(p) => match p {
-            Partitioning::Hash { .. }
-            | Partitioning::Single
+            Partitioning::Hash { scheme, .. } => match scheme {
+                HashScheme::Unpinned => None,
+                HashScheme::KeyGroupV1 => Some(Feature::KeyGroupHash),
+            },
+            Partitioning::Single
             | Partitioning::Broadcast
             | Partitioning::RoundRobin
             | Partitioning::Range { .. } => None,
@@ -268,6 +275,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // `array<variant>` needs it too.
         Construct::Type(t) => t.is_nested().then_some(Feature::NestedTypes),
         Construct::ArrowType(t) => arrow_nested(t).then_some(Feature::NestedTypes),
+        Construct::Expr(e) => match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),
+            _ => None,
+        },
         // The `Window` node's format carries every frame between unbounded
         // and current-row bounds; an offset bound is newer. `FrameBound` is
         // non-exhaustive, so a bound added later counts as newer too.
@@ -350,68 +361,15 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
     for t in arrow_types_of(node) {
         f(Construct::ArrowType(t));
     }
-    if exprs_have_lambda(node) {
-        f(Construct::Lambda);
+    for e in exprs_of(node) {
+        if matches!(
+            &e.node,
+            ExprNode::Lambda { .. } | ExprNode::Resolved(ResolvedExpr::LambdaVar(_))
+        ) {
+            f(Construct::Lambda);
+        }
+        f(Construct::Expr(e));
     }
-}
-
-/// Whether any expression `node` holds is or contains a lambda: the bound
-/// body of a higher-order function's argument.
-fn exprs_have_lambda(node: &PhysNode) -> bool {
-    let mut seen = std::collections::HashSet::new();
-    let mut stack = expr_roots(node);
-    while let Some(e) = stack.pop() {
-        if !seen.insert(Arc::as_ptr(e)) {
-            continue;
-        }
-        match &e.node {
-            ExprNode::Lambda { .. } | ExprNode::Resolved(ResolvedExpr::LambdaVar(_)) => {
-                return true;
-            }
-            _ => {}
-        }
-        e.for_each_child(&mut |c| stack.push(c));
-    }
-    false
-}
-
-/// The expressions `node` holds (its scan filter, project items and the
-/// like): [`types_of`] and [`exprs_have_lambda`] walk these.
-fn expr_roots(node: &PhysNode) -> Vec<&Arc<Expr>> {
-    use krishiv_exec::physical::ProjectItemPlan as Item;
-    let mut roots: Vec<&Arc<Expr>> = Vec::new();
-    match node {
-        PhysNode::Scan(scan) => {
-            roots.extend(scan.filter.iter().map(|f| &f.predicate));
-        }
-        PhysNode::Filter { predicate, .. } => roots.push(predicate),
-        PhysNode::Project { items: i, .. } => roots.extend(i.iter().filter_map(|p| match p {
-            Item::Expr { expr, .. } => Some(expr),
-            Item::Column { .. } | Item::NullOf { .. } => None,
-        })),
-        PhysNode::Expand { projections, .. } => {
-            roots.extend(projections.iter().flat_map(|p| {
-                p.iter().filter_map(|p| match p {
-                    Item::Expr { expr, .. } => Some(expr),
-                    Item::Column { .. } | Item::NullOf { .. } => None,
-                })
-            }));
-        }
-        PhysNode::ReplicateRows { count, .. } => roots.push(count),
-        PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
-        PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
-        PhysNode::OneRow
-        | PhysNode::Limit { .. }
-        | PhysNode::Sort { .. }
-        | PhysNode::TopN { .. }
-        | PhysNode::Window { .. }
-        | PhysNode::WindowGroupLimit { .. }
-        | PhysNode::Aggregate { .. }
-        | PhysNode::Union { .. }
-        | PhysNode::WriteFiles { .. }
-        | PhysNode::Exchange(_) => {}
-    }
-    roots
 }
 
 /// The Arrow types `node` carries as IPC bytes.
@@ -456,17 +414,7 @@ fn arrow_types_of(node: &PhysNode) -> Vec<&arrow_schema::DataType> {
 /// expression in it (columns, casts, functions, aliases, typed NULLs).
 fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     let mut out: Vec<&'a DataType> = Vec::new();
-    if let PhysNode::Scan(scan) = node {
-        out.extend(scan.scan.output.iter().map(|c| &c.data_type));
-    }
-    let roots: Vec<&'a Arc<Expr>> = expr_roots(node);
-    // Expressions share subtrees: each is visited once.
-    let mut seen = std::collections::HashSet::new();
-    let mut stack = roots;
-    while let Some(e) = stack.pop() {
-        if !seen.insert(Arc::as_ptr(e)) {
-            continue;
-        }
+    for e in exprs_of(node) {
         match &e.node {
             ExprNode::Cast { to, .. } => out.push(to),
             ExprNode::Literal(Literal::Null(Some(t))) => out.push(t),
@@ -477,8 +425,57 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
             }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
+            ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => out.push(data_type),
             _ => {}
         }
+    }
+    if let PhysNode::Scan(scan) = node {
+        out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+    }
+    out
+}
+
+/// Every expression `node` holds, each once (shared subtrees visited once).
+fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
+    fn items(items: &[ProjectItemPlan]) -> impl Iterator<Item = &Arc<Expr>> {
+        items.iter().filter_map(|i| match i {
+            ProjectItemPlan::Expr { expr, .. } => Some(expr),
+            ProjectItemPlan::Column { .. } | ProjectItemPlan::NullOf { .. } => None,
+        })
+    }
+    let mut roots: Vec<&'a Arc<Expr>> = Vec::new();
+    match node {
+        PhysNode::Scan(scan) => {
+            roots.extend(scan.filter.iter().map(|f| &f.predicate));
+        }
+        PhysNode::Filter { predicate, .. } => roots.push(predicate),
+        PhysNode::Project { items: i, .. } => roots.extend(items(i)),
+        PhysNode::Expand { projections, .. } => {
+            roots.extend(projections.iter().flat_map(|p| items(p)));
+        }
+        PhysNode::ReplicateRows { count, .. } => roots.push(count),
+        PhysNode::HashJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::OneRow
+        | PhysNode::Limit { .. }
+        | PhysNode::Sort { .. }
+        | PhysNode::TopN { .. }
+        | PhysNode::Window { .. }
+        | PhysNode::WindowGroupLimit { .. }
+        | PhysNode::Aggregate { .. }
+        | PhysNode::Union { .. }
+        | PhysNode::WriteFiles { .. }
+        | PhysNode::Exchange(_) => {}
+    }
+    // Expressions share subtrees: each is visited once.
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = roots;
+    let mut out = Vec::new();
+    while let Some(e) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(e)) {
+            continue;
+        }
+        out.push(e);
         e.for_each_child(&mut |c| stack.push(c));
     }
     out

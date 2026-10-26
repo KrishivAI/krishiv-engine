@@ -13,14 +13,6 @@
       "reason": "SELECT equal_null(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "equal_null#2b9586adb520/ansi_on",
-      "reason": "SELECT equal_null(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "equal_null#2b9586adb520/ansi_off",
-      "reason": "SELECT equal_null(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "equal_null#49d8fd6084a6/ansi_off",
       "reason": "SELECT equal_null('abc', 3) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -103,14 +95,6 @@
     {
       "id": "equal_null#e2ccee8023d2/ansi_off",
       "reason": "SELECT equal_null(3, '1') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
-    },
-    {
-      "id": "equal_null#f6120d7280dd/ansi_on",
-      "reason": "SELECT equal_null(3, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "equal_null#f6120d7280dd/ansi_off",
-      "reason": "SELECT equal_null(3, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     }
   ],
   "format_version": 1,

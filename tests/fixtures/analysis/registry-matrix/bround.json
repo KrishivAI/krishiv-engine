@@ -17,22 +17,6 @@
       "reason": "SELECT bround(map('a', 1), 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "bround#2dd9f9244d5b/ansi_on",
-      "reason": "SELECT bround(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bround#2dd9f9244d5b/ansi_off",
-      "reason": "SELECT bround(named_struct('a', 1, 'b', 'x'), 0) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bround#61b3210c3a84/ansi_on",
-      "reason": "SELECT bround(2.5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bround#61b3210c3a84/ansi_off",
-      "reason": "SELECT bround(2.5, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "bround#8139bd9fdb4c/ansi_on",
       "reason": "SELECT bround(2.5, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

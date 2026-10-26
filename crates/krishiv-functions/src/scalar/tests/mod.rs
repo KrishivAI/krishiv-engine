@@ -592,6 +592,7 @@ mod calendar;
 mod families;
 mod number;
 mod predicate;
+mod r#struct;
 mod text;
 mod url;
 

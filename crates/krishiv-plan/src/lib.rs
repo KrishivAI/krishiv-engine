@@ -93,6 +93,7 @@
 //! | `ExprNode::Function` | U | all | `operators`, `functions` |
 //! | `ExprNode::Cast` | U, R | Q1, Q3-Q8, Q10, Q12, Q14, Q15, Q20 | `cast` |
 //! | `ExprNode::Alias` | U | Q1, Q3-Q17, Q19, Q21, Q22 | `col.alias` |
+//! | `ExprNode::Field` | U | - | - |
 //! | `ExprNode::Subquery` | U, R | Q2, Q4, Q11, Q15-Q18, Q20-Q22 | - |
 //! | `ExprNode::Window` | U, R | - | - |
 //! | `ExprNode::Lambda` | U, R | - | - |
@@ -101,6 +102,7 @@
 //! | `ResolvedExpr::Function` | R | - | - |
 //! | `ResolvedExpr::LambdaVar` | R | - | - |
 //! | `ResolvedExpr::Alias` | R | - | - |
+//! | `ResolvedExpr::Field` | R | - | - |
 //!
 //! Not in v1 (spec 13 §9; added with the features that need them):
 //! `Generate`, `Repartition`, `Hint`, `Pivot`, `Command`,

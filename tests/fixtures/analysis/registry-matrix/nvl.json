@@ -9,22 +9,6 @@
       "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
-      "id": "nvl#2305f5ee469a/ansi_on",
-      "reason": "SELECT nvl(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#2305f5ee469a/ansi_off",
-      "reason": "SELECT nvl(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#7b57963d6974/ansi_on",
-      "reason": "SELECT nvl(NULL, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "nvl#7b57963d6974/ansi_off",
-      "reason": "SELECT nvl(NULL, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
       "id": "nvl#9e1045de78bd/ansi_on",
       "reason": "SELECT nvl(NULL, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

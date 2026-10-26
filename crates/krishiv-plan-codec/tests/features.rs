@@ -274,6 +274,23 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         None
     );
+    for (scheme, feature) in [
+        (krishiv_exec::physical::HashScheme::Unpinned, None),
+        (
+            krishiv_exec::physical::HashScheme::KeyGroupV1,
+            Some(Feature::KeyGroupHash),
+        ),
+    ] {
+        assert_eq!(
+            feature_of(Construct::Partitioning(
+                &krishiv_exec::physical::Partitioning::Hash {
+                    keys: vec![0],
+                    scheme
+                }
+            )),
+            feature
+        );
+    }
     assert_eq!(
         feature_of(Construct::Window(
             &krishiv_exec::window::WindowFunction::RowNumber
@@ -659,4 +676,23 @@ fn a_nested_type_only_in_an_arrow_field_needs_the_feature() {
         );
         assert_eq!(decode(&bytes).unwrap(), plan);
     }
+}
+
+/// A hash exchange naming a routing function this reader does not know is
+/// corrupt: it is never routed by some other function.
+#[test]
+fn an_unknown_hash_scheme_is_corrupt() {
+    let mut m = message("exchange_hash_key_group");
+    let mut hashed = 0;
+    for n in &mut m.nodes {
+        if let Some(pb::node::Kind::Exchange(e)) = &mut n.kind
+            && let Some(pb::partitioning::Kind::Hash(h)) =
+                e.partitioning.as_mut().and_then(|p| p.kind.as_mut())
+        {
+            h.scheme = 99;
+            hashed += 1;
+        }
+    }
+    assert_eq!(hashed, 1);
+    corrupt(&m, "an unknown hash scheme");
 }

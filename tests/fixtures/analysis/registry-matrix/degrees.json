@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "degrees#0f5e2f47c537/ansi_on",
-      "reason": "SELECT degrees(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "degrees#0f5e2f47c537/ansi_off",
-      "reason": "SELECT degrees(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "degrees#9a381aac8d04/ansi_on",
       "reason": "SELECT degrees(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

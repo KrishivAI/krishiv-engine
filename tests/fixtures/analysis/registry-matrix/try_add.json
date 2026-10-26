@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "try_add#01d08859909f/ansi_on",
-      "reason": "SELECT try_add(1, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#01d08859909f/ansi_off",
-      "reason": "SELECT try_add(1, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_add#06d82e68390e/ansi_on",
       "reason": "SELECT try_add(1, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -147,14 +139,6 @@
     {
       "id": "try_add#80670b49f5fe/ansi_off",
       "reason": "SELECT try_add(date'2021-01-01', CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
-    },
-    {
-      "id": "try_add#8b46cf1077d3/ansi_on",
-      "reason": "SELECT try_add(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_add#8b46cf1077d3/ansi_off",
-      "reason": "SELECT try_add(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_add#97c240c3d841/ansi_on",

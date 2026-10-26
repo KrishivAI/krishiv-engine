@@ -23,14 +23,6 @@
     {
       "id": "raise_error#7316fcbbf706/ansi_off",
       "reason": "SELECT raise_error(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "raise_error#fcc723f51e83/ansi_on",
-      "reason": "SELECT raise_error(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "raise_error#fcc723f51e83/ansi_off",
-      "reason": "SELECT raise_error(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

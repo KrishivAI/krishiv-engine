@@ -1191,12 +1191,25 @@ impl Lowerer {
                         _ => break,
                     }
                 }
-                let ExprKind::Column(parts) = &base.kind else {
-                    return Err(unsupported("field access on an expression", sp));
-                };
-                let mut name: Vec<String> = parts.iter().map(|p| p.value.clone()).collect();
-                name.extend(fields.into_iter().rev());
-                self.column(name, sp)
+                let sp = base.span;
+                if let ExprKind::Column(parts) = &base.kind {
+                    let mut name: Vec<String> = parts.iter().map(|p| p.value.clone()).collect();
+                    name.extend(fields.into_iter().rev());
+                    self.column(name, sp)
+                } else {
+                    // `f(x).y`: field access on an expression.
+                    let mut base = self.expr(base)?;
+                    for name in fields.into_iter().rev() {
+                        base = self.ex(
+                            ExprNode::Field {
+                                base: arc(base),
+                                name,
+                            },
+                            sp,
+                        );
+                    }
+                    base
+                }
             }
             ExprKind::Wildcard { qualifier, except } => self.ex(
                 ExprNode::Star(Star {
@@ -1585,9 +1598,10 @@ impl Lowerer {
                     sp,
                 )
             }
-            ExprKind::Row(_) | ExprKind::Struct(_) => {
+            ExprKind::Row(_) => {
                 return Err(unsupported("row and struct constructors", sp));
             }
+            ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
             // Every variant is lowered above; the wildcard stays because
             // `ExprKind` is non-exhaustive.
             #[expect(unreachable_patterns, reason = "every ExprKind variant is lowered")]
@@ -1603,6 +1617,52 @@ impl Lowerer {
             }),
             sp,
         )
+    }
+
+    /// `STRUCT(items)`: `struct(...)` when no item is aliased, else
+    /// `named_struct(name, ...)` with a default for the unaliased items. A
+    /// `*` item passes through for the analyzer to expand against the
+    /// struct's fields, and a multi-name alias is not a field name. An
+    /// unaliased column or field keeps its own name (as Spark's
+    /// `CreateStruct` does); any other expression defaults to `colN`.
+    fn struct_ctor(&mut self, items: &[SelectItem], sp: Span) -> R<IrExpr> {
+        let mut args = Vec::with_capacity(items.len());
+        let mut names: Vec<String> = Vec::with_capacity(items.len());
+        let mut aliased = false;
+        for (i, item) in items.iter().enumerate() {
+            let star = matches!(item.expr.kind, ExprKind::Wildcard { .. });
+            if star && item.alias.is_some() {
+                return Err(unsupported("row and struct constructors", sp));
+            }
+            let name = match &item.alias {
+                None => match &item.expr.kind {
+                    ExprKind::Column(parts) => parts
+                        .last()
+                        .map(|p| p.value.clone())
+                        .unwrap_or_else(|| format!("col{}", i + 1)),
+                    ExprKind::Field(_, f) => f.value.clone(),
+                    _ => format!("col{}", i + 1),
+                },
+                Some(Alias::Name(id)) => {
+                    aliased = true;
+                    id.value.clone()
+                }
+                Some(Alias::List(_)) => {
+                    return Err(unsupported("row and struct constructors", sp));
+                }
+            };
+            args.push(self.arg(&item.expr)?);
+            names.push(name);
+        }
+        if !aliased {
+            return Ok(self.call("struct", args, sp));
+        }
+        let mut named: Vec<Arc<IrExpr>> = Vec::with_capacity(args.len() * 2);
+        for (name, arg) in names.into_iter().zip(args) {
+            named.push(arc(self.ex(ExprNode::Literal(IrLiteral::String(name)), sp)));
+            named.push(arg);
+        }
+        Ok(self.call("named_struct", named, sp))
     }
 }
 

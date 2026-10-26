@@ -23,14 +23,6 @@
     {
       "id": "isnull#56c254dd036b/ansi_off",
       "reason": "SELECT isnull(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "isnull#ca1c1fc4fce7/ansi_on",
-      "reason": "SELECT isnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "isnull#ca1c1fc4fce7/ansi_off",
-      "reason": "SELECT isnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     }
   ],
   "format_version": 1,

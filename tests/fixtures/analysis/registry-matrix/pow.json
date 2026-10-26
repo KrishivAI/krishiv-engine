@@ -17,14 +17,6 @@
       "reason": "SELECT pow(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "pow#43948fbfbfd3/ansi_on",
-      "reason": "SELECT pow(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "pow#43948fbfbfd3/ansi_off",
-      "reason": "SELECT pow(named_struct('a', 1, 'b', 'x'), 3) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "pow#68ef202493af/ansi_on",
       "reason": "SELECT pow(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -47,14 +39,6 @@
     {
       "id": "pow#8a8284f79bbe/ansi_off",
       "reason": "SELECT pow(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "pow#9129c8ea381c/ansi_on",
-      "reason": "SELECT pow(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "pow#9129c8ea381c/ansi_off",
-      "reason": "SELECT pow(2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "pow#a5c5256f4fbf/ansi_on",

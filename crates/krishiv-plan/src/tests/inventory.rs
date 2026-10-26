@@ -59,6 +59,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::TypedLiteral { .. } => "ExprNode::TypedLiteral",
         ExprNode::Star(_) => "ExprNode::Star",
         ExprNode::Function(_) => "ExprNode::Function",
+        ExprNode::Field { .. } => "ExprNode::Field",
         ExprNode::Cast { .. } => "ExprNode::Cast",
         ExprNode::Alias { .. } => "ExprNode::Alias",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",
@@ -69,6 +70,7 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::Resolved(ResolvedExpr::LambdaVar(_)) => "ResolvedExpr::LambdaVar",
         ExprNode::Resolved(ResolvedExpr::Function(_)) => "ResolvedExpr::Function",
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => "ResolvedExpr::Alias",
+        ExprNode::Resolved(ResolvedExpr::Field { .. }) => "ResolvedExpr::Field",
     });
     if let ExprNode::Subquery { plan, .. } = &expr.node {
         kinds(plan, out);

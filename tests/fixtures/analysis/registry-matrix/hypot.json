@@ -41,28 +41,12 @@
       "reason": "SELECT hypot(map('a', 1), 4) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "hypot#8ffd180f8baa/ansi_on",
-      "reason": "SELECT hypot(3, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "hypot#8ffd180f8baa/ansi_off",
-      "reason": "SELECT hypot(3, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "hypot#b0f1ca89094f/ansi_on",
       "reason": "SELECT hypot(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "hypot#b0f1ca89094f/ansi_off",
       "reason": "SELECT hypot(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "hypot#e8004c8b463f/ansi_on",
-      "reason": "SELECT hypot(named_struct('a', 1, 'b', 'x'), 4) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "hypot#e8004c8b463f/ansi_off",
-      "reason": "SELECT hypot(named_struct('a', 1, 'b', 'x'), 4) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

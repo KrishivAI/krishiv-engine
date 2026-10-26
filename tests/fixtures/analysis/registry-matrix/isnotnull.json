@@ -23,14 +23,6 @@
     {
       "id": "isnotnull#72997046ecf4/ansi_off",
       "reason": "SELECT isnotnull(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "isnotnull#e9c8cf75daa7/ansi_on",
-      "reason": "SELECT isnotnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "isnotnull#e9c8cf75daa7/ansi_off",
-      "reason": "SELECT isnotnull(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     }
   ],
   "format_version": 1,

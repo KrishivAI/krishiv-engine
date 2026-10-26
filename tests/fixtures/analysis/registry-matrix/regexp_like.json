@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "regexp_like#0df5d67c2bbf/ansi_on",
-      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_like#0df5d67c2bbf/ansi_off",
-      "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp_like#13bf747628ed/ansi_on",
       "reason": "SELECT regexp_like(INTERVAL '1-2' YEAR TO MONTH, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -47,14 +39,6 @@
     {
       "id": "regexp_like#9f58a004fc29/ansi_off",
       "reason": "SELECT regexp_like('%SystemDrive%\\Users\\John', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "regexp_like#a09640912b93/ansi_on",
-      "reason": "SELECT regexp_like(named_struct('a', 1, 'b', 'x'), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_like#a09640912b93/ansi_off",
-      "reason": "SELECT regexp_like(named_struct('a', 1, 'b', 'x'), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp_like#e155c6f9762d/ansi_on",

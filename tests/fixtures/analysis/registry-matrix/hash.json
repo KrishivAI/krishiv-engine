@@ -9,22 +9,6 @@
       "reason": "SELECT hash(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "hash#272caba7a158/ansi_on",
-      "reason": "SELECT hash(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "hash#272caba7a158/ansi_off",
-      "reason": "SELECT hash(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "hash#4d1d1a99deac/ansi_on",
-      "reason": "SELECT hash('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "hash#4d1d1a99deac/ansi_off",
-      "reason": "SELECT hash('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
       "id": "hash#51a176d3611e/ansi_on",
       "reason": "SELECT hash('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
@@ -79,14 +63,6 @@
     {
       "id": "hash#ce8dfe4ae46a/ansi_off",
       "reason": "SELECT hash(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "hash#dd8381fee2e5/ansi_on",
-      "reason": "SELECT hash('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "hash#dd8381fee2e5/ansi_off",
-      "reason": "SELECT hash('Spark', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
       "id": "hash#f0c7f0566e00/ansi_on",
