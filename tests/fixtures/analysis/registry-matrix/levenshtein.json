@@ -25,14 +25,6 @@
       "reason": "SELECT levenshtein('kitten', 'sitting', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "levenshtein#23466a724e83/ansi_on",
-      "reason": "SELECT levenshtein(named_struct('a', 1, 'b', 'x'), 'sitting', 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#23466a724e83/ansi_off",
-      "reason": "SELECT levenshtein(named_struct('a', 1, 'b', 'x'), 'sitting', 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "levenshtein#2ab177355128/ansi_on",
       "reason": "SELECT levenshtein('kitten', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -47,14 +39,6 @@
     {
       "id": "levenshtein#3926e67ae481/ansi_off",
       "reason": "SELECT levenshtein(map('a', 1), 'sitting') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#3fe9de811ea1/ansi_on",
-      "reason": "SELECT levenshtein('kitten', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#3fe9de811ea1/ansi_off",
-      "reason": "SELECT levenshtein('kitten', named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "levenshtein#45c5cc2454fe/ansi_on",
@@ -111,14 +95,6 @@
     {
       "id": "levenshtein#9f13de23c36b/ansi_off",
       "reason": "SELECT levenshtein('kitten', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "levenshtein#a261271a6e13/ansi_on",
-      "reason": "SELECT levenshtein(named_struct('a', 1, 'b', 'x'), 'sitting') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#a261271a6e13/ansi_off",
-      "reason": "SELECT levenshtein(named_struct('a', 1, 'b', 'x'), 'sitting') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "levenshtein#a3d047579589/ansi_on",
@@ -183,22 +159,6 @@
     {
       "id": "levenshtein#eb13bb49b1b9/ansi_off",
       "reason": "SELECT levenshtein(INTERVAL '1 02:03:04' DAY TO SECOND, 'sitting', 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "levenshtein#ec080f007ee7/ansi_on",
-      "reason": "SELECT levenshtein('kitten', 'sitting', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#ec080f007ee7/ansi_off",
-      "reason": "SELECT levenshtein('kitten', 'sitting', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#f7dc8a87fc2c/ansi_on",
-      "reason": "SELECT levenshtein('kitten', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#f7dc8a87fc2c/ansi_off",
-      "reason": "SELECT levenshtein('kitten', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

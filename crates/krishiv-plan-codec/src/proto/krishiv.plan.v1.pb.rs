@@ -715,7 +715,7 @@ pub struct BoundColumn {
 pub struct Expr {
     #[prost(message, optional, tag = "1")]
     pub origin: ::core::option::Option<Origin>,
-    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8")]
     pub kind: ::core::option::Option<expr::Kind>,
 }
 /// Nested message and enum types in `Expr`.
@@ -734,6 +734,9 @@ pub mod expr {
         Cast(super::Cast),
         #[prost(message, tag = "7")]
         Alias(super::AliasExpr),
+        /// feature: struct_field
+        #[prost(message, tag = "8")]
+        Field(super::FieldExpr),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -742,6 +745,21 @@ pub struct AliasExpr {
     pub expr: u32,
     #[prost(message, optional, tag = "2")]
     pub output: ::core::option::Option<BoundColumn>,
+}
+/// A struct field: the field `name` at `ordinal` of the struct `base`.
+/// feature: struct_field
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FieldExpr {
+    #[prost(uint32, tag = "1")]
+    pub base: u32,
+    #[prost(uint32, tag = "2")]
+    pub ordinal: u32,
+    #[prost(string, tag = "3")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "4")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "5")]
+    pub nullable: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Cast {

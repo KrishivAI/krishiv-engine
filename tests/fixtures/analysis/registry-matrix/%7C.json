@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "|#2e4c42947f15/ansi_on",
-      "reason": "SELECT (named_struct('a', 1, 'b', 'x')) | 5 | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "|#2e4c42947f15/ansi_off",
-      "reason": "SELECT (named_struct('a', 1, 'b', 'x')) | 5 | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "|#473f0f1c46b1/ansi_on",
       "reason": "SELECT 3 | (INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -47,14 +39,6 @@
     {
       "id": "|#97f196c58d5e/ansi_off",
       "reason": "SELECT (INTERVAL '1-2' YEAR TO MONTH) | 5 | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "|#b36875dbc07f/ansi_on",
-      "reason": "SELECT 3 | (named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "|#b36875dbc07f/ansi_off",
-      "reason": "SELECT 3 | (named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "|#c2c41d6ca153/ansi_on",

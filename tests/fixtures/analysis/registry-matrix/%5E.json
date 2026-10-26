@@ -9,14 +9,6 @@
       "reason": "SELECT (INTERVAL '1 02:03:04' DAY TO SECOND) ^ 5 | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "^#16fedc28f35e/ansi_on",
-      "reason": "SELECT (named_struct('a', 1, 'b', 'x')) ^ 5 | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "^#16fedc28f35e/ansi_off",
-      "reason": "SELECT (named_struct('a', 1, 'b', 'x')) ^ 5 | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "^#2e9b5ee868b2/ansi_on",
       "reason": "SELECT 3 ^ (INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -47,14 +39,6 @@
     {
       "id": "^#83d0d49f9f79/ansi_off",
       "reason": "SELECT (INTERVAL '1-2' YEAR TO MONTH) ^ 5 | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "^#895a1c0297e8/ansi_on",
-      "reason": "SELECT 3 ^ (named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "^#895a1c0297e8/ansi_off",
-      "reason": "SELECT 3 ^ (named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "^#9c09c7c7c027/ansi_on",
