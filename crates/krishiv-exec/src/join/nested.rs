@@ -221,6 +221,8 @@ struct ProbeLocal {
     offset: usize,
     /// Per probe row of the chunk: whether it matched.
     matched: Vec<bool>,
+    /// The driver's partition: the residual filter evaluates in it.
+    partition: u32,
 }
 
 impl Operator for ProbeOp {
@@ -250,6 +252,7 @@ impl Operator for ProbeOp {
             batch: 0,
             offset: 0,
             matched: Vec::new(),
+            partition: ctx.partition(),
         }))
     }
 
@@ -280,8 +283,10 @@ impl Operator for ProbeOp {
                 let n = (b.num_rows() - l.offset).min((TARGET_PAIRS / (l.end - l.start)).max(1));
                 let slice = b.slice(l.offset, n);
                 l.offset += n;
+                let (partition, start, end) = (l.partition, l.start, l.end);
+                let matched = &mut l.matched;
                 if let Some(pairs) =
-                    self.pairs(input.data(), l.start, l.end, &slice, &mut l.matched)?
+                    self.pairs(input.data(), start, end, &slice, matched, partition)?
                 {
                     out.push(pairs);
                 }
@@ -325,6 +330,7 @@ impl ProbeOp {
         end: usize,
         build: &RecordBatch,
         matched: &mut [bool],
+        partition: u32,
     ) -> Result<Option<RecordBatch>> {
         let b = build.num_rows();
         if b == 0 {
@@ -356,7 +362,7 @@ impl ProbeOp {
         let mask = match &self.0.spec.filter {
             None => BooleanArray::from(vec![true; n]),
             Some(f) => {
-                let m = f.evaluate(&paired)?;
+                let m = f.evaluate_in(&paired, partition)?;
                 // NULL is not a match.
                 match m.nulls() {
                     Some(v) => BooleanArray::new(m.values() & v.inner(), None),

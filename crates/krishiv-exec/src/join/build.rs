@@ -516,7 +516,7 @@ impl Sink for BuildSink {
             g.null_key.store(true, Ordering::Release);
         }
         let payload = match (s.row_payload(g.hashing.rows()), &s.payload) {
-            (Some(layout), _) => Some(Payload::Rows(layout.encode(columns, 0)?)),
+            (Some(layout), _) => Some(Payload::Rows(layout.encode(columns)?)),
             (None, Some((conv, _))) => Some(Payload::Arrow(
                 conv.convert_columns(columns)
                     .map_err(|e| internal(e.to_string()))?,

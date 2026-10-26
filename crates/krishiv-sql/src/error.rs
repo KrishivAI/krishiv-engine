@@ -19,8 +19,8 @@
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
     InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidStatementOrClause,
-    InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0053,
-    ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
+    InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0035,
+    LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
     UnclosedBracketedComment,
 };
 
@@ -237,4 +237,10 @@ pub(crate) fn unsupported_set_time_zone(form: &str, span: Span) -> ParseError {
         },
         span,
     )
+}
+
+/// `_LEGACY_ERROR_TEMP_0035`: a bare `ALTER TABLE ... CHANGE column`
+/// (Spark's message names what the change needs).
+pub(crate) fn legacy_error_temp_0035(message: String, span: Span) -> ParseError {
+    at(LegacyErrorTemp0035 { message }, span)
 }

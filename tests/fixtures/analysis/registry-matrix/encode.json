@@ -25,28 +25,12 @@
       "reason": "SELECT encode(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "encode#9dd4a26f0636/ansi_on",
-      "reason": "SELECT encode(array(1, 2), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "encode#9dd4a26f0636/ansi_off",
-      "reason": "SELECT encode(array(1, 2), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "encode#cbde63238f70/ansi_on",
       "reason": "SELECT encode('abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "encode#cbde63238f70/ansi_off",
       "reason": "SELECT encode('abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "encode#d880a267ff0e/ansi_on",
-      "reason": "SELECT encode('abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "encode#d880a267ff0e/ansi_off",
-      "reason": "SELECT encode('abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "encode#ed99015663e0/ansi_on",
@@ -63,22 +47,6 @@
     {
       "id": "encode#f8cddc0cc0fd/ansi_off",
       "reason": "SELECT encode(map('a', 1), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "encode#fae724ac33a7/ansi_on",
-      "reason": "SELECT encode('abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "encode#fae724ac33a7/ansi_off",
-      "reason": "SELECT encode('abc', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "encode#fb2eda66e4ee/ansi_on",
-      "reason": "SELECT encode(named_struct('a', 1, 'b', 'x'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "encode#fb2eda66e4ee/ansi_off",
-      "reason": "SELECT encode(named_struct('a', 1, 'b', 'x'), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

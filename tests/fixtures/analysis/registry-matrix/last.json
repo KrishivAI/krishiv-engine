@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "last#14e29c30b9be/ansi_on",
-      "reason": "SELECT last(col, array(1, 2)) FROM VALUES (10), (5), (NULL) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
-      "id": "last#14e29c30b9be/ansi_off",
-      "reason": "SELECT last(col, array(1, 2)) FROM VALUES (10), (5), (NULL) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
       "id": "last#63f16e2e35b3/ansi_on",
       "reason": "SELECT last(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
     },
@@ -31,14 +23,6 @@
     {
       "id": "last#8d76e63681f0/ansi_off",
       "reason": "SELECT last(col, map('a', 1)) FROM VALUES (10), (5), (NULL) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
-      "id": "last#903f35baac68/ansi_on",
-      "reason": "SELECT last(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (10), (5), (NULL) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
-      "id": "last#903f35baac68/ansi_off",
-      "reason": "SELECT last(col, named_struct('a', 1, 'b', 'x')) FROM VALUES (10), (5), (NULL) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has _LEGACY_ERROR_TEMP_1210"
     }
   ],
   "format_version": 1,

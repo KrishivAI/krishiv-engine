@@ -518,6 +518,71 @@ where
     })
 }
 
+/// Reference for [`crate::list::create`]: one list per row holding each
+/// argument's value, built row-at-a-time over `Int32` arguments.
+///
+/// # Errors
+/// As the fast path.
+pub fn list_create(
+    args: &[arrow_array::ArrayRef],
+    rows: usize,
+    contains_null: bool,
+) -> Result<arrow_array::ListArray, KernelError> {
+    use arrow_array::cast::AsArray as _;
+    use arrow_array::types::Int32Type;
+    for a in args {
+        if a.len() != rows {
+            return Err(KernelError::internal(format!(
+                "array of {rows} rows over an argument of {} rows",
+                a.len()
+            )));
+        }
+    }
+    let len = rows
+        .checked_mul(args.len().max(1))
+        .ok_or_else(|| KernelError::internal(format!("a list of {rows} rows")))?;
+    if args.is_empty() {
+        let zeros = usize::checked_add(rows, 1)
+            .ok_or_else(|| KernelError::internal(format!("a list of {rows} rows")))?;
+        return Ok(arrow_array::ListArray::new(
+            std::sync::Arc::new(arrow_schema::Field::new(
+                "element",
+                arrow_schema::DataType::Null,
+                contains_null,
+            )),
+            arrow_buffer::OffsetBuffer::new(arrow_buffer::ScalarBuffer::from(vec![0_i32; zeros])),
+            std::sync::Arc::new(arrow_array::NullArray::new(0)),
+            None,
+        ));
+    }
+    let mut values: Vec<Option<i32>> = Vec::with_capacity(len);
+    let mut offsets = Vec::with_capacity(
+        len.checked_add(1)
+            .ok_or_else(|| KernelError::internal(format!("a list of {rows} rows")))?,
+    );
+    offsets.push(0_i32);
+    for r in 0..rows {
+        for a in args {
+            let col = a.as_primitive::<Int32Type>();
+            values.push(col.is_valid(r).then(|| col.value(r)));
+        }
+        offsets.push(
+            i32::try_from(values.len())
+                .map_err(|_| KernelError::internal(format!("a list of {rows} rows")))?,
+        );
+    }
+    Ok(arrow_array::ListArray::new(
+        std::sync::Arc::new(arrow_schema::Field::new(
+            "element",
+            arrow_schema::DataType::Int32,
+            contains_null,
+        )),
+        arrow_buffer::OffsetBuffer::new(arrow_buffer::ScalarBuffer::from(offsets)),
+        std::sync::Arc::new(arrow_array::Int32Array::from(values)),
+        None,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use arrow_array::{Float32Array, Int64Array};

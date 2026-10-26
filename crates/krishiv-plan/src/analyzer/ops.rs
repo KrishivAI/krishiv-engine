@@ -2202,10 +2202,22 @@ impl Resolver<'_> {
             {
                 return e;
             }
+            let Some(name) = e
+                .error
+                .message_parameters()
+                .iter()
+                .find_map(|(k, v)| (*k == "name").then(|| v.clone()))
+            else {
+                return e;
+            };
             exprs
                 .iter()
                 .find_map(|x| match &x.node {
-                    ExprNode::Column(col) if col.plan_id.is_none() && col.name.len() == 1 => {
+                    ExprNode::Column(col)
+                        if col.plan_id.is_none()
+                            && col.name.len() == 1
+                            && quoted(&col.name) == name =>
+                    {
                         Some(unresolved(&col.name, &c.out, x.origin))
                     }
                     _ => None,
@@ -2217,28 +2229,9 @@ impl Resolver<'_> {
             // twice (Spark 4.2.0: `SELECT 1 AS a, 2 AS a FROM t(a) GROUP BY a
             // ORDER BY a` succeeds); with no grouping attribute of that name
             // the duplicates are `UNRESOLVED_COLUMN` and not ambiguous.
-            let duplicate = exprs.iter().find_map(|e| match &e.node {
-                ExprNode::Column(col)
-                    if col.plan_id.is_none()
-                        && col.name.len() == 1
-                        && c.out
-                            .iter()
-                            .filter(|a| {
-                                same(&a.col.name, &col.name[0], self.ctx.conf.case_sensitive)
-                            })
-                            .count()
-                            > 1 =>
-                {
-                    Some((col.name.clone(), e.origin))
-                }
-                _ => None,
-            });
             match self.over_agg(&c, &exprs, env, "Sort") {
                 Ok(found) => found,
-                Err(_) if let Some((name, origin)) = &duplicate => {
-                    return Err(unresolved(name, &c.out, *origin));
-                }
-                Err(e) => return Err(e),
+                Err(e) => return Err(reported(e)),
             }
         } else {
             // A name the select list outputs twice is looked up below it,

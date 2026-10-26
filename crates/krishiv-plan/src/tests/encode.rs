@@ -10,6 +10,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_types::DataType;
 
 use super::depth::self_joins;
+use crate::{AttrId, BoundColumn};
 use crate::{
     Builtin, ColumnRef, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition, JoinKind, Literal,
     LogicalPlan, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr, ResolvedFunction,
@@ -242,6 +243,60 @@ fn resolved_call(name: &str, id: u32, kind: FunctionKind, arg: &str) -> LogicalP
     LogicalPlan::table(["t"]).project(vec![call])
 }
 
+/// A lambda and its variables enter the key: parameter names, the
+/// variable's name and identity, and the lambda/variable tags all count.
+#[test]
+fn lambda_and_its_variables_enter_the_key() {
+    let var = BoundColumn {
+        id: AttrId(2),
+        name: "y".to_owned(),
+        data_type: DataType::Integer,
+        nullable: false,
+    };
+    let body = Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(var.clone())));
+    let lam = |params: Vec<BoundColumn>| {
+        Expr::new(ExprNode::Lambda {
+            params,
+            body: Arc::new(body.clone()),
+        })
+    };
+    let param = |name: &str| BoundColumn {
+        id: AttrId(2),
+        name: name.to_owned(),
+        data_type: DataType::Integer,
+        nullable: false,
+    };
+    let p = |e: Expr| key(LogicalPlan::table(["t"]).filter(e));
+    let base = p(lam(vec![param("y")]));
+    assert_ne!(p(lam(vec![param("z")])), base, "params");
+    let renamed = Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(BoundColumn {
+        id: AttrId(2),
+        name: "z".to_owned(),
+        data_type: DataType::Integer,
+        nullable: false,
+    })));
+    let renamed = Expr::new(ExprNode::Lambda {
+        params: vec![param("z")],
+        body: Arc::new(renamed),
+    });
+    assert_ne!(p(renamed), base, "variable name");
+    let reid = Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(BoundColumn {
+        id: AttrId(3),
+        ..var.clone()
+    })));
+    let reid = Expr::new(ExprNode::Lambda {
+        params: vec![BoundColumn {
+            id: AttrId(3),
+            ..param("y")
+        }],
+        body: Arc::new(reid),
+    });
+    assert_ne!(p(reid), base, "variable identity");
+    // A variable is not a column with the same name and identity.
+    let col = Expr::new(ExprNode::Resolved(ResolvedExpr::Column(var)));
+    assert_ne!(p(col), base, "variable tag");
+}
+
 /// A function's key is its name, kind and arguments, never its registry
 /// handle, so a cache shared across builds cannot confuse two functions.
 #[test]
@@ -290,7 +345,7 @@ fn keys_are_stable() {
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
     assert_eq!(encoding.len(), 493, "{encoding:?}");
-    assert_eq!(hash.to_string(), "c52735ab283b4cec155d3ea789487c38");
+    assert_eq!(hash.to_string(), "eaeeb9e9da010966fde69769c8d36f0f");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -302,7 +357,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "062cd8e7cfaceee9a9e908d776219685");
+    assert_eq!(hash.to_string(), "abc19dd01ab19870f695f43bf481168f");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in

@@ -27,7 +27,8 @@ use crate::analyzer::{
 use crate::walk::{Node, visit_distinct};
 use crate::{
     ColumnRef, Cte, Expr, ExprNode, JoinCondition, JoinKind, Literal, LogicalPlan, MAX_DEPTH,
-    Origin, Plan, PlanId, PlanNode, ReadSource, SourceId, SqlArgs, Star, TableVersion,
+    Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr, SourceId, SqlArgs, Star,
+    TableVersion,
 };
 
 fn goldens() -> Value {
@@ -74,6 +75,30 @@ fn run(plan: LogicalPlan, ctx: &AnalysisContext) -> Result<AnalyzedPlan, Analysi
 fn class(r: &Result<AnalyzedPlan, AnalysisError>) -> &'static str {
     r.as_ref()
         .map_or_else(|e| e.error.error_class().name(), |_| "OK")
+}
+
+/// Ids of every resolved input column under `e`, in walk order.
+fn resolved_ids(e: &Arc<Expr>) -> Vec<crate::AttrId> {
+    let mut ids = Vec::new();
+    let _ = visit_distinct(Node::Expr(e), |n| {
+        if let Node::Expr(x) = n
+            && let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
+        {
+            ids.push(c.id);
+        }
+        ControlFlow::Continue(())
+    });
+    ids
+}
+
+/// The grouping expressions of an aggregate node.
+fn grouping_keys(grouping: &crate::Grouping) -> Vec<Arc<Expr>> {
+    match grouping {
+        crate::Grouping::GroupBy(keys)
+        | crate::Grouping::Rollup(keys)
+        | crate::Grouping::Cube(keys) => keys.clone(),
+        crate::Grouping::GroupingSets { exprs, .. } => exprs.clone(),
+    }
 }
 
 /// Names and nullability, or the error class and parameters.
@@ -1564,7 +1589,8 @@ fn unsupported_inputs_fail_explicitly() {
     old.profile = SparkProfile::V3_5;
     let randstr = LogicalPlan::table(["t"]).project(vec![Expr::function("randstr", vec![int(3)])]);
     assert_eq!(class(&run(randstr.clone(), &old)), "UNRESOLVED_ROUTINE");
-    assert_eq!(class(&run(randstr, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    // `randstr` is implemented: it resolves on current versions.
+    assert_eq!(class(&run(randstr, &ctx)), "OK");
     // The argument count is checked first, with Spark's `expectedNum` text.
     let upper =
         LogicalPlan::table(["t"]).project(vec![Expr::function("upper", vec![int(1), int(2)])]);
@@ -1775,7 +1801,7 @@ fn function_entries_print_their_signature() {
     let uuid = ["uuid".to_owned()];
     assert!(matches!(
         b.lookup(&uuid, SparkProfile::V4_2),
-        FunctionLookup::KnownUnsupported
+        FunctionLookup::Found(_)
     ));
     assert_eq!(b.version(), 0);
 }
@@ -3390,9 +3416,12 @@ fn group_by_picks_the_first_matching_alias() {
     assert_eq!(class(&run(ungrouped, &ctx)), "MISSING_AGGREGATION");
     let dup_group = LogicalPlan::new(PlanNode::OneRowRelation)
         .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")]);
-    let r = run(dup_group, &ctx);
-    // Resolves (to the first alias) rather than raising `AMBIGUOUS`.
-    assert_ne!(class(&r), "AMBIGUOUS_REFERENCE");
+    // Resolves to the first alias rather than raising `AMBIGUOUS_REFERENCE`.
+    let a = run(dup_group, &ctx).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a", "a"]
+    );
 }
 
 /// `HAVING` and `ORDER BY` over an aggregate read grouping attributes when
@@ -3409,7 +3438,29 @@ fn having_and_order_by_prefer_grouping_over_duplicate_outputs() {
     let having = LogicalPlan::table(["t"])
         .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")])
         .filter(gt(c("a"), int(0)));
-    run(having, &ctx).unwrap();
+    let a = run(having, &ctx).unwrap();
+    // The predicate and the grouping key share the input column's id, which
+    // neither duplicate output carries.
+    let mut predicates = Vec::new();
+    let mut groupings = Vec::new();
+    let _ = visit_distinct(Node::Plan(a.plan.root()), |node| {
+        if let Node::Plan(p) = node {
+            match &p.node {
+                PlanNode::Filter { predicate, .. } => {
+                    predicates.extend(resolved_ids(predicate));
+                }
+                PlanNode::Aggregate { grouping, .. } => {
+                    groupings.extend(grouping_keys(grouping).iter().flat_map(resolved_ids));
+                }
+                _ => {}
+            }
+        }
+        ControlFlow::Continue(())
+    });
+    assert_eq!(predicates.len(), 1);
+    assert_eq!(groupings, predicates);
+    let outputs: Vec<_> = a.output.iter().map(|c| c.id).collect();
+    assert!(!outputs.contains(&predicates[0]));
     // Without a grouping column of that name, the same shape stays
     // ambiguous: two outputs, nothing below to prefer.
     let ambiguous = LogicalPlan::new(PlanNode::OneRowRelation)
@@ -3420,13 +3471,48 @@ fn having_and_order_by_prefer_grouping_over_duplicate_outputs() {
     let order = LogicalPlan::table(["t"])
         .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")])
         .sort(vec![crate::SortOrder::asc(c("a"))]);
-    run(order, &ctx).unwrap();
+    let a = run(order, &ctx).unwrap();
+    // The sort key is the grouping column (input `a`), not either duplicate
+    // output.
+    let mut keys = Vec::new();
+    let mut groupings = Vec::new();
+    let _ = visit_distinct(Node::Plan(a.plan.root()), |node| {
+        if let Node::Plan(p) = node {
+            match &p.node {
+                PlanNode::Sort { order, .. } => {
+                    keys.extend(order.iter().flat_map(|o| resolved_ids(&o.expr)));
+                }
+                PlanNode::Aggregate { grouping, .. } => {
+                    groupings.extend(grouping_keys(grouping).iter().flat_map(resolved_ids));
+                }
+                _ => {}
+            }
+        }
+        ControlFlow::Continue(())
+    });
+    assert_eq!(keys.len(), 1);
+    assert_eq!(groupings, keys);
+    let outputs: Vec<_> = a.output.iter().map(|c| c.id).collect();
+    assert!(!outputs.contains(&keys[0]));
     let order_ambiguous = LogicalPlan::new(PlanNode::OneRowRelation)
         .aggregate(vec![int(1)], vec![int(1).alias("a"), int(2).alias("a")])
         .sort(vec![crate::SortOrder::asc(c("a"))]);
     // Spark 4.2.0 reports `UNRESOLVED_COLUMN` (not `AMBIGUOUS_REFERENCE`)
-    // for `SELECT 1 AS a, 2 AS a GROUP BY 1 ORDER BY a`.
-    assert!(class(&run(order_ambiguous, &ctx)).starts_with("UNRESOLVED_COLUMN"));
+    // for `SELECT 1 AS a, 2 AS a GROUP BY 1 ORDER BY a`, proposing the
+    // duplicate outputs.
+    let e = run(order_ambiguous, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("objectName").map(String::as_str), Some("`a`"));
+    assert_eq!(params.get("proposal").map(String::as_str), Some("`a`, `a`"));
 }
 
 /// `ORDER BY` over duplicate select outputs looks below them (existing
@@ -3442,11 +3528,24 @@ fn order_by_duplicates_fall_back_then_stay_unresolved() {
         .sort(vec![crate::SortOrder::asc(c("a"))]);
     run(order, &ctx).unwrap();
     // No input column of that name: unresolved (Spark 4.2.0:
-    // `SELECT 1 AS a, 2 AS a ORDER BY a` is UNRESOLVED_COLUMN).
+    // `SELECT 1 AS a, 2 AS a ORDER BY a` is UNRESOLVED_COLUMN, proposing the
+    // duplicate outputs).
     let ambiguous = LogicalPlan::new(PlanNode::OneRowRelation)
         .project(vec![int(1).alias("a"), int(2).alias("a")])
         .sort(vec![crate::SortOrder::asc(c("a"))]);
-    assert!(class(&run(ambiguous, &ctx)).starts_with("UNRESOLVED_COLUMN"));
+    let e = run(ambiguous, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("objectName").map(String::as_str), Some("`a`"));
+    assert_eq!(params.get("proposal").map(String::as_str), Some("`a`, `a`"));
 }
 
 /// `LIMIT` (and `OFFSET`) over a column is `IS_UNFOLDABLE`, not
@@ -3545,7 +3644,19 @@ fn limit_resolves_against_the_select_list() {
     let below = LogicalPlan::table(["t"])
         .project(vec![c("a")])
         .limit(c("b"));
-    assert!(class(&run(below, &ctx)).starts_with("UNRESOLVED_COLUMN"));
+    let e = run(below, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("objectName").map(String::as_str), Some("`b`"));
+    assert_eq!(params.get("proposal").map(String::as_str), Some("`a`"));
 }
 
 /// `GROUP BY` ordinals follow `spark.sql.groupByOrdinal`: with it on, an
@@ -3629,9 +3740,21 @@ fn group_by_attributes_take_precedence_over_aliases() {
     // column, not either alias.
     let key = LogicalPlan::table(["t"])
         .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")]);
-    // Fails without the input column (missing aggregation for the
-    // constants is fine, but the test table `t` has `a`, so it resolves).
-    run(key, &ctx).unwrap();
+    // The key is the input column: the grouping expression references an id
+    // neither duplicate output carries.
+    let a = run(key, &ctx).unwrap();
+    let mut groupings = Vec::new();
+    let _ = visit_distinct(Node::Plan(a.plan.root()), |node| {
+        if let Node::Plan(p) = node
+            && let PlanNode::Aggregate { grouping, .. } = &p.node
+        {
+            groupings.extend(grouping_keys(grouping).iter().flat_map(resolved_ids));
+        }
+        ControlFlow::Continue(())
+    });
+    assert_eq!(groupings.len(), 1);
+    let outputs: Vec<_> = a.output.iter().map(|c| c.id).collect();
+    assert!(!outputs.contains(&groupings[0]));
     // Without an input column of that name, the first alias wins for the
     // grouping itself (Spark golden `group-by-alias` case 27 succeeds).
     let no_input = LogicalPlan::new(PlanNode::OneRowRelation)
@@ -3742,11 +3865,24 @@ fn limit_and_offset_share_sparks_checks() {
 fn order_by_leniency_and_group_by_star_rules() {
     let ctx = ctx();
     // Duplicate outputs with no input column of that name are unresolved
-    // (Spark 4.2.0: `SELECT a AS k, b AS k FROM t ORDER BY k`).
+    // (Spark 4.2.0: `SELECT a AS k, b AS k FROM t ORDER BY k`), proposing
+    // the duplicate outputs.
     let order = LogicalPlan::table(["t"])
         .project(vec![c("a").alias("x"), c("b").alias("x")])
         .sort(vec![crate::SortOrder::asc(c("x"))]);
-    assert!(class(&run(order, &ctx)).starts_with("UNRESOLVED_COLUMN"));
+    let e = run(order, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("objectName").map(String::as_str), Some("`x`"));
+    assert_eq!(params.get("proposal").map(String::as_str), Some("`x`, `x`"));
     // Star grouped by all of its columns resolves.
     let star_ok = LogicalPlan::table(["t"]).aggregate(vec![c("a"), c("b"), c("c")], vec![star()]);
     run(star_ok, &ctx).unwrap();
