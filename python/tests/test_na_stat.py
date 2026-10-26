@@ -357,7 +357,7 @@ def test_dropna_how_rejects_an_array(typed: DataFrame) -> None:
 
     how = _Array()
     with pytest.raises(errors.PySparkValueError) as info:
-        typed.dropna(how=how)
+        typed.dropna(how=how)  # ty: ignore[invalid-argument-type]
     assert info.value.getCondition() == "VALUE_NOT_ANY_OR_ALL"
     assert (info.value.getMessageParameters() or {})["arg_name"] == "how"
     assert (info.value.getMessageParameters() or {})["arg_value"] is how
