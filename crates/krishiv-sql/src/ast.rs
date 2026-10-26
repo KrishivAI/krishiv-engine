@@ -1319,8 +1319,14 @@ pub struct Insert {
 pub struct InsertClause {
     /// `OVERWRITE` (`false` for `INTO`).
     pub overwrite: bool,
+    /// `WITH SCHEMA EVOLUTION`.
+    pub with_schema_evolution: bool,
     /// The target table.
     pub name: DdlName,
+    /// Its alias, if written (only with `REPLACE`).
+    pub target_alias: Option<Ident>,
+    /// `WITH (...)` target options.
+    pub target_options: Vec<TableOption>,
     /// The target columns; empty for none.
     pub columns: Vec<ColumnName>,
     /// `PARTITION (...)`.
@@ -1330,6 +1336,10 @@ pub struct InsertClause {
     pub if_not_exists: bool,
     /// `REPLACE WHERE ...`.
     pub replace_where: Option<Expr>,
+    /// `REPLACE ON ...`.
+    pub replace_on: Option<Expr>,
+    /// `REPLACE USING (...)` columns.
+    pub replace_using: Option<Vec<Ident>>,
     /// `BY NAME`.
     pub by_name: bool,
     /// The rows to write.

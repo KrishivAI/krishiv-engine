@@ -16,8 +16,8 @@ use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
     AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind,
     ChangeColumnAction, CreatePermanentView, DdlName, Delete, Describe, DescribeKind, DescribeMode,
-    DropPermanentView, FunctionScope, Insert, InsertClause, ListResource, Merge, MergeAction,
-    MergeClause, MergeInsert, MergeMatched, MergeSource, NamespaceKind, PartitionSpec,
+    DropPermanentView, FunctionScope, Ident, Insert, InsertClause, ListResource, Merge,
+    MergeAction, MergeClause, MergeInsert, MergeMatched, MergeSource, NamespaceKind, PartitionSpec,
     PartitionSpecPart, PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind,
     Relation, RelationExt, Repair, RepairAction, ResourceType, SchemaBinding, SetExprKind, Show,
     ShowKind, ShowPattern, Span, Statement, Truncate, Update, UpdateAssignment,
@@ -1247,13 +1247,22 @@ impl<'s> Parser<'s> {
     }
 
     /// After the `INSERT` at `clause_start`, Spark's `insertInto` then the
-    /// query: `OVERWRITE [TABLE] name [PARTITION ... [IF NOT EXISTS]]
-    /// [BY NAME | (columns)] query`, `INTO [TABLE] name [PARTITION ...]
-    /// [IF NOT EXISTS] [BY NAME | (columns)] query`, or `INTO [TABLE] name
-    /// [BY NAME] REPLACE WHERE ... query`. A `(` opening a query reads as
-    /// the query (it consumes its own parens), anything else as a column
-    /// list.
+    /// query: `[(WITH SCHEMA EVOLUTION)] OVERWRITE [TABLE] name [WITH
+    /// (...)] [PARTITION ... [IF NOT EXISTS]] [BY NAME | (columns)] query`,
+    /// `[(WITH SCHEMA EVOLUTION)] INTO [TABLE] name [WITH (...)]
+    /// [PARTITION ...] [IF NOT EXISTS] [BY NAME | (columns)] query`, or
+    /// `[(WITH SCHEMA EVOLUTION)] INTO [TABLE] name [alias] [WITH (...)]
+    /// [BY NAME] REPLACE (WHERE | ON) ... query` or `REPLACE USING
+    /// (columns) query`. A `(` opening a query reads as the query (it
+    /// consumes its own parens), anything else as a column list.
     fn insert_clause(&mut self, clause_start: usize, multi: bool) -> PR<InsertClause> {
+        let with_schema_evolution =
+            if self.kw_at(0, "WITH") && self.kw_at(1, "SCHEMA") && self.kw_at(2, "EVOLUTION") {
+                self.pos += 3;
+                true
+            } else {
+                false
+            };
         let overwrite = if self.eat_kw("OVERWRITE") {
             true
         } else {
@@ -1262,40 +1271,200 @@ impl<'s> Parser<'s> {
         };
         self.eat_kw("TABLE");
         let name = self.ddl_name()?;
-        let replace_at = if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
-            2
-        } else {
-            0
-        };
-        if !overwrite && self.kw_at(replace_at, "REPLACE") && self.kw_at(replace_at + 1, "WHERE") {
-            let where_at = self.pos + replace_at + 1;
-            self.pos += replace_at + 2;
-            let replace_where = Some(self.expr()?);
-            if replace_at == 0 && self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
-                // `BY NAME` goes before `REPLACE`: ANTLR's prediction
-                // rejects the reverse order at the `WHERE`.
-                self.pos = where_at;
-                self.far = where_at;
-                self.matched = None;
-                self.extra = None;
-                self.missing = None;
-                return Err(Fail::Syntax);
-            }
-            let head_span = self.span_from(clause_start);
-            let query = self.insert_query(multi)?;
+        if overwrite {
+            let target_options = self.table_options()?;
+            let partition = if self.kw_at(0, "PARTITION") {
+                Some(self.partition_spec()?)
+            } else {
+                None
+            };
+            // `IF NOT EXISTS` follows a partition for `OVERWRITE`; for
+            // `INTO` it parses anywhere here and fails after parsing.
+            let if_not_exists = partition.is_some() && self.eat_if_not_exists();
+            let by_name = if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+                self.pos += 2;
+                true
+            } else {
+                false
+            };
+            let head_before_columns = self.span_from(clause_start);
+            let (columns, paren_query) = if by_name {
+                (Vec::new(), None)
+            } else if multi && self.sym_at(0, Sym::LParen) && self.query_follows(1) {
+                // A multi-table insert body is no parenthesized query.
+                return self.fail();
+            } else if self.sym_at(0, Sym::LParen) && self.query_follows(1) {
+                let save = self.checkpoint();
+                match self.query() {
+                    Ok(query) => {
+                        self.commit(save);
+                        (Vec::new(), Some(query))
+                    }
+                    Err(Fail::Syntax) => {
+                        self.restore(save);
+                        (self.paren_list(Self::column_name)?, None)
+                    }
+                    Err(fatal) => return Err(fatal),
+                }
+            } else if self.sym_at(0, Sym::LParen) {
+                (self.paren_list(Self::column_name)?, None)
+            } else {
+                (Vec::new(), None)
+            };
+            let head_span = if columns.is_empty() {
+                head_before_columns
+            } else {
+                self.span_from(clause_start)
+            };
+            let query = match paren_query {
+                Some(query) => query,
+                None => self.insert_query(multi)?,
+            };
             return Ok(InsertClause {
                 overwrite,
+                with_schema_evolution,
                 name,
-                columns: Vec::new(),
-                partition: None,
-                if_not_exists: false,
-                replace_where,
-                by_name: replace_at == 2,
+                target_alias: None,
+                target_options,
+                columns,
+                partition,
+                if_not_exists,
+                replace_where: None,
+                replace_on: None,
+                replace_using: None,
+                by_name,
                 query: Box::new(query),
                 head_span,
                 span: self.span_from(clause_start),
             });
         }
+        // `INTO`: try a `REPLACE` variant first (an alias, `WITH (...)`
+        // options and `BY NAME` may precede `REPLACE`).
+        let save = self.checkpoint();
+        let target_alias: Option<Ident> = if self.eat_kw("AS") {
+            Some(self.any_ident()?)
+        } else if self.is_ident_at(0, true)
+            && (self.kw_at(1, "WITH") || self.kw_at(1, "BY") || self.kw_at(1, "REPLACE"))
+        {
+            // A bare alias only when something a replace head takes
+            // follows; otherwise the name stands alone.
+            Some(self.any_ident()?)
+        } else {
+            None
+        };
+        let target_options = self.table_options()?;
+        let by_name_before = if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+            self.pos += 2;
+            true
+        } else {
+            false
+        };
+        if self.kw_at(0, "REPLACE") {
+            let replace_kw_at = self.pos;
+            self.pos += 1;
+            if self.eat_kw("WHERE") {
+                let where_at = replace_kw_at + 1;
+                let replace_where = Some(self.expr()?);
+                if !by_name_before && self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+                    // `BY NAME` goes before `REPLACE`: ANTLR's prediction
+                    // rejects the reverse order at the `WHERE`.
+                    self.pos = where_at;
+                    self.far = where_at;
+                    self.matched = None;
+                    self.extra = None;
+                    self.missing = None;
+                    return Err(Fail::Syntax);
+                }
+                self.commit(save);
+                let head_span = self.span_from(clause_start);
+                let query = self.insert_query(multi)?;
+                return Ok(InsertClause {
+                    overwrite: false,
+                    with_schema_evolution,
+                    name,
+                    target_alias,
+                    target_options,
+                    columns: Vec::new(),
+                    partition: None,
+                    if_not_exists: false,
+                    replace_where,
+                    replace_on: None,
+                    replace_using: None,
+                    by_name: by_name_before,
+                    query: Box::new(query),
+                    head_span,
+                    span: self.span_from(clause_start),
+                });
+            }
+            if self.eat_kw("ON") {
+                let on_at = replace_kw_at + 1;
+                let replace_on = Some(self.expr()?);
+                if !by_name_before && self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+                    self.pos = on_at;
+                    self.far = on_at;
+                    self.matched = None;
+                    self.extra = None;
+                    self.missing = None;
+                    return Err(Fail::Syntax);
+                }
+                self.commit(save);
+                let head_span = self.span_from(clause_start);
+                let query = self.insert_query(multi)?;
+                return Ok(InsertClause {
+                    overwrite: false,
+                    with_schema_evolution,
+                    name,
+                    target_alias,
+                    target_options,
+                    columns: Vec::new(),
+                    partition: None,
+                    if_not_exists: false,
+                    replace_where: None,
+                    replace_on,
+                    replace_using: None,
+                    by_name: by_name_before,
+                    query: Box::new(query),
+                    head_span,
+                    span: self.span_from(clause_start),
+                });
+            }
+            if self.eat_kw("USING") {
+                let using_at = replace_kw_at + 1;
+                let replace_using = Some(self.ident_list()?);
+                if !by_name_before && self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
+                    self.pos = using_at;
+                    self.far = using_at;
+                    self.matched = None;
+                    self.extra = None;
+                    self.missing = None;
+                    return Err(Fail::Syntax);
+                }
+                self.commit(save);
+                let head_span = self.span_from(clause_start);
+                let query = self.insert_query(multi)?;
+                return Ok(InsertClause {
+                    overwrite: false,
+                    with_schema_evolution,
+                    name,
+                    target_alias,
+                    target_options,
+                    columns: Vec::new(),
+                    partition: None,
+                    if_not_exists: false,
+                    replace_where: None,
+                    replace_on: None,
+                    replace_using,
+                    by_name: by_name_before,
+                    query: Box::new(query),
+                    head_span,
+                    span: self.span_from(clause_start),
+                });
+            }
+            // `REPLACE` with nothing Spark takes: a syntax error here.
+            return self.fail();
+        }
+        self.restore(save);
+        let target_options = self.table_options()?;
         let partition = if self.kw_at(0, "PARTITION") {
             Some(self.partition_spec()?)
         } else {
@@ -1303,7 +1472,7 @@ impl<'s> Parser<'s> {
         };
         // `IF NOT EXISTS` follows a partition for `OVERWRITE`; for `INTO`
         // it parses anywhere here and fails after parsing.
-        let if_not_exists = (!overwrite || partition.is_some()) && self.eat_if_not_exists();
+        let if_not_exists = self.eat_if_not_exists();
         let by_name = if self.kw_at(0, "BY") && self.kw_at(1, "NAME") {
             self.pos += 2;
             true
@@ -1344,12 +1513,17 @@ impl<'s> Parser<'s> {
             None => self.insert_query(multi)?,
         };
         Ok(InsertClause {
-            overwrite,
+            overwrite: false,
+            with_schema_evolution,
             name,
+            target_alias: None,
+            target_options,
             columns,
             partition,
             if_not_exists,
             replace_where: None,
+            replace_on: None,
+            replace_using: None,
             by_name,
             query: Box::new(query),
             head_span,

@@ -200,6 +200,18 @@ fn property_list_shapes() {
             "ALTER NAMESPACE n SET PROPERTIES ('a')",
             "Values must be specified for key(s): [a]",
         ),
+        (
+            "CREATE VIEW v TBLPROPERTIES ('a') AS SELECT 1",
+            "Values must be specified for key(s): [a]",
+        ),
+        (
+            "CREATE TEMPORARY VIEW v USING parquet OPTIONS ('a')",
+            "Values must be specified for key(s): [a]",
+        ),
+        (
+            "CACHE TABLE t OPTIONS ('a') AS SELECT 1",
+            "Values must be specified for key(s): [a]",
+        ),
     ] {
         let e = err(sql);
         assert_eq!(
@@ -214,6 +226,23 @@ fn property_list_shapes() {
         );
         assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
     }
+    // `INSERT` target options: Spark 4.2.0 spans the target name.
+    let sql = "INSERT INTO t WITH ('a') SELECT 1";
+    let e = err(sql);
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::LegacyErrorTemp0035,
+        "{sql}"
+    );
+    assert_eq!(
+        e.error.message_parameters(),
+        [(
+            "message",
+            "Values must be specified for key(s): [a]".to_owned()
+        )],
+        "{sql}"
+    );
+    assert_eq!(e.span.range(), 12..13, "{sql}");
     // Schema-level collations are off in Spark 4.2.
     let sql = "ALTER SCHEMA s DEFAULT COLLATION UTF8_LCASE";
     let e = err(sql);
@@ -649,6 +678,15 @@ fn insert_statements() {
         "INSERT OVERWRITE TABLE t PARTITION (c = 'Us') IF NOT EXISTS SELECT 1",
         "INSERT OVERWRITE t PARTITION (c = 'Us') IF NOT EXISTS BY NAME SELECT 1",
         "INSERT INTO t BY NAME REPLACE WHERE c > 0 SELECT 1",
+        "INSERT WITH SCHEMA EVOLUTION INTO t SELECT 1",
+        "INSERT WITH SCHEMA EVOLUTION OVERWRITE TABLE t SELECT 1",
+        "INSERT WITH SCHEMA EVOLUTION INTO t WITH ('a' = '1') SELECT 1",
+        "INSERT INTO t WITH ('a' = '1') SELECT 1",
+        "INSERT INTO t AS a REPLACE ON a.c1 = s.c1 SELECT * FROM s",
+        "INSERT INTO t REPLACE ON c1 = 1 SELECT 1",
+        "INSERT INTO t BY NAME REPLACE ON c1 = 1 SELECT 1",
+        "INSERT INTO t REPLACE USING (c1) SELECT 1",
+        "INSERT INTO t AS a BY NAME REPLACE USING (c1) SELECT 1",
         "FROM s INSERT INTO a SELECT * INSERT INTO b SELECT *",
         "FROM s INSERT OVERWRITE TABLE a SELECT * INSERT INTO b PARTITION (d = 1) SELECT *",
         "FROM s INSERT INTO a SELECT * WHERE x > 1 GROUP BY x INSERT INTO b SELECT 1 ORDER BY 1",
@@ -786,6 +824,38 @@ fn insert_errors() {
         panic!("not an insert")
     };
     assert!(i.clauses[0].replace_where.is_some() && i.clauses[0].by_name);
+    // `REPLACE ON`, `REPLACE USING`, `WITH SCHEMA EVOLUTION`, aliases and
+    // target options parse, keeping `WHERE` apart from `ON`.
+    let ast::Statement::Insert(i) = checked("INSERT WITH SCHEMA EVOLUTION INTO t SELECT 1")
+    else {
+        panic!("not an insert")
+    };
+    assert!(i.clauses[0].with_schema_evolution);
+    let ast::Statement::Insert(i) =
+        checked("INSERT INTO t AS a WITH ('k' = 'v') BY NAME REPLACE ON a.c1 = 1 SELECT 1")
+    else {
+        panic!("not an insert")
+    };
+    let c = &i.clauses[0];
+    assert!(c.replace_on.is_some() && c.replace_where.is_none());
+    assert!(c.by_name && c.target_alias.is_some() && !c.target_options.is_empty());
+    let ast::Statement::Insert(i) = checked("INSERT INTO t REPLACE USING (c1) SELECT 1") else {
+        panic!("not an insert")
+    };
+    assert!(i.clauses[0].replace_using.is_some());
+    // `REPLACE WHERE` rejects a target alias, as Spark does.
+    // The alias is rejected before the options are read.
+    for sql in [
+        "INSERT INTO t AS a REPLACE WHERE c > 0 SELECT 1",
+        "INSERT INTO t a WITH ('k') REPLACE WHERE c > 0 SELECT 1",
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InsertReplaceWhereTableAliasNotAllowed,
+            "{sql}"
+        );
+    }
 }
 
 /// `DELETE`, `UPDATE`, `MERGE` and `TRUNCATE` statements.

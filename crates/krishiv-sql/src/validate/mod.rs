@@ -49,9 +49,9 @@ use std::collections::HashSet;
 use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses,
     DuplicatedCteNames, IdentityColumnsDuplicatedSequenceGeneratorOption,
-    IdentityColumnsIllegalStep, IncompatibleJoinTypes, InvalidBucketCount,
-    InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit, InvalidSetSyntax,
-    InvalidSqlSyntaxEmptyInPredicate, InvalidSqlSyntaxEmptyPartitionValue,
+    IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceWhereTableAliasNotAllowed,
+    InvalidBucketCount, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
+    InvalidSetSyntax, InvalidSqlSyntaxEmptyInPredicate, InvalidSqlSyntaxEmptyPartitionValue,
     InvalidSqlSyntaxInvalidWindowReference, InvalidSqlSyntaxRepetitiveWindowDefinition,
     InvalidSqlSyntaxShowFunctionsInvalidPattern, InvalidSqlSyntaxUnresolvedWindowReference,
     InvalidSqlSyntaxVariableTypeOrDefaultRequired, InvalidStatementOrClause, KrishivError,
@@ -162,6 +162,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                 } => {
                     let checker = Checker { sql, opts };
                     checker.ddl_name(name)?;
+                    property_shapes(options, true, c.span)?;
                     options
                         .iter()
                         .filter_map(|o| o.value.as_ref())
@@ -419,6 +420,7 @@ impl Checker<'_> {
     /// qualifier. `createTempViewUsing`: the names, types and options,
     /// then the qualifier.
     fn create_permanent_view(&self, v: &CreatePermanentView) -> R {
+        property_shapes(&v.tblproperties, true, v.span)?;
         if v.query.is_some() {
             if v.partitioned_on {
                 return Err(at(
@@ -464,6 +466,9 @@ impl Checker<'_> {
             if let Some(t) = &c.data_type {
                 data_type(t)?;
             }
+        }
+        if v.query.is_none() {
+            property_shapes(&v.options, true, v.span)?;
         }
         v.options
             .iter()
@@ -609,7 +614,7 @@ impl Checker<'_> {
     /// One `INSERT INTO|OVERWRITE` clause, in Spark's order: the query,
     /// then the head (`withInsertInto`): names, partition values, `IF NOT
     /// EXISTS` (rejected for `INTO`, and for `OVERWRITE` with a dynamic
-    /// partition) and the `REPLACE WHERE` condition.
+    /// partition) and the `REPLACE` condition.
     fn insert_clause(&self, c: &InsertClause) -> R {
         self.query(&c.query)?;
         self.ddl_name(&c.name)?;
@@ -645,7 +650,17 @@ impl Checker<'_> {
                 ));
             }
         }
+        // Spark rejects a `REPLACE WHERE` alias before it reads the options.
+        if c.replace_where.is_some() && c.target_alias.is_some() {
+            return Err(at(InsertReplaceWhereTableAliasNotAllowed {}, c.head_span));
+        }
+        // Spark spans a key without a value at the target name.
+        property_shapes(&c.target_options, true, c.name.span())?;
+        self.option_values(&c.target_options)?;
         if let Some(e) = &c.replace_where {
+            self.expr(e)?;
+        }
+        if let Some(e) = &c.replace_on {
             self.expr(e)?;
         }
         Ok(())
