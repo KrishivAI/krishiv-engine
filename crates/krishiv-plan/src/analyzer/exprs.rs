@@ -1240,7 +1240,23 @@ impl Resolver<'_> {
                 if entry.id.name() == "struct"
                     && let Some(rewritten) = self.struct_names(f, &kids[..n], e.origin)
                 {
-                    return self.expr(&rewritten, cx);
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&rewritten, cx)?;
+                    for k in &kids[..n] {
+                        b.agg = b.agg.or(k.agg);
+                        b.win = b.win.or(k.win);
+                        b.outer = match (b.outer, k.outer) {
+                            (Some(x), Some(y)) => Some(x.min(y)),
+                            (x, y) => x.or(y),
+                        };
+                        for id in &k.lateral {
+                            if !b.lateral.contains(id) {
+                                b.lateral.push(*id);
+                            }
+                        }
+                    }
+                    return Ok(b);
                 }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
                 // Spark's constructor materializes the default message, so

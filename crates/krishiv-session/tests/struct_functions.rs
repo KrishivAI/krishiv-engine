@@ -32,6 +32,10 @@ fn rows(s: &Session, sql: &str) -> Vec<String> {
                 .as_primitive::<arrow_array::types::Int32Type>()
                 .value(row)
                 .to_string(),
+            arrow_schema::DataType::Int64 => col
+                .as_primitive::<arrow_array::types::Int64Type>()
+                .value(row)
+                .to_string(),
             arrow_schema::DataType::Utf8View => col.as_string_view().value(row).to_owned(),
             arrow_schema::DataType::Utf8 => col.as_string::<i32>().value(row).to_owned(),
             arrow_schema::DataType::Struct(_) => {
@@ -251,7 +255,47 @@ fn struct_comparison_follows_field_order() {
             "SELECT named_struct('a', 1, 'b', CAST(NULL AS INT)) = named_struct('a', 1, 'b', CAST(NULL AS INT))",
             "true",
         ),
+        // Equal null fields defer to the next field (Spark 4.2.0 run).
+        (
+            "SELECT named_struct('a', CAST(NULL AS INT), 'b', 1) < named_struct('a', CAST(NULL AS INT), 'b', 2)",
+            "true",
+        ),
+        // Untyped NULL fields (a `NullArray` underneath) behave the same.
+        (
+            "SELECT named_struct('a', NULL) = named_struct('a', NULL)",
+            "true",
+        ),
+        (
+            "SELECT named_struct('a', NULL) < named_struct('a', NULL)",
+            "false",
+        ),
+        (
+            "SELECT named_struct('a', NULL) > named_struct('a', NULL)",
+            "false",
+        ),
+        (
+            "SELECT named_struct('a', NULL, 'b', 1) < named_struct('a', NULL, 'b', 2)",
+            "true",
+        ),
     ] {
         assert_eq!(rows(&s, sql), [want], "{sql}");
     }
+}
+
+/// `struct(...)` over a qualified star and over an aggregate (Spark 4.2.0:
+/// the star's columns keep their names; a non-named child is `colN`).
+#[test]
+fn struct_of_a_star_and_of_an_aggregate() {
+    let s = session();
+    assert_eq!(
+        rows(&s, "SELECT STRUCT(t.*) FROM (SELECT 1 AS a, 'x' AS b) AS t"),
+        ["{\"a\":1,\"b\":\"x\"}"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT struct(k, sum(v)) FROM VALUES (1, 2), (1, 3) AS t(k, v) GROUP BY k"
+        ),
+        ["{\"k\":1,\"col2\":5}"]
+    );
 }

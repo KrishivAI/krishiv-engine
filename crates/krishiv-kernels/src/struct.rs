@@ -51,7 +51,9 @@ pub fn build(
     if fields.is_empty() {
         return Ok(StructArray::new_empty_fields(rows, None));
     }
-    Ok(StructArray::new(fields, children, None))
+    // `try_new`: a child with nulls under a field bound as non-nullable is
+    // an error, never a panic.
+    StructArray::try_new(fields, children, None).map_err(|e| KernelError::internal(e.to_string()))
 }
 
 /// The field `ordinal` of every row of `struct_array`: the child with the
@@ -73,8 +75,12 @@ pub fn get_field(struct_array: &dyn Array, ordinal: usize) -> Result<ArrayRef, K
         ))
     })?;
     Ok(match s.nulls() {
-        None => Arc::clone(child),
-        Some(validity) => fold_validity(child.as_ref(), validity)?,
+        // A `NullArray` is null on every row already (and holds no null
+        // buffer to fold into).
+        Some(validity) if child.data_type() != &ArrowType::Null => {
+            fold_validity(child.as_ref(), validity)?
+        }
+        _ => Arc::clone(child),
     })
 }
 
@@ -211,6 +217,29 @@ mod tests {
         let s = build(fields(), vec![int(vec![Some(1)]), str(vec![Some("x")])], 1).unwrap();
         let err = get_field(&s, 7).unwrap_err().to_string();
         assert!(err.contains("struct field 7 of 2 fields"), "{err}");
+    }
+
+    #[test]
+    fn build_rejects_nulls_under_a_non_nullable_field() {
+        let strict: Fields = vec![Field::new("a", ArrowType::Int32, false)].into();
+        let err = build(strict, vec![int(vec![Some(1), None])], 2)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("non-nullable"), "{err}");
+    }
+
+    #[test]
+    fn get_field_of_an_untyped_null_child_under_a_nullable_struct() {
+        let fields: Fields = vec![Field::new("a", ArrowType::Null, true)].into();
+        let s = StructArray::new(
+            fields,
+            vec![Arc::new(arrow_array::NullArray::new(2)) as ArrayRef],
+            Some(NullBuffer::from_iter([true, false])),
+        );
+        let col = get_field(&s, 0).unwrap();
+        assert_eq!(col.data_type(), &ArrowType::Null);
+        assert_eq!(col.len(), 2);
+        assert_eq!(col.logical_null_count(), 2);
     }
 
     #[test]

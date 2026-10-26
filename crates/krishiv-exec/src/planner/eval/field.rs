@@ -43,15 +43,32 @@ fn get(base: &arrow_array::ArrayRef, ordinal: usize) -> Result<arrow_array::Arra
         .map_err(|e| internal(&e.to_string()))
 }
 
-/// Compiles the field `ordinal` (of Arrow type `data_type`) of `base`.
+/// Compiles the field `ordinal` (of Arrow type `data_type`) of `base`. A
+/// plan is data (it may come from the plan codec), so the ordinal and the
+/// declared type are checked against the struct here, never per batch.
 pub(super) fn compile(
     base: Arc<dyn PhysExpr>,
     ordinal: usize,
     data_type: &ArrowType,
     nullable: bool,
 ) -> Result<Arc<dyn PhysExpr>> {
-    if !matches!(base.data_type(), ArrowType::Struct(_)) {
+    let ArrowType::Struct(fields) = base.data_type() else {
         return Err(internal(&format!("a struct field of {}", base.data_type())));
+    };
+    match fields.get(ordinal) {
+        Some(f) if f.data_type() == data_type => {}
+        Some(f) => {
+            return Err(internal(&format!(
+                "struct field {ordinal} declared as {data_type} is {}",
+                f.data_type()
+            )));
+        }
+        None => {
+            return Err(internal(&format!(
+                "struct field {ordinal} of a struct with {} fields",
+                fields.len()
+            )));
+        }
     }
     Ok(Arc::new(GetField {
         base,
@@ -59,4 +76,48 @@ pub(super) fn compile(
         data_type: data_type.clone(),
         nullable,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow_schema::{Field, Fields};
+
+    use super::*;
+
+    fn base() -> Arc<dyn PhysExpr> {
+        let fields: Fields = vec![
+            Field::new("a", ArrowType::Int32, true),
+            Field::new("b", ArrowType::Utf8, true),
+        ]
+        .into();
+        Arc::new(super::super::Column {
+            index: 0,
+            data_type: ArrowType::Struct(fields),
+            nullable: true,
+        })
+    }
+
+    /// A decoded plan's ordinal and declared type are checked when the
+    /// expression compiles, not per batch.
+    #[test]
+    fn compile_checks_the_ordinal_and_the_declared_type() {
+        assert!(compile(base(), 1, &ArrowType::Utf8, true).is_ok());
+        let err = compile(base(), 2, &ArrowType::Utf8, true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("struct field 2 of a struct with 2 fields"), "{err}");
+        let err = compile(base(), 0, &ArrowType::Utf8, true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("struct field 0 declared as Utf8 is Int32"), "{err}");
+        let int: Arc<dyn PhysExpr> = Arc::new(super::super::Column {
+            index: 0,
+            data_type: ArrowType::Int32,
+            nullable: true,
+        });
+        let err = compile(int, 0, &ArrowType::Int32, true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("a struct field of Int32"), "{err}");
+    }
 }

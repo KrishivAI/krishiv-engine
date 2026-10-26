@@ -422,8 +422,10 @@ fn struct_cmp(
     let field = |s: &arrow_array::StructArray, i: usize| {
         krishiv_kernels::r#struct::get_field(s, i).map_err(|e| internal(&e.to_string()))
     };
-    let valid_of = |a: &arrow_array::ArrayRef| match a.nulls() {
-        Some(n) => n.inner().clone(),
+    // Logical nulls: a `NullArray` field (an untyped NULL) has no null
+    // buffer but every row is NULL.
+    let valid_of = |a: &arrow_array::ArrayRef| match a.logical_nulls() {
+        Some(n) => n.into_inner(),
         None => BooleanBuffer::new_set(a.len()),
     };
     let ls_valid = valid_of(&l);
@@ -729,6 +731,44 @@ mod tests {
         assert_eq!(
             safe,
             BooleanArray::from(vec![false, false, false, true, false, false, false, true])
+        );
+    }
+
+    /// `named_struct('a', NULL)` against itself: an untyped NULL field (a
+    /// `NullArray`, with no null buffer) is NULL on every row, so the two
+    /// fields compare equal, and a later field decides the order.
+    #[test]
+    fn untyped_null_fields_compare_as_equal_nulls() {
+        let ctx = KernelCtx::new();
+        let fields: Fields = vec![
+            Field::new("a", ArrowType::Null, true),
+            Field::new("b", ArrowType::Int32, true),
+        ]
+        .into();
+        let make = |b: Vec<i32>| -> Value {
+            let cols: Vec<ArrayRef> = vec![
+                Arc::new(NullArray::new(b.len())),
+                Arc::new(Int32Array::from(b)),
+            ];
+            Value::Array(Arc::new(StructArray::new(fields.clone(), cols, None)))
+        };
+        let (l, r) = (make(vec![1, 1]), make(vec![1, 2]));
+        let at = |kind| cmp(kind, &l, &r, &ctx).expect("struct cmp");
+        assert_eq!(
+            at(CompareKind::Equal),
+            BooleanArray::from(vec![Some(true), Some(false)])
+        );
+        assert_eq!(
+            at(CompareKind::Less),
+            BooleanArray::from(vec![Some(false), Some(true)])
+        );
+        assert_eq!(
+            at(CompareKind::Greater),
+            BooleanArray::from(vec![Some(false), Some(false)])
+        );
+        assert_eq!(
+            at(CompareKind::LessEq),
+            BooleanArray::from(vec![Some(true), Some(true)])
         );
     }
 }
