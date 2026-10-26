@@ -1250,11 +1250,27 @@ fn python_wheel_tests_follow_python_and_the_bindings_crate() {
         make_plan(&Changes::detect(&p, &with_bindings), &opts(&[]), true)
     };
     let reaches = rust_only("crates/common/src/lib.rs");
-    assert!(matches!(
-        step(&reaches, "python-wheel-tests").action,
-        Action::Run(_)
-    ));
-    assert!(skip_reason(&rust_only("crates/other/src/lib.rs"), "python-wheel-tests").is_some());
+    let Action::Run(reaches_cmds) = &step(&reaches, "python-wheel-tests").action else {
+        panic!("python-wheel-tests should run for a change reaching krishiv-python")
+    };
+    let Action::Run(py_cmds) = &step(&py, "python-wheel-tests").action else {
+        panic!("python-wheel-tests should run")
+    };
+    // The Rust-only change plans the exact same wheel-test command as a python/ change.
+    assert_eq!(reaches_cmds, py_cmds);
+    assert_eq!(reaches_cmds.len(), 1);
+    assert_eq!(
+        reaches_cmds[0].args[2..],
+        [
+            "python-wheel-tests".to_owned(),
+            "target/precheck/pyvenv".to_owned()
+        ]
+    );
+    assert!(reaches_cmds[0].heavy);
+    assert_eq!(
+        skip_reason(&rust_only("crates/other/src/lib.rs"), "python-wheel-tests"),
+        Some("no python/ change and krishiv-python is not affected")
+    );
 }
 
 #[test]
