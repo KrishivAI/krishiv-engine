@@ -390,7 +390,8 @@ fn read_scalars_cover_every_arm() {
     let out = read(&[Some("{\"n\":\"xx\"}")], &t, &opts);
     let st = out.as_any().downcast_ref::<StructArray>().unwrap();
     assert!(st.column(0).is_null(0));
-    // `len_total` runs over every scalar builder behind a list.
+    // `len_total` runs over every scalar builder behind a list; a JSON
+    // null reads as one null element.
     for target in [
         DataType::Boolean,
         DataType::Int8,
@@ -405,7 +406,10 @@ fn read_scalars_cover_every_arm() {
     ] {
         let list = list_of(Arc::new(Field::new("element", target.clone(), true)));
         let out = read(&[Some("[null]")], &list, &opts);
-        let _ = out;
+        let list = out.as_any().downcast_ref::<ListArray>().unwrap();
+        assert!(!list.is_null(0), "{target:?}");
+        assert_eq!(list.value_length(0), 1, "{target:?}");
+        assert_eq!(list.values().null_count(), 1, "{target:?}");
     }
     let void_list = list_of(Arc::new(Field::new("element", DataType::Null, true)));
     let out = read(&[Some("[null]")], &void_list, &opts);

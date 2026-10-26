@@ -25,13 +25,13 @@ fn opts(pairs: &[(&str, &str)]) -> ArrayRef {
         Field::new("value", ArrowDataType::Utf8, true),
     ];
     let entries = StructArray::new(fields.into(), vec![keys, values], None);
-    let offsets: Vec<i32> = (0..=pairs.len())
-        .map(|i| i32::try_from(i).unwrap_or(0))
-        .collect();
+    // One map row spanning every pair, as a `map(k1, v1, ...)` literal
+    // reads (one entry per row would be several one-entry maps).
+    let len = i32::try_from(pairs.len()).unwrap_or(0);
     Arc::new(
         MapArray::try_new(
             Arc::new(Field::new("entries", entries.data_type().clone(), false)),
-            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, len])),
             entries,
             None,
             false,
@@ -197,6 +197,43 @@ fn schema_of_json_infers_and_reads_options() {
         text(&out),
         owned(&[Some("STRUCT<c1: STRING, c2: ARRAY<STRING>>"), None])
     );
+    // A `NULL` field renders as `STRING`, recursively; fields sort by
+    // name, as Spark's `JsonInferSchema` sorts them.
+    let nulls = strs(&[
+        Some("{\"a\":null}"),
+        Some("{\"a\":[null]}"),
+        Some("{\"b\":1,\"a\":2}"),
+    ]);
+    let f = bind("schema_of_json", &[&nulls]);
+    let out = f.invoke(&[col(&nulls)], nulls.len()).unwrap();
+    assert_eq!(
+        text(&out),
+        owned(&[
+            Some("STRUCT<a: STRING>"),
+            Some("STRUCT<a: ARRAY<STRING>>"),
+            Some("STRUCT<a: BIGINT, b: BIGINT>"),
+        ])
+    );
+    // `dropFieldIfAllNull` drops the void fields instead.
+    let drop = opts(&[("dropFieldIfAllNull", "true")]);
+    let f = bind_scalar(
+        "schema_of_json",
+        &[
+            nulls.data_type().clone().into(),
+            BindArg::Literal(Arc::clone(&drop)),
+        ],
+        &BindOptions::new(),
+    )
+    .unwrap();
+    let out = f.invoke(&[col(&nulls), lit(&drop)], nulls.len()).unwrap();
+    assert_eq!(
+        text(&out),
+        owned(&[
+            Some("STRUCT<>"),
+            Some("STRUCT<a: ARRAY<STRING>>"),
+            Some("STRUCT<a: BIGINT, b: BIGINT>"),
+        ])
+    );
     // A non-literal options map does not bind.
     assert!(
         bind_scalar(
@@ -233,6 +270,20 @@ fn from_json_reads_structs_arrays_and_maps() {
     let st = out.as_any().downcast_ref::<StructArray>().unwrap();
     assert!(st.is_null(2));
     assert!(!st.is_null(3));
+    // A non-object reads as a struct of `NULL`s.
+    let a: Vec<Option<i32>> = st
+        .column(0)
+        .as_primitive::<arrow_array::types::Int32Type>()
+        .iter()
+        .collect();
+    let b: Vec<Option<String>> = st
+        .column(1)
+        .as_string_view()
+        .iter()
+        .map(|s| s.map(str::to_owned))
+        .collect();
+    assert_eq!(a, [Some(1), None, None, None]);
+    assert_eq!(b, [Some("x".to_owned()), None, None, None]);
     let out = run_with_schema("from_json", &[Some("[1, 2, null]"), None], "ARRAY<INT>");
     let list = out
         .as_any()
@@ -240,6 +291,12 @@ fn from_json_reads_structs_arrays_and_maps() {
         .unwrap();
     assert_eq!(list.value_length(0), 3);
     assert!(list.is_null(1));
+    let values: Vec<Option<i32>> = list
+        .values()
+        .as_primitive::<arrow_array::types::Int32Type>()
+        .iter()
+        .collect();
+    assert_eq!(values, [Some(1), Some(2), None]);
     let out = run_with_schema(
         "from_json",
         &[Some("{\"a\":1, \"b\":2}"), None],
@@ -248,6 +305,20 @@ fn from_json_reads_structs_arrays_and_maps() {
     let map = out.as_any().downcast_ref::<MapArray>().unwrap();
     assert_eq!(map.value_length(0), 2);
     assert!(map.is_null(1));
+    let entries = map.entries();
+    let keys: Vec<Option<String>> = entries
+        .column(0)
+        .as_string_view()
+        .iter()
+        .map(|s| s.map(str::to_owned))
+        .collect();
+    let values: Vec<Option<i32>> = entries
+        .column(1)
+        .as_primitive::<arrow_array::types::Int32Type>()
+        .iter()
+        .collect();
+    assert_eq!(keys, [Some("a".to_owned()), Some("b".to_owned())]);
+    assert_eq!(values, [Some(1), Some(2)]);
 }
 
 #[test]
@@ -269,7 +340,13 @@ fn from_json_reads_options_and_dates() {
         .invoke(&[col(&json), lit(&schema), lit(&fmt)], json.len())
         .unwrap();
     let st = out.as_any().downcast_ref::<StructArray>().unwrap();
-    assert!(!st.is_null(0));
+    // `26/08/2015` parses to midnight UTC with `dd/MM/yyyy`.
+    let micros: Vec<Option<i64>> = st
+        .column(0)
+        .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+        .iter()
+        .collect();
+    assert_eq!(micros, [Some(1_440_547_200_000_000)]);
     // FAILFAST with valid input is unaffected.
     let one = strs(&[Some("{\"a\":1}")]);
     let aschema = strs(&[Some("a INT")]);
@@ -289,6 +366,12 @@ fn from_json_reads_options_and_dates() {
         .unwrap();
     let st = out.as_any().downcast_ref::<StructArray>().unwrap();
     assert!(!st.is_null(0));
+    let a: Vec<Option<i32>> = st
+        .column(0)
+        .as_primitive::<arrow_array::types::Int32Type>()
+        .iter()
+        .collect();
+    assert_eq!(a, [Some(1)]);
     // DROPMALFORMED is rejected with PARSE_MODE_UNSUPPORTED.
     let drop = opts(&[("mode", "DROPMALFORMED")]);
     let err = bind_scalar(
@@ -339,6 +422,44 @@ fn from_json_reads_options_and_dates() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn from_json_reads_every_option_entry() {
+    // A two-entry options map applies both entries: the format parses the
+    // valid row, and the mode fails the malformed one (dropping either
+    // entry would read `NULL`s or succeed instead).
+    let json = strs(&[Some("{\"time\":\"26/08/2015\"}"), Some("not json")]);
+    let schema = strs(&[Some("time Timestamp")]);
+    let both = opts(&[("timestampFormat", "dd/MM/yyyy"), ("mode", "FAILFAST")]);
+    let f = bind_scalar(
+        "from_json",
+        &[
+            json.data_type().clone().into(),
+            schema_arg_of(&schema),
+            BindArg::Literal(Arc::clone(&both)),
+        ],
+        &BindOptions::new(),
+    )
+    .unwrap();
+    let err = f
+        .invoke(&[col(&json), lit(&schema), lit(&both)], json.len())
+        .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::MalformedRecordInParsingWithoutSuggestion
+    );
+    let valid = strs(&[Some("{\"time\":\"26/08/2015\"}")]);
+    let out = f
+        .invoke(&[col(&valid), lit(&schema), lit(&both)], valid.len())
+        .unwrap();
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let micros: Vec<Option<i64>> = st
+        .column(0)
+        .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+        .iter()
+        .collect();
+    assert_eq!(micros, [Some(1_440_547_200_000_000)]);
 }
 
 #[test]

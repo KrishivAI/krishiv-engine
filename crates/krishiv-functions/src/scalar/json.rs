@@ -115,20 +115,75 @@ fn schema_of(args: &[BindArg]) -> Result<Binding, KrishivError> {
         return Err(bad_types("schema_of_json", args));
     }
     let options = read_options(options)?;
+    let drop = options.drop_field_if_all_null;
     Ok(Binding::new(ArrowDataType::Utf8, move |x: &Inputs<'_>| {
         let inferred = infer_json(&x.strings(0)?, &options)?;
         let mut out = Vec::with_capacity(inferred.len());
         for ty in inferred {
             match ty {
                 None => out.push(None),
-                Some(arrow) => match DataType::from_arrow(&arrow) {
-                    Ok(parsed) => out.push(Some(parsed.sql())),
-                    Err(_) => out.push(None),
+                Some(arrow) => match render_schema(&arrow, drop) {
+                    Some(rendered) => match DataType::from_arrow(&rendered) {
+                        Ok(parsed) => out.push(Some(parsed.sql())),
+                        Err(_) => out.push(None),
+                    },
+                    None => out.push(None),
                 },
             }
         }
         Ok(Arc::new(StringArray::from(out)) as ArrayRef)
     }))
+}
+
+/// The schema `schema_of_json` renders: a `VOID` reads as `STRING`,
+/// recursively, as Spark renders an all-null field or element; with
+/// `dropFieldIfAllNull` void struct fields are dropped instead (structs
+/// left without fields stay empty). A void array element or map entry is
+/// not a field and still canonicalizes. `None` is a void top-level type
+/// with dropping on.
+fn render_schema(ty: &ArrowDataType, drop: bool) -> Option<ArrowDataType> {
+    match ty {
+        ArrowDataType::Null => {
+            if drop {
+                None
+            } else {
+                Some(ArrowDataType::Utf8View)
+            }
+        }
+        ArrowDataType::Struct(fields) => Some(ArrowDataType::Struct(
+            fields
+                .iter()
+                .filter_map(|f| render_field(f, drop))
+                .collect::<Vec<_>>()
+                .into(),
+        )),
+        ArrowDataType::List(field) => {
+            Some(ArrowDataType::List(Arc::new(render_element(field, drop))))
+        }
+        ArrowDataType::LargeList(field) => Some(ArrowDataType::LargeList(Arc::new(
+            render_element(field, drop),
+        ))),
+        ArrowDataType::Map(field, sorted) => Some(ArrowDataType::Map(
+            Arc::new(render_element(field, drop)),
+            *sorted,
+        )),
+        _ => Some(ty.clone()),
+    }
+}
+
+/// One struct, list-element or map-entries field rendered for
+/// `schema_of_json` (`None` is a void field with dropping on).
+fn render_field(f: &arrow_schema::Field, drop: bool) -> Option<arrow_schema::Field> {
+    render_schema(f.data_type(), drop)
+        .map(|t| arrow_schema::Field::new(f.name(), t, f.is_nullable()))
+}
+
+/// An array element or map-entries field: a void there is not a struct
+/// field, so it canonicalizes to `STRING` instead of dropping.
+fn render_element(f: &arrow_schema::Field, drop: bool) -> arrow_schema::Field {
+    render_field(f, drop).unwrap_or_else(|| {
+        arrow_schema::Field::new(f.name(), ArrowDataType::Utf8View, f.is_nullable())
+    })
 }
 
 /// `from_json(json, schema[, options])`: the schema's Arrow type per row.
@@ -222,11 +277,24 @@ fn read_options(arg: Option<&BindArg>) -> Result<JsonOptions, KrishivError> {
     let entries = map.entries();
     let keys = to_utf8(entries.column(0).as_ref())?;
     let values = to_utf8(entries.column(1).as_ref())?;
-    let mut options = BTreeMap::new();
-    for row in 0..map.len() {
-        if map.is_null(row) {
-            continue;
+    // One map row: the entry range of row 0 (`value_offsets`), not one
+    // entry per row (a literal is one row with every entry in it).
+    let offsets = map.value_offsets();
+    let (start, end) = match (offsets.first(), offsets.get(1)) {
+        (Some(start), Some(end)) => (*start, *end),
+        _ => {
+            return Err(internal(
+                "a JSON options map without a first row".to_owned(),
+            ));
         }
+    };
+    if map.is_null(0) {
+        return Ok(JsonOptions::new());
+    }
+    let mut options = BTreeMap::new();
+    for row in start..end {
+        let row = usize::try_from(row)
+            .map_err(|_| internal("a JSON options map past the entry limit".to_owned()))?;
         if keys.is_null(row) || values.is_null(row) {
             return Err(internal("a null JSON option".to_owned()));
         }

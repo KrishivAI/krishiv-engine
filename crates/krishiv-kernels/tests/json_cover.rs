@@ -121,33 +121,55 @@ fn infer_every_kind_and_nesting() {
 fn infer_conflicting_merges_fall_back_to_string() {
     let opts = JsonOptions::new();
     // int + string element -> STRING; bool + int -> STRING; object + array -> STRING.
-    for (text, expect_string) in [
-        ("[1,\"x\"]", true),
-        ("[true,1]", true),
-        ("[1,1.5]", false), // int+float -> double, not string
-        ("[true,false]", false),
-        ("[1,2]", false),
-        ("[\"a\",\"b\"]", false),
-        ("{\"a\":1,\"a\":\"x\"}", true), // same field conflicting -> STRING field
-        ("{\"a\":1}", false),
+    for (text, element) in [
+        ("[1,\"x\"]", DataType::Utf8View),
+        ("[true,1]", DataType::Utf8View),
+        ("[1,1.5]", DataType::Float64), // int+float -> double, not string
+        ("[true,false]", DataType::Boolean),
+        ("[1,2]", DataType::Int64),
+        ("[\"a\",\"b\"]", DataType::Utf8View),
     ] {
         let got = infer_json(&strs(&[Some(text)]), &opts).unwrap();
-        let ty = got[0].clone().unwrap();
-        if expect_string {
-            // Top-level array of mixed -> the element or field is STRING.
-            let s = format!("{ty:?}");
-            assert!(s.contains("Utf8"), "{text}: {s}");
-        } else {
-            assert!(!format!("{ty:?}").is_empty(), "{text}");
-        }
+        assert_eq!(
+            got[0],
+            Some(DataType::List(Arc::new(Field::new(
+                "element", element, true
+            )))),
+            "{text}"
+        );
     }
-    // Object merging: same field int+float stays DOUBLE; new fields append.
+    for (text, field) in [
+        // Same field conflicting -> STRING field; otherwise the field type.
+        ("{\"a\":1,\"a\":\"x\"}", DataType::Utf8View),
+        ("{\"a\":1}", DataType::Int64),
+    ] {
+        let got = infer_json(&strs(&[Some(text)]), &opts).unwrap();
+        assert_eq!(
+            got[0],
+            Some(DataType::Struct(vec![Field::new("a", field, true)].into())),
+            "{text}"
+        );
+    }
+    // Each row infers on its own: int+float in one row stays DOUBLE, and
+    // every level sorts fields by name.
     let got = infer_json(
         &strs(&[Some("{\"a\":1,\"b\":2}"), Some("{\"a\":1.5,\"c\":true}")]),
         &opts,
     )
     .unwrap();
-    assert!(got[0].is_some() && got[1].is_some());
+    assert_eq!(
+        got,
+        [
+            Some(struct_of(vec![
+                Field::new("a", DataType::Int64, true),
+                Field::new("b", DataType::Int64, true),
+            ])),
+            Some(struct_of(vec![
+                Field::new("a", DataType::Float64, true),
+                Field::new("c", DataType::Boolean, true),
+            ])),
+        ]
+    );
     // Array merging: empty + non-empty, non-empty + empty.
     let got = infer_json(&strs(&[Some("[[], [1]]"), Some("[[1], []]")]), &opts).unwrap();
     assert!(matches!(got[0], Some(DataType::List(_))));
@@ -168,9 +190,9 @@ fn infer_decimal_and_string_options() {
         matches!(got[0], Some(DataType::Decimal128(_, _))),
         "{got:?}"
     );
-    // Negative scale widens precision: 1e3 -> DECIMAL.
+    // Negative scale widens the precision: 1e3 -> DECIMAL(4,0).
     let got = infer_json(&strs(&[Some("1e3")]), &pref).unwrap();
-    assert!(got[0].is_some());
+    assert_eq!(got[0], Some(DataType::Decimal128(4, 0)));
     // Over-wide decimal falls back to DOUBLE.
     let wide = format!("0.{}", "1".repeat(50));
     let got = infer_json(&strs(&[Some(&wide)]), &pref).unwrap();
@@ -218,9 +240,79 @@ fn infer_decimal_and_string_options() {
     assert!(matches!(got[0], Some(DataType::Struct(_))));
     // Bad bare usage still errors.
     assert!(infer_json(&strs(&[Some("{a:}")]), &bare).is_err());
-    // Decimal shape with exponent and sign.
+    // Decimal shape with exponent and sign: -12.340e-2 -> DECIMAL(5,5).
     let got = infer_json(&strs(&[Some("-12.340e-2")]), &pref).unwrap();
-    assert!(got[0].is_some());
+    assert_eq!(got[0], Some(DataType::Decimal128(5, 5)));
+}
+
+#[test]
+fn infer_sorts_fields_empty_strings_and_big_ints() {
+    let opts = JsonOptions::new();
+    // Fields sort by name, as Spark's `JsonInferSchema` sorts them.
+    let got = infer_json(&strs(&[Some("{\"b\":1,\"a\":2}")]), &opts).unwrap();
+    assert_eq!(
+        got[0],
+        Some(struct_of(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]))
+    );
+    // Merged objects sort too: new fields slot into name order.
+    let got = infer_json(&strs(&[Some("[{\"b\":1},{\"a\":2}]")]), &opts).unwrap();
+    assert_eq!(
+        got[0],
+        Some(list_of(Arc::new(Field::new(
+            "element",
+            struct_of(vec![
+                Field::new("a", DataType::Int64, true),
+                Field::new("b", DataType::Int64, true),
+            ]),
+            true
+        ))))
+    );
+    // An empty string infers as JSON `null`: it merges away under an
+    // integer, as Spark infers `STRUCT<a: BIGINT>`.
+    let got = infer_json(&strs(&[Some("[{\"a\":\"\"},{\"a\":1}]")]), &opts).unwrap();
+    assert_eq!(
+        got[0],
+        Some(list_of(Arc::new(Field::new(
+            "element",
+            struct_of(vec![Field::new("a", DataType::Int64, true)]),
+            true
+        ))))
+    );
+    // An integer past `i64` infers `DECIMAL(p, 0)` (past precision 38 a
+    // `DOUBLE`), with or without `prefersDecimal`.
+    let got = infer_json(&strs(&[Some("{\"a\":12345678901234567890}")]), &opts).unwrap();
+    assert_eq!(
+        got[0],
+        Some(struct_of(vec![Field::new(
+            "a",
+            DataType::Decimal128(20, 0),
+            true
+        )]))
+    );
+    let got = infer_json(
+        &strs(&[Some("{\"a\":123456789012345678901234567890123456789}")]),
+        &opts,
+    )
+    .unwrap();
+    assert_eq!(
+        got[0],
+        Some(struct_of(vec![Field::new("a", DataType::Float64, true)]))
+    );
+    // `prefersDecimal` does not count leading zeros: `0.01` is
+    // `DECIMAL(2,2)` and `0.1` is `DECIMAL(1,1)`.
+    let mut pref = JsonOptions::new();
+    pref.prefers_decimal = true;
+    let got = infer_json(&strs(&[Some("0.01"), Some("0.1")]), &pref).unwrap();
+    assert_eq!(
+        got,
+        [
+            Some(DataType::Decimal128(2, 2)),
+            Some(DataType::Decimal128(1, 1))
+        ]
+    );
 }
 
 // ---- options: every flag, unknown, bad mode, bad patterns ----
@@ -295,13 +387,23 @@ fn binary_base64_lengths_and_bad_inputs() {
         vec![0x41, 0x42, 0x43, 0x44],
         vec![0xff, 0x00, 0x80, 0x01, 0x02],
     ] {
-        let target = DataType::BinaryView;
-        let col = read(&[Some("\"aGVsbG8=\"")], &target, &JsonOptions::new());
-        assert_eq!(col.len(), 1);
-        // Round-trip through the writer covers encode padding branches.
-        let w = write(&col, &JsonOptions::new());
-        assert_eq!(w.len(), 1);
-        let _ = bytes;
+        // Every byte string round-trips through base64 and back, covering
+        // the encode padding branches.
+        let col: ArrayRef = Arc::new(BinaryViewArray::from(vec![Some(bytes.as_slice()), None]));
+        let written = write(&col, &JsonOptions::new());
+        assert_eq!(written.len(), 2);
+        assert_eq!(written[1], None);
+        let back = read(
+            &[written[0].as_deref(), None],
+            &DataType::BinaryView,
+            &JsonOptions::new(),
+        );
+        let back = back
+            .as_binary_view()
+            .iter()
+            .map(|b| b.map(<[u8]>::to_vec))
+            .collect::<Vec<_>>();
+        assert_eq!(back, [Some(bytes), None]);
     }
     // Encode padding: 1, 2, 0 leftover bytes.
     use arrow_array::BinaryViewArray;
@@ -420,11 +522,16 @@ fn leniency_flags_open_up_the_lexer() {
     o.allow_unquoted_control_chars = true;
     let t = struct_of(vec![Field::new("a", DataType::Utf8View, true)]);
     let out = read(&[Some("{a:\"\\q\"}")], &t, &o);
-    assert!(
-        !out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
+    // `allowBackslashEscapingAnyCharacter` reads `\q` as `q` itself.
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(!st.is_null(0));
+    assert_eq!(
+        st.column(0)
+            .as_string_view()
+            .iter()
+            .map(|s| s.map(str::to_owned))
+            .collect::<Vec<_>>(),
+        [Some("q".to_owned())]
     );
     // Without backslash-any that poisons.
     let mut o2 = JsonOptions::new();
@@ -436,21 +543,35 @@ fn leniency_flags_open_up_the_lexer() {
             .unwrap()
             .is_null(0)
     );
-    // Bare non-ascii names.
+    // Bare non-ascii names read with the flag, matching the field.
     let mut o3 = JsonOptions::new();
     o3.allow_unquoted_field_names = true;
     let out = read(
-        &[Some("{\"\\u00e9\":1}")],
+        &[Some("{é:1}")],
+        &struct_of(vec![Field::new("é", DataType::Int32, true)]),
+        &o3,
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(!st.is_null(0));
+    assert_eq!(
+        st.column(0)
+            .as_primitive::<Int32Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        [Some(1)]
+    );
+    // Without the flag the bare name poisons the row.
+    let out = read(
+        &[Some("{é:1}")],
         &struct_of(vec![Field::new("é", DataType::Int32, true)]),
         &JsonOptions::new(),
     );
     assert!(
-        !out.as_any()
+        out.as_any()
             .downcast_ref::<StructArray>()
             .unwrap()
             .is_null(0)
     );
-    let _ = o3;
 }
 
 #[test]
@@ -576,10 +697,14 @@ fn path_wildcards_indexes_quoted_and_bad_paths() {
         [Some("1".to_owned())]
     );
     let got = get_json_object(&json, &strs(&[Some("$['c\\'d']")]));
-    // Single-quote escapes inside single-quoted path need unescape; if the
-    // path lexer keeps the backslash the match misses -> NULL is fine too,
-    // but the line must run.
-    let _ = got;
+    // The escaped quote unescapes, so the dotted-and-quoted field matches.
+    assert_eq!(
+        got.as_string::<i32>()
+            .iter()
+            .map(|s| s.map(str::to_owned))
+            .collect::<Vec<_>>(),
+        [Some("2".to_owned())]
+    );
     // Index out of range / wrong shape -> NULL.
     for (j, p) in [
         ("[1,2]", "$[5]"),
@@ -667,6 +792,35 @@ fn path_wildcards_indexes_quoted_and_bad_paths() {
             .map(|s| s.map(str::to_owned))
             .collect::<Vec<_>>(),
         [Some("{\"x\":[1,true,null]}".to_owned())]
+    );
+}
+
+#[test]
+fn path_renders_numbers_like_jackson_and_takes_first_match() {
+    let one = |json: &str, path: &str| {
+        get_json_object(&strs(&[Some(json)]), &strs(&[Some(path)]))
+            .as_string::<i32>()
+            .iter()
+            .map(|s| s.map(str::to_owned))
+            .collect::<Vec<_>>()
+    };
+    // Numbers render as Jackson renders the parsed value: a float as
+    // Java's `Double.toString` (`1.0e2` reads `100.0`), an integer as
+    // written.
+    assert_eq!(one("{\"a\":1.0e2}", "$.a"), [Some("100.0".to_owned())]);
+    assert_eq!(one("{\"a\":2.50}", "$.a"), [Some("2.5".to_owned())]);
+    assert_eq!(one("{\"a\":1.5}", "$.a"), [Some("1.5".to_owned())]);
+    assert_eq!(one("{\"a\":10}", "$.a"), [Some("10".to_owned())]);
+    assert_eq!(
+        one("{\"a\":{\"b\":1.0e2}}", "$"),
+        [Some("{\"a\":{\"b\":100.0}}".to_owned())]
+    );
+    // Duplicate keys: the first match wins, as Jackson's field lookup does.
+    assert_eq!(one("{\"a\":1,\"a\":2}", "$.a"), [Some("1".to_owned())]);
+    // A wildcard still collects every match.
+    assert_eq!(
+        one("[{\"a\":1.0e2},{\"a\":2}]", "$[*].a"),
+        [Some("[100.0,2]".to_owned())]
     );
 }
 
@@ -766,6 +920,152 @@ fn read_every_scalar_type() {
     // Dates/timestamps/binary tested elsewhere; void target.
     let out = read(&[Some("{\"a\":1}"), None, Some("")], &DataType::Null, &opts);
     assert_eq!(out.len(), 3);
+}
+
+#[test]
+fn read_decimal_rounds_once_and_bounds_exponents() {
+    let opts = JsonOptions::new();
+    // `HALF_UP` decides on the most significant discarded digit only:
+    // `1.2349` reads `1.23`, not `1.24` (rounding twice would give the
+    // latter), and the same holds below zero.
+    let t = struct_of(vec![Field::new("d", DataType::Decimal128(10, 2), true)]);
+    let out = read(
+        &[
+            Some("{\"d\":1.2349}"),
+            Some("{\"d\":1.235}"),
+            Some("{\"d\":-1.2349}"),
+            Some("{\"d\":2.5}"),
+        ],
+        &t,
+        &opts,
+    );
+    let values: Vec<Option<i128>> = out
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .unwrap()
+        .column(0)
+        .as_primitive::<Decimal128Type>()
+        .iter()
+        .collect();
+    assert_eq!(values, [Some(123), Some(124), Some(-123), Some(250)]);
+    // An untrusted exponent cannot set a loop count: these return at once.
+    // A scale past 38 never fits (`1e-2000000000` is `NULL`), while zero
+    // of any exponent reads as zero (`0e2000000000` is `0.00`).
+    let out = read(
+        &[
+            Some("{\"d\":1e-2000000000}"),
+            Some("{\"d\":0e2000000000}"),
+            Some("{\"d\":1e2000000000}"),
+        ],
+        &t,
+        &opts,
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(st.column(0).is_null(0));
+    let values: Vec<Option<i128>> = st
+        .column(0)
+        .as_primitive::<Decimal128Type>()
+        .iter()
+        .collect();
+    assert_eq!(values, [None, Some(0), None]);
+}
+
+#[test]
+fn read_huge_integers_into_string_double_and_decimal() {
+    let opts = JsonOptions::new();
+    let big = "1234567890123456789012345678901234567890123";
+    // A 43-digit integer poisons no target: `STRING` reads its text,
+    // `DOUBLE` its double, and `DECIMAL(10,2)` (which cannot hold it) a
+    // field `NULL`.
+    let t = struct_of(vec![
+        Field::new("s", DataType::Utf8View, true),
+        Field::new("d", DataType::Float64, true),
+        Field::new("e", DataType::Decimal128(10, 2), true),
+    ]);
+    let out = read(
+        &[Some(&format!("{{\"s\":{big},\"d\":{big},\"e\":{big}}}"))],
+        &t,
+        &opts,
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(!st.is_null(0));
+    assert_eq!(
+        st.column(0)
+            .as_string_view()
+            .iter()
+            .map(|s| s.map(str::to_owned))
+            .collect::<Vec<_>>(),
+        [Some(big.to_owned())]
+    );
+    assert_eq!(
+        st.column(1)
+            .as_primitive::<Float64Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        [Some(1.2345678901234567e42)]
+    );
+    assert!(st.column(2).is_null(0));
+}
+
+#[test]
+fn read_non_numeric_numbers_with_the_flag() {
+    // `allowNonNumericNumbers` (Spark's default) reads the `NaN`,
+    // `Infinity` and `INF` spellings, signed, into float fields; quoted
+    // spellings read too.
+    let opts = JsonOptions::new();
+    assert!(opts.allow_non_numeric_numbers);
+    let t = struct_of(vec![
+        Field::new("d", DataType::Float64, true),
+        Field::new("f", DataType::Float32, true),
+    ]);
+    let out = read(
+        &[
+            Some("{\"d\":NaN,\"f\":Infinity}"),
+            Some("{\"d\":-INF,\"f\":+INF}"),
+            Some("{\"d\":\"NaN\",\"f\":\"-Infinity\"}"),
+        ],
+        &t,
+        &opts,
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let d: Vec<Option<f64>> = st.column(0).as_primitive::<Float64Type>().iter().collect();
+    assert_eq!(d.len(), 3);
+    assert!(d[0].is_some_and(f64::is_nan));
+    assert_eq!(d[1], Some(f64::NEG_INFINITY));
+    assert!(d[2].is_some_and(f64::is_nan));
+    let f: Vec<Option<f32>> = st.column(1).as_primitive::<Float32Type>().iter().collect();
+    assert_eq!(
+        f,
+        [
+            Some(f32::INFINITY),
+            Some(f32::INFINITY),
+            Some(f32::NEG_INFINITY)
+        ]
+    );
+    // `NaN` has no decimal form, and an infinity is no integer.
+    let t = struct_of(vec![
+        Field::new("e", DataType::Decimal128(10, 2), true),
+        Field::new("i", DataType::Int32, true),
+    ]);
+    let out = read(&[Some("{\"e\":NaN,\"i\":Infinity}")], &t, &opts);
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(!st.is_null(0));
+    assert!(st.column(0).is_null(0));
+    assert!(st.column(1).is_null(0));
+    // Without the flag the spellings are malformed: span splitting fails,
+    // so the whole row is `NULL`.
+    let mut strict = JsonOptions::new();
+    strict.allow_non_numeric_numbers = false;
+    let t = struct_of(vec![Field::new("d", DataType::Float64, true)]);
+    let out = read(&[Some("{\"d\":NaN}")], &t, &strict);
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(st.is_null(0));
+    // `schema_of_json` infers a `DOUBLE` for them.
+    let got = infer_json(&strs(&[Some("{\"a\":NaN}")]), &opts).unwrap();
+    assert_eq!(
+        got[0],
+        Some(struct_of(vec![Field::new("a", DataType::Float64, true)]))
+    );
 }
 
 #[test]
@@ -1110,10 +1410,19 @@ fn write_every_arrow_type() {
     let col: ArrayRef = Arc::new(Float64Array::from(vec![
         Some(f64::INFINITY),
         Some(f64::NAN),
+        Some(f64::NEG_INFINITY),
         None,
     ]));
-    let got = write(&col, &opts);
-    assert_eq!(got.len(), 3);
+    // Non-finite values write quoted, as Spark's `JacksonGenerator` does.
+    assert_eq!(
+        write(&col, &opts),
+        [
+            Some("\"Infinity\"".to_owned()),
+            Some("\"NaN\"".to_owned()),
+            Some("\"-Infinity\"".to_owned()),
+            None
+        ]
+    );
     // Decimal.
     let col: ArrayRef = Arc::new(
         Decimal128Array::from(vec![Some(12345), None])
@@ -1166,20 +1475,30 @@ fn write_every_arrow_type() {
     );
     let col: ArrayRef = Arc::new(Date32Array::from(vec![Some(15689)]));
     assert_eq!(write(&col, &custom), [Some("\"12/15/2012\"".to_owned())]);
-    // Struct with null fields writes null; sortKeys sorts.
+    // Struct null fields are dropped by default (`ignoreNullFields`);
+    // `sortKeys` sorts what is written.
     let target = struct_of(vec![
         Field::new("b", DataType::Int32, true),
         Field::new("a", DataType::Int32, true),
     ]);
     let col = read(&[Some("{\"b\":1}")], &target, &JsonOptions::new());
-    assert_eq!(
-        write(&col, &opts),
-        [Some("{\"b\":1,\"a\":null}".to_owned())]
-    );
+    assert_eq!(write(&col, &opts), [Some("{\"b\":1}".to_owned())]);
     let mut sort = JsonOptions::new();
     sort.sort_keys = true;
+    assert_eq!(write(&col, &sort), [Some("{\"b\":1}".to_owned())]);
+    // With `ignoreNullFields` off the nulls write again; maps and arrays
+    // still write `null` either way.
+    let mut keep = JsonOptions::new();
+    keep.ignore_null_fields = false;
     assert_eq!(
-        write(&col, &sort),
+        write(&col, &keep),
+        [Some("{\"b\":1,\"a\":null}".to_owned())]
+    );
+    let mut keep_sort = JsonOptions::new();
+    keep_sort.ignore_null_fields = false;
+    keep_sort.sort_keys = true;
+    assert_eq!(
+        write(&col, &keep_sort),
         [Some("{\"a\":null,\"b\":1}".to_owned())]
     );
     // Other Arrow types are rejected.
@@ -1253,7 +1572,8 @@ fn write_lists_maps_and_keys() {
     );
     let map_target = DataType::Map(Arc::new(Field::new("entries", entries, false)), false);
     let cols = read(&[Some("{\"[1,2]\":3}")], &map_target, &opts);
-    let _ = write(&cols, &opts);
+    // A struct-typed key never converts, so the whole map is `NULL`.
+    assert_eq!(write(&cols, &opts), [None]);
     // Binary keys write as base64.
     let target = map_of(
         Field::new("key", DataType::BinaryView, false),

@@ -174,7 +174,7 @@ fn parse_path(path: &str) -> Option<Vec<Step>> {
                 let quote = bytes.get(i).copied()?;
                 if quote == b'\'' || quote == b'"' {
                     let raw = quoted(bytes, i, quote)?;
-                    let value = RawStr { raw, quote }.unescape()?;
+                    let value = RawStr { raw, quote }.unescape(false)?;
                     i = i.saturating_add(raw.len());
                     if bytes.get(i) != Some(&b']') {
                         return None;
@@ -250,13 +250,16 @@ impl Owned {
         }
     }
 
-    /// Renders the value as compact JSON.
+    /// Renders the value as compact JSON. Numbers render as Jackson
+    /// renders the parsed value: a floating-point number as Java's
+    /// `Double.toString` (`1.0e2` reads `100.0`), an integral number as
+    /// written.
     fn render(&self, text: &mut String) {
         match self {
             Self::Null => text.push_str("null"),
             Self::Bool(true) => text.push_str("true"),
             Self::Bool(false) => text.push_str("false"),
-            Self::Num(raw) => text.push_str(raw),
+            Self::Num(raw) => text.push_str(&render_number(raw)),
             Self::Str(s) => push_quoted(s, text),
             Self::Array(items) => {
                 text.push('[');
@@ -282,6 +285,18 @@ impl Owned {
             }
         }
     }
+}
+
+/// A captured number as Jackson renders it: floating-point numbers as
+/// Java's `Double.toString`, integral numbers as written (a huge integral
+/// stays exact, as Jackson's `BigInteger` does).
+fn render_number(raw: &str) -> String {
+    if raw.bytes().any(|b| b == b'.' || b == b'e' || b == b'E')
+        && let Some(v) = crate::text::java_parse_double(raw)
+    {
+        return crate::text::java_double_string(v);
+    }
+    raw.to_owned()
 }
 
 /// Renders matches: none is `NULL`, one is the value (a matched JSON
@@ -339,9 +354,12 @@ fn select_object(
     if lexer.eat(Token::CloseBrace)? {
         return Ok(out);
     }
+    // A named field matches only its first occurrence, as Jackson's field
+    // lookup does; a wildcard matches every value.
+    let mut matched = false;
     loop {
         let name = match lexer.raw_key()? {
-            RawKey::Quoted(raw) => raw.unescape().ok_or(ParseError::Malformed)?,
+            RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(ParseError::Malformed)?,
             RawKey::Bare(word) => word.to_owned(),
         };
         lexer.skip_trivia()?;
@@ -353,7 +371,8 @@ fn select_object(
             Step::Wildcard => true,
             Step::Index(_) => false,
         };
-        if hit {
+        if hit && (matches!(step, Step::Wildcard) || !matched) {
+            matched = true;
             out.extend(select(lexer, rest)?);
         } else {
             lexer.skip_value()?;
@@ -416,7 +435,9 @@ fn capture(lexer: &mut Lexer<'_>, depth: usize) -> Result<Owned, ParseError> {
         Some(Token::Null) => Ok(Owned::Null),
         Some(Token::Bool(b)) => Ok(Owned::Bool(b)),
         Some(Token::Num(raw, _)) => Ok(Owned::Num(raw.to_owned())),
-        Some(Token::Str(raw)) => Ok(Owned::Str(raw.unescape().ok_or(ParseError::Malformed)?)),
+        Some(Token::Str(raw)) => Ok(Owned::Str(
+            lexer.unescape(raw).ok_or(ParseError::Malformed)?,
+        )),
         Some(Token::OpenBracket) => {
             let mut items = Vec::new();
             if lexer.eat(Token::CloseBracket)? {
@@ -442,7 +463,7 @@ fn capture(lexer: &mut Lexer<'_>, depth: usize) -> Result<Owned, ParseError> {
             }
             loop {
                 let name = match lexer.raw_key()? {
-                    RawKey::Quoted(raw) => raw.unescape().ok_or(ParseError::Malformed)?,
+                    RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(ParseError::Malformed)?,
                     RawKey::Bare(word) => word.to_owned(),
                 };
                 lexer.skip_trivia()?;
@@ -500,7 +521,7 @@ fn object_keys(lexer: &mut Lexer<'_>) -> Result<Vec<String>, ParseError> {
     }
     loop {
         let key = match lexer.raw_key()? {
-            RawKey::Quoted(raw) => raw.unescape().ok_or(ParseError::Malformed)?,
+            RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(ParseError::Malformed)?,
             RawKey::Bare(word) => word.to_owned(),
         };
         keys.push(key);

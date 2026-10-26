@@ -261,7 +261,7 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("format_number", "col: ColumnOrName, d: int"),
         Row::new(
             "from_json",
-            "col: ColumnOrName, schema: Column | str, options: Any = None",
+            "col: ColumnOrName, schema: Column | str, options: dict[str, str] = None",
         ),
         Row::new("get_json_object", "col: ColumnOrName, path: str"),
         Row::new("greatest", "*cols: ColumnOrName").at_least(2),
@@ -307,7 +307,10 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("sha2", "col: ColumnOrName, numBits: int")
             .one_of("numBits", &[0, 224, 256, 384, 512]),
         Row::new("startswith", "str: ColumnOrName, prefix: ColumnOrName"),
-        Row::new("schema_of_json", "json: ColumnOrName, options: Any = None"),
+        Row::new(
+            "schema_of_json",
+            "json: Column | str, options: dict[str, str] = None",
+        ),
         Row::new(
             "concat_ws",
             "sep: str, *cols: ColumnOrName",
@@ -381,7 +384,7 @@ pub(super) fn rows() -> Vec<Row> {
             "from_utc_timestamp",
             "timestamp: ColumnOrName, tz: Column | str",
         ),
-        Row::new("to_json", "col: ColumnOrName, options: Any = None"),
+        Row::new("to_json", "col: ColumnOrName, options: dict[str, str] = None"),
         Row::new(
             "to_utc_timestamp",
             "timestamp: ColumnOrName, tz: Column | str",

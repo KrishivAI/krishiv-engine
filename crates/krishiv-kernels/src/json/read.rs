@@ -42,7 +42,7 @@ use krishiv_common::error::{
 use super::JsonOptions;
 use super::base64;
 use super::options::ParseMode;
-use super::parse::{Error as ParseError, Lexer, RawKey, RawStr, Token};
+use super::parse::{Error as ParseError, Lexer, RawKey, RawStr, Token, non_numeric_value};
 use crate::cast::TimeZoneRules;
 use crate::text::{
     java_parse_double, spark_string_to_date, spark_string_to_timestamp,
@@ -227,7 +227,7 @@ fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
             break;
         }
         let key = match lexer.raw_key()? {
-            RawKey::Quoted(raw) => raw.unescape().ok_or(Poison)?,
+            RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(Poison)?,
             RawKey::Bare(word) => word.to_owned(),
         };
         lexer.skip_trivia()?;
@@ -424,7 +424,7 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
     }
     loop {
         let key = match lexer.raw_key()? {
-            RawKey::Quoted(raw) => raw.unescape().ok_or(Poison)?,
+            RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(Poison)?,
             RawKey::Bare(word) => word.to_owned(),
         };
         lexer.skip_trivia()?;
@@ -569,7 +569,7 @@ fn render_compact_value(
         Some(Token::Bool(false)) => text.push_str("false"),
         Some(Token::Num(raw, _)) => text.push_str(raw),
         Some(Token::Str(raw)) => {
-            let s = raw.unescape().ok_or(Poison)?;
+            let s = lexer.unescape(raw).ok_or(Poison)?;
             super::write::push_quoted(&s, text);
         }
         Some(Token::OpenBracket) => {
@@ -600,7 +600,7 @@ fn render_compact_value(
             }
             loop {
                 let key = match lexer.raw_key()? {
-                    RawKey::Quoted(raw) => raw.unescape().ok_or(Poison)?,
+                    RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(Poison)?,
                     RawKey::Bare(word) => word.to_owned(),
                 };
                 lexer.skip_trivia()?;
@@ -685,7 +685,7 @@ fn read_scalar_token(lexer: &mut Lexer<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> 
             }
             loop {
                 let key = match lexer.raw_key()? {
-                    RawKey::Quoted(raw) => raw.unescape().ok_or(Poison)?,
+                    RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(Poison)?,
                     RawKey::Bare(word) => word.to_owned(),
                 };
                 lexer.skip_trivia()?;
@@ -715,7 +715,9 @@ fn read_scalar_token(lexer: &mut Lexer<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> 
 
 /// One JSON string into `out`.
 fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), Fault> {
-    let text = raw.unescape().ok_or(Poison)?;
+    let text = raw
+        .unescape(ctx.opts.allow_backslash_escaping_any)
+        .ok_or(Poison)?;
     match out {
         Scalar::Str(b) => {
             b.append_value(&text);
@@ -765,8 +767,32 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
             }
             None => Err(Poison.into()),
         },
+        Scalar::F32(b) => match quoted_special(&text, ctx) {
+            Some(v) => {
+                b.append_value(f32_from_f64(v));
+                Ok(())
+            }
+            None => Err(Poison.into()),
+        },
+        Scalar::F64(b) => match quoted_special(&text, ctx) {
+            Some(v) => {
+                b.append_value(v);
+                Ok(())
+            }
+            None => Err(Poison.into()),
+        },
         _ => Err(Poison.into()),
     }
+}
+
+/// A quoted special numeric string (`"NaN"`) for a float field: its value
+/// with `allowNonNumericNumbers`, else `None` (a string is never read as a
+/// number otherwise).
+fn quoted_special(text: &str, ctx: &Ctx<'_>) -> Option<f64> {
+    ctx.opts
+        .allow_non_numeric_numbers
+        .then(|| non_numeric_value(text))
+        .flatten()
 }
 
 /// Narrows a double to a float, as Java's cast does.
@@ -783,19 +809,21 @@ fn f32_from_f64(v: f64) -> f32 {
 /// as does a string like `"1"` into an integral.
 fn read_number(text: &str, is_float: bool, out: &mut Scalar) -> Result<(), Fault> {
     if is_float {
+        // The lexer only produces the non-numeric spellings with
+        // `allowNonNumericNumbers`, so no flag check is needed here.
         return match out {
             Scalar::Str(b) => {
                 b.append_value(text);
                 Ok(())
             }
-            Scalar::F32(b) => match java_parse_double(text) {
+            Scalar::F32(b) => match non_numeric_value(text).or_else(|| java_parse_double(text)) {
                 Some(v) => {
                     b.append_value(f32_from_f64(v));
                     Ok(())
                 }
                 None => Err(Poison.into()),
             },
-            Scalar::F64(b) => match java_parse_double(text) {
+            Scalar::F64(b) => match non_numeric_value(text).or_else(|| java_parse_double(text)) {
                 Some(v) => {
                     b.append_value(v);
                     Ok(())
@@ -812,34 +840,37 @@ fn read_number(text: &str, is_float: bool, out: &mut Scalar) -> Result<(), Fault
             _ => Err(Poison.into()),
         };
     }
-    let int = text.parse::<i128>().map_err(|_| Poison)?;
+    // Integral text: the string and float targets never read the integer
+    // value, so a huge mantissa cannot poison them (Spark returns the text
+    // for `STRING` and the double for `DOUBLE`); the integral targets
+    // parse at their own width.
     match out {
         Scalar::Str(b) => {
             b.append_value(text);
             Ok(())
         }
-        Scalar::I8(b) => match i8::try_from(int) {
+        Scalar::I8(b) => match text.parse::<i8>() {
             Ok(v) => {
                 b.append_value(v);
                 Ok(())
             }
             Err(_) => Err(Poison.into()),
         },
-        Scalar::I16(b) => match i16::try_from(int) {
+        Scalar::I16(b) => match text.parse::<i16>() {
             Ok(v) => {
                 b.append_value(v);
                 Ok(())
             }
             Err(_) => Err(Poison.into()),
         },
-        Scalar::I32(b) => match i32::try_from(int) {
+        Scalar::I32(b) => match text.parse::<i32>() {
             Ok(v) => {
                 b.append_value(v);
                 Ok(())
             }
             Err(_) => Err(Poison.into()),
         },
-        Scalar::I64(b) => match i64::try_from(int) {
+        Scalar::I64(b) => match text.parse::<i64>() {
             Ok(v) => {
                 b.append_value(v);
                 Ok(())
@@ -873,6 +904,11 @@ fn read_number(text: &str, is_float: bool, out: &mut Scalar) -> Result<(), Fault
 
 /// The decimal `text` (integral or floating) rounded to `(p, s)` with
 /// `HALF_UP`; `None` past the precision or for malformed text.
+///
+/// Only the most significant discarded digit decides the rounding: the
+/// rest truncate. Every count here is bounded by the input text (digits
+/// kept, precisions and scales are all at most 38), so no untrusted
+/// exponent can set a loop count.
 fn decimal_from_text(text: &str, p: u8, s: i8) -> Option<i128> {
     let bytes = text.as_bytes();
     let (negative, digits) = match bytes.first() {
@@ -915,39 +951,71 @@ fn decimal_from_text(text: &str, p: u8, s: i8) -> Option<i128> {
     {
         return None;
     }
-    // Unscaled = int ++ frac, scale = frac.len() - exp.
-    let mut unscaled: i128 = 0;
-    for &d in int.iter().chain(frac.iter()) {
-        unscaled = unscaled
-            .checked_mul(10)?
-            .checked_add(i128::from(d.checked_sub(b'0')?))?;
+    // The significant digits, past the leading zeros. A zero of any shape
+    // reads as zero whatever the exponent says (`0e2000000000` is `0.00`,
+    // where `1e-2000000000` is out of range below).
+    let total = int.len().saturating_add(frac.len());
+    let leading = int
+        .iter()
+        .chain(frac.iter())
+        .take_while(|b| **b == b'0')
+        .count();
+    if leading == total {
+        return Some(0);
     }
-    let scale = i32::try_from(frac.len()).ok()?.checked_sub(exp)?;
-    fit_decimal(unscaled, scale, negative, p, s)
-}
-
-/// Rounds `unscaled × 10^-scale` to `s` fraction digits (`HALF_UP`) and
-/// checks it fits `p` digits.
-fn fit_decimal(unscaled: i128, scale: i32, negative: bool, p: u8, s: i8) -> Option<i128> {
-    let target = i32::from(s);
-    let mut value = unscaled;
-    let mut here = scale;
-    while here > target {
-        let digit = value.checked_rem(10)?.checked_abs()?;
-        value = value.checked_div(10)?;
-        if digit >= 5 {
-            value = if value >= 0 {
-                value.checked_add(1)?
-            } else {
-                value.checked_sub(1)?
-            };
+    let significant_len = total.saturating_sub(leading);
+    let digits = |i: usize| -> u8 {
+        let at = leading.saturating_add(i);
+        if at < int.len() {
+            int.get(at).copied().unwrap_or(b'0')
+        } else {
+            frac.get(at.saturating_sub(int.len()))
+                .copied()
+                .unwrap_or(b'0')
         }
-        here = here.checked_sub(1)?;
+    };
+    let significant = i64::try_from(significant_len).ok()?;
+    // Unscaled = significant digits, scale = frac.len() - exp.
+    let scale = i64::try_from(frac.len())
+        .ok()?
+        .checked_sub(i64::from(exp))?;
+    if scale > 38 {
+        // A scale past 38 never fits at these precisions.
+        return None;
     }
-    while here < target {
-        value = value.checked_mul(10)?;
-        here = here.checked_add(1)?;
-    }
+    let target = i64::from(s);
+    let drop = scale.checked_sub(target)?;
+    let value: i128 = if drop < 0 {
+        // Widen by `-drop`: more than `p` digits never fits.
+        let widen = drop.checked_neg()?;
+        if significant.checked_add(widen)? > i64::from(p) {
+            return None;
+        }
+        let mut value: i128 = 0;
+        for i in 0..significant_len {
+            value = value
+                .checked_mul(10)?
+                .checked_add(i128::from(digits(i).checked_sub(b'0')?))?;
+        }
+        value.checked_mul(10_i128.checked_pow(u32::try_from(widen).ok()?)?)?
+    } else if drop >= significant {
+        // Less than one at this scale: the leading digit rounds once.
+        if digits(0) >= b'5' { 1 } else { 0 }
+    } else {
+        // Truncate every discarded digit but the most significant, then
+        // round once on that one (`HALF_UP`).
+        let keep = usize::try_from(significant.checked_sub(drop)?).ok()?;
+        let mut value: i128 = 0;
+        for i in 0..keep {
+            value = value
+                .checked_mul(10)?
+                .checked_add(i128::from(digits(i).checked_sub(b'0')?))?;
+        }
+        if digits(keep) >= b'5' {
+            value = value.checked_add(1)?;
+        }
+        value
+    };
     let limit = 10_i128.checked_pow(u32::from(p))?;
     if value.checked_abs()? >= limit {
         return None;

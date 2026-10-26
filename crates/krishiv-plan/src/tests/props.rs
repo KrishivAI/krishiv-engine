@@ -689,6 +689,7 @@ fn m_literal(v: &mut Literal, w: &mut Walk) -> bool {
         }
         Literal::String(s) => site!(w, s.push('x')),
         Literal::Binary(b) => site!(w, b.push(0)),
+        Literal::Map(pairs) => site!(w, pairs.push(("k".to_owned(), "v".to_owned()))),
         Literal::YearMonthInterval { months, start, end } => {
             site!(w, *months += 1);
             site!(w, flip(start, YearMonthField::Year, YearMonthField::Month));

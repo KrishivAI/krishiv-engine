@@ -37,6 +37,9 @@ pub enum Literal {
     },
     /// `STRING`.
     String(String),
+    /// A `MAP<STRING, STRING>` literal: the JSON options of one call, as
+    /// the Python wrappers build them (SQL has no map-literal syntax).
+    Map(Vec<(String, String)>),
     /// `BINARY`.
     Binary(Vec<u8>),
     /// `DATE`: days since 1970-01-01.
@@ -90,6 +93,7 @@ impl std::fmt::Debug for Literal {
                 Some(url) => f.debug_tuple("String").field(&url).finish(),
                 None => f.debug_tuple("String").field(s).finish(),
             },
+            Self::Map(pairs) => f.debug_tuple("Map").field(pairs).finish(),
             Self::Binary(v) => f.debug_tuple("Binary").field(v).finish(),
             Self::Date(v) => f.debug_tuple("Date").field(v).finish(),
             Self::Timestamp(v) => f.debug_tuple("Timestamp").field(v).finish(),
@@ -145,6 +149,7 @@ enum Key<'a> {
     Double(u64),
     Decimal(i128, DecimalType),
     String(&'a str),
+    Map(&'a [(String, String)]),
     Binary(&'a [u8]),
     Date(i32),
     Timestamp(i64),
@@ -169,6 +174,7 @@ impl Literal {
                 data_type,
             } => Key::Decimal(*unscaled, *data_type),
             Self::String(v) => Key::String(v),
+            Self::Map(pairs) => Key::Map(pairs),
             Self::Binary(v) => Key::Binary(v),
             Self::Date(v) => Key::Date(*v),
             Self::Timestamp(v) => Key::Timestamp(*v),

@@ -954,6 +954,16 @@ impl Display for Literal {
                 Some(url) => write!(f, "'{}'", Escaped(&url.to_string())),
                 None => write!(f, "'{}'", Escaped(s)),
             },
+            Self::Map(pairs) => {
+                f.write_str("MAP(")?;
+                for (i, (k, v)) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "'{}', '{}'", Escaped(k), Escaped(v))?;
+                }
+                f.write_str(")")
+            }
             Self::Binary(b) => {
                 f.write_str("X'")?;
                 b.iter().try_for_each(|byte| write!(f, "{byte:02X}"))?;

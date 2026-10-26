@@ -3,12 +3,14 @@
 //! `JacksonGenerator` writes them.
 //!
 //! Structs keep their fields in order (`sortKeys` sorts them by name),
+//! with `NULL` fields dropped (`ignoreNullFields`, Spark's default);
 //! maps keep insertion order (`sortKeys` sorts by rendered key, which
 //! agrees with Spark's key order for string keys), arrays keep order. Strings are quoted and escaped, integral values print as
 //! digits, doubles and floats print as Java's `toString` does, decimals
 //! print plain, dates print as `yyyy-MM-dd` and timestamps in the session
 //! zone as `yyyy-MM-dd'T'HH:mm:ss.SSSXXX` unless the options name other
-//! patterns. Binary prints base64. A map key that is not a string prints
+//! patterns (non-finite floats and doubles are quoted, as Spark writes
+//! them). Binary prints base64. A map key that is not a string prints
 //! as its JSON value does, except a struct key, which prints as the JSON
 //! array of its values (`{"[1,2]":...}`, as Spark does).
 
@@ -73,6 +75,9 @@ struct Output {
     timestamp_ntz: DateTimePattern,
     /// `sortKeys`.
     sort_keys: bool,
+    /// `ignoreNullFields` (Spark's default): struct fields that are `NULL`
+    /// are not written (maps and arrays still write `null`).
+    ignore_null_fields: bool,
 }
 
 impl Output {
@@ -93,6 +98,7 @@ impl Output {
             timestamp: compile(opts.timestamp_output.as_ref(), TIMESTAMP_DEFAULT)?,
             timestamp_ntz: compile(opts.timestamp_ntz_output.as_ref(), TIMESTAMP_NTZ_DEFAULT)?,
             sort_keys: opts.sort_keys,
+            ignore_null_fields: opts.ignore_null_fields,
         })
     }
 }
@@ -131,14 +137,22 @@ fn write_value(
             )));
         }
         ArrowType::Float32 => {
-            text.push_str(&java_float_string32(
-                col.as_primitive::<Float32Type>().value(row),
-            ));
+            let v = col.as_primitive::<Float32Type>().value(row);
+            // Bare `NaN` is not JSON: Spark quotes the non-finite values.
+            if v.is_finite() {
+                text.push_str(&java_float_string32(v));
+            } else {
+                push_quoted(&java_float_string32(v), text);
+            }
         }
         ArrowType::Float64 => {
-            text.push_str(&java_double_string(
-                col.as_primitive::<Float64Type>().value(row),
-            ));
+            let v = col.as_primitive::<Float64Type>().value(row);
+            // Bare `NaN` is not JSON: Spark quotes the non-finite values.
+            if v.is_finite() {
+                text.push_str(&java_double_string(v));
+            } else {
+                push_quoted(&java_double_string(v), text);
+            }
         }
         ArrowType::Decimal128(..) => {
             let v = col.as_primitive::<Decimal128Type>().value(row);
@@ -318,10 +332,17 @@ fn write_struct(
     if ctx.out.sort_keys {
         fields.sort_by(|a, b| a.0.cmp(&b.0));
     }
-    for (i, (name, child)) in fields.iter().enumerate() {
-        if i > 0 {
+    // `ignoreNullFields` (Spark's default) drops the null fields; the
+    // comma tracks what was actually written.
+    let mut first = true;
+    for (name, child) in fields.iter() {
+        if ctx.out.ignore_null_fields && child.is_null(row) {
+            continue;
+        }
+        if !first {
             text.push(',');
         }
+        first = false;
         push_quoted(name, text);
         text.push(':');
         write_value(child, row, text, ctx)?;

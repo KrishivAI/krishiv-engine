@@ -397,6 +397,9 @@ pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
         Literal::Double(_) => DataType::Double,
         Literal::Decimal { data_type, .. } => DataType::Decimal(*data_type),
         Literal::String(_) => DataType::String,
+        Literal::Map(_) => DataType::Map(
+            krishiv_types::MapType::new(DataType::String, DataType::String, false).into(),
+        ),
         Literal::Binary(_) => DataType::Binary,
         Literal::Date(_) => DataType::Date,
         Literal::Timestamp(_) => DataType::Timestamp,
@@ -3683,6 +3686,18 @@ const fn frame_shape(b: &crate::FrameBound) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_map_literal_types_and_prints_as_a_string_map() {
+        let literal = Literal::Map(vec![("mode".to_owned(), "FAILFAST".to_owned())]);
+        assert_eq!(
+            literal_type(&literal),
+            Some(DataType::Map(
+                krishiv_types::MapType::new(DataType::String, DataType::String, false).into()
+            ))
+        );
+        assert_eq!(literal.to_string(), "MAP('mode', 'FAILFAST')");
+    }
 
     /// `call()` renders named arguments with their `name => ` prefixes and
     /// quantified forms in their SQL shape.

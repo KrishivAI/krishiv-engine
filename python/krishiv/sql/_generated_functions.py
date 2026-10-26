@@ -21,6 +21,7 @@ from krishiv.sql._function_support import (
     _num_or_col,
     _one_of,
     _opt,
+    _opts,
 )
 from krishiv.sql.column import Column
 
@@ -591,9 +592,9 @@ def format_number(col: ColumnOrName, d: int) -> Column:
     return _call("format_number", _named(col, "col"), _lit(d, "d"))
 
 
-def from_json(col: ColumnOrName, schema: Column | str, options: Any | None = None) -> Column:
+def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``from_json``."""
-    return _call("from_json", _named(col, "col"), _lit(schema, "schema"), *_opt(_lit, options, "options"))
+    return _call("from_json", _named(col, "col"), _lit(schema, "schema"), *_opt(_opts, options, "options"))
 
 
 def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
@@ -1043,9 +1044,9 @@ def rtrim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
     return _call("rtrim", *_opt(_named, trim, "trim"), _named(col, "col"))
 
 
-def schema_of_json(json: ColumnOrName, options: Any | None = None) -> Column:
+def schema_of_json(json: Column | str, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``schema_of_json``."""
-    return _call("schema_of_json", _named(json, "json"), *_opt(_lit, options, "options"))
+    return _call("schema_of_json", _lit(json, "json"), *_opt(_opts, options, "options"))
 
 
 def sec(col: ColumnOrName) -> Column:
@@ -1204,9 +1205,9 @@ def to_char(col: ColumnOrName, format: ColumnOrName) -> Column:
     return _call("to_char", _named(col, "col"), _named(format, "format"))
 
 
-def to_json(col: ColumnOrName, options: Any | None = None) -> Column:
+def to_json(col: ColumnOrName, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``to_json``."""
-    return _call("to_json", _named(col, "col"), *_opt(_lit, options, "options"))
+    return _call("to_json", _named(col, "col"), *_opt(_opts, options, "options"))
 
 
 def to_number(col: ColumnOrName, format: ColumnOrName) -> Column:

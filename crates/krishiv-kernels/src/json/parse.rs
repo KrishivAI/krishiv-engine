@@ -31,6 +31,9 @@ pub(crate) struct LexerFlags {
     pub allow_unquoted_field_names: bool,
     /// `allowUnquotedControlChars`.
     pub allow_unquoted_control_chars: bool,
+    /// `allowNonNumericNumbers` (Spark's default): the `NaN`, `Infinity`
+    /// and `INF` spellings, signed, as floating-point numbers.
+    pub allow_non_numeric_numbers: bool,
 }
 
 impl LexerFlags {
@@ -43,6 +46,7 @@ impl LexerFlags {
             allow_backslash_escaping_any: false,
             allow_unquoted_field_names: false,
             allow_unquoted_control_chars: false,
+            allow_non_numeric_numbers: false,
         }
     }
 }
@@ -67,9 +71,12 @@ pub(crate) struct RawStr<'a> {
 
 impl<'a> RawStr<'a> {
     /// The string's value, unescaped; `None` for a bad escape or a lone
-    /// surrogate (Jackson rejects those too).
-    pub(crate) fn unescape(&self) -> Option<String> {
-        unescape(self.raw, self.quote)
+    /// surrogate (Jackson rejects those too). With
+    /// `allowBackslashEscapingAnyCharacter` any other escaped character is
+    /// the character itself (as `skip_escape` accepts it), and an escaped
+    /// single quote is a quote in any quoting.
+    pub(crate) fn unescape(&self, allow_backslash_escaping_any: bool) -> Option<String> {
+        unescape(self.raw, self.quote, allow_backslash_escaping_any)
     }
 }
 
@@ -123,6 +130,11 @@ impl<'a> Lexer<'a> {
     /// The whole text this lexer reads.
     pub(crate) const fn text(&self) -> &'a str {
         self.text
+    }
+
+    /// The value of a quoted `raw`, with this lexer's escaping rules.
+    pub(crate) fn unescape(&self, raw: RawStr<'a>) -> Option<String> {
+        raw.unescape(self.flags.allow_backslash_escaping_any)
     }
 
     /// The unread bytes.
@@ -210,7 +222,17 @@ impl<'a> Lexer<'a> {
             }
             b'"' => Ok(Some(Token::Str(self.string(b'"')?))),
             b'\'' if self.flags.allow_single_quotes => Ok(Some(Token::Str(self.string(b'\'')?))),
-            b'-' | b'0'..=b'9' => Ok(Some(self.number()?)),
+            b'-' => {
+                if let Some(token) = self.non_numeric_if_allowed()? {
+                    return Ok(Some(token));
+                }
+                Ok(Some(self.number()?))
+            }
+            b'+' | b'N' | b'I' => match self.non_numeric_if_allowed()? {
+                Some(token) => Ok(Some(token)),
+                None => Err(Error::Malformed),
+            },
+            b'0'..=b'9' => Ok(Some(self.number()?)),
             b't' => Ok(Some(self.literal("true", Token::Bool(true))?)),
             b'f' => Ok(Some(self.literal("false", Token::Bool(false))?)),
             b'n' => Ok(Some(self.literal("null", Token::Null)?)),
@@ -322,6 +344,51 @@ impl<'a> Lexer<'a> {
         let text = core::str::from_utf8(text).map_err(|_| Error::Malformed)?;
         self.pos = i;
         Ok(Token::Num(text, is_float))
+    }
+
+    /// A non-numeric number (`NaN`, `Infinity` or `INF`, signed) at the
+    /// cursor when the flag allows it: the token, or `None` when the
+    /// cursor is not on one.
+    fn non_numeric_if_allowed(&mut self) -> Result<Option<Token<'a>>, Error> {
+        if self.flags.allow_non_numeric_numbers {
+            self.non_numeric()
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// A non-numeric number (`NaN`, `Infinity` or `INF`, signed) at the
+    /// cursor: the token, or `None` when the cursor is not on one. Longer
+    /// spellings win (`+Infinity` before `+INF`), and the word must end
+    /// there, as a literal's must.
+    fn non_numeric(&mut self) -> Result<Option<Token<'a>>, Error> {
+        for word in [
+            "+Infinity",
+            "-Infinity",
+            "+INF",
+            "-INF",
+            "Infinity",
+            "NaN",
+            "INF",
+        ] {
+            let end = self.pos.saturating_add(word.len());
+            if self.bytes.get(self.pos..end) != Some(word.as_bytes()) {
+                continue;
+            }
+            if self
+                .bytes
+                .get(end)
+                .copied()
+                .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                return Err(Error::Malformed);
+            }
+            let text = self.bytes.get(self.pos..end).unwrap_or_default();
+            let text = core::str::from_utf8(text).map_err(|_| Error::Malformed)?;
+            self.pos = end;
+            return Ok(Some(Token::Num(text, true)));
+        }
+        Ok(None)
     }
 
     /// A string at the cursor (the cursor is on `quote`): validated, with
@@ -513,9 +580,32 @@ fn skip_escape(bytes: &[u8], i: usize, quote: u8, flags: LexerFlags) -> Result<u
     Err(Error::Malformed)
 }
 
+/// Whether `raw` is a non-numeric number spelling (`NaN`, `Infinity` or
+/// `INF`, signed), which the lexer only produces with
+/// `allowNonNumericNumbers`.
+#[must_use]
+pub(crate) fn is_non_numeric_number(raw: &str) -> bool {
+    matches!(
+        raw,
+        "NaN" | "INF" | "+INF" | "-INF" | "Infinity" | "+Infinity" | "-Infinity"
+    )
+}
+
+/// The value of a non-numeric number spelling (`None` for anything else).
+#[must_use]
+pub(crate) fn non_numeric_value(raw: &str) -> Option<f64> {
+    Some(match raw {
+        "NaN" => f64::NAN,
+        "INF" | "+INF" | "Infinity" | "+Infinity" => f64::INFINITY,
+        "-INF" | "-Infinity" => f64::NEG_INFINITY,
+        _ => return None,
+    })
+}
+
 /// Unescapes `raw` (with `quote`); `None` for a bad escape or a lone
-/// surrogate.
-fn unescape(raw: &str, quote: u8) -> Option<String> {
+/// surrogate. With `allow_backslash_escaping_any` any other escaped
+/// character is the character itself.
+fn unescape(raw: &str, quote: u8, allow_backslash_escaping_any: bool) -> Option<String> {
     let bytes = raw.as_bytes();
     let body = bytes.get(1..bytes.len().saturating_sub(1))?;
     if !body.contains(&b'\\') {
@@ -538,7 +628,7 @@ fn unescape(raw: &str, quote: u8) -> Option<String> {
             'n' => out.push('\n'),
             'r' => out.push('\r'),
             't' => out.push('\t'),
-            '\'' if quote == b'\'' => out.push('\''),
+            '\'' if quote == b'\'' || allow_backslash_escaping_any => out.push('\''),
             'u' => {
                 let hex: String = chars.by_ref().take(4).collect();
                 if hex.len() != 4 {
@@ -569,6 +659,7 @@ fn unescape(raw: &str, quote: u8) -> Option<String> {
                     out.push(char::from_u32(u32::from(high))?);
                 }
             }
+            other if allow_backslash_escaping_any => out.push(other),
             _ => return None,
         }
     }

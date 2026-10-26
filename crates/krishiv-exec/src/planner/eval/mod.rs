@@ -424,9 +424,11 @@ impl PhysExpr for Lit {
 pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
     use arrow_array::{
         BinaryViewArray, BooleanArray as B, Date32Array, Decimal128Array, Float32Array,
-        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, NullArray, StringViewArray,
-        TimestampMicrosecondArray,
+        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, MapArray, NullArray,
+        StringArray, StringViewArray, StructArray, TimestampMicrosecondArray,
     };
+    use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    use arrow_schema::Field;
     use krishiv_types::DataType;
     Ok(match l {
         Literal::Null(None) => Arc::new(NullArray::new(1)),
@@ -459,6 +461,42 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
                 .with_data_type(DataType::Timestamp.to_arrow()),
         ),
         Literal::TimestampNtz(v) => Arc::new(TimestampMicrosecondArray::from(vec![*v])),
+        // A one-row string map, as the JSON options bind.
+        Literal::Map(pairs) => {
+            let keys: ArrayRef = Arc::new(StringArray::from(
+                pairs
+                    .iter()
+                    .map(|(k, _)| Some(k.as_str()))
+                    .collect::<Vec<_>>(),
+            ));
+            let values: ArrayRef = Arc::new(StringArray::from(
+                pairs
+                    .iter()
+                    .map(|(_, v)| Some(v.as_str()))
+                    .collect::<Vec<_>>(),
+            ));
+            let entries = StructArray::new(
+                vec![
+                    Field::new("key", ArrowType::Utf8, false),
+                    Field::new("value", ArrowType::Utf8, true),
+                ]
+                .into(),
+                vec![keys, values],
+                None,
+            );
+            let len = i32::try_from(pairs.len())
+                .map_err(|_| internal("a map literal past the 32-bit offset limit"))?;
+            Arc::new(
+                MapArray::try_new(
+                    Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0, len])),
+                    entries,
+                    None,
+                    false,
+                )
+                .map_err(|e| internal(&e.to_string()))?,
+            )
+        }
         _ => return Err(unsupported("interval literals in physical plans")),
     })
 }
@@ -528,6 +566,26 @@ mod tests {
                 .nullable()
         );
         assert!(!Lit::new(&Literal::Integer(1)).unwrap().nullable());
+    }
+
+    #[test]
+    fn a_map_literal_is_a_one_row_string_map() {
+        use arrow_array::Array;
+        use arrow_array::cast::AsArray;
+
+        let array = super::literal_array(&Literal::Map(vec![
+            ("mode".to_owned(), "FAILFAST".to_owned()),
+            ("timestampFormat".to_owned(), "dd/MM/yyyy".to_owned()),
+        ]))
+        .unwrap();
+        assert_eq!(array.len(), 1);
+        let map = array.as_map();
+        assert_eq!((map.value_length(0), map.is_null(0)), (2, false));
+        let entries = map.entries();
+        let keys: Vec<Option<&str>> = entries.column(0).as_string::<i32>().iter().collect();
+        let values: Vec<Option<&str>> = entries.column(1).as_string::<i32>().iter().collect();
+        assert_eq!(keys, [Some("mode"), Some("timestampFormat")]);
+        assert_eq!(values, [Some("FAILFAST"), Some("dd/MM/yyyy")]);
     }
 
     /// `scatter` puts the i-th value at the i-th set row, NULL elsewhere,

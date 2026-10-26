@@ -7,12 +7,14 @@
 //! `prefersDecimal`), the leniency flags (`allowComments`,
 //! `allowSingleQuotes`, `allowNumericLeadingZeros`,
 //! `allowBackslashEscapingAnyCharacter`, `allowUnquotedFieldNames`,
-//! `allowUnquotedControlChars`), `sortKeys` (a `to_json` writer flag) and
-//! `mode` (`PERMISSIVE` or `FAILFAST` for `from_json`; `DROPMALFORMED` is
-//! rejected with `PARSE_MODE_UNSUPPORTED`). Unknown options are ignored,
-//! as Spark's reader ignores them, and the file options (`multiLine`,
-//! `columnNameOfCorruptRecord`, `samplingRatio`, `dropFieldIfAllNull`,
-//! `locale`, `timeFormat`, ...) have no scalar meaning and are ignored.
+//! `allowUnquotedControlChars`, `allowNonNumericNumbers`), `sortKeys` and
+//! `ignoreNullFields` (two `to_json` writer flags), `dropFieldIfAllNull` (a
+//! `schema_of_json` rendering flag) and `mode` (`PERMISSIVE` or `FAILFAST`
+//! for `from_json`; `DROPMALFORMED` is rejected with
+//! `PARSE_MODE_UNSUPPORTED`). Unknown options are ignored, as Spark's
+//! reader ignores them, and the file options (`multiLine`,
+//! `columnNameOfCorruptRecord`, `samplingRatio`, `locale`, `timeFormat`,
+//! ...) have no scalar meaning and are ignored.
 
 use std::collections::BTreeMap;
 
@@ -64,8 +66,18 @@ pub struct JsonOptions {
     pub allow_unquoted_field_names: bool,
     /// `allowUnquotedControlChars`.
     pub allow_unquoted_control_chars: bool,
+    /// `allowNonNumericNumbers` (Spark's default): the `NaN`, `Infinity`
+    /// and `INF` spellings, signed, read as floating-point numbers.
+    pub allow_non_numeric_numbers: bool,
     /// `sortKeys` (a `to_json` writer flag).
     pub sort_keys: bool,
+    /// `ignoreNullFields` (a `to_json` writer flag, Spark's default):
+    /// struct fields that are `NULL` are not written.
+    pub ignore_null_fields: bool,
+    /// `dropFieldIfAllNull` (a `schema_of_json` rendering flag): struct
+    /// fields that infer as `VOID` are dropped instead of rendering as
+    /// `STRING`.
+    pub drop_field_if_all_null: bool,
     /// `mode` (a `from_json` reader flag).
     pub mode: ParseMode,
 }
@@ -74,7 +86,11 @@ impl JsonOptions {
     /// The defaults (no options argument).
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            allow_non_numeric_numbers: true,
+            ignore_null_fields: true,
+            ..Self::default()
+        }
     }
 
     /// Parses `options` (option name to value, as Spark writes a
@@ -113,7 +129,10 @@ impl JsonOptions {
                 }
                 "allowUnquotedFieldNames" => out.allow_unquoted_field_names = is_true(value),
                 "allowUnquotedControlChars" => out.allow_unquoted_control_chars = is_true(value),
+                "allowNonNumericNumbers" => out.allow_non_numeric_numbers = is_true(value),
                 "sortKeys" => out.sort_keys = is_true(value),
+                "ignoreNullFields" => out.ignore_null_fields = is_true(value),
+                "dropFieldIfAllNull" => out.drop_field_if_all_null = is_true(value),
                 "mode" => {
                     out.mode = match value.trim().to_ascii_uppercase().as_str() {
                         "PERMISSIVE" => ParseMode::Permissive,
@@ -141,6 +160,7 @@ impl JsonOptions {
             allow_backslash_escaping_any: self.allow_backslash_escaping_any,
             allow_unquoted_field_names: self.allow_unquoted_field_names,
             allow_unquoted_control_chars: self.allow_unquoted_control_chars,
+            allow_non_numeric_numbers: self.allow_non_numeric_numbers,
         }
     }
 }
