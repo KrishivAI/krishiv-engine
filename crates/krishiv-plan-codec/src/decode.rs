@@ -11,7 +11,7 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
     SubqueryValueKind,
@@ -902,6 +902,13 @@ fn partitioning(p: &pb::Partitioning) -> Result<Partitioning> {
     Ok(match required(&p.kind, "a partitioning kind")? {
         Kind::Hash(h) => Partitioning::Hash {
             keys: usizes(&h.keys)?,
+            // Not `enum_map!`: 0 is not "unspecified" here but the scheme of
+            // plans written before the field existed.
+            scheme: match pb::HashScheme::try_from(h.scheme) {
+                Ok(pb::HashScheme::Unpinned) => HashScheme::Unpinned,
+                Ok(pb::HashScheme::KeyGroupV1) => HashScheme::KeyGroupV1,
+                Err(_) => return Err(corrupt("an unknown hash scheme")),
+            },
         },
         Kind::Single(_) => Partitioning::Single,
         Kind::Broadcast(_) => Partitioning::Broadcast,
