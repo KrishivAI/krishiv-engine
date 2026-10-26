@@ -190,6 +190,101 @@ fn resolve<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> {
     Some(v)
 }
 
+/// The validator above handles exactly these keywords; annotations carry no
+/// validation. Fails on any other keyword so a schema addition without
+/// validator support is caught here, not silently ignored.
+#[test]
+fn validator_supports_every_schema_keyword() {
+    fn visit(node: &Value, path: &str) {
+        let Some(obj) = node.as_object() else {
+            return;
+        };
+        for (key, value) in obj {
+            match key.as_str() {
+                // No validation and no subschemas: annotations (`$schema`,
+                // `$id`, `title`, `description`), data (`const`, `enum`,
+                // `required`) and leaf checks (`type`,
+                // `additionalProperties`, `minItems`, `$ref`).
+                "$schema"
+                | "$id"
+                | "title"
+                | "description"
+                | "const"
+                | "enum"
+                | "required"
+                | "type"
+                | "additionalProperties"
+                | "minItems"
+                | "$ref" => {}
+                "$defs" => {
+                    let defs = value
+                        .as_object()
+                        .unwrap_or_else(|| panic!("{path}/$defs is not an object: {value}"));
+                    for (name, sub) in defs {
+                        visit(sub, &format!("{path}/$defs/{name}"));
+                    }
+                }
+                // `properties` maps names to schemas; the names are data.
+                "properties" => {
+                    let props = value
+                        .as_object()
+                        .unwrap_or_else(|| panic!("{path}/properties is not an object: {value}"));
+                    for (name, sub) in props {
+                        visit(sub, &format!("{path}/properties/{name}"));
+                    }
+                }
+                // Subschemas to descend into.
+                "items" => visit(value, &format!("{path}/items")),
+                "oneOf" => {
+                    let branches = value
+                        .as_array()
+                        .unwrap_or_else(|| panic!("{path}/oneOf is not an array: {value}"));
+                    for (i, sub) in branches.iter().enumerate() {
+                        visit(sub, &format!("{path}/oneOf[{i}]"));
+                    }
+                }
+                "minimum" | "maximum" => {
+                    assert!(
+                        value.as_u64().is_some(),
+                        "{path}/{key} is not a non-negative integer: {value}"
+                    );
+                }
+                other => panic!("{path}: validator does not support keyword {other:?}"),
+            }
+        }
+    }
+
+    let schema = schema_doc();
+    visit(&schema, "#");
+    // Every `$ref` in the file resolves to a schema the validator can see.
+    fn check_refs(node: &Value, root: &Value, path: &str) {
+        if let Some(obj) = node.as_object() {
+            for (key, value) in obj {
+                if key == "$ref" {
+                    let reference = value
+                        .as_str()
+                        .unwrap_or_else(|| panic!("{path}/$ref is not a string: {value}"));
+                    assert!(
+                        resolve(root, reference).is_some(),
+                        "{path}: cannot resolve {reference:?}"
+                    );
+                } else if key == "properties" || key == "$defs" {
+                    for (name, sub) in value.as_object().unwrap() {
+                        check_refs(sub, root, &format!("{path}/{key}/{name}"));
+                    }
+                } else if key == "items" {
+                    check_refs(value, root, &format!("{path}/items"));
+                } else if key == "oneOf" {
+                    for (i, sub) in value.as_array().unwrap().iter().enumerate() {
+                        check_refs(sub, root, &format!("{path}/oneOf[{i}]"));
+                    }
+                }
+            }
+        }
+    }
+    check_refs(&schema, &schema, "#");
+}
+
 /// A time the text prints, with the unit it was printed in (the display's
 /// rounding quantum follows the unit).
 #[derive(Clone, Copy, Debug)]
@@ -1074,72 +1169,109 @@ fn corrupt_documents_fail_validation() {
         .unwrap();
     type Edit = Box<dyn Fn(&mut Value)>;
 
-    let schema_cases: Vec<(&str, Edit)> = vec![
-        ("format is not", Box::new(|v| v["format"] = "x".into())),
+    let schema_cases: Vec<(&str, Edit, &str, Option<&str>)> = vec![
+        (
+            "format is not",
+            Box::new(|v| v["format"] = "x".into()),
+            "#/format: is not",
+            Some("format is not krishiv.query-profile"),
+        ),
         (
             "version 2 is not supported",
             Box::new(|v| v["version"] = 2.into()),
+            "#/version: is not 1: 2",
+            Some("version 2 is not supported (this build reads 1)"),
         ),
         (
             "missing member \"query\"",
             Box::new(|v| {
                 v.as_object_mut().unwrap().remove("query");
             }),
+            "#: missing member \"query\"",
+            Some("missing member \"query\""),
         ),
         (
             "wall_time_ns is not an unsigned integer",
             Box::new(|v| v["query"]["wall_time_ns"] = (-1).into()),
+            "#/query/wall_time_ns: -1 is below minimum 0",
+            Some("wall_time_ns is not an unsigned integer"),
         ),
         (
             "drivers is not an unsigned integer",
             Box::new(|v| v["query"]["drivers"] = "many".into()),
+            "#/query/drivers: is not integer",
+            Some("drivers is not an unsigned integer"),
         ),
-        ("unexpected member", Box::new(|v| v["bogus"] = 1.into())),
+        (
+            "unexpected member",
+            Box::new(|v| v["bogus"] = 1.into()),
+            "#: unexpected member \"bogus\"",
+            None,
+        ),
         (
             "unknown operator role",
             Box::new(|v| v["operators"][0]["role"] = "x".into()),
+            "#/operators[0]/role: is not one of",
+            Some("unknown operator role \"x\""),
         ),
         (
             "unknown metric kind",
             Box::new(move |v| v["operators"][with_extra]["extra"][0]["kind"] = "avg".into()),
+            "/extra[0]: matches 0 of 2 oneOf branches",
+            Some("unknown metric kind \"avg\""),
         ),
         (
             "a pipeline id exceeds u32",
             Box::new(|v| v["pipelines"][0]["id"] = (u64::from(u32::MAX) + 1).into()),
+            "#/pipelines[0]/id: 4294967296 is above maximum 4294967295",
+            Some("id exceeds u32"),
         ),
         (
             "node is not a u32 or null",
             Box::new(|v| v["operators"][0]["node"] = "0".into()),
+            "#/operators[0]/node: matches 0 of 2 oneOf branches",
+            Some("node is not an unsigned integer"),
         ),
         (
             "limit_bytes is not a u64 or null",
             Box::new(|v| v["query"]["memory"]["limit_bytes"] = "unlimited".into()),
+            "#/query/memory/limit_bytes: matches 0 of 2 oneOf branches",
+            Some("limit_bytes is not an unsigned integer"),
         ),
     ];
-    for (want, edit) in schema_cases {
+    for (want, edit, validate_want, reader_want) in schema_cases {
         let mut v = good.clone();
         edit(&mut v);
+        let validator_err = validate(&schema, &v, &schema, "#")
+            .err()
+            .unwrap_or_else(|| panic!("{want} validates"));
         assert!(
-            validate(&schema, &v, &schema, "#").is_err(),
-            "{want} validates"
+            validator_err.contains(validate_want),
+            "{want}: validator error {validator_err:?} does not contain {validate_want:?}"
         );
-        if want == "unexpected member" {
+        match reader_want {
             // Within-v1 growth: the reader ignores what it does not know.
-            assert!(QueryProfile::from_json(&v.to_string()).is_ok());
-        } else {
-            let err = QueryProfile::from_json(&v.to_string())
-                .err()
-                .unwrap_or_else(|| panic!("accepted a document with {want}"));
-            assert!(
-                err.to_string().starts_with("invalid query profile: "),
-                "{err}"
-            );
+            None => assert!(
+                QueryProfile::from_json(&v.to_string()).is_ok(),
+                "{want} does not load"
+            ),
+            Some(reader_want) => {
+                let err = QueryProfile::from_json(&v.to_string())
+                    .err()
+                    .unwrap_or_else(|| panic!("accepted a document with {want}"));
+                let message = err.to_string();
+                assert!(message.starts_with("invalid query profile: "), "{message}");
+                assert!(
+                    message.contains(reader_want),
+                    "{want}: reader error {message:?} does not contain {reader_want:?}"
+                );
+            }
         }
     }
 
     // The schema cannot see ids, name uniqueness or the plan's shape; the
     // reader still must.
-    let reader_cases: Vec<(&str, Edit)> = vec![
+    let reader_cases: Vec<(&str, Edit, &str)> = vec![
         (
             "extra metric listed twice",
             Box::new(move |v| {
@@ -1149,6 +1281,7 @@ fn corrupt_documents_fail_validation() {
                     .unwrap()
                     .push(first);
             }),
+            "extra metric \"groups\" listed twice",
         ),
         (
             "operator 0 listed twice",
@@ -1156,6 +1289,7 @@ fn corrupt_documents_fail_validation() {
                 let first = v["operators"][0].clone();
                 v["operators"].as_array_mut().unwrap().push(first);
             }),
+            "operator 0 listed twice",
         ),
         (
             "pipeline 0 listed twice",
@@ -1163,10 +1297,12 @@ fn corrupt_documents_fail_validation() {
                 let first = v["pipelines"][0].clone();
                 v["pipelines"].as_array_mut().unwrap().push(first);
             }),
+            "pipeline 0 listed twice",
         ),
         (
             "a plan input is not a later node",
             Box::new(|v| v["plan"][0]["children"] = serde_json::json!([0])),
+            "a plan input is not a later node",
         ),
         (
             "the input of two nodes",
@@ -1174,13 +1310,20 @@ fn corrupt_documents_fail_validation() {
                 v["plan"][2]["children"] = serde_json::json!([3]);
                 v["plan"][1]["children"] = serde_json::json!([2, 3]);
             }),
+            "a plan node is the input of two nodes",
         ),
     ];
-    for (want, edit) in reader_cases {
+    for (want, edit, reader_want) in reader_cases {
         let mut v = good.clone();
         edit(&mut v);
-        QueryProfile::from_json(&v.to_string())
+        let err = QueryProfile::from_json(&v.to_string())
             .err()
             .unwrap_or_else(|| panic!("accepted a document with {want}"));
+        let message = err.to_string();
+        assert!(message.starts_with("invalid query profile: "), "{message}");
+        assert!(
+            message.contains(reader_want),
+            "{want}: reader error {message:?} does not contain {reader_want:?}"
+        );
     }
 }
