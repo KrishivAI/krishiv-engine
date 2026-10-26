@@ -295,6 +295,7 @@ impl ContextFingerprint {
             c.order_by_ordinal,
             c.lateral_column_alias,
             c.decimal_precision_loss,
+            c.map_key_dedup_last_win,
             c.run_sql_on_files,
             c.timestamp_ntz,
             self.files,

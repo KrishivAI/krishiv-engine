@@ -1174,6 +1174,8 @@ def str_to_map(
     text: ColumnOrName, pairDelim: ColumnOrName | None = None, keyValueDelim: ColumnOrName | None = None
 ) -> Column:
     """Calls the registry function ``str_to_map``."""
+    if pairDelim is None and keyValueDelim is not None:
+        return _call("str_to_map", _named(text, "text"), _lit(",", "pairDelim"), _named(keyValueDelim, "keyValueDelim"))
     return _call(
         "str_to_map",
         _named(text, "text"),

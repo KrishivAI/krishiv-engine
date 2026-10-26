@@ -437,10 +437,34 @@ pub struct HashJoinPlan {
     pub null_safe: Vec<bool>,
     /// The non-equality conditions.
     pub residual: Option<Residual>,
+    /// A left outer join that fails when a probe row matches more than
+    /// once (a correlated scalar subquery without an aggregate). Only
+    /// `LeftOuter` joins set it.
+    pub single_match: bool,
+    /// The build's rows are never output and the join reads nothing of
+    /// them but their keys (a left semi, left anti or existence join
+    /// without a residual condition), so the build may keep each key once
+    /// (design P2-T166 §3.2). An executor that ignores it stores every row
+    /// and returns the same result; this one does so for now.
+    pub distinct_build: bool,
     /// The runtime filters the build publishes.
     pub runtime_filters: Vec<JoinFilterPlan>,
     /// Broadcast or partitioned.
     pub distribution: JoinDistribution,
+}
+
+impl HashJoinPlan {
+    /// Whether [`distinct_build`](Self::distinct_build) may be set: the
+    /// join outputs no build rows and reads no build column but the keys
+    /// (a left semi, left anti or existence join without a residual).
+    #[must_use]
+    pub fn distinct_build_allowed(&self) -> bool {
+        self.residual.is_none()
+            && matches!(
+                self.join_type,
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::Existence
+            )
+    }
 }
 
 /// A nested-loop join over every pair of rows.
@@ -508,8 +532,8 @@ plan_data!(struct SubqueryPlan { id, kind, data_type, plan });
 plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output });
 plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
-    probe, build, join_type, probe_keys, build_keys, null_safe, residual, runtime_filters,
-    distribution
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,
+    distinct_build, runtime_filters, distribution
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, schema, explain, warnings, env });

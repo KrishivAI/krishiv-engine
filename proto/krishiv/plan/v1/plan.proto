@@ -379,6 +379,10 @@ enum JoinType {
   JOIN_TYPE_RIGHT_ANTI = 7;
   // feature: join_build_preserved
   JOIN_TYPE_RIGHT_OUTER = 8;
+  // Spark's `ExistenceJoin`: every probe row once, plus a non-nullable
+  // boolean `exists` (some build row matched).
+  // feature: existence_join
+  JOIN_TYPE_EXISTENCE = 9;
 }
 
 message Residual {
@@ -398,6 +402,15 @@ message HashJoinNode {
   // v2: how matching rows meet in one task. v1 bytes leave this as
   // `JOIN_DISTRIBUTION_UNSPECIFIED`, which decodes as broadcast.
   JoinDistribution distribution = 9;
+  // A left outer join that fails when a probe row matches more than once
+  // (a correlated scalar subquery without an aggregate); only `LeftOuter`
+  // joins set it.
+  // feature: join_single_match
+  bool single_match = 10;
+  // The build may keep each key once: only on a left semi, left anti or
+  // existence join without a residual.
+  // ignorable: a reader without it builds every row, with the same result.
+  bool distinct_build = 11;
 }
 
 enum JoinDistribution {

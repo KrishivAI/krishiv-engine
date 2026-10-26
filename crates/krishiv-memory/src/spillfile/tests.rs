@@ -1402,6 +1402,7 @@ fn config_keys_drive_the_spill_config() {
         ("krishiv.spill.maxBytes", "10g"),
         ("krishiv.spill.compression", "ZSTD"),
         ("krishiv.spill.zstd.level", "7"),
+        ("krishiv.spill.dropBehindBytes", "0"),
     ])
     .unwrap();
     let c = SpillConfig::from_config(&config);
@@ -1409,6 +1410,8 @@ fn config_keys_drive_the_spill_config() {
     assert_eq!(c.max_bytes, 10 << 30);
     assert_eq!(c.codec, SpillCodec::Zstd);
     assert_eq!(c.zstd_level, 7);
+    assert_eq!(c.drop_behind, 0);
+    assert_eq!(SpillConfig::default().drop_behind, 8 << 20);
 
     assert_eq!(SpillCodec::from_name("none"), Some(SpillCodec::None));
     assert_eq!(SpillCodec::from_name("lz4"), Some(SpillCodec::Lz4));

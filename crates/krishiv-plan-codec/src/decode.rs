@@ -557,21 +557,33 @@ impl Decoder {
         if probe_keys.len() != build_keys.len() || probe_keys.len() != j.null_safe.len() {
             return Err(corrupt("a hash join whose key lists differ in length"));
         }
-        Ok(HashJoinPlan {
+        let join_type = join_type(j.join_type)?;
+        if j.single_match && join_type != JoinType::LeftOuter {
+            return Err(corrupt("single match on a join that is not left outer"));
+        }
+        let plan = HashJoinPlan {
             probe: self.boxed(j.probe)?,
             build: self.boxed(j.build)?,
-            join_type: join_type(j.join_type)?,
+            join_type,
             probe_keys,
             build_keys,
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
+            single_match: j.single_match,
+            distinct_build: j.distinct_build,
             runtime_filters: j
                 .runtime_filters
                 .iter()
                 .map(join_filter)
                 .collect::<Result<_>>()?,
             distribution: distribution(j.distribution)?,
-        })
+        };
+        if plan.distinct_build && !plan.distinct_build_allowed() {
+            return Err(corrupt(
+                "a distinct build on a join that outputs or reads build rows",
+            ));
+        }
+        Ok(plan)
     }
 
     fn exchange(&mut self, e: &pb::ExchangeNode) -> Result<ExchangePlan> {
@@ -861,6 +873,7 @@ fn join_type(t: i32) -> Result<JoinType> {
         LeftSemi => JoinType::LeftSemi,
         LeftAnti => JoinType::LeftAnti,
         NullAwareAnti => JoinType::NullAwareAnti,
+        Existence => JoinType::Existence,
         RightSemi => JoinType::RightSemi,
         RightAnti => JoinType::RightAnti,
         RightOuter => JoinType::RightOuter,

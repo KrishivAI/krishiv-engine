@@ -280,11 +280,7 @@ fn struct_equal(a: &StructArray, i: usize, b: &StructArray, j: usize) -> Result<
     if af.len() != bf.len() {
         return Ok(false);
     }
-    for (f, g) in af.iter().zip(bf.iter()) {
-        let (x, y) = (a.column_by_name(f.name()), b.column_by_name(g.name()));
-        let (Some(x), Some(y)) = (x, y) else {
-            return Err(internal("a struct key field is missing"));
-        };
+    for (x, y) in a.columns().iter().zip(b.columns()) {
         if !keys_equal(x.as_ref(), i, y.as_ref(), j)? {
             return Ok(false);
         }
@@ -383,8 +379,8 @@ fn append_value(
             let a = array.as_struct();
             let b = downcast::<StructBuilder>(builder)?;
             if array.is_null(idx) {
-                for f in b.field_builders_mut() {
-                    downcast::<NullBuilder>(f.as_mut())?.append_null();
+                for (f, col) in b.field_builders_mut().iter_mut().zip(a.columns()) {
+                    append_value(f.as_mut(), col.as_ref(), idx)?;
                 }
                 b.append(false);
                 return Ok(());
@@ -821,7 +817,7 @@ pub fn contains_key(map: &ArrayRef, key: &ArrayRef) -> Result<BooleanArray, Kern
 fn project(m: &MapArray, child: &ArrayRef, element: &FieldRef) -> Result<ArrayRef, KernelError> {
     Ok(Arc::new(ListArray::new(
         Arc::clone(element),
-        OffsetBuffer::new(m.value_offsets().to_vec().into()),
+        m.offsets().clone(),
         Arc::clone(child),
         m.nulls().cloned(),
     )))
@@ -861,7 +857,7 @@ pub fn entries(map: &ArrayRef, element: &FieldRef) -> Result<ArrayRef, KernelErr
     .map_err(internal)?;
     Ok(Arc::new(ListArray::new(
         Arc::clone(element),
-        OffsetBuffer::new(m.value_offsets().to_vec().into()),
+        m.offsets().clone(),
         Arc::new(structs),
         m.nulls().cloned(),
     )))
@@ -944,7 +940,7 @@ pub fn from_arrays(
 
 /// `map_from_entries(entries)`: row `r` maps the `r`-th struct slice's
 /// first field to its second. A null element (of a nullable array) makes
-/// the whole result null; a null key field is `NULL_MAP_KEY`.
+/// only its own row null; a null key field is `NULL_MAP_KEY`.
 pub fn from_entries(
     array: &ArrayRef,
     rows: usize,
@@ -974,6 +970,7 @@ pub fn from_entries(
             continue;
         }
         let (from, to) = *range;
+        let base = ordered.len();
         let mut row = Vec::with_capacity(to.saturating_sub(from));
         let mut null_element = false;
         for p in from..to {
@@ -990,8 +987,11 @@ pub fn from_entries(
             });
         }
         if null_element {
-            // A null element of a nullable array voids the whole result.
-            return whole_null(rows, entries);
+            // A null element of a nullable array nulls only its own row.
+            ordered.truncate(base);
+            nulls.append(false);
+            per_row.push(Vec::new());
+            continue;
         }
         nulls.append(true);
         per_row.push(row);
@@ -1001,25 +1001,6 @@ pub fn from_entries(
         &Deduped::of(per_row, policy, &ordered)?,
         nulls.finish(),
     )
-}
-
-/// An all-null [`MapArray`] of `rows` rows over `entries`.
-fn whole_null(rows: usize, entries: &FieldRef) -> Result<MapArray, KernelError> {
-    let fields = match entries.data_type() {
-        DataType::Struct(fs) if fs.len() == 2 => fs.clone(),
-        t => return Err(internal(format!("map entries of type {t}"))),
-    };
-    let empty_keys = make_builder(fields[0].data_type(), 0).finish();
-    let empty_values = make_builder(fields[1].data_type(), 0).finish();
-    let structs =
-        StructArray::try_new(fields, vec![empty_keys, empty_values], None).map_err(internal)?;
-    let offsets = OffsetBuffer::new(vec![0_i32; rows.saturating_add(1)].into());
-    let mut nulls = NullBufferBuilder::new(rows);
-    for _ in 0..rows {
-        nulls.append(false);
-    }
-    MapArray::try_new(Arc::clone(entries), offsets, structs, nulls.finish(), false)
-        .map_err(internal)
 }
 
 /// `str_to_map` assembly: `keys` and `values` hold every row's pairs in
@@ -1661,6 +1642,60 @@ mod tests {
     }
 
     #[test]
+    fn null_struct_values_append_typed_nulls() {
+        let struct_ty = DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into());
+        let struct_fields = match &struct_ty {
+            DataType::Struct(fs) => fs.clone(),
+            _ => unreachable!(),
+        };
+        // A null struct as a map value: the map holds a null.
+        let null_struct = Arc::new(
+            StructArray::try_new(
+                struct_fields.clone(),
+                vec![ints(&[Some(1)])],
+                Some(arrow_buffer::NullBuffer::from(vec![false])),
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let entries = test_entries(DataType::Int32, struct_ty.clone(), true);
+        let m = create_map(
+            &[ints(&[Some(1)])],
+            &[null_struct],
+            1,
+            &entries,
+            DedupPolicy::Exception,
+        )
+        .unwrap();
+        assert!(!m.is_null(0));
+        assert!(m.values().is_null(0));
+
+        // A null struct element of a list value: the list keeps a null.
+        let inner = Arc::new(
+            StructArray::try_new(
+                struct_fields,
+                vec![ints(&[Some(1), Some(2)])],
+                Some(arrow_buffer::NullBuffer::from(vec![true, false])),
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let list_value = list_of(inner, &[2], &[false]);
+        let list_ty = DataType::List(Arc::new(Field::new("element", struct_ty, true)));
+        let entries = test_entries(DataType::Int32, list_ty, true);
+        let m = create_map(
+            &[ints(&[Some(1)])],
+            &[list_value],
+            1,
+            &entries,
+            DedupPolicy::Exception,
+        )
+        .unwrap();
+        assert!(!m.is_null(0));
+        let lists = m.values().as_list::<i32>();
+        assert!(!lists.is_null(0));
+        assert!(lists.values().as_struct().is_null(1));
+    }
+
+    #[test]
     fn from_entries_maps_struct_slices() {
         let fields: arrow_schema::Fields = vec![
             Field::new("key", DataType::Int32, true),
@@ -1681,7 +1716,7 @@ mod tests {
         assert_eq!(m.len(), 2);
         assert!(m.is_null(1));
 
-        // A null element voids the whole result, not just its row.
+        // A null element nulls only its own row.
         let values = Arc::new(
             StructArray::try_new(
                 fields.clone(),
@@ -1692,7 +1727,9 @@ mod tests {
         ) as ArrayRef;
         let array = list_of(values, &[1, 0], &[false, false]);
         let m = from_entries(&array, 2, &entries, DedupPolicy::Exception).unwrap();
-        assert!(m.is_null(0) && m.is_null(1));
+        assert!(m.is_null(0));
+        assert!(!m.is_null(1));
+        assert_eq!(pairs(&m), [None, Some(vec![])]);
 
         // A null key field is `NULL_MAP_KEY`.
         let structs = Arc::new(
@@ -1867,7 +1904,7 @@ mod tests {
         }
         let n = NullArray::new(1);
         assert!(keys_equal(&n, 0, &n, 0).unwrap());
-        // Structs compare field by field, by name.
+        // Structs compare field by field, by position.
         let st = |x: Vec<i32>, y: Vec<&str>| -> ArrayRef {
             Arc::new(StructArray::from(vec![
                 (

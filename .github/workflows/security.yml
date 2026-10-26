@@ -6,7 +6,7 @@ name: Security
 #   cargo-deny allow list plus CC0-1.0 (deny.toml [licenses]; the one deliberate
 #   difference is CC0-1.0, allowed for Python dependencies only; see CONTRIBUTING.md).
 # - `zizmor`: static analysis of the workflows. On pull requests it fails on
-#   any finding (read-only job); on main and on the schedule `zizmor-sarif`
+#   any finding (read-only job); on the schedule `zizmor-sarif`
 #   uploads SARIF to code scanning instead.
 # Vulnerability scanning of the lock files is in osv-scanner.yml.
 
@@ -15,8 +15,6 @@ on:
     types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
-  push:
-    branches: [main]
   schedule:
     - cron: "41 5 * * 2"
 

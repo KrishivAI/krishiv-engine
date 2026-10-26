@@ -342,15 +342,17 @@ fn str_to_map(
     let mut pair_splitters: HashMap<String, Splitter> = HashMap::new();
     let mut kv_splitters: HashMap<String, Splitter> = HashMap::new();
     // The splitter for `d`, compiled once per distinct delimiter.
-    let splitter =
-        |cache: &mut HashMap<String, Splitter>, d: &str| -> Result<Splitter, KrishivError> {
-            if let Some(s) = cache.get(d) {
-                return Ok(s.clone());
-            }
-            let s = Splitter::new(d)?;
-            cache.insert(d.to_owned(), s.clone());
-            Ok(s)
-        };
+    fn splitter<'a>(
+        cache: &'a mut HashMap<String, Splitter>,
+        d: &str,
+    ) -> Result<&'a Splitter, KrishivError> {
+        if !cache.contains_key(d) {
+            cache.insert(d.to_owned(), Splitter::new(d)?);
+        }
+        cache
+            .get(d)
+            .ok_or_else(|| internal("a splitter just compiled".to_owned()))
+    }
     let mut keys: Vec<Option<String>> = Vec::new();
     let mut values: Vec<Option<String>> = Vec::new();
     let mut row_of: Vec<usize> = Vec::new();
