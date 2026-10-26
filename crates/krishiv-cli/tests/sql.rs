@@ -348,6 +348,146 @@ fn explain_verbose_prints_the_rules() {
 }
 
 #[test]
+fn explain_format_renders_graphs_json_and_usage_errors() {
+    let view = format!("lineitem={LINEITEM}");
+    let local = "select a from (select 1 as a, 2 as b) where a > 0";
+    let q = "select l_returnflag, count(*) as n from lineitem group by l_returnflag";
+    // Mermaid and DOT of the optimizer's stages.
+    let o = krishiv(
+        &[
+            "sql",
+            "--explain-verbose",
+            "--explain-format",
+            "mermaid",
+            "-e",
+            local,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    // Exact text, written out by hand: comparing against the renderer's own
+    // output would hide a renderer defect on both sides.
+    assert_eq!(
+        t,
+        "flowchart TD\n    n0[\"Project [1 AS a#0]\"]\n    n1[\"OneRowRelation\"]\n    n0 --> n1\n"
+    );
+    let o = krishiv(
+        &[
+            "sql",
+            "--explain-verbose",
+            "--explain-format",
+            "dot",
+            "-e",
+            local,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert_eq!(
+        t,
+        "digraph {\n    n0 [label=\"Project [1 AS a#0]\"];\n    n1 [label=\"OneRowRelation\"];\n    n0 -> n1;\n}\n"
+    );
+    // The profile as JSON and as a graph.
+    let o = krishiv(
+        &[
+            "sql",
+            "--table",
+            &view,
+            "--explain-analyze",
+            "--explain-format",
+            "json",
+            "-e",
+            q,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    krishiv::QueryProfile::from_json(out(&o).trim()).expect("profile JSON");
+    let o = krishiv(
+        &[
+            "sql",
+            "--table",
+            &view,
+            "--explain-analyze",
+            "--explain-format",
+            "mermaid",
+            "-e",
+            q,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    let t = out(&o);
+    assert!(t.starts_with("flowchart TD\n"), "{t}");
+    assert!(t.contains("HashAggregate"), "{t}");
+    let o = krishiv(
+        &[
+            "sql",
+            "--table",
+            &view,
+            "--explain-analyze",
+            "--explain-format",
+            "dot",
+            "-e",
+            q,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    assert!(out(&o).starts_with("digraph {\n"), "{}", out(&o));
+    // `--json` stays a synonym for `--explain-format json`.
+    let o = krishiv(&["sql", "--explain-verbose", "--json", "-e", local], None);
+    assert!(o.status.success(), "{}", err(&o));
+    krishiv::ExplainVerbose::from_json(out(&o).trim()).expect("verbose JSON");
+    let o = krishiv(
+        &[
+            "sql",
+            "--explain-verbose",
+            "--json",
+            "--explain-format",
+            "json",
+            "-e",
+            local,
+        ],
+        None,
+    );
+    assert!(o.status.success(), "{}", err(&o));
+    // `--json` with another format, a missing explain flag and an unknown
+    // format are usage errors.
+    let o = krishiv(
+        &[
+            "sql",
+            "--explain-verbose",
+            "--json",
+            "--explain-format",
+            "dot",
+            "-e",
+            local,
+        ],
+        None,
+    );
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("cannot be used with"), "{}", err(&o));
+    let o = krishiv(&["sql", "--explain-format", "mermaid", "-e", local], None);
+    assert_eq!(o.status.code(), Some(2));
+    let o = krishiv(
+        &[
+            "sql",
+            "--explain-verbose",
+            "--explain-format",
+            "yaml",
+            "-e",
+            local,
+        ],
+        None,
+    );
+    assert_eq!(o.status.code(), Some(2));
+    assert!(err(&o).contains("mermaid"), "{}", err(&o));
+}
+
+#[test]
 fn explain_flags_are_checked() {
     // Usage errors exit 2.
     let o = krishiv(&["sql", "--json", "-e", "select 1"], None);
