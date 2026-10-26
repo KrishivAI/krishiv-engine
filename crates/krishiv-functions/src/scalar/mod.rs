@@ -37,6 +37,7 @@ mod regex;
 mod session;
 mod string;
 mod r#struct;
+mod url;
 
 pub use regex::{extract_all_pieces, split_regex};
 
@@ -304,7 +305,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 13] = [
+const FAMILIES: [(&[&str], Binder); 14] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
@@ -318,6 +319,7 @@ const FAMILIES: [(&[&str], Binder); 13] = [
     (chars::NAMES, chars::bind),
     (codec::NAMES, codec::bind),
     (r#struct::NAMES, r#struct::bind),
+    (url::NAMES, url::bind),
 ];
 
 /// The name of every scalar function [`bind_scalar`] binds, aliases

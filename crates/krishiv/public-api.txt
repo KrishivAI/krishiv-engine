@@ -7,6 +7,7 @@ pub use krishiv::DataType
 pub use krishiv::Error
 pub use krishiv::ExplainMode
 pub use krishiv::ExplainVerbose
+pub use krishiv::GraphFormat
 pub use krishiv::GroupedData
 pub use krishiv::JoinType
 pub use krishiv::OptimizerStep
@@ -16,7 +17,9 @@ pub use krishiv::RuntimeConf
 pub use krishiv::Session
 pub use krishiv::SessionBuilder
 pub use krishiv::TextOptions
+pub use krishiv::dot_of_profile
 pub use krishiv::functions
+pub use krishiv::mermaid_of_profile
 pub mod krishiv::arrow
 pub use krishiv::arrow::array
 pub use krishiv::arrow::datatypes

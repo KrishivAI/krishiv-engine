@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Hash aggregation (ADR 0011): `count`, `sum`, `avg`, `min`, `max`,
-//! `first`, `last`, `any_value`, `max_by`, `min_by` with Spark 4.2 result
-//! types, in two phases, with spill and `DISTINCT`. `count_if` and the
-//! boolean aggregates are `count` and `min`/`max` over a rewritten argument
-//! (the physical planner).
+//! `first`, `last`, `any_value`, `max_by`, `min_by` and the moment
+//! aggregates (`stddev`, `variance`, `skewness`, `kurtosis`, `covar_*`,
+//! `corr`) with Spark 4.2 result types, in two phases, with spill and
+//! `DISTINCT`. `count_if` and the boolean aggregates are `count` and
+//! `min`/`max` over a rewritten argument (the physical planner).
 //!
 //! # Operators
 //! - [`HashAggregate`] is a pipeline breaker. Each driver aggregates into
@@ -53,12 +54,14 @@
 //! Rows carry Z-set weights ([`Weights`](krishiv_types::batch::Weights)):
 //! `count` adds the weight, `sum` adds `value × weight`, `avg` divides the
 //! weighted sum by the weighted count. `min`/`max`, `first`, `last`,
-//! `any_value`, `max_by` and `min_by` need retractions to be maintained
-//! incrementally (P4 IVM), so they and `DISTINCT` reject any weight other
-//! than 1 with `KRISHIV_UNSUPPORTED_FEATURE`. Output rows have weight 1;
-//! a group exists once it received a row.
+//! `any_value`, `max_by`, `min_by` and the moment aggregates need
+//! retractions to be maintained incrementally (P4 IVM), so they and
+//! `DISTINCT` reject any weight other than 1 with
+//! `KRISHIV_UNSUPPORTED_FEATURE`. Output rows have weight 1; a group exists
+//! once it received a row.
 
 mod accumulator;
+mod moments;
 mod node;
 mod partial;
 mod rowtable;
@@ -80,6 +83,7 @@ use krishiv_memory::SpillScope;
 #[cfg(all(test, not(loom)))]
 pub(crate) use accumulator::plain;
 pub(crate) use accumulator::{Accumulator, Running, avg_decimal_wide, wide_sum_value};
+pub(crate) use moments::arity;
 pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
 pub use partial::{BypassPolicy, PartialAggregate};
 #[cfg(test)]
@@ -87,6 +91,13 @@ use sink::row_merge_running;
 pub use sink::{AggregateMetrics, HashAggregate};
 
 use crate::error::{Result, internal};
+
+/// Whether `f` is a moment aggregate (`stddev`, `variance`, `skewness`,
+/// `kurtosis`, `covar_*`, `corr`): it reads its arguments as doubles, and
+/// the window planner refuses it.
+pub fn is_moment(f: AggregateFunction) -> bool {
+    moments::buffer(f).is_some()
+}
 
 /// An aggregate function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -116,6 +127,33 @@ pub enum AggregateFunction {
         /// `last(x, true)` / `IGNORE NULLS`: the last non-NULL value.
         ignore_nulls: bool,
     },
+    /// `stddev(x)` / `std` / `stddev_samp`: `double`; NULL for no rows, and
+    /// for one row unless `legacy_statistical` (then NaN). Rows with a NULL
+    /// are skipped. Likewise for the moment aggregates below.
+    StddevSamp,
+    /// `stddev_pop(x)`: `double`; NULL for no rows.
+    StddevPop,
+    /// `variance(x)` / `var_samp`, as `StddevSamp` without the root.
+    VarSamp,
+    /// `var_pop(x)`, as `StddevPop` without the root.
+    VarPop,
+    /// `skewness(x)`: `double`; NULL for no rows, and for no variance
+    /// unless `legacy_statistical` (then NaN).
+    Skewness,
+    /// `kurtosis(x)`, as `Skewness`.
+    Kurtosis,
+    /// `corr(x, y)`: Pearson correlation, `double`; both arguments are read
+    /// as `double` and a row with a NULL in either is skipped. NULL for no
+    /// rows, and for one row unless `legacy_statistical` (then NaN). Over
+    /// several rows of which one argument is constant it is
+    /// `DIVIDE_BY_ZERO` with `ansi` and NULL without, whatever
+    /// `legacy_statistical` says.
+    Corr,
+    /// `covar_samp(x, y)`: as `Corr` for its arguments and its single-row
+    /// rule.
+    CovarSamp,
+    /// `covar_pop(x, y)`: as `Corr` for its arguments; NULL for no rows.
+    CovarPop,
     /// `any_value(x)`: some row's value of the group; here the first row's,
     /// as `first` (a legal choice); NULL for no value. The input type.
     /// In-order merges keep the first row in input order; a `DISTINCT`
@@ -256,6 +294,11 @@ impl AggregateExpr {
             {
                 t.clone()
             }
+            // The analyzer casts every argument to `double` (decimals
+            // included); the executor also reads integers and `float`.
+            (f, t) if moments::buffer(f).is_some() && moments::reads_as_double(t) => {
+                DataType::Float64
+            }
             (F::MaxBy | F::MinBy, _) => match self.by_types() {
                 Some((v, k))
                     if accumulator::min_max_supported(v) && accumulator::min_max_supported(k) =>
@@ -298,6 +341,18 @@ impl AggregateExpr {
                 Field::new(n("value"), out, true),
                 Field::new(n("valueSet"), DataType::Boolean, false),
             ],
+            (
+                F::StddevSamp
+                | F::StddevPop
+                | F::VarSamp
+                | F::VarPop
+                | F::Skewness
+                | F::Kurtosis
+                | F::Corr
+                | F::CovarSamp
+                | F::CovarPop,
+                _,
+            ) => moments::state_fields(self.function, &self.name),
             // The key is NULL until a row with a key was taken: it says
             // whether the value (which may be NULL) counts.
             (F::MaxBy | F::MinBy, _) => {
@@ -371,6 +426,10 @@ pub struct AggregateSpec {
     /// Reject input weights other than 1 (`DISTINCT`, `UNION`: set
     /// semantics over Z-sets need IVM).
     pub require_unit_weights: bool,
+    /// `spark.sql.legacy.statisticalAggregate`: where Spark divides by zero,
+    /// the sample moment aggregates (`stddev_samp`, `var_samp`, `covar_samp`,
+    /// `corr`, `skewness`, `kurtosis`) give NaN instead of NULL.
+    pub legacy_statistical: bool,
 }
 
 impl AggregateSpec {

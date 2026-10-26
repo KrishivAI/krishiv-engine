@@ -594,6 +594,7 @@ mod number;
 mod predicate;
 mod r#struct;
 mod text;
+mod url;
 
 #[test]
 fn session_user_and_local_clock() {
