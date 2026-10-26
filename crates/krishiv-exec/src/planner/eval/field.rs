@@ -105,11 +105,17 @@ mod tests {
         let err = compile(base(), 2, &ArrowType::Utf8, true)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("struct field 2 of a struct with 2 fields"), "{err}");
+        assert!(
+            err.contains("struct field 2 of a struct with 2 fields"),
+            "{err}"
+        );
         let err = compile(base(), 0, &ArrowType::Utf8, true)
             .unwrap_err()
             .to_string();
-        assert!(err.contains("struct field 0 declared as Utf8 is Int32"), "{err}");
+        assert!(
+            err.contains("struct field 0 declared as Utf8 is Int32"),
+            "{err}"
+        );
         let int: Arc<dyn PhysExpr> = Arc::new(super::super::Column {
             index: 0,
             data_type: ArrowType::Int32,

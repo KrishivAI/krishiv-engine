@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "try_parse_url#0dde74e198ba/ansi_on",
-      "reason": "SELECT try_parse_url(named_struct('a', 1, 'b', 'x'), 'HOST') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_parse_url#0dde74e198ba/ansi_off",
-      "reason": "SELECT try_parse_url(named_struct('a', 1, 'b', 'x'), 'HOST') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_parse_url#0e12119c68fa/ansi_on",
       "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -49,14 +41,6 @@
       "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', INTERVAL '1 02:03:04' DAY TO SECOND, 'query') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_parse_url#21a1cb3b0b53/ansi_on",
-      "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_parse_url#21a1cb3b0b53/ansi_off",
-      "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_parse_url#2c278d2df488/ansi_on",
       "reason": "SELECT try_parse_url(INTERVAL '1 02:03:04' DAY TO SECOND, 'QUERY', 'query') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -81,14 +65,6 @@
       "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', array(1, 2), 'query') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "try_parse_url#31b9fb5d1644/ansi_on",
-      "reason": "SELECT try_parse_url(named_struct('a', 1, 'b', 'x'), 'QUERY', 'query') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_parse_url#31b9fb5d1644/ansi_off",
-      "reason": "SELECT try_parse_url(named_struct('a', 1, 'b', 'x'), 'QUERY', 'query') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "try_parse_url#37c0beb26184/ansi_on",
       "reason": "SELECT try_parse_url(map('a', 1), 'QUERY', 'query') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -111,14 +87,6 @@
     {
       "id": "try_parse_url#48d9e4f27891/ansi_off",
       "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_parse_url#53b39a1f6c3a/ansi_on",
-      "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_parse_url#53b39a1f6c3a/ansi_off",
-      "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_parse_url#6cd107179b5a/ansi_on",
@@ -167,14 +135,6 @@
     {
       "id": "try_parse_url#b3be60b5bab4/ansi_off",
       "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_parse_url#b9b887d58e1c/ansi_on",
-      "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', named_struct('a', 1, 'b', 'x'), 'query') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_parse_url#b9b887d58e1c/ansi_off",
-      "reason": "SELECT try_parse_url('http://spark.apache.org/path?query=1', named_struct('a', 1, 'b', 'x'), 'query') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_parse_url#dc20bfc7ef6c/ansi_on",
