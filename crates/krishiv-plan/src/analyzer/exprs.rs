@@ -17,7 +17,7 @@ use krishiv_common::error::{
     DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
     DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
-    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
     NamedParametersNotSupported, NestedAggregateFunction, RequiredParameterNotFound,
@@ -1134,6 +1134,11 @@ impl Resolver<'_> {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
+                // `schema_of_csv(lit)` resolves below to the DDL literal.
+                // The registry lookup is ASCII case-insensitive and
+                // `id.name()` is the canonical lower-case name, so a
+                // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
+                let is_schema_of_csv = entry.id.name() == "schema_of_csv";
                 if lookup_name.eq_ignore_ascii_case("mask") {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
@@ -1151,7 +1156,7 @@ impl Resolver<'_> {
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 let shown = self.call_shown(lookup_name, &expr, kids, &call_kids);
-                Bound {
+                let mut bound = Bound {
                     agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
                     } else {
@@ -1160,7 +1165,14 @@ impl Resolver<'_> {
                     shown,
                     expr,
                     ..keep(ty)
+                };
+                // `schema_of_csv(lit)` resolves during analysis (Spark's
+                // `SchemaOfCsv` evaluates its foldable child): the DDL
+                // literal, shown as the call.
+                if is_schema_of_csv {
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound)?;
                 }
+                bound
             }
             ExprNode::Cast { to, mode, .. } => {
                 let mode = match mode {
@@ -1358,6 +1370,56 @@ impl Resolver<'_> {
             );
         }
         kids
+    }
+
+    /// `schema_of_csv(csv)` as the DDL literal it resolves to (Spark's
+    /// `SchemaOfCsv` evaluates its foldable child during analysis, keeping
+    /// the call as the output name). The signature's result rule already
+    /// rejected a non-foldable, null or non-string child, so anything but
+    /// a folded string here (a custom registry's rule) keeps the call;
+    /// that call has no scalar binding and fails at execution binding, so
+    /// it never resolves silently. Only the one-argument form resolves
+    /// here: the two-argument options form is rejected by the signature
+    /// (options are a map, which Krishiv cannot type yet), so the default
+    /// options below always match the accepted call. Out of line: it is on
+    /// the path of every call.
+    #[inline(never)]
+    fn resolve_schema_of_csv(
+        &self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        bound: &mut Bound,
+    ) -> Result<(), AnalysisError> {
+        if kids.len() != 1 {
+            return Ok(());
+        }
+        let csv = kids
+            .first()
+            .and_then(|k| self.fold(&k.expr, self.ctx.conf.ansi));
+        let Some(Constant::String(csv)) = csv else {
+            return Ok(());
+        };
+        let options = krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema());
+        let ddl = krishiv_io::csv::ddl_of_string(&csv, &options).map_err(|err| {
+            AnalysisError::new(
+                match err {
+                    krishiv_io::FormatError::Other(e) => e,
+                    other => InternalError {
+                        message: other.to_string(),
+                    }
+                    .into(),
+                },
+                e.origin,
+            )
+        })?;
+        // Keep the form the call already shows (a session variable's name,
+        // not its value); otherwise show the call itself.
+        if bound.shown.is_none() {
+            bound.shown = Some(Arc::clone(&bound.expr));
+        }
+        bound.expr =
+            Arc::new(Expr::new(ExprNode::Literal(Literal::String(ddl))).with_origin(e.origin));
+        Ok(())
     }
 
     /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,

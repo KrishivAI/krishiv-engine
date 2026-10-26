@@ -62,6 +62,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &LEGACY_STATISTICAL_AGGREGATE,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -169,6 +170,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
     (
+        "spark.sql.legacy.statisticalAggregate",
+        &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.minRows",
         &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     ),
@@ -183,6 +188,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.sources.bucketing.maxBuckets",
         &BUCKETING_MAX_BUCKETS,
+    ),
+    (
+        "krishiv.sql.legacy.statisticalAggregate",
+        &LEGACY_STATISTICAL_AGGREGATE,
     ),
     (
         "krishiv.runtimeFilter.exactSet.maxValues",
@@ -874,4 +883,17 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `spark.sql.legacy.statisticalAggregate`.
+pub static LEGACY_STATISTICAL_AGGREGATE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.statisticalAggregate",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, `stddev_samp`, `var_samp`, `covar_samp` and `corr` of a single row, and \
+          `skewness` and `kurtosis` of values without variance, return NaN; when false they \
+          return NULL, as Spark 4 does.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.statisticalAggregate"),
 };

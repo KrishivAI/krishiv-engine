@@ -67,10 +67,15 @@ pub struct ExprEnv {
     pub query_start_micros: i64,
     #[prost(string, tag = "4")]
     pub user: ::prost::alloc::string::String,
+    /// feature: legacy_statistical_aggregate
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+    /// give NaN instead of NULL where Spark divides by zero.
+    #[prost(bool, tag = "5")]
+    pub legacy_statistical_aggregate: bool,
     /// The session's map-key dedup policy: a worker without the feature keeps
     /// the first value on duplicate map keys.
     /// feature: map_key_dedup_policy
-    #[prost(bool, optional, tag = "5")]
+    #[prost(bool, optional, tag = "6")]
     pub map_key_dedup_last_win: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

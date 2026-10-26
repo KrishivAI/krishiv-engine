@@ -186,6 +186,11 @@ PYSPARK_CALLS = [
     (lambda: F.trim("s"), ("call", "trim", (("col", "s"),))),
     (lambda: F.trim("s", F.col("x")), ("call", "trim", (("col", "x"), ("col", "s")))),
     (lambda: F.btrim("s", "x"), ("call", "btrim", (("col", "s"), ("col", "x")))),
+    (lambda: F.parse_url("u", "HOST"), ("call", "parse_url", (("col", "u"), ("col", "HOST")))),
+    (
+        lambda: F.try_parse_url("u", F.lit("QUERY"), "k"),
+        ("call", "try_parse_url", (("col", "u"), ("lit", "QUERY"), ("col", "k"))),
+    ),
     (lambda: F.log("a"), ("call", "ln", (("col", "a"),))),
     (lambda: F.log(2.0, "a"), ("call", "log", (("lit", 2.0), ("col", "a")))),
     (lambda: F.mean("a"), ("call", "avg", (("col", "a"),))),

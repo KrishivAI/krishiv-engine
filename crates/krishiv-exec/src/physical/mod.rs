@@ -150,6 +150,9 @@ pub enum JoinDistribution {
 pub struct ExprEnv {
     /// `spark.sql.ansi.enabled`.
     pub ansi: bool,
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+    /// give NaN instead of NULL where Spark divides by zero.
+    pub legacy_statistical_aggregate: bool,
     /// The session time zone as a fixed offset in seconds, when it is one.
     pub zone: Option<i32>,
     /// The query's clock (microseconds since the epoch, UTC), read once at
@@ -497,7 +500,14 @@ plan_data!(
         Partitioned,
     }
 );
-plan_data!(struct ExprEnv { ansi, zone, query_start_micros, user, map_key_dedup_last_win });
+plan_data!(struct ExprEnv {
+    ansi,
+    legacy_statistical_aggregate,
+    zone,
+    query_start_micros,
+    user,
+    map_key_dedup_last_win
+});
 plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,
