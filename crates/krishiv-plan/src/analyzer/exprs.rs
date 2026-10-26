@@ -1410,7 +1410,11 @@ impl Resolver<'_> {
                 e.origin,
             )
         })?;
-        bound.shown = Some(Arc::clone(&bound.expr));
+        // Keep the form the call already shows (a session variable's name,
+        // not its value); otherwise show the call itself.
+        if bound.shown.is_none() {
+            bound.shown = Some(Arc::clone(&bound.expr));
+        }
         bound.expr =
             Arc::new(Expr::new(ExprNode::Literal(Literal::String(ddl))).with_origin(e.origin));
         Ok(())

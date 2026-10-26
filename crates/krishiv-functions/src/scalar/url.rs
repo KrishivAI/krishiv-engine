@@ -30,8 +30,10 @@
 //! server-based ones, strict IPv6 literals (brackets kept in the host),
 //! and ports that must be digits (an empty port reads as absent).
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
+use arrow_array::builder::StringBuilder;
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
 use fancy_regex::{Regex, RegexBuilder};
@@ -65,7 +67,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             Binding::new(text, move |x: &Inputs<'_>| {
                 let (urls, parts) = (x.strings(0)?, x.strings(1)?);
                 let keys = keyed.then(|| x.strings(2)).transpose()?;
-                let mut out = Vec::with_capacity(urls.len());
+                // Values go straight into the Arrow buffer: every part is a
+                // slice of the URL or its query.
+                let mut out = StringBuilder::with_capacity(urls.len(), urls.value_data().len());
                 // The compiled key pattern of the last distinct key: a
                 // literal key compiles once per call.
                 let mut keys_cache: Option<KeyPattern> = None;
@@ -81,7 +85,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         }
                     }
                     if urls.is_null(i) || parts.is_null(i) || null_key {
-                        out.push(None);
+                        out.append_null();
                         continue;
                     }
                     let (url, part) = (urls.value(i), parts.value(i));
@@ -89,7 +93,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     // a key is NULL without parsing the URL (as Spark's
                     // evaluator checks the part first).
                     if keyed && part != "QUERY" {
-                        out.push(None);
+                        out.append_null();
                         continue;
                     }
                     match split_uri(url) {
@@ -99,23 +103,23 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                             }
                             .into());
                         }
-                        Err(()) => out.push(None),
+                        Err(()) => out.append_null(),
                         Ok(uri) => {
-                            out.push(if keyed {
+                            if keyed {
                                 // No query component: NULL, the key is not read.
                                 match uri.query {
-                                    Some(q) => key_value(q, key, &mut keys_cache)?,
-                                    None => None,
+                                    Some(q) => {
+                                        out.append_option(key_value(q, key, &mut keys_cache)?);
+                                    }
+                                    None => out.append_null(),
                                 }
                             } else {
-                                extract_part(&uri, part)
-                            });
+                                append_part(&mut out, &uri, part);
+                            }
                         }
                     }
                 }
-                Ok(Arc::new(arrow_array::StringArray::from_iter(
-                    out.iter().map(|o| o.as_deref()),
-                )) as ArrayRef)
+                Ok(Arc::new(out.finish()) as ArrayRef)
             })
         }
         _ => return Some((listed, Err(bad_types(listed, args)))),
@@ -649,17 +653,23 @@ fn check_scope_id(s: &str) -> Result<(), ()> {
     }
 }
 
-/// The URI's `part`: the (raw) component, or `None` when undefined or when
-/// `part` names nothing.
-fn extract_part(uri: &Uri<'_>, part: &str) -> Option<String> {
+/// Appends the URI's `part` to `out`: the (raw) component, or NULL when
+/// undefined or when `part` names nothing.
+fn append_part(out: &mut StringBuilder, uri: &Uri<'_>, part: &str) {
     if part == "FILE" {
-        return match (uri.path, uri.query) {
-            (Some(path), Some(query)) => Some(format!("{path}?{query}")),
-            (Some(path), None) => Some(path.to_owned()),
-            _ => None,
-        };
+        match (uri.path, uri.query) {
+            (Some(path), Some(query)) => {
+                out.write_str(path).ok();
+                out.write_str("?").ok();
+                out.write_str(query).ok();
+                out.append_value("");
+            }
+            (Some(path), None) => out.append_value(path),
+            _ => out.append_null(),
+        }
+        return;
     }
-    match part {
+    out.append_option(match part {
         "HOST" => uri.host,
         "PATH" => uri.path,
         "QUERY" => uri.query,
@@ -668,8 +678,7 @@ fn extract_part(uri: &Uri<'_>, part: &str) -> Option<String> {
         "AUTHORITY" => uri.authority,
         "USERINFO" => uri.userinfo,
         _ => None,
-    }
-    .map(str::to_owned)
+    });
 }
 
 /// Spark's `(&|^)key=([^&]*)` search of the raw `query`, where `key` is a
@@ -682,11 +691,11 @@ fn extract_part(uri: &Uri<'_>, part: &str) -> Option<String> {
 /// itself throws an untyped `PatternSyntaxException`, which has no error
 /// class); `KRISHIV_REGEXP_BACKTRACK_LIMIT_EXCEEDED` past the
 /// backtracking cap, as for `regexp`.
-fn key_value(
-    query: &str,
+fn key_value<'q>(
+    query: &'q str,
     key: &str,
     cache: &mut Option<KeyPattern>,
-) -> Result<Option<String>, KrishivError> {
+) -> Result<Option<&'q str>, KrishivError> {
     if cache.as_ref().is_none_or(|c| c.key != key) {
         *cache = Some(KeyPattern::new(key)?);
     }
@@ -697,9 +706,7 @@ fn key_value(
         .for_query(query)
         .captures_from_pos(query, 0)
         .map_err(|e| compiled.backtrack(e))?;
-    Ok(found
-        .and_then(|caps| caps.get(2))
-        .map(|m| m.as_str().to_owned()))
+    Ok(found.and_then(|caps| caps.get(2)).map(|m| m.as_str()))
 }
 
 /// The compiled `(&|^)key=([^&]*)` search for one `key`.
