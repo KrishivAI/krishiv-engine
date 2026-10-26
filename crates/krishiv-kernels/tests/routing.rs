@@ -210,6 +210,18 @@ fn a_dictionary_without_values_is_all_null() {
     assert!(h_of(&[&none]).is_empty());
 }
 
+/// A sparse dictionary (far more values than rows) hashes each referenced
+/// value as the plain column does, including out-of-range keys' NULLs.
+#[test]
+fn a_sparse_dictionary_hashes_like_the_plain_column() {
+    let values: Vec<String> = (0..50).map(|i| format!("v{i}")).collect();
+    let keys = arrow_array::Int32Array::from(vec![Some(7), None, Some(49), Some(7)]);
+    let dict = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(StringArray::from(values)))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let plain = StringArray::from(vec![Some("v7"), None, Some("v49"), Some("v7")]);
+    assert_eq!(h_of(&[&dict]), h_of(&[&plain]));
+}
+
 fn strings() -> impl Strategy<Value = Vec<Option<String>>> {
     prop::collection::vec(prop::option::of("[a-c]{0,20}"), 0..60)
 }

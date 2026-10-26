@@ -14,9 +14,10 @@
 //! carries the version, and a filter built under another version is never
 //! applied. It is the one-column case of the routing hash `H_kg`
 //! (`krishiv_kernels::hash::routing`, P2-T175), whose XXH64 this module
-//! uses, so a join that stores `h` for its own table can pass those hashes
-//! to [`KeyFilterBuilder::add_hashed`](super::KeyFilterBuilder::add_hashed)
-//! instead of the builder hashing again.
+//! uses. Only hashes produced by this routing-hash implementation, such as
+//! `row_hashes` or [`xxh64_fixed`], are valid for
+//! [`KeyFilterBuilder::add_hashed`](super::KeyFilterBuilder::add_hashed). A
+//! row-layout table hash is not valid input.
 
 pub use krishiv_kernels::hash::routing::xxh64_fixed;
 

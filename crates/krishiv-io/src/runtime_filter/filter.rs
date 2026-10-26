@@ -160,11 +160,11 @@ impl KeyFilterBuilder {
         self.add_hashed(column, include, None)
     }
 
-    /// As [`Self::add`], with the row hash `h` of every row of `column`
-    /// already computed under `hash` (a join that stores `h` for its own
-    /// table passes it instead of the keys being hashed twice). Hashes of
-    /// another function, or of the wrong length, are not used: the
-    /// builder hashes the keys itself.
+    /// As [`Self::add`], with the routing hash of every row of `column`
+    /// already computed under [`RowHash::Xxh64Seed0`]. Hashes from another
+    /// function, including a row-layout table hash, must not be supplied.
+    /// Hashes of the wrong length are ignored and the builder hashes the
+    /// keys itself.
     ///
     /// # Errors
     /// As [`Self::add`].

@@ -335,10 +335,23 @@ fn column_hashes(a: &dyn Array, out: &mut [u64]) -> Result<(), KernelError> {
                 out.fill(NULL_HASH);
                 return Ok(());
             }
-            let mut value_hashes = vec![0; values.len()];
-            column_hashes(values.as_ref(), &mut value_hashes)?;
-            for (dst, k) in out.iter_mut().zip(d.normalized_keys()) {
-                *dst = value_hashes.get(k).copied().unwrap_or(NULL_HASH);
+            if values.len() <= a.len().saturating_mul(2) {
+                let mut value_hashes = vec![0; values.len()];
+                column_hashes(values.as_ref(), &mut value_hashes)?;
+                for (dst, k) in out.iter_mut().zip(d.normalized_keys()) {
+                    *dst = value_hashes.get(k).copied().unwrap_or(NULL_HASH);
+                }
+            } else {
+                // Sparse dictionary: hash only the values a row refers to.
+                let mut one = [0u64];
+                for (dst, k) in out.iter_mut().zip(d.normalized_keys()) {
+                    *dst = if k < values.len() {
+                        column_hashes(values.slice(k, 1).as_ref(), &mut one)?;
+                        one[0]
+                    } else {
+                        NULL_HASH
+                    };
+                }
             }
         }
         t => return Err(super::unsupported(t)),
