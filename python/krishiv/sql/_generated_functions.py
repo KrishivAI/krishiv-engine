@@ -56,9 +56,12 @@ __all__ = [
     "concat_ws",
     "contains",
     "conv",
+    "corr",
     "cos",
     "cosh",
     "cot",
+    "covar_pop",
+    "covar_samp",
     "crc32",
     "csc",
     "cume_dist",
@@ -114,6 +117,7 @@ __all__ = [
     "isnan",
     "isnotnull",
     "isnull",
+    "kurtosis",
     "lag",
     "last",
     "last_day",
@@ -157,6 +161,7 @@ __all__ = [
     "nvl2",
     "octet_length",
     "overlay",
+    "parse_url",
     "percent_rank",
     "pi",
     "pmod",
@@ -203,11 +208,16 @@ __all__ = [
     "signum",
     "sin",
     "sinh",
+    "skewness",
     "soundex",
     "spark_partition_id",
     "split_part",
     "sqrt",
     "startswith",
+    "std",
+    "stddev",
+    "stddev_pop",
+    "stddev_samp",
     "substr",
     "substring",
     "substring_index",
@@ -228,6 +238,7 @@ __all__ = [
     "try_divide",
     "try_mod",
     "try_multiply",
+    "try_parse_url",
     "try_subtract",
     "try_to_binary",
     "try_to_number",
@@ -245,6 +256,9 @@ __all__ = [
     "user",
     "uuid",
     "validate_utf8",
+    "var_pop",
+    "var_samp",
+    "variance",
     "version",
     "weekday",
     "weekofyear",
@@ -410,6 +424,11 @@ def conv(col: ColumnOrName, fromBase: int, toBase: int) -> Column:
     return _call("conv", _named(col, "col"), _lit(fromBase, "fromBase"), _lit(toBase, "toBase"))
 
 
+def corr(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``corr``."""
+    return _call("corr", _named(col1, "col1"), _named(col2, "col2"))
+
+
 def cos(col: ColumnOrName) -> Column:
     """Calls the registry function ``cos``."""
     return _call("cos", _named(col, "col"))
@@ -423,6 +442,16 @@ def cosh(col: ColumnOrName) -> Column:
 def cot(col: ColumnOrName) -> Column:
     """Calls the registry function ``cot``."""
     return _call("cot", _named(col, "col"))
+
+
+def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``covar_pop``."""
+    return _call("covar_pop", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``covar_samp``."""
+    return _call("covar_samp", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def crc32(col: ColumnOrName) -> Column:
@@ -701,6 +730,11 @@ def isnull(col: ColumnOrName) -> Column:
     return _call("isnull", _named(col, "col"))
 
 
+def kurtosis(col: ColumnOrName) -> Column:
+    """Calls the registry function ``kurtosis``."""
+    return _call("kurtosis", _named(col, "col"))
+
+
 def lag(col: ColumnOrName, offset: int = 1, default: Any | None = None) -> Column:
     """Calls the registry function ``lag``."""
     return _call("lag", _named(col, "col"), _lit(offset, "offset"), *_opt(_lit, default, "default"))
@@ -930,6 +964,11 @@ def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, l
     return _call(
         "overlay", _named(src, "src"), _named(replace, "replace"), _int_or_col(pos, "pos"), _int_or_col(len, "len")
     )
+
+
+def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``parse_url``."""
+    return _call("parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
 
 
 def percent_rank() -> Column:
@@ -1166,6 +1205,11 @@ def sinh(col: ColumnOrName) -> Column:
     return _call("sinh", _named(col, "col"))
 
 
+def skewness(col: ColumnOrName) -> Column:
+    """Calls the registry function ``skewness``."""
+    return _call("skewness", _named(col, "col"))
+
+
 def soundex(col: ColumnOrName) -> Column:
     """Calls the registry function ``soundex``."""
     return _call("soundex", _named(col, "col"))
@@ -1189,6 +1233,26 @@ def sqrt(col: ColumnOrName) -> Column:
 def startswith(str: ColumnOrName, prefix: ColumnOrName) -> Column:
     """Calls the registry function ``startswith``."""
     return _call("startswith", _named(str, "str"), _named(prefix, "prefix"))
+
+
+def std(col: ColumnOrName) -> Column:
+    """Calls the registry function ``std``."""
+    return _call("std", _named(col, "col"))
+
+
+def stddev(col: ColumnOrName) -> Column:
+    """Calls the registry function ``stddev``."""
+    return _call("stddev", _named(col, "col"))
+
+
+def stddev_pop(col: ColumnOrName) -> Column:
+    """Calls the registry function ``stddev_pop``."""
+    return _call("stddev_pop", _named(col, "col"))
+
+
+def stddev_samp(col: ColumnOrName) -> Column:
+    """Calls the registry function ``stddev_samp``."""
+    return _call("stddev_samp", _named(col, "col"))
 
 
 def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None = None) -> Column:
@@ -1293,6 +1357,11 @@ def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column:
     return _call("try_multiply", _named(left, "left"), _named(right, "right"))
 
 
+def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``try_parse_url``."""
+    return _call("try_parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
+
+
 def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_subtract``."""
     return _call("try_subtract", _named(left, "left"), _named(right, "right"))
@@ -1376,6 +1445,21 @@ def uuid(seed: int | Column | None = None) -> Column:
 def validate_utf8(str: ColumnOrName) -> Column:
     """Calls the registry function ``validate_utf8``."""
     return _call("validate_utf8", _named(str, "str"))
+
+
+def var_pop(col: ColumnOrName) -> Column:
+    """Calls the registry function ``var_pop``."""
+    return _call("var_pop", _named(col, "col"))
+
+
+def var_samp(col: ColumnOrName) -> Column:
+    """Calls the registry function ``var_samp``."""
+    return _call("var_samp", _named(col, "col"))
+
+
+def variance(col: ColumnOrName) -> Column:
+    """Calls the registry function ``variance``."""
+    return _call("variance", _named(col, "col"))
 
 
 def version() -> Column:

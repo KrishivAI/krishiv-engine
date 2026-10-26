@@ -37,6 +37,17 @@ use crate::text::TextMetadata;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CsvFormat;
 
+/// The CSV reader's options, for callers that parse literals (see
+/// [`ddl_of_string`]).
+#[must_use]
+pub fn option_schema() -> &'static OptionSchema {
+    &OPTIONS
+}
+
+/// The DDL of a CSV literal (Spark's `schema_of_csv`; see
+/// [`ddl_of_string`] for the contract).
+pub use self::infer::ddl_of_string;
+
 impl FileFormat for CsvFormat {
     fn name(&self) -> &'static str {
         "csv"

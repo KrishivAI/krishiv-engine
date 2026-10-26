@@ -5,6 +5,7 @@
 
 pub mod budgets;
 pub mod ci;
+pub mod codeql_proxy;
 pub mod coverage;
 pub mod dev;
 pub mod docs;

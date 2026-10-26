@@ -15,6 +15,7 @@
 //! nested deeper than [`INLINE_NESTING`] brackets parses on a thread whose
 //! stack fits that depth.
 
+mod ddl;
 mod expr;
 mod types;
 
@@ -142,6 +143,9 @@ pub(crate) struct Parser<'s> {
     cast_types: Vec<usize>,
     /// A complex type keyword after `::` to read as a bare type.
     force_bare: Option<usize>,
+    /// Reading the bodies of a multi-table insert: `INSERT INTO|OVERWRITE`
+    /// starts the next clause, never an implicit alias.
+    insert_bodies: bool,
 }
 
 /// Parses one query statement (`query ;* EOF`).
@@ -640,6 +644,7 @@ impl<'s> Parser<'s> {
             deferred: None,
             cast_types: vec![],
             force_bare,
+            insert_bodies: false,
         }
     }
 
@@ -1285,6 +1290,12 @@ impl<'s> Parser<'s> {
         if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
             return Ok(None);
         }
+        if self.insert_bodies
+            && self.kw_at(0, "INSERT")
+            && (self.kw_at(1, "INTO") || self.kw_at(1, "OVERWRITE"))
+        {
+            return Ok(None);
+        }
         let keyword = !self.opts.enforce_reserved_keywords
             && self.kind(0) == Some(TokenKind::Word)
             && self.item_end_at(1)
@@ -1409,6 +1420,45 @@ impl<'s> Parser<'s> {
             self.drop_command()?
         } else if self.kw_at(0, "USE") {
             self.use_command()?
+        } else if self.any_kw_at(
+            0,
+            &[
+                "ALTER", "SHOW", "DESC", "DESCRIBE", "INSERT", "DELETE", "UPDATE", "MERGE",
+                "TRUNCATE", "CACHE", "UNCACHE", "CLEAR", "REFRESH", "ANALYZE", "MSCK", "REPAIR",
+                "ADD", "LIST",
+            ],
+        ) {
+            self.command_statement()?
+        } else if self.kw_at(0, "FROM") {
+            // A multi-table insert, or a `FROM ... SELECT` query. The
+            // query runs first; only its syntax failure reads as an
+            // insert (a fatal error is the query's own). When both fail,
+            // the farther failure is reported.
+            let save = self.checkpoint();
+            match self.statement() {
+                Ok(query) => {
+                    self.commit(save);
+                    Statement::Query(Box::new(query))
+                }
+                Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                Err(Fail::Syntax) => {
+                    let (far, extra, missing, matched) =
+                        (self.far, self.extra, self.missing, self.matched);
+                    self.restore(save);
+                    match self.multi_insert_command() {
+                        Ok(statement) => statement,
+                        Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                        Err(Fail::Syntax) if self.far >= far => return self.fail(),
+                        Err(Fail::Syntax) => {
+                            self.far = far;
+                            self.extra = extra;
+                            self.missing = missing;
+                            self.matched = matched;
+                            return self.fail();
+                        }
+                    }
+                }
+            }
         } else {
             Statement::Query(Box::new(self.statement()?))
         };
@@ -1854,6 +1904,45 @@ impl<'s> Parser<'s> {
     /// a namespace. Anything else (`CREATE VIEW`, `CREATE FUNCTION`,
     /// `CREATE GLOBAL ...`, ...) fails where it stands, as in Spark.
     fn create_command(&mut self) -> PR<Statement> {
+        // The legacy shapes first (temporary views, tables, namespaces);
+        // a view-shaped statement the legacy reading rejects reads as a
+        // full view statement instead (a fatal error is the legacy
+        // reading's own).
+        if !self.create_is_view_shaped() {
+            return self.create_command_inner();
+        }
+        let start = self.start();
+        let save = self.checkpoint();
+        match self.create_command_inner() {
+            Ok(statement) => {
+                self.commit(save);
+                Ok(statement)
+            }
+            Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
+            Err(Fail::Syntax) => {
+                self.restore(save);
+                self.create_full_view_command(start)
+            }
+        }
+    }
+
+    /// Whether the statement at `CREATE` reads `CREATE [OR REPLACE]
+    /// [GLOBAL] [TEMP|TEMPORARY] VIEW`.
+    fn create_is_view_shaped(&self) -> bool {
+        let mut n = 1;
+        if self.kw_at(n, "OR") && self.kw_at(n + 1, "REPLACE") {
+            n += 2;
+        }
+        if self.kw_at(n, "GLOBAL") {
+            n += 1;
+        }
+        if self.kw_at(n, "TEMP") || self.kw_at(n, "TEMPORARY") {
+            n += 1;
+        }
+        self.kw_at(n, "VIEW")
+    }
+
+    fn create_command_inner(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("CREATE")?;
         let or_replace = if self.kw_at(0, "OR") && self.kw_at(1, "REPLACE") {
@@ -1888,32 +1977,23 @@ impl<'s> Parser<'s> {
         self.fail()
     }
 
-    /// `CREATE [OR REPLACE] TEMPORARY VIEW [IF NOT EXISTS] name
-    /// [(column [COMMENT '...'], ...)] [DEFAULT COLLATION name] AS query`
-    /// (`TEMP` for `TEMPORARY`),
-    /// after the `CREATE [OR REPLACE] TEMPORARY` at `start`. A qualified
-    /// name parses and fails with `INVALID_TEMP_OBJ_QUALIFIER`;
-    /// `OR REPLACE` with `IF NOT EXISTS` parses and fails with
-    /// `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`, and `IF NOT EXISTS`
-    /// without `OR REPLACE` parses and fails with `_LEGACY_ERROR_TEMP_0053`,
-    /// as in Spark. The flag checks run here, on the parsed statement, so
-    /// they come before the post-parse checks of the view's query and
-    /// before execution (an `EXPLAIN` of such a statement fails too).
+    /// `CREATE [OR REPLACE] TEMPORARY VIEW name [(column [COMMENT '...'],
+    /// ...)] [DEFAULT COLLATION name] AS query` (`TEMP` for `TEMPORARY`),
+    /// after the `CREATE [OR REPLACE] TEMPORARY` at `start`. `IF NOT
+    /// EXISTS` or a qualified name fails here, so the statement reads as a
+    /// full view statement ([`Parser::create_full_view_command`]), whose
+    /// `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`, `_LEGACY_ERROR_TEMP_0053`
+    /// and `INVALID_TEMP_OBJ_QUALIFIER` validation raises in Spark's order.
     fn create_temp_view_command(&mut self, start: usize, or_replace: bool) -> PR<Statement> {
         self.expect_kw("VIEW")?;
-        let if_not_exists =
-            if self.kw_at(0, "IF") && self.kw_at(1, "NOT") && self.kw_at(2, "EXISTS") {
-                self.pos += 3;
-                true
-            } else {
-                false
-            };
-        // Temporary views take one name part; more parts fail after the
-        // statement parsed, where the name is complete.
+        // `IF NOT EXISTS` and a qualified name read as the full view
+        // statement, whose checks run after parsing in Spark's order.
+        if self.kw_at(0, "IF") {
+            return self.fail();
+        }
         let first = self.any_ident()?;
-        let mut extra = Vec::new();
-        while self.eat_sym(Sym::Dot) {
-            extra.push(self.any_ident()?);
+        if self.sym_at(0, Sym::Dot) {
+            return self.fail();
         }
         let columns = if self.sym_at(0, Sym::LParen) {
             self.paren_list(Self::view_column)?
@@ -1930,33 +2010,9 @@ impl<'s> Parser<'s> {
         let query = Box::new(self.query()?);
         let span = self.span_from(start);
         self.command_end()?;
-        if !extra.is_empty() {
-            let mut parts = vec![&first];
-            parts.extend(extra.iter());
-            let object_name: Vec<String> = parts.iter().map(|p| quote_ident(&p.value)).collect();
-            let qualifier: Vec<String> = parts[..parts.len() - 1]
-                .iter()
-                .map(|p| quote_ident(&p.value))
-                .collect();
-            return Self::fatal(error::invalid_temp_obj_qualifier(
-                "view",
-                object_name.join("."),
-                qualifier.join("."),
-                span,
-            ));
-        }
-        if if_not_exists && or_replace {
-            return Self::fatal(error::create_view_with_if_not_exists_and_replace(
-                quote_ident(&first.value),
-                span,
-            ));
-        }
-        if if_not_exists && !or_replace {
-            return Self::fatal(error::temp_view_if_not_exists(span));
-        }
         Ok(Statement::CreateView(CreateView {
             or_replace,
-            if_not_exists,
+            if_not_exists: false,
             name: first,
             columns,
             collation,
@@ -1985,8 +2041,31 @@ impl<'s> Parser<'s> {
     }
 
     /// `DROP ...`: a view, a table, a namespace, or a temporary variable.
-    /// Anything else fails where it stands, as in Spark.
+    /// Anything else fails where it stands, as in Spark. A `DROP VIEW`
+    /// the legacy reading rejects reads as a full view statement instead.
     fn drop_command(&mut self) -> PR<Statement> {
+        if !self.kw_at(1, "VIEW") {
+            return self.drop_command_inner();
+        }
+        let start = self.start();
+        let save = self.checkpoint();
+        match self.drop_command_inner() {
+            Ok(statement) => {
+                self.commit(save);
+                Ok(statement)
+            }
+            Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
+            Err(Fail::Syntax) => {
+                self.restore(save);
+                self.expect_kw("DROP")?;
+                self.drop_full_view_command(start)
+            }
+        }
+    }
+
+    /// `DROP ...`: a view, a table, a namespace, or a temporary variable.
+    /// Anything else fails where it stands, as in Spark.
+    fn drop_command_inner(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("DROP")?;
         if self.kw_at(0, "VIEW") {
