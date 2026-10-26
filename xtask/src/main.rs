@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use xtask::budgets::{self, Budgets};
+use xtask::codeql_proxy;
 use xtask::coverage;
 use xtask::dev;
 use xtask::docs::{self, Doc};
@@ -21,7 +22,7 @@ use xtask::precheck;
 use xtask::profile;
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--memory-cap SIZE] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--known-failures F]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--known-failures F]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -34,6 +35,7 @@ fn main() -> ExitCode {
         ["layering"] => run_layering(),
         ["golden", flags @ ..] => run_golden(flags),
         ["precheck", flags @ ..] => precheck::run_precheck(&workspace_root(), flags),
+        ["codeql-proxy", flags @ ..] => codeql_proxy::run(&workspace_root(), flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
         ["budgets", flags @ ..] => run_budgets(flags),
         ["wheel-sizes", "--compare", file, flags @ ..] => {

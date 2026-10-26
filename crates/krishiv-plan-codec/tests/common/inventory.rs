@@ -33,6 +33,7 @@ use krishiv_types::{DataType, DecimalType, parse_data_type};
 pub(crate) fn env() -> ExprEnv {
     ExprEnv {
         ansi: true,
+        legacy_statistical_aggregate: false,
         zone: Some(-28_800),
         query_start_micros: 1_760_000_000_123_456,
         user: Arc::from("analyst"),
@@ -764,6 +765,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
 
 /// A plan of `root`, with a two-level explain tree and a warning.
 pub(crate) fn plan_of(root: PhysNode) -> PhysicalPlan {
+    plan_of_env(root, env())
+}
+
+/// [`plan_of`] with `env`: the golden for the
+/// `legacy_statistical_aggregate` feature sets the flag the wire now
+/// carries.
+pub(crate) fn plan_of_env(root: PhysNode, env: ExprEnv) -> PhysicalPlan {
     let explain = ExplainNode::new(
         "Root",
         "details",
@@ -772,8 +780,7 @@ pub(crate) fn plan_of(root: PhysNode) -> PhysicalPlan {
             ExplainNode::new("Right", "", vec![ExplainNode::leaf("Leaf", "x")]),
         ],
     );
-    PhysicalPlan::new(root, schema(), explain, env())
-        .with_warnings(vec!["a hint was ignored".into()])
+    PhysicalPlan::new(root, schema(), explain, env).with_warnings(vec!["a hint was ignored".into()])
 }
 
 /// Every kind of expression and literal, in one projection.
@@ -941,6 +948,17 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .map(|(name, node)| (name.to_owned(), plan_of(node)))
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
+    // The expression environment flag the `legacy_statistical_aggregate`
+    // feature is about: the same root as `one_row`, under a session with
+    // `spark.sql.legacy.statisticalAggregate` set. With no moment aggregate
+    // in the plan it lists no feature, so readers without it keep reading
+    // the plan; the flag itself still travels on the wire.
+    let mut legacy = env();
+    legacy.legacy_statistical_aggregate = true;
+    out.push((
+        "one_row_legacy_statistical_aggregate".to_owned(),
+        plan_of_env(PhysNode::OneRow, legacy),
+    ));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
     out
 }

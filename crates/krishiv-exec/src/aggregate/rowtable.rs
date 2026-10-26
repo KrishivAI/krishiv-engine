@@ -1481,7 +1481,7 @@ fn new_accs(core: &AggCore) -> Result<Vec<Accumulator>> {
     core.spec
         .aggregates
         .iter()
-        .map(|a| Accumulator::new(a, core.spec.ansi))
+        .map(|a| core.accumulator(a))
         .collect()
 }
 
@@ -1713,6 +1713,7 @@ mod tests {
             ansi: true,
             spill: None,
             require_unit_weights: false,
+            legacy_statistical: false,
         };
         Arc::new(AggCore::new(spec).unwrap())
     }
@@ -1746,6 +1747,7 @@ mod tests {
             ansi: true,
             spill: None,
             require_unit_weights: false,
+            legacy_statistical: false,
         };
         Arc::new(AggCore::new(spec).unwrap())
     }
@@ -2206,6 +2208,7 @@ mod tests {
             ansi: true,
             spill: None,
             require_unit_weights: false,
+            legacy_statistical: false,
         };
         let core = Arc::new(AggCore::new(spec).unwrap());
         let seed = HashSeed::new(Some(6));
