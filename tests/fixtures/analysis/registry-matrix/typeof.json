@@ -9,14 +9,6 @@
       "reason": "SELECT typeof(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
     {
-      "id": "typeof#7b81ac5ac6dd/ansi_on",
-      "reason": "SELECT typeof(CAST(NULL AS array<int>)) | string where Spark has string not null"
-    },
-    {
-      "id": "typeof#7b81ac5ac6dd/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS array<int>)) | string where Spark has string not null"
-    },
-    {
       "id": "typeof#85119c3e6111/ansi_on",
       "reason": "SELECT typeof(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -63,22 +55,6 @@
     {
       "id": "typeof#bea7c4b2a1ca/ansi_off",
       "reason": "SELECT typeof(CAST(array(NULL) AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "typeof#e22394e72946/ansi_on",
-      "reason": "SELECT typeof(CAST(NULL AS int)) | string where Spark has string not null"
-    },
-    {
-      "id": "typeof#e22394e72946/ansi_off",
-      "reason": "SELECT typeof(CAST(NULL AS int)) | string where Spark has string not null"
-    },
-    {
-      "id": "typeof#e571d1babdbc/ansi_on",
-      "reason": "SELECT typeof(NULL) | string where Spark has string not null"
-    },
-    {
-      "id": "typeof#e571d1babdbc/ansi_off",
-      "reason": "SELECT typeof(NULL) | string where Spark has string not null"
     },
     {
       "id": "typeof#ef1847dcc457/ansi_on",
