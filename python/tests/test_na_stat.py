@@ -338,6 +338,36 @@ def test_dropna_how_must_be_any_or_all(typed: DataFrame, how: Any) -> None:
         typed.na.drop(how=how)
 
 
+def test_dropna_how_rejects_an_array(typed: DataFrame) -> None:
+    """A multi-element array as ``how`` fails with ``VALUE_NOT_ANY_OR_ALL`` instead of an
+    ambiguous-truth-value error (``in`` would truth-test the elementwise ``==``)."""
+
+    class _Array:
+        """Stands in for a multi-element NumPy array: ``==`` yields an object whose truth
+        value is ambiguous, exactly like ``numpy.ndarray.__eq__``."""
+
+        def __eq__(self, other: object) -> Any:
+            class _Compared:
+                def __bool__(self) -> bool:
+                    raise ValueError(
+                        "The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()"
+                    )
+
+            return _Compared()
+
+    how = _Array()
+    with pytest.raises(errors.PySparkValueError) as info:
+        typed.dropna(how=how)
+    assert info.value.getCondition() == "VALUE_NOT_ANY_OR_ALL"
+    assert (info.value.getMessageParameters() or {})["arg_name"] == "how"
+    assert (info.value.getMessageParameters() or {})["arg_value"] is how
+    with pytest.raises(errors.PySparkValueError) as info:
+        typed.na.drop(how=how)
+    assert info.value.getCondition() == "VALUE_NOT_ANY_OR_ALL"
+    assert (info.value.getMessageParameters() or {})["arg_name"] == "how"
+    assert (info.value.getMessageParameters() or {})["arg_value"] is how
+
+
 def test_dropna_names_that_are_not_columns(typed: DataFrame) -> None:
     with pytest.raises(errors.AnalysisException) as info:
         typed.dropna(subset=["s", "nope"])

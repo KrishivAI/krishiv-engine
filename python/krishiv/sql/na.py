@@ -167,7 +167,7 @@ class DataFrameNaFunctions:
     def drop(self, how: str | None = "any", thresh: int | None = None, subset: Any = None) -> DataFrame:
         """Returns a new :class:`DataFrame` omitting rows with null or NaN values; see
         :meth:`DataFrame.dropna` (``df.na.drop`` and ``df.dropna`` are the same)."""
-        if how is not None and how not in ("any", "all"):
+        if how is not None and (not isinstance(how, str) or how not in ("any", "all")):
             raise PySparkValueError(
                 errorClass="VALUE_NOT_ANY_OR_ALL",
                 messageParameters={"arg_name": "how", "arg_value": how},
