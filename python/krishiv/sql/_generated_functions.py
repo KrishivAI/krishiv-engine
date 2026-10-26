@@ -202,6 +202,7 @@ __all__ = [
     "split_part",
     "sqrt",
     "startswith",
+    "std",
     "stddev",
     "stddev_pop",
     "stddev_samp",
@@ -1155,6 +1156,11 @@ def sqrt(col: ColumnOrName) -> Column:
 def startswith(str: ColumnOrName, prefix: ColumnOrName) -> Column:
     """Calls the registry function ``startswith``."""
     return _call("startswith", _named(str, "str"), _named(prefix, "prefix"))
+
+
+def std(col: ColumnOrName) -> Column:
+    """Calls the registry function ``std``."""
+    return _call("std", _named(col, "col"))
 
 
 def stddev(col: ColumnOrName) -> Column:

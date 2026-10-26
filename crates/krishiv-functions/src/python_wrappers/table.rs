@@ -30,7 +30,6 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("min_by", "no PySpark function"),
     ("some", "no PySpark function"),
     ("space", "no PySpark function"),
-    ("std", "no PySpark function; use `stddev`"),
     (
         "mean",
         "an alias of `avg`; the exported `mean` is a row that sends `avg`",
@@ -144,6 +143,7 @@ pub(super) fn rows() -> Vec<Row> {
         "skewness",
         "soundex",
         "sqrt",
+        "std",
         "stddev",
         "stddev_pop",
         "stddev_samp",

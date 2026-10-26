@@ -198,6 +198,7 @@ PYSPARK_SIGNATURES = {
     "split_part": "src, delimiter, partNum",
     "sqrt": "col",
     "startswith": "str, prefix",
+    "std": "col",
     "stddev": "col",
     "stddev_pop": "col",
     "stddev_samp": "col",
