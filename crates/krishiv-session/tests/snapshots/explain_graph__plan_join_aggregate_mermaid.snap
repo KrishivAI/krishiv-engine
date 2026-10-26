@@ -1,0 +1,24 @@
+---
+source: crates/krishiv-session/tests/explain_graph.rs
+expression: mermaid
+---
+flowchart TD
+    n0["Sort [name#3 ASC NULLS FIRST]"]
+    n1["Exchange rangepartitioning(name#3 ASC NULLS FIRST)"]
+    n2["Project [name#3, count(1)#4611686018427387904 AS n#4, sum(amount#1)#4611686018427387905 AS total#5]"]
+    n3["HashAggregate keys=[name#3], functions=[count(1), sum(amount#1)]"]
+    n4["Exchange hashpartitioning(name#3)"]
+    n5["Project [amount#1, name#3]"]
+    n6["HashJoin Inner, [cust#0] = [id#2], RuntimeFilter #1: cust#0 -#gt; spark_catalog.default.orders.cust"]
+    n7["Scan spark_catalog.default.orders [cust#0, amount#1], PushedFilters: [(amount#1 #gt; 10L)]"]
+    n8["BroadcastExchange"]
+    n9["Scan spark_catalog.default.customers [id#2, name#3]"]
+    n0 --> n1
+    n1 --> n2
+    n2 --> n3
+    n3 --> n4
+    n4 --> n5
+    n5 --> n6
+    n6 --> n7
+    n6 --> n8
+    n8 --> n9

@@ -15,7 +15,7 @@ use krishiv_plan_codec::{
 };
 use prost::Message as _;
 
-use inventory::{cases, plan_of};
+use inventory::{cases, plan_of, plan_of_env};
 
 fn message(name: &str) -> pb::PhysicalPlan {
     let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
@@ -49,8 +49,15 @@ fn the_header_lists_exactly_the_features_in_use() {
         limit: 1,
     });
     assert!(plan_features(&zero).is_empty());
-    // Every registered feature occurs in some inventory case.
+    // Every registered feature occurs in some inventory case, except
+    // `legacy_statistical_aggregate`: it fires only around a moment
+    // aggregate, and the encoder refuses every moment aggregate (pinned by
+    // the TPC-DS ratchet), so no encodable case can use it. The test below
+    // pins its `plan_features` rule on plans that are never encoded.
     for f in Feature::ALL {
+        if *f == Feature::LegacyStatisticalAggregate {
+            continue;
+        }
         assert!(
             cases().iter().any(|(_, p)| plan_features(p).contains(f)),
             "{f}: no inventory case uses it"
@@ -78,6 +85,123 @@ fn a_feature_in_a_subquery_plan_counts() {
         [Feature::Window]
     );
     assert_eq!(decode(&encode(&plan).unwrap()).unwrap(), plan);
+}
+
+/// `legacy_statistical_aggregate` fires only for a plan that sets the flag
+/// around a moment aggregate. The flag alone changes nothing the encoder
+/// can write (it refuses every moment aggregate), so such plans list no
+/// feature: a reader without it keeps reading them, and the flag itself
+/// still round-trips.
+#[test]
+fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
+    use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
+    use krishiv_exec::physical::{AggregatePlan, SubqueryPlan};
+    use krishiv_exec::window::{
+        FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+    };
+
+    let moment = || {
+        AggregateExpr::new(
+            AggregateFunction::StddevSamp,
+            0,
+            arrow_schema::DataType::Float64,
+            "s",
+        )
+    };
+    let aggregate_node = || PhysNode::Aggregate {
+        input: Box::new(inventory::scan()),
+        aggregate: AggregatePlan {
+            group_by: Vec::new(),
+            aggregates: vec![moment()],
+            distinct: vec![false],
+            output: AggregateOutput::Final,
+        },
+    };
+    let legacy = || {
+        let mut env = inventory::env();
+        env.legacy_statistical_aggregate = true;
+        env
+    };
+
+    // The flag alone lists no feature.
+    let (_, flag_only) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "one_row_legacy_statistical_aggregate")
+        .unwrap();
+    assert!(plan_features(&flag_only).is_empty());
+    assert!(to_message(&flag_only).unwrap().features.is_empty());
+    // A reader without the feature still reads such a plan, flag included.
+    let bytes = encode(&flag_only).unwrap();
+    let without = ReaderFeatures::only([]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without).unwrap(),
+        flag_only
+    );
+    // A moment aggregate without the flag lists none either.
+    assert!(plan_features(&plan_of(aggregate_node())).is_empty());
+    // Both together list the feature: in an aggregate node, ...
+    let with_both = plan_of_env(aggregate_node(), legacy());
+    assert_eq!(
+        plan_features(&with_both).into_iter().collect::<Vec<_>>(),
+        [Feature::LegacyStatisticalAggregate]
+    );
+    // ... in a window function, ...
+    let window = plan_of_env(
+        PhysNode::Window {
+            input: Box::new(inventory::scan()),
+            window: WindowPlan {
+                partition_by: Vec::new(),
+                order_by: Vec::new(),
+                functions: vec![WindowFunctionPlan {
+                    function: WindowFunction::Aggregate(moment()),
+                    frame: WindowFrame::whole(FrameUnits::Rows),
+                    filter: None,
+                    name: "w".to_owned(),
+                }],
+            },
+        },
+        legacy(),
+    );
+    assert_eq!(
+        plan_features(&window).into_iter().collect::<Vec<_>>(),
+        [Feature::LegacyStatisticalAggregate, Feature::Window]
+    );
+    // ... and in a subquery plan ...
+    let subquery = plan_of_env(
+        PhysNode::Filter {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            predicate: inventory::predicate(),
+            subqueries: vec![SubqueryPlan {
+                plan: aggregate_node(),
+                ..inventory::subquery()
+            }],
+        },
+        legacy(),
+    );
+    assert_eq!(
+        plan_features(&subquery).into_iter().collect::<Vec<_>>(),
+        [Feature::LegacyStatisticalAggregate]
+    );
+    // ... but never for another aggregate under the flag.
+    let plain = plan_of_env(
+        PhysNode::Aggregate {
+            input: Box::new(inventory::scan()),
+            aggregate: AggregatePlan {
+                group_by: Vec::new(),
+                aggregates: vec![AggregateExpr::new(
+                    AggregateFunction::Sum,
+                    0,
+                    arrow_schema::DataType::Float64,
+                    "s",
+                )],
+                distinct: vec![false],
+                output: AggregateOutput::Final,
+            },
+        },
+        legacy(),
+    );
+    assert!(plan_features(&plain).is_empty());
 }
 
 #[test]

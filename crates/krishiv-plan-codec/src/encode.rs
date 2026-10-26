@@ -130,6 +130,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: env.user.to_string(),
+        legacy_statistical_aggregate: env.legacy_statistical_aggregate,
     }
 }
 
@@ -722,13 +723,22 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
         AggregateFunction::Max => (pb::AggregateFunction::Max, false),
         AggregateFunction::First { ignore_nulls } => (pb::AggregateFunction::First, ignore_nulls),
         AggregateFunction::Last { ignore_nulls } => (pb::AggregateFunction::Last, ignore_nulls),
-        // The format has no ids for these yet.
-        AggregateFunction::AnyValue { .. }
+        // The format has no code for these yet.
+        f @ (AggregateFunction::StddevSamp
+        | AggregateFunction::StddevPop
+        | AggregateFunction::VarSamp
+        | AggregateFunction::VarPop
+        | AggregateFunction::Skewness
+        | AggregateFunction::Kurtosis
+        | AggregateFunction::Corr
+        | AggregateFunction::CovarSamp
+        | AggregateFunction::CovarPop
+        | AggregateFunction::AnyValue { .. }
         | AggregateFunction::MaxBy
-        | AggregateFunction::MinBy => {
-            return Err(CodecError::Unsupported(
-                "an aggregate function the format does not know".to_owned(),
-            ));
+        | AggregateFunction::MinBy) => {
+            return Err(CodecError::Unsupported(format!(
+                "the aggregate function {f:?}"
+            )));
         }
     };
     Ok(pb::AggregateExpr {
