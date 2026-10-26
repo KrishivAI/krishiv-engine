@@ -264,6 +264,29 @@ fn randstr_null_length_is_empty_and_negative_fails() {
 }
 
 #[test]
+fn randstr_refuses_an_output_past_the_string_offset_limit() {
+    use krishiv_common::error::ErrorClass;
+    // 1e9 characters over 3 rows exceed `i32` offsets: an error, not a panic.
+    let (big, sd) = (seed_i32(1_000_000_000), seed_i32(0));
+    let bound = vec![
+        BindArg::Literal(Arc::clone(&big)),
+        BindArg::Literal(Arc::clone(&sd)),
+    ];
+    let f = super::bind_scalar("randstr", &bound, &BindOptions::new()).unwrap();
+    let err = f.invoke_in(&[lit(&big), lit(&sd)], 3, 0).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::UnableToAcquireMemory);
+    // The binding is still usable afterwards (nothing was poisoned).
+    let small = seed_i32(3);
+    let bound = vec![
+        BindArg::Literal(Arc::clone(&small)),
+        BindArg::Literal(Arc::clone(&sd)),
+    ];
+    let f = super::bind_scalar("randstr", &bound, &BindOptions::new()).unwrap();
+    let out = f.invoke_in(&[lit(&small), lit(&sd)], 2, 0).unwrap();
+    assert_eq!(out.as_string::<i32>().value(0), "ceV");
+}
+
+#[test]
 fn uuids_have_shape_and_partitioned_streams() {
     let sd = seed_i32(42);
     let bound = vec![BindArg::Literal(Arc::clone(&sd))];

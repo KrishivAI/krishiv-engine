@@ -28,7 +28,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Float64Type, Int32Type, Int64Type};
 use arrow_array::{ArrayRef, Float64Array, StringArray};
 use arrow_schema::DataType;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, UnableToAcquireMemory};
 use krishiv_kernels::cast::{CastMode, CastOptions, TimeZoneRules, cast};
 
 use super::super::uniform::{UniformKind, uniform_result as shared_result};
@@ -473,6 +473,19 @@ fn randstr(opts: &BindOptions, args: &[BindArg]) -> Binding {
             }
             .into());
         }
+        // The output must fit a `StringArray`'s `i32` offsets: refuse before
+        // drawing or allocating, as the other string builders do.
+        let total = usize::try_from(n)
+            .ok()
+            .and_then(|n| n.checked_mul(x.rows()))
+            .filter(|t| i32::try_from(*t).is_ok());
+        let Some(_) = total else {
+            return Err(UnableToAcquireMemory {
+                requested_bytes: n.to_string(),
+                received_bytes: "0".to_owned(),
+            }
+            .into());
+        };
         let mut streams = lock(&state)?;
         let s = streams.stream(partition, seed);
         let out: Vec<String> = (0..x.rows())

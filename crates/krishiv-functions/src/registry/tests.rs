@@ -1118,6 +1118,12 @@ fn misc_signatures() {
     assert_eq!(result("monotonically_increasing_id", &[], &[]).unwrap(), l);
     assert_eq!(result("spark_partition_id", &[], &[]).unwrap(), i);
     assert_eq!(result("typeof", std::slice::from_ref(&s), &[]).unwrap(), s);
+    // Never NULL, even for a nullable or untyped-NULL argument.
+    assert_eq!(result("typeof", &[null_ty()], &[]).unwrap(), s);
+    assert_eq!(
+        result("typeof", &[ArgType::new(DataType::String, true)], &[]).unwrap(),
+        s
+    );
     assert_eq!(result("uuid", &[], &[]).unwrap(), s);
     assert_eq!(result("rand", &[], &[]).unwrap(), ty(DataType::Double));
     assert_eq!(

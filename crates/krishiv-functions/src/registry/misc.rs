@@ -50,8 +50,10 @@ fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 /// `typeof(x)`: a non-nullable string. The name itself is resolved by the
 /// analyzer (a literal rewrite); the rule only types the call.
-fn typeof_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    string(c)
+fn typeof_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    // Spark's `typeof` is a literal of the argument's type name: never NULL,
+    // whatever the argument's nullability.
+    Ok(ArgType::new(DataType::String, false))
 }
 
 /// Whether `t` is an `int` or a `bigint` (what every non-`uuid` seed takes).
