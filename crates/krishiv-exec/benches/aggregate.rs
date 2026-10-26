@@ -197,6 +197,7 @@ fn bench(c: &mut Criterion) {
             Some(t) => TokioExecutor::new(&ExecutorConfig {
                 compute_threads: t,
                 blocking_threads: t,
+                io_blocking_threads: 2,
                 ..ExecutorConfig::default()
             }),
             None => TokioExecutor::deterministic(1),

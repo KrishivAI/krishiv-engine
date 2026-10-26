@@ -262,6 +262,10 @@ message WindowFunctionPlan {
     // The bucket count.
     int32 ntile = 6;
     AggregateExpr aggregate = 7;
+    // feature: window_offset_functions
+    OffsetFunction offset_value = 11;
+    // feature: window_offset_functions
+    NthValueFunction nth_value = 12;
   }
   WindowFrame frame = 8;
   // A boolean input column an aggregate is restricted to.
@@ -269,10 +273,38 @@ message WindowFunctionPlan {
   string name = 10;
 }
 
+// `lag` / `lead`: input column `input` of the row `offset` rows after the
+// current one (before it when negative), or column `default`.
+// feature: window_offset_functions
+message OffsetFunction {
+  uint64 input = 1;
+  sint64 offset = 2;
+  optional uint64 default = 3;
+  bool ignore_nulls = 4;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 5;
+}
+
+// `nth_value`: input column `input` of the frame's `n`-th row.
+// feature: window_offset_functions
+message NthValueFunction {
+  uint64 input = 1;
+  sint64 n = 2;
+  bool ignore_nulls = 3;
+  // Arrow IPC `Schema` flatbuffer of one field.
+  bytes data_type = 4;
+}
+
 message WindowFrame {
   FrameUnits units = 1;
   FrameBound lower = 2;
   FrameBound upper = 3;
+  // `FRAME_BOUND_OFFSET` bounds: rows after the current one (before it when
+  // negative).
+  // feature: window_frame_offsets
+  sint64 lower_offset = 4;
+  // feature: window_frame_offsets
+  sint64 upper_offset = 5;
 }
 
 enum FrameUnits {
@@ -286,6 +318,8 @@ enum FrameBound {
   FRAME_BOUND_UNBOUNDED_PRECEDING = 1;
   FRAME_BOUND_CURRENT_ROW = 2;
   FRAME_BOUND_UNBOUNDED_FOLLOWING = 3;
+  // feature: window_frame_offsets
+  FRAME_BOUND_OFFSET = 4;
 }
 
 message AggregateNode {
@@ -345,6 +379,10 @@ enum JoinType {
   JOIN_TYPE_RIGHT_ANTI = 7;
   // feature: join_build_preserved
   JOIN_TYPE_RIGHT_OUTER = 8;
+  // Spark's `ExistenceJoin`: every probe row once, plus a non-nullable
+  // boolean `exists` (some build row matched).
+  // feature: existence_join
+  JOIN_TYPE_EXISTENCE = 9;
 }
 
 message Residual {
@@ -364,6 +402,15 @@ message HashJoinNode {
   // v2: how matching rows meet in one task. v1 bytes leave this as
   // `JOIN_DISTRIBUTION_UNSPECIFIED`, which decodes as broadcast.
   JoinDistribution distribution = 9;
+  // A left outer join that fails when a probe row matches more than once
+  // (a correlated scalar subquery without an aggregate); only `LeftOuter`
+  // joins set it.
+  // feature: join_single_match
+  bool single_match = 10;
+  // The build may keep each key once: only on a left semi, left anti or
+  // existence join without a residual.
+  // ignorable: a reader without it builds every row, with the same result.
+  bool distinct_build = 11;
 }
 
 enum JoinDistribution {
@@ -590,11 +637,17 @@ message DataType {
     KIND_DATE = 12;
     KIND_TIMESTAMP = 13;
     KIND_TIMESTAMP_NTZ = 14;
+    // feature: nested_types
+    KIND_NESTED = 15;
   }
   Kind kind = 1;
   // `KIND_DECIMAL` only.
   uint32 precision = 2;
   uint32 scale = 3;
+  // feature: nested_types
+  // `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+  // (`DataType.json`), which keeps nullability and field metadata.
+  string json = 4;
 }
 
 enum YearMonthField {

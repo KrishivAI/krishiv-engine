@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "query": "SELECT\n    (boolean_array1 || boolean_array2) boolean_array,\n    (tinyint_array1 || tinyint_array2) tinyint_array,\n    (smallint_array1 || smallint_array2) smallint_array,\n    (int_array1 || int_array2) int_array,\n    (bigint_array1 || bigint_array2) bigint_array,\n    (decimal_array1 || decimal_array2) decimal_array,\n    (double_array1 || double_array2) double_array,\n    (float_array1 || float_array2) float_array,\n    (date_array1 || data_array2) data_array,\n    (timestamp_array1 || timestamp_array2) timestamp_array,\n    (string_array1 || string_array2) string_array,\n    (array_array1 || array_array2) array_array,\n    (struct_array1 || struct_array2) struct_array,\n    (map_array1 || map_array2) map_array\nFROM various_arrays",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_arrays`"
+    },
+    {
+      "query": "SELECT\n    (tinyint_array1 || smallint_array2) ts_array,\n    (smallint_array1 || int_array2) si_array,\n    (int_array1 || bigint_array2) ib_array,\n    (bigint_array1 || decimal_array2) bd_array,\n    (decimal_array1 || double_array2) dd_array,\n    (double_array1 || float_array2) df_array,\n    (string_array1 || data_array2) std_array,\n    (timestamp_array1 || string_array2) tst_array,\n    (string_array1 || int_array2) sti_array\nFROM various_arrays",
+      "reason": "TABLE_OR_VIEW_NOT_FOUND: `various_arrays`"
+    },
+    {
+      "query": "SELECT ((col1 || col2) || (col3 || col4) || col5) col\nFROM (\n  SELECT\n    'prefix_' col1,\n    id col2,\n    string(id + 1) col3,\n    encode(string(id + 2), 'utf-8') col4,\n    CAST(id AS DOUBLE) col5\n  FROM range(10)\n)",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
+    },
+    {
+      "query": "SELECT ((col1 || col2) || (col3 || col4)) col\nFROM (\n  SELECT\n    encode(string(id), 'utf-8') col1,\n    encode(string(id + 1), 'utf-8') col2,\n    encode(string(id + 2), 'utf-8') col3,\n    encode(string(id + 3), 'utf-8') col4\n  FROM range(10)\n)",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
+    },
+    {
+      "query": "SELECT ((col1 || col2) || (col3 || col4)) col\nFROM (\n  SELECT\n    string(id) col1,\n    string(id + 1) col2,\n    encode(string(id + 2), 'utf-8') col3,\n    encode(string(id + 3), 'utf-8') col4\n  FROM range(10)\n)",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
+    },
+    {
+      "query": "SELECT (col1 || col2 || col3 || col4) col\nFROM (\n  SELECT\n    encode(string(id), 'utf-8') col1,\n    encode(string(id + 1), 'utf-8') col2,\n    encode(string(id + 2), 'utf-8') col3,\n    encode(string(id + 3), 'utf-8') col4\n  FROM range(10)\n)",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
+    },
+    {
+      "query": "SELECT (col1 || col2 || col3) col\nFROM (\n  SELECT\n    id col1,\n    string(id + 1) col2,\n    encode(string(id + 2), 'utf-8') col3\n  FROM range(10)\n)",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
+    },
+    {
+      "query": "SELECT (col1 || col2) col\nFROM (\n  SELECT\n    encode(string(id), 'utf-8') col1,\n    encode(string(id + 1), 'utf-8') col2\n  FROM range(10)\n)",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
+    }
+  ],
+  "file": "typeCoercion/native/concat",
+  "format_version": 1
+}

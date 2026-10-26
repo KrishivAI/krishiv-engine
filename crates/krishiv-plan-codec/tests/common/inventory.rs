@@ -28,7 +28,7 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DecimalType, parse_data_type};
 
 pub(crate) fn env() -> ExprEnv {
     ExprEnv {
@@ -276,6 +276,84 @@ pub(crate) fn window_aggregates() -> WindowPlan {
     }
 }
 
+/// Frames with offsets and to the partition's end.
+pub(crate) fn window_frames() -> WindowPlan {
+    let aggs = aggregate_exprs();
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::Aggregate(aggs[0].clone()),
+                rows(FrameBound::Offset(-2), FrameBound::Offset(3)),
+                "sliding",
+            ),
+            window_function(
+                WindowFunction::Aggregate(aggs[3].clone()),
+                WindowFrame {
+                    units: FrameUnits::Range,
+                    lower: FrameBound::CurrentRow,
+                    upper: FrameBound::UnboundedFollowing,
+                },
+                "rest",
+            ),
+        ],
+    }
+}
+
+/// `lag`/`lead` (with and without a default) and `nth_value`, over their
+/// offset frames.
+pub(crate) fn window_offset_values() -> WindowPlan {
+    let rows = |lower, upper| WindowFrame {
+        units: FrameUnits::Rows,
+        lower,
+        upper,
+    };
+    WindowPlan {
+        partition_by: vec![1],
+        order_by: vec![SortKey::asc(0)],
+        functions: vec![
+            window_function(
+                WindowFunction::Offset {
+                    input: 2,
+                    offset: -1,
+                    default: Some(0),
+                    ignore_nulls: true,
+                    data_type: arrow_schema::DataType::Int64,
+                },
+                rows(FrameBound::Offset(-1), FrameBound::Offset(-1)),
+                "lag",
+            ),
+            window_function(
+                WindowFunction::Offset {
+                    input: 2,
+                    offset: 2,
+                    default: None,
+                    ignore_nulls: false,
+                    data_type: arrow_schema::DataType::Utf8View,
+                },
+                rows(FrameBound::Offset(2), FrameBound::Offset(2)),
+                "lead",
+            ),
+            window_function(
+                WindowFunction::NthValue {
+                    input: 1,
+                    n: 3,
+                    ignore_nulls: true,
+                    data_type: arrow_schema::DataType::Float64,
+                },
+                rows(FrameBound::UnboundedPreceding, FrameBound::Offset(1)),
+                "nth",
+            ),
+        ],
+    }
+}
+
 pub(crate) fn residual() -> Residual {
     Residual {
         layout: vec![AttrId(1), AttrId(2), AttrId(3)],
@@ -292,6 +370,8 @@ fn join(join_type: JoinType) -> HashJoinPlan {
         build_keys: vec![1, 0],
         null_safe: vec![false, true],
         residual: Some(residual()),
+        single_match: false,
+        distinct_build: false,
         runtime_filters: vec![JoinFilterPlan {
             id: FilterId(3),
             key: 0,
@@ -305,6 +385,25 @@ fn join(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_fpp: 0.05,
             },
         }],
+        distribution: JoinDistribution::Broadcast,
+    }
+}
+
+/// An existence or single-match join over one key, without a residual
+/// condition or runtime filters (the single-match flag rides on a plain
+/// left outer join).
+fn subquery_join(join_type: JoinType) -> HashJoinPlan {
+    HashJoinPlan {
+        probe: boxed(scan()),
+        build: boxed(PhysNode::Scan(file_scan())),
+        join_type,
+        probe_keys: vec![0],
+        build_keys: vec![1],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+        distinct_build: false,
+        runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
     }
 }
@@ -485,6 +584,20 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             },
         ),
         (
+            "window_frames",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_frames(),
+            },
+        ),
+        (
+            "window_offset_values",
+            PhysNode::Window {
+                input: boxed(scan()),
+                window: window_offset_values(),
+            },
+        ),
+        (
             "window_aggregates",
             PhysNode::Window {
                 input: boxed(PhysNode::Sort {
@@ -559,6 +672,29 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::HashJoin(HashJoinPlan {
                 distribution: JoinDistribution::Partitioned,
                 ..join(JoinType::Inner)
+            }),
+        ),
+        (
+            "hash_join_existence",
+            PhysNode::HashJoin(HashJoinPlan {
+                distinct_build: true,
+                ..subquery_join(JoinType::Existence)
+            }),
+        ),
+        (
+            "hash_join_single_match",
+            PhysNode::HashJoin(HashJoinPlan {
+                single_match: true,
+                ..subquery_join(JoinType::LeftOuter)
+            }),
+        ),
+        (
+            "nested_loop_existence",
+            PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe: boxed(scan()),
+                build: boxed(PhysNode::OneRow),
+                join_type: JoinType::Existence,
+                residual: Some(residual()),
             }),
         ),
         (
@@ -759,6 +895,51 @@ pub(crate) fn expressions() -> PhysNode {
     }
 }
 
+/// Array, map and struct types (depth 4, nullability, a comment) in a
+/// scan column, a cast, a typed NULL, a function and an alias.
+pub(crate) fn nested_types() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let deep = t("array<struct<a:int not null comment 'c',b:map<string,array<double>>>>");
+    let map = t("map<string,struct<a:array<map<int,struct<b:timestamp_ntz>>>>>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(3, "n", deep.clone(), true));
+    }
+    let n = col(3, "n", deep.clone());
+    let items = vec![
+        ProjectItemPlan::Expr {
+            name: "cast".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&n),
+                to: t("array<struct<a:bigint,b:map<string,array<double>>>>"),
+                mode: CastMode::Ansi,
+            })),
+        },
+        ProjectItemPlan::Expr {
+            name: "null".to_owned(),
+            expr: lit(Literal::Null(Some(map))),
+        },
+        ProjectItemPlan::Expr {
+            name: "f".to_owned(),
+            expr: call(Builtin::Concat, vec![Arc::clone(&n)], deep),
+        },
+        ProjectItemPlan::Expr {
+            name: "alias".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: n,
+                output: column(11, "alias", t("struct<>"), true),
+            }))),
+        },
+    ];
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3)],
+        items,
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// The named plans the inventory test, the error tests and the golden
 /// files share.
 pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
@@ -776,5 +957,6 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         "one_row_legacy_statistical_aggregate".to_owned(),
         plan_of_env(PhysNode::OneRow, legacy),
     ));
+    out.push(("nested_types".to_owned(), plan_of(nested_types())));
     out
 }

@@ -1473,6 +1473,8 @@ async fn first_and_last_pick_rows_in_input_order() {
     );
 }
 
+mod simple;
+
 #[test]
 fn first_and_last_types_and_states() {
     use AggregateFunction::{First, Last};
@@ -2462,6 +2464,7 @@ async fn a_cancel_during_a_result_spill_releases_everything() {
         compute_threads: 1,
         io_threads: 1,
         blocking_threads: 1,
+        io_blocking_threads: 2,
     })
     .unwrap();
     let runner = QueryRunner::new(executor);

@@ -35,7 +35,10 @@ def putType(m: ObjectNode, dt: DataType): Unit = {
   m.put("sql", dt.sql)
   m.put("type_name", dt.typeName)
   m.put("json", dt.json)
-  m.put("simple_string_reparses", CatalystSqlParser.parseDataType(dt.simpleString) == dt)
+  // A simpleString need not parse back (a struct field named `a b`, more fields than
+  // maxToStringFields); that is recorded as false, not as an error of the input.
+  m.put("simple_string_reparses",
+    scala.util.Try(CatalystSqlParser.parseDataType(dt.simpleString) == dt).getOrElse(false))
 }
 
 val in = scala.io.Source.fromFile("/tmp/krishiv_cases.jsonl", "UTF-8")

@@ -359,6 +359,7 @@ fn run_join(
         build_keys: vec![0],
         null_safe: vec![false],
         filter: None,
+        single_match: false,
         spill: None,
     };
     let scan = |b: &[Batch]| -> Arc<dyn ExecNode> {
@@ -403,6 +404,7 @@ fn operator_abba(threads: usize, sizes: &[usize], reps: usize) {
                 compute_threads: threads,
                 io_threads: 1,
                 blocking_threads: threads,
+                io_blocking_threads: 2,
             })
             .expect("executor"),
         )

@@ -6,8 +6,11 @@
 //! fold left into inner joins without a condition; `<>` is `not(==)`; a
 //! `SELECT` with aggregates but no `GROUP BY` stays a `Project` (the
 //! analyzer turns it into an aggregate); `HAVING` is a `Filter` over the
-//! `Aggregate`. Constructs the v1 IR lacks (set operations, `VALUES`,
-//! windows, generators, pivots, ...) fail with `KRISHIV_UNSUPPORTED_FEATURE`
+//! `Aggregate`. An inline `VALUES` table lowers to the unresolved
+//! [`PlanNode::InlineTable`] (row aliases stripped, columns `col1`, ...
+//! unless the table alias renames them; the alias itself stays a
+//! `SubqueryAlias`, as other table factors do). Constructs the IR lacks
+//! (windows, generators, ...) fail with `KRISHIV_UNSUPPORTED_FEATURE`
 //! naming the construct. Join lists and dotted names are lowered with
 //! loops; recursion follows the tree's nesting, which the parser bounds,
 //! and moves to a fresh stack every `STEP` levels. The plan is checked
@@ -24,18 +27,18 @@ use krishiv_common::stack::{STEP, on_big_stack};
 use krishiv_plan::{
     Builtin, CastMode, ColumnRef, Cte, Expr as IrExpr, ExprNode, FrameBound as IrFrameBound,
     FrameUnits as IrFrameUnits, FunctionCall, Grouping, JoinCondition, JoinKind as IrJoin,
-    Literal as IrLiteral, LogicalPlan, Origin, Plan, PlanNode, ReadSource, SortOrder, SourceId,
-    Star, SubqueryKind, TypedLiteralKind as IrTypedKind, WindowExpr, WindowFrame as IrWindowFrame,
-    WindowSpec as IrWindowSpec, WindowSpecRef,
+    Literal as IrLiteral, LogicalPlan, Origin, PivotValue, Plan, PlanNode, ReadSource, SortOrder,
+    SourceId, Star, SubqueryKind, TypedLiteralKind as IrTypedKind, UnpivotColumnSet, WindowExpr,
+    WindowFrame as IrWindowFrame, WindowSpec as IrWindowSpec, WindowSpecRef,
 };
 use krishiv_types::DecimalType;
 
 use crate::ast::{
     Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause, GroupBy,
-    GroupItem, GroupItemKind, GroupWith, GroupingSet, Ident, JoinConstraint, JoinKind, Literal,
-    NamedWindow, NullTreatment, NumKind, Query, Relation, RelationExt, Select, SelectItem, SetExpr,
-    SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableFactor, TableFactorKind, Truth,
-    UnaryOp, WindowRef, WindowSpec,
+    GroupItem, GroupItemKind, GroupWith, GroupingSet, Ident, Join, JoinConstraint, JoinKind,
+    Literal, NamedWindow, NullTreatment, NumKind, Pivot, Query, Relation, RelationExt, Select,
+    SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableAlias,
+    TableFactor, TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
@@ -214,6 +217,8 @@ impl Lowerer {
         self.ex(
             ExprNode::Function(FunctionCall {
                 name: name.to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args,
                 distinct: false,
                 filter: None,
@@ -391,8 +396,11 @@ impl Lowerer {
     /// A query body: a `SELECT`, a set operation, a table, ...
     fn body(&mut self, body: &SetExpr) -> R<LogicalPlan> {
         Ok(match &body.kind {
+            SetExprKind::Pipe(_) => return Err(unsupported("pipe operators", body.span)),
+            SetExprKind::Transform(_) => return Err(unsupported("TRANSFORM", body.span)),
             SetExprKind::Select(s) => self.select(s, s.from.as_ref())?,
             SetExprKind::Query(inner) => self.query(inner)?,
+            SetExprKind::DynamicTable(_) => return Err(unsupported("IDENTIFIER()", body.span)),
             SetExprKind::Table(name) => self.node(
                 PlanNode::Read(ReadSource::Table {
                     name: name.parts.iter().map(|p| p.value.clone()).collect(),
@@ -451,7 +459,13 @@ impl Lowerer {
                     body.span,
                 )
             }
-            SetExprKind::Values(_) => return Err(unsupported("VALUES", body.span)),
+            SetExprKind::Values(v) => {
+                let plan = self.inline_table(&v.rows, v.alias.as_ref(), v.span)?;
+                match &v.alias {
+                    None => plan,
+                    Some(a) => self.with_alias(plan, a, v.span),
+                }
+            }
         })
     }
 
@@ -557,13 +571,8 @@ impl Lowerer {
     }
 
     fn select_list(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
-        for (present, what) in [
-            (!s.lateral_views.is_empty(), "LATERAL VIEW"),
-            (s.qualify.is_some(), "QUALIFY"),
-        ] {
-            if present {
-                return Err(unsupported(what, s.span));
-            }
+        if !s.lateral_views.is_empty() {
+            return Err(unsupported("LATERAL VIEW", s.span));
         }
         let mut plan = match from {
             Some(from) => self.from(from)?,
@@ -584,43 +593,72 @@ impl Lowerer {
             items.push(self.select_item(item)?);
         }
         if s.group_by.is_none() && s.having.is_none() {
-            return Ok(self.node(
+            plan = self.node(
                 PlanNode::Project {
                     input: arc(plan),
                     exprs: items,
                 },
                 s.span,
-            ));
-        }
-        let grouping = match &s.group_by {
-            Some(g) => self.grouping(g)?,
-            None => Grouping::GroupBy(Vec::new()),
-        };
-        plan = self.node(
-            PlanNode::Aggregate {
-                input: arc(plan),
-                grouping,
-                aggregates: items,
-            },
-            s.span,
-        );
-        if let Some(h) = &s.having {
-            let predicate = self.expr(h)?;
-            // As Spark's AstBuilder: a `HAVING` that is not a predicate is
-            // cast to boolean.
-            let predicate = arc(if is_predicate(&predicate) {
-                predicate
-            } else {
-                let span = h.span;
-                self.ex(
-                    ExprNode::Cast {
-                        expr: arc(predicate),
-                        to: krishiv_types::DataType::Boolean,
-                        mode: CastMode::Default,
+            );
+        } else {
+            let grouping = match &s.group_by {
+                Some(g) => self.grouping(g)?,
+                None => Grouping::GroupBy(Vec::new()),
+            };
+            plan = self.node(
+                PlanNode::Aggregate {
+                    input: arc(plan),
+                    grouping,
+                    aggregates: items,
+                },
+                s.span,
+            );
+            if let Some(h) = &s.having {
+                let predicate = self.expr(h)?;
+                // As Spark's AstBuilder: a `HAVING` that is not a predicate is
+                // cast to boolean.
+                let predicate = arc(if is_predicate(&predicate) {
+                    predicate
+                } else {
+                    let span = h.span;
+                    self.ex(
+                        ExprNode::Cast {
+                            expr: arc(predicate),
+                            to: krishiv_types::DataType::Boolean,
+                            mode: CastMode::Default,
+                        },
+                        span,
+                    )
+                });
+                plan = self.node(
+                    PlanNode::Filter {
+                        input: arc(plan),
+                        predicate,
                     },
-                    span,
-                )
-            });
+                    s.span,
+                );
+            }
+        }
+        if let Some(q) = &s.qualify {
+            // `QUALIFY`, as Spark's `AstBuilder` shapes it: a filter with
+            // the qualify predicate over the select list's projection (the
+            // analyzer resolves it like `HAVING`, extracting window
+            // functions the same way). The predicate is wrapped so the
+            // analyzer tells it apart from `WHERE` and `HAVING`; the
+            // wrapper is stripped during analysis and never reaches the
+            // executor.
+            let inner = arc(self.expr(q)?);
+            let predicate = arc(self.ex(
+                ExprNode::Function(FunctionCall {
+                    qualifier: Vec::new(),
+                    name: "qualify".to_owned(),
+                    args: vec![inner],
+                    arg_names: Vec::new(),
+                    distinct: false,
+                    filter: None,
+                }),
+                q.span,
+            ));
             plan = self.node(
                 PlanNode::Filter {
                     input: arc(plan),
@@ -647,7 +685,17 @@ impl Lowerer {
         }
         let all_plain = plain.len() == g.items.len();
         match (&g.with, all_plain) {
-            (None, true) => return Ok(Grouping::GroupBy(plain)),
+            (None, true) => {
+                // `GROUP BY ALL` reads as a column named `all` here; the
+                // analyzer expands it (or resolves the column). The key
+                // keeps the whole clause's span, so the analyzer's
+                // `UNRESOLVED_ALL_IN_GROUP_BY` cites `group by all`.
+                if plain.len() == 1 && Self::is_group_by_all(&g.items[0]) {
+                    let node = plain[0].node.clone();
+                    plain[0] = arc(IrExpr::new(node).with_origin(self.origin(g.span)));
+                }
+                return Ok(Grouping::GroupBy(plain));
+            }
             (Some(GroupWith::Rollup), true) => return Ok(Grouping::Rollup(plain)),
             (Some(GroupWith::Cube), true) => return Ok(Grouping::Cube(plain)),
             (Some(GroupWith::GroupingSets(sets)), true) => {
@@ -694,6 +742,7 @@ impl Lowerer {
         written: &mut Vec<Arc<IrExpr>>,
     ) -> R<Vec<Vec<Arc<IrExpr>>>> {
         Ok(match &item.kind {
+            GroupItemKind::Named(_) => return Err(unsupported("named grouping items", item.span)),
             GroupItemKind::Expr(e) => {
                 let e = arc(self.expr(e)?);
                 written.push(Arc::clone(&e));
@@ -762,10 +811,19 @@ impl Lowerer {
         s.exprs.iter().map(|e| Ok(arc(self.expr(e)?))).collect()
     }
 
+    /// Whether a `GROUP BY` item is a bare `ALL` (`GROUP BY ALL`), written as
+    /// a column of that name by the parser (see `column_named_all`).
+    fn is_group_by_all(item: &GroupItem) -> bool {
+        let GroupItemKind::Expr(e) = &item.kind else {
+            return false;
+        };
+        let ExprKind::Column(parts) = &e.kind else {
+            return false;
+        };
+        matches!(&parts[..], [p] if p.value.eq_ignore_ascii_case("all"))
+    }
+
     fn from(&mut self, f: &FromClause) -> R<LogicalPlan> {
-        if f.pivot.is_some() || f.unpivot.is_some() {
-            return Err(unsupported("PIVOT and UNPIVOT", f.span));
-        }
         if !f.lateral_views.is_empty() {
             return Err(unsupported("LATERAL VIEW", f.span));
         }
@@ -785,59 +843,199 @@ impl Lowerer {
                 ),
             });
         }
-        plan.ok_or_else(|| unsupported("an empty FROM clause", f.span))
+        let mut plan = plan.ok_or_else(|| unsupported("an empty FROM clause", f.span))?;
+        if f.pivot.is_some() && f.unpivot.is_some() {
+            return Err(err(
+                krishiv_common::error::NotAllowedInFromUnpivotWithPivot {},
+                f.span,
+            ));
+        }
+        if let Some(p) = &f.pivot {
+            plan = self.pivot(plan, p)?;
+        }
+        if let Some(u) = &f.unpivot {
+            plan = self.unpivot(plan, u)?;
+        }
+        Ok(plan)
     }
 
     fn relation(&mut self, r: &Relation) -> R<LogicalPlan> {
         if r.lateral {
             return Err(unsupported("LATERAL subqueries", r.span));
         }
+        // Spark rejects a relation carrying both clauses
+        // (`NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`, also raised for the
+        // pipe-operator chain in the goldens): a `PIVOT ... UNPIVOT ...`
+        // chain on one relation lowers to no plan.
+        if r.extensions
+            .iter()
+            .any(|e| matches!(e, RelationExt::Pivot(_)))
+            && r.extensions
+                .iter()
+                .any(|e| matches!(e, RelationExt::Unpivot(_)))
+        {
+            return Err(err(
+                krishiv_common::error::NotAllowedInFromUnpivotWithPivot {},
+                r.span,
+            ));
+        }
         let mut plan = self.factor(&r.primary)?;
         for ext in &r.extensions {
-            let RelationExt::Join(j) = ext else {
-                return Err(unsupported("PIVOT and UNPIVOT", r.span));
-            };
-            if j.natural || j.lateral {
-                return Err(unsupported(
-                    if j.natural {
-                        "NATURAL JOIN"
-                    } else {
-                        "LATERAL joins"
-                    },
-                    j.span,
-                ));
+            match ext {
+                RelationExt::Join(j) => {
+                    plan = self.join(plan, j)?;
+                }
+                RelationExt::Pivot(p) => {
+                    plan = self.pivot(plan, p)?;
+                }
+                RelationExt::Unpivot(u) => {
+                    plan = self.unpivot(plan, u)?;
+                }
             }
-            let kind = match j.kind {
-                JoinKind::Inner => IrJoin::Inner,
-                JoinKind::Cross => IrJoin::Cross,
-                JoinKind::Left => IrJoin::LeftOuter,
-                JoinKind::Right => IrJoin::RightOuter,
-                JoinKind::Full => IrJoin::FullOuter,
-                JoinKind::LeftSemi => IrJoin::LeftSemi,
-                JoinKind::LeftAnti => IrJoin::LeftAnti,
-            };
-            let right = self.factor(&j.right)?;
-            let condition = match &j.constraint {
+        }
+        Ok(plan)
+    }
+
+    /// `[INNER] JOIN right constraint` onto `plan`.
+    fn join(&mut self, plan: LogicalPlan, j: &Join) -> R<LogicalPlan> {
+        if j.lateral {
+            return Err(unsupported("LATERAL joins", j.span));
+        }
+        let kind = match j.kind {
+            JoinKind::Inner => IrJoin::Inner,
+            JoinKind::Cross => IrJoin::Cross,
+            JoinKind::Left => IrJoin::LeftOuter,
+            JoinKind::Right => IrJoin::RightOuter,
+            JoinKind::Full => IrJoin::FullOuter,
+            JoinKind::LeftSemi => IrJoin::LeftSemi,
+            JoinKind::LeftAnti => IrJoin::LeftAnti,
+        };
+        let right = self.factor(&j.right)?;
+        let condition = if j.natural {
+            // `NATURAL JOIN` has no condition in the syntax tree (the
+            // parser leaves it empty); the analyzer computes the
+            // common columns.
+            JoinCondition::Natural
+        } else {
+            match &j.constraint {
                 JoinConstraint::None => JoinCondition::None,
                 JoinConstraint::On(e) => JoinCondition::On(arc(self.expr(e)?)),
                 JoinConstraint::Using(cols) => {
                     JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
                 }
-            };
-            plan = self.node(
-                PlanNode::Join {
-                    left: arc(plan),
-                    right: arc(right),
-                    kind,
-                    condition,
-                },
-                j.span,
-            );
+                JoinConstraint::NearestBy(n) => {
+                    return Err(unsupported("NEAREST BY joins", n.span));
+                }
+            }
+        };
+        Ok(self.node(
+            PlanNode::Join {
+                left: arc(plan),
+                right: arc(right),
+                kind,
+                condition,
+            },
+            j.span,
+        ))
+    }
+
+    /// `PIVOT (aggregates FOR columns IN (values)) [alias]` over `plan`,
+    /// as Spark's parser builds it: the aggregates and values keep their
+    /// aliases, several pivot columns stand for a struct value, and the
+    /// alias becomes a `SubqueryAlias`.
+    fn pivot(&mut self, plan: LogicalPlan, p: &Pivot) -> R<LogicalPlan> {
+        let mut aggregates = Vec::with_capacity(p.aggregates.len());
+        for item in &p.aggregates {
+            aggregates.push(self.select_item(item)?);
         }
-        Ok(plan)
+        let mut pivot_columns = Vec::with_capacity(p.columns.len());
+        for col in &p.columns {
+            pivot_columns.push(arc(self.column(vec![col.value.clone()], col.span)));
+        }
+        let mut values = Vec::with_capacity(p.values.len());
+        for item in &p.values {
+            let alias = match &item.alias {
+                None => None,
+                Some(Alias::Name(name)) => Some(name.value.clone()),
+                Some(_) => return Err(unsupported("multi-name aliases", item.span)),
+            };
+            // `(a, b)` is one struct value of two parts.
+            let exprs = match &item.expr.kind {
+                ExprKind::Row(items) => items
+                    .iter()
+                    .map(|i| self.expr(&i.expr).map(arc))
+                    .collect::<R<Vec<_>>>()?,
+                _ => vec![arc(self.expr(&item.expr)?)],
+            };
+            values.push(PivotValue { exprs, alias });
+        }
+        let plan = self.node(
+            PlanNode::Pivot {
+                input: arc(plan),
+                pivot_columns,
+                values,
+                aggregates,
+            },
+            p.span,
+        );
+        Ok(match &p.alias {
+            None => plan,
+            Some(alias) => self.node(
+                PlanNode::SubqueryAlias {
+                    input: arc(plan),
+                    alias: alias.value.clone(),
+                    columns: Vec::new(),
+                },
+                p.span,
+            ),
+        })
+    }
+
+    /// `UNPIVOT [INCLUDE | EXCLUDE NULLS] (values FOR name IN (columns))
+    /// [alias]` over `plan`, as Spark's parser builds it: the alias
+    /// becomes a `SubqueryAlias`.
+    fn unpivot(&mut self, plan: LogicalPlan, u: &Unpivot) -> R<LogicalPlan> {
+        let mut column_sets = Vec::with_capacity(u.columns.len());
+        for set in &u.columns {
+            let mut columns = Vec::with_capacity(set.columns.len());
+            for col in &set.columns {
+                columns.push(arc(self.column(
+                    col.parts.iter().map(|p| p.value.clone()).collect(),
+                    col.span,
+                )));
+            }
+            column_sets.push(UnpivotColumnSet {
+                columns,
+                alias: set.alias.as_ref().map(|a| a.value.clone()),
+            });
+        }
+        let plan = self.node(
+            PlanNode::Unpivot {
+                input: arc(plan),
+                value_columns: u.value_columns.iter().map(|c| c.value.clone()).collect(),
+                name_column: u.name_column.value.clone(),
+                column_sets,
+                include_nulls: u.include_nulls.unwrap_or(false),
+            },
+            u.span,
+        );
+        Ok(match &u.alias {
+            None => plan,
+            Some(alias) => self.node(
+                PlanNode::SubqueryAlias {
+                    input: arc(plan),
+                    alias: alias.value.clone(),
+                    columns: Vec::new(),
+                },
+                u.span,
+            ),
+        })
     }
 
     fn factor(&mut self, tf: &TableFactor) -> R<LogicalPlan> {
+        if let Some(sample) = &tf.sample {
+            return Err(unsupported("TABLESAMPLE", sample.span));
+        }
         let plan = match &tf.kind {
             TableFactorKind::Table {
                 name,
@@ -892,25 +1090,71 @@ impl Lowerer {
                 inner
             }
             TableFactorKind::Nested(r) => self.deeper(|l| l.relation(r))?,
-            TableFactorKind::Values(_) => return Err(unsupported("VALUES", tf.span)),
+            TableFactorKind::DynamicTable { name, .. } => {
+                return Err(unsupported("IDENTIFIER()", name.span));
+            }
+            TableFactorKind::Values(rows) => self.inline_table(rows, tf.alias.as_ref(), tf.span)?,
             _ => return Err(unsupported("table-valued functions", tf.span)),
         };
         Ok(match &tf.alias {
             None => plan,
-            Some(a) => self.node(
-                PlanNode::SubqueryAlias {
-                    input: arc(plan),
-                    // `AS (columns)` names no table: a generated name, as
-                    // for no alias at all.
-                    alias: a.name.as_ref().map_or_else(
-                        || "__auto_generated_subquery_name".to_owned(),
-                        |n| n.value.clone(),
-                    ),
-                    columns: a.columns.iter().map(|c| c.value.clone()).collect(),
-                },
-                tf.span,
-            ),
+            Some(a) => self.with_alias(plan, a, tf.span),
         })
+    }
+
+    /// `plan` under the `SubqueryAlias` of `a` (the one wrapper both the
+    /// query-body and table-factor paths use). `AS (columns)` names no
+    /// table: a generated name, as for no alias at all.
+    fn with_alias(&mut self, plan: LogicalPlan, a: &TableAlias, span: Span) -> LogicalPlan {
+        self.node(
+            PlanNode::SubqueryAlias {
+                input: arc(plan),
+                alias: a.name.as_ref().map_or_else(
+                    || "__auto_generated_subquery_name".to_owned(),
+                    |n| n.value.clone(),
+                ),
+                columns: a.columns.iter().map(|c| c.value.clone()).collect(),
+            },
+            span,
+        )
+    }
+
+    /// `VALUES rows [AS alias(columns)]` at `span`: an unresolved
+    /// [`PlanNode::InlineTable`] (Spark's `UnresolvedInlineTable`); the
+    /// caller wraps it in a `SubqueryAlias` for the alias. A row is either
+    /// a row constructor (one cell per item; item aliases are ignored, the
+    /// schema comes from `columns`) or a single expression (one column, as
+    /// Spark's grammar has it). Rows of different widths are rejected by
+    /// [`crate::validate`] before lowering.
+    fn inline_table(
+        &mut self,
+        rows: &[Expr],
+        alias: Option<&TableAlias>,
+        span: Span,
+    ) -> R<LogicalPlan> {
+        let mut lowered = Vec::with_capacity(rows.len());
+        for row in rows {
+            let cells = match &row.kind {
+                ExprKind::Row(items) => items
+                    .iter()
+                    .map(|i| self.arg(&i.expr))
+                    .collect::<R<Vec<_>>>()?,
+                _ => vec![self.arg(row)?],
+            };
+            lowered.push(cells);
+        }
+        let width = lowered.first().map_or(0, Vec::len);
+        let columns = match alias.map(|a| &a.columns) {
+            Some(cols) if !cols.is_empty() => cols.iter().map(|c| c.value.clone()).collect(),
+            _ => (1..=width).map(|i| format!("col{i}")).collect(),
+        };
+        Ok(self.node(
+            PlanNode::InlineTable {
+                rows: lowered,
+                columns,
+            },
+            span,
+        ))
     }
 
     fn expr(&mut self, e: &Expr) -> R<IrExpr> {
@@ -954,18 +1198,17 @@ impl Lowerer {
                 name.extend(fields.into_iter().rev());
                 self.column(name, sp)
             }
-            ExprKind::Wildcard { qualifier, except } => {
-                if !except.is_empty() {
-                    return Err(unsupported("SELECT * EXCEPT", sp));
-                }
-                self.ex(
-                    ExprNode::Star(Star {
-                        qualifier: qualifier.iter().map(|p| p.value.clone()).collect(),
-                        plan_id: None,
-                    }),
-                    sp,
-                )
-            }
+            ExprKind::Wildcard { qualifier, except } => self.ex(
+                ExprNode::Star(Star {
+                    qualifier: qualifier.iter().map(|p| p.value.clone()).collect(),
+                    except: except
+                        .iter()
+                        .map(|n| n.parts.iter().map(|p| p.value.clone()).collect())
+                        .collect(),
+                    plan_id: None,
+                }),
+                sp,
+            ),
             ExprKind::Unary(op, inner) => {
                 let name = match op {
                     // Unary `-` keeps `"-"` so the analyzer sees it apart
@@ -1190,8 +1433,15 @@ impl Lowerer {
                 self.call(Builtin::When.name(), args, sp)
             }
             ExprKind::Function(f) => {
-                let [name] = &f.name.parts[..] else {
-                    return Err(unsupported("qualified function names", f.name.span));
+                if let Some(dynamic) = &f.dynamic_name {
+                    return Err(unsupported("IDENTIFIER() function names", dynamic.span));
+                }
+                let (qualifier, name) = match &f.name.parts[..] {
+                    [name] => (Vec::new(), name),
+                    [qualifier @ .., name] => {
+                        (qualifier.iter().map(|p| p.value.clone()).collect(), name)
+                    }
+                    [] => return Err(unsupported("a function name", f.name.span)),
                 };
                 for (present, what) in [
                     (!f.within_group.is_empty(), "WITHIN GROUP"),
@@ -1205,28 +1455,62 @@ impl Lowerer {
                     }
                 }
                 let mut args = Vec::new();
+                let mut arg_names = Vec::new();
+                let mut any_named = false;
                 for a in &f.args {
-                    if a.name.is_some() {
-                        return Err(unsupported("named function arguments", a.span));
+                    if let Some(n) = &a.name {
+                        any_named = true;
+                        arg_names.push(Some(n.value.clone()));
+                    } else {
+                        arg_names.push(None);
                     }
                     args.push(self.arg(&a.expr)?);
                 }
+                if !any_named {
+                    arg_names.clear();
+                }
+                // Spark's builder of `lag` and `lead`: `input` NULL, `offset`
+                // 1 and `default` NULL when not given.
+                let lname = name.value.to_ascii_lowercase();
+                if matches!(lname.as_str(), "lag" | "lead") && args.len() < 3 {
+                    let fill = [
+                        IrLiteral::Null(None),
+                        IrLiteral::Integer(1),
+                        IrLiteral::Null(None),
+                    ];
+                    for v in fill.into_iter().skip(args.len()) {
+                        args.push(arc(self.ex(ExprNode::Literal(v), sp)));
+                        if !arg_names.is_empty() {
+                            arg_names.push(None);
+                        }
+                    }
+                }
                 // `first(x) IGNORE NULLS` is `first(x, true)` and `RESPECT
-                // NULLS` is `first(x, false)`, whatever flag was written;
-                // a flag that is not a literal stays for the analyzer to
+                // NULLS` is `first(x, false)`, whatever flag was written
+                // (`lag`/`lead`'s fourth argument, `nth_value`'s third); a
+                // flag that is not a literal stays for the analyzer to
                 // refuse, as Spark does.
+                let flag_at = match lname.as_str() {
+                    "lag" | "lead" => 3,
+                    "nth_value" => 2,
+                    _ => 1,
+                };
                 if let Some(t) = f.null_treatment {
                     let flag = t == NullTreatment::Ignore;
-                    match args.get(1).map(|a| &a.node) {
+                    match args.get(flag_at).map(|a| &a.node) {
                         None | Some(ExprNode::Literal(IrLiteral::Boolean(_))) => {
                             let flag =
                                 arc(self.ex(ExprNode::Literal(IrLiteral::Boolean(flag)), sp));
-                            // Only the flag slot is replaced: surplus arguments
-                            // stay for the analyzer's arity error.
-                            if args.len() == 1 {
+                            // Only the flag slot is replaced: surplus (or
+                            // missing) arguments stay for the analyzer's
+                            // arity error.
+                            if args.len() == flag_at {
                                 args.push(flag);
-                            } else {
-                                args[1] = flag;
+                                if !arg_names.is_empty() {
+                                    arg_names.push(None);
+                                }
+                            } else if args.len() > flag_at {
+                                args[flag_at] = flag;
                             }
                         }
                         Some(_) => {}
@@ -1236,6 +1520,8 @@ impl Lowerer {
                 let call = self.ex(
                     ExprNode::Function(FunctionCall {
                         name: name.value.clone(),
+                        qualifier,
+                        arg_names,
                         args,
                         distinct: f.quantifier == Some(SetQuantifier::Distinct),
                         filter,
@@ -1259,14 +1545,44 @@ impl Lowerer {
                     }
                 }
             }
+            ExprKind::LikeQuantified {
+                expr,
+                quantifier,
+                patterns,
+                negated,
+                case_insensitive,
+            } => {
+                use crate::ast::LikeQuantifier::{All, Any, Some};
+                let b = match (quantifier, negated, case_insensitive) {
+                    (Any | Some, false, false) => Builtin::LikeAny,
+                    (All, false, false) => Builtin::LikeAll,
+                    (Any | Some, true, false) => Builtin::NotLikeAny,
+                    (All, true, false) => Builtin::NotLikeAll,
+                    (Any | Some, false, true) => Builtin::ILikeAny,
+                    (All, false, true) => Builtin::ILikeAll,
+                    (Any | Some, true, true) => Builtin::NotILikeAny,
+                    (All, true, true) => Builtin::NotILikeAll,
+                };
+                let mut args = vec![self.arg(expr)?];
+                for p in patterns {
+                    args.push(self.arg(p)?);
+                }
+                self.call(b.name(), args, sp)
+            }
             ExprKind::Nested(inner) => self.expr(inner)?,
             ExprKind::Parameter(_) => return Err(unsupported("parameter markers", sp)),
             ExprKind::Subscript(..) => return Err(unsupported("subscripts", sp)),
+            ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
+            ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
+            ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
             ExprKind::Lambda { .. } => return Err(unsupported("lambda functions", sp)),
             ExprKind::Row(_) | ExprKind::Struct(_) => {
                 return Err(unsupported("row and struct constructors", sp));
             }
-            _ => return Err(unsupported("LIKE ANY, SOME and ALL", sp)),
+            // Every variant is lowered above; the wildcard stays because
+            // `ExprKind` is non-exhaustive.
+            #[expect(unreachable_patterns, reason = "every ExprKind variant is lowered")]
+            _ => return Err(unsupported("this expression form", sp)),
         })
     }
 
@@ -1284,9 +1600,18 @@ impl Lowerer {
 /// The aggregates that take `IGNORE NULLS` / `RESPECT NULLS` (as their
 /// `ignoreNulls` argument).
 fn takes_null_treatment(name: &str) -> bool {
-    ["first", "last", "first_value", "last_value"]
-        .iter()
-        .any(|n| name.eq_ignore_ascii_case(n))
+    [
+        "first",
+        "last",
+        "first_value",
+        "last_value",
+        "any_value",
+        "lag",
+        "lead",
+        "nth_value",
+    ]
+    .iter()
+    .any(|n| name.eq_ignore_ascii_case(n))
 }
 
 /// A path written as a quoted name part (`parquet.`s3://b/k``).
@@ -1311,6 +1636,14 @@ fn is_predicate(e: &IrExpr) -> bool {
                     | Builtin::Between
                     | Builtin::Like
                     | Builtin::ILike
+                    | Builtin::LikeAny
+                    | Builtin::LikeAll
+                    | Builtin::NotLikeAny
+                    | Builtin::NotLikeAll
+                    | Builtin::ILikeAny
+                    | Builtin::ILikeAll
+                    | Builtin::NotILikeAny
+                    | Builtin::NotILikeAll
                     | Builtin::RLike
                     | Builtin::IsNull
                     | Builtin::IsNotNull

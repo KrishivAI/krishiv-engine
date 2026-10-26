@@ -3,7 +3,9 @@
 //! Spark defines the function on binary): `upper`/`lower`, `length`, the
 //! `trim` family, `startswith`/`endswith`/`contains`, `replace`,
 //! `lpad`/`rpad`, `substring`, `concat`, `like` ([`like()`]) and a literal
-//! `split` ([`split_literal`]).
+//! `split` ([`split_literal`]), plus the character-level functions of
+//! `chars.rs` (`right`, `repeat`, `translate`, `locate`, `mask`, ...) and the
+//! encodings of `codec.rs` (`base64`, `to_binary`, `encode`, `url_encode`, ...).
 //!
 //! `STRING` is valid UTF-8 (validated at the edges), so a "character" is a
 //! Unicode scalar value (Spark counts code points) and every slice a kernel
@@ -12,9 +14,30 @@
 //! NULL row is never evaluated. Work is per valid row and depends on the
 //! row's content, so these kernels have no has-nulls axis (they skip NULL
 //! rows) and ASCII rows take byte-wise fast paths.
+//!
+//! Known approximations (Spark's defaults apply; the switches are not read):
+//! - `initcap` and `mask` classify non-ASCII characters with the toolchain's
+//!   Unicode data, not a version-keyed table like [`upper`]/[`lower`] (see
+//!   `case_table.rs`). The divergent code points (Greek letters with an iota
+//!   subscript, modifier/circled/Roman-numeral letters, Georgian) are pinned
+//!   by `toolchain_unicode_is_pinned`.
+//! - `encode`/`decode` take Spark's seven default charsets; the
+//!   `spark.sql.legacy.javaCharsets` and `spark.sql.legacy.codingErrorAction`
+//!   switches are not read.
+//! - `base64` always writes MIME chunking (a CRLF every 76 symbols), Spark's
+//!   default; `spark.sql.chunkBase64String.enabled` is not read.
+//! - `split_part` and `substring_index` with `Int.MIN` return what Spark's
+//!   algorithm would (the whole string / the empty string); the JVM raises an
+//!   unclassified exception there.
+//! - `unbase64` of text Java's MIME decoder rejects is
+//!   `KRISHIV_INVALID_BASE64_INPUT`; Spark raises an unclassified
+//!   `IllegalArgumentException`.
 
 mod case_table;
+mod chars;
+mod codec;
 mod like;
+mod mask_table;
 mod split;
 
 use arrow_array::builder::{BooleanBufferBuilder, GenericByteBuilder};
@@ -25,6 +48,15 @@ use arrow_array::{
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer};
 
+pub use chars::{
+    ascii, bit_length, chr, concat_ws, elt, elt_binary, find_in_set, initcap, levenshtein, locate,
+    luhn_check, overlay, overlay_binary, quote, repeat, reverse, reverse_binary, right, soundex,
+    space, split_part, substring_index, translate,
+};
+pub use codec::{
+    base64, decode, encode, is_valid_utf8, make_valid_utf8, to_binary, unbase64, url_decode,
+    url_encode, validate_utf8,
+};
 pub use like::{LikePattern, like};
 pub use split::{literal_delimiter, split_literal};
 
@@ -510,6 +542,121 @@ pub fn match_binary<O: OffsetSizeTrait>(
     Ok(bool_result(rows, &slots, |i| {
         kind.holds_bytes(l.at(i), r.at(i))
     }))
+}
+
+// ---- mask ----
+
+/// The class `mask()` assigns to a character.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MaskClass {
+    Upper,
+    Lower,
+    Digit,
+    Other,
+}
+
+/// Spark's `mask()` class of `c`: general category `Lu`, `Ll` or `Nd`
+/// (`Ⓐ`, `²`, `Ⅻ` are other characters), as of Spark 4.2's Unicode data.
+/// ASCII follows the ASCII rule; the rest of the basic multilingual plane is
+/// looked up in the generated runs. Spark classifies UTF-16 units, so a
+/// supplementary scalar is two other characters (see [`mask`]).
+fn mask_class(c: char) -> MaskClass {
+    match c {
+        'A'..='Z' => MaskClass::Upper,
+        'a'..='z' => MaskClass::Lower,
+        '0'..='9' => MaskClass::Digit,
+        _ => {
+            let cp = u32::from(c);
+            if in_runs(&mask_table::UPPER, cp) {
+                MaskClass::Upper
+            } else if in_runs(&mask_table::LOWER, cp) {
+                MaskClass::Lower
+            } else if in_runs(&mask_table::DIGIT, cp) {
+                MaskClass::Digit
+            } else {
+                MaskClass::Other
+            }
+        }
+    }
+}
+
+/// Whether `cp` is in one of the sorted, disjoint `(first, last, step)` runs.
+fn in_runs(runs: &[(u32, u32, u32)], cp: u32) -> bool {
+    let i = runs.partition_point(|&(_, last, _)| last < cp);
+    runs.get(i).is_some_and(|&(first, _, step)| {
+        cp.checked_sub(first)
+            .and_then(|d| d.checked_rem(step))
+            .is_some_and(|r| r == 0)
+    })
+}
+
+/// `mask(str[, upperChar[, lowerChar[, digitChar[, otherChar]]]])`: an
+/// uppercase letter becomes `upperChar`, a lowercase letter `lowerChar`, a
+/// digit `digitChar`, any other character `otherChar`; a NULL replacement
+/// retains the character. A NULL input is NULL.
+///
+/// Characters are classified as Spark 4.2 does (`Lu`, `Ll`, `Nd`; the table
+/// is generated from the Spark oracle by `tests/scripts/gen_mask_table.py`).
+/// Spark works on UTF-16 units: a character outside the basic multilingual
+/// plane is two other characters, so `otherChar` is emitted twice for it.
+/// A replacement is the first scalar of its string; Spark takes its first
+/// UTF-16 unit, so a replacement outside the basic multilingual plane (a lone
+/// surrogate in Spark) is not representable here.
+///
+/// # Errors
+/// `INTERNAL_ERROR` for operands of different lengths;
+/// `UNABLE_TO_ACQUIRE_MEMORY` if the result does not fit the offset type.
+pub fn mask<O: OffsetSizeTrait>(
+    input: StrOperand<'_, O>,
+    upper: StrOperand<'_, O>,
+    lower: StrOperand<'_, O>,
+    digit: StrOperand<'_, O>,
+    other: StrOperand<'_, O>,
+) -> Result<GenericStringArray<O>, KernelError> {
+    let slots: [&dyn Slot; 5] = [&input, &upper, &lower, &digit, &other];
+    let rows = row_count(&slots)?;
+    let mut sink = StrSink::new(rows, 0);
+    let mut scratch = String::new();
+    let first =
+        |op: StrOperand<'_, O>, i: usize| op.is_valid(i).then(|| op.at(i).chars().next()).flatten();
+    for i in 0..rows {
+        if !input.is_valid(i) {
+            sink.push_null();
+            continue;
+        }
+        let (u, l, d, o) = (
+            first(upper, i),
+            first(lower, i),
+            first(digit, i),
+            first(other, i),
+        );
+        scratch.clear();
+        for c in input.at(i).chars() {
+            let (replacement, units) = if u32::from(c) > 0xFFFF {
+                (o, 2)
+            } else {
+                match mask_class(c) {
+                    MaskClass::Upper => (u, 1),
+                    MaskClass::Lower => (l, 1),
+                    MaskClass::Digit => (d, 1),
+                    MaskClass::Other => (o, 1),
+                }
+            };
+            match replacement {
+                Some(r) => {
+                    for _ in 0..units {
+                        scratch.push(r);
+                    }
+                }
+                // A NULL replacement retains the character: Spark works on
+                // UTF-16 units, so both surrogate units stay as the one
+                // scalar instead of duplicating it.
+                None => scratch.push(c),
+            }
+        }
+        sink.push(&scratch)?;
+    }
+    Ok(sink.finish())
 }
 
 // ---- replace ----

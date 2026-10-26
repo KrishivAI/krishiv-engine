@@ -18,6 +18,7 @@
 //! | Partitioning | Lowered into |
 //! |---|---|
 //! | `Hash` below an aggregate | the aggregate's breaker, whose partitions are the hash's |
+//! | `Hash` below a sort by its keys first (a window's) | the sort's hash buckets, merged and read in parallel |
 //! | `Hash` on both inputs of a join | the build's partitions; the probe needs none, as the build is complete |
 //! | `Broadcast` | the shared, immutable build |
 //! | `Single` | the breaker's combine and merge, or the result stream |
@@ -37,8 +38,8 @@ use krishiv_memory::SpillScope;
 use krishiv_plan::{AttrId, Expr};
 
 use super::{
-    AggregatePlan, HashJoinPlan, NestedLoopPlan, PhysNode, PhysicalPlan, ProjectItemPlan, Residual,
-    ScanNode, SubqueryPlan,
+    AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
+    ProjectItemPlan, Residual, ScanNode, SubqueryPlan,
 };
 use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
 use crate::error::{Result, internal};
@@ -325,9 +326,20 @@ impl Instantiation<'_> {
                 Ok(operator(input, op))
             }
             PhysNode::Sort { input, keys } => {
+                let buckets = hash_buckets(input, keys);
                 let input = self.node(input)?;
-                let sort = sort_op(&input.schema, keys, self.spill.clone())?;
-                Ok(breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort))
+                match buckets {
+                    // A hash exchange below lowers into the sort's buckets.
+                    Some(columns) => {
+                        let sort = Sort::new(Arc::clone(&input.schema), keys, self.spill.clone())?
+                            .with_hash_buckets(columns)?;
+                        Ok(bucketed(input, Arc::new(sort)))
+                    }
+                    None => {
+                        let sort = sort_op(&input.schema, keys, self.spill.clone())?;
+                        Ok(breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort))
+                    }
+                }
             }
             PhysNode::Window { input, window } => {
                 let input = self.node(input)?;
@@ -344,11 +356,21 @@ impl Instantiation<'_> {
                 // batch (the limit's `Partial` mode).
                 let input = match input.as_ref() {
                     sort_node @ PhysNode::Sort { input, keys } if limit.sorted_by(keys) => {
+                        let buckets = hash_buckets(input, keys);
                         let input = self.node(input)?;
                         let sort = Sort::new(Arc::clone(&input.schema), keys, self.spill.clone())?
                             .with_group_limit(keys, limit)?;
-                        let sort = Arc::new(sort);
-                        let built = breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort);
+                        let built = match buckets {
+                            // As a plain sort: a hash exchange below lowers
+                            // into the sort's buckets.
+                            Some(columns) => {
+                                bucketed(input, Arc::new(sort.with_hash_buckets(columns)?))
+                            }
+                            None => {
+                                let sort = Arc::new(sort);
+                                breaker(input, Arc::clone(&sort) as Arc<dyn Sink>, sort)
+                            }
+                        };
                         // Built here, not through `node`: tag it as `node`
                         // does, for `EXPLAIN ANALYZE`.
                         self.tag(sort_node, built)
@@ -542,6 +564,37 @@ fn operator(input: Built, op: Arc<dyn Operator>) -> Built {
     }
 }
 
+/// The hash keys of the exchange below a sort by those keys first (the
+/// sort below a window with partitioning): the sort's buckets, which the
+/// exchange lowers into on one worker (design P2-T055 4a).
+fn hash_buckets<'p>(input: &'p PhysNode, keys: &[SortKey]) -> Option<&'p [usize]> {
+    let PhysNode::Exchange(e) = input else {
+        return None;
+    };
+    let Partitioning::Hash { keys: hash } = &e.partitioning else {
+        return None;
+    };
+    let mut lead: Vec<usize> = keys.get(..hash.len())?.iter().map(|k| k.column).collect();
+    let mut want = hash.clone();
+    lead.sort_unstable();
+    want.sort_unstable();
+    (!hash.is_empty() && lead == want).then_some(hash.as_slice())
+}
+
+/// A bucketed sort's breaker: its buckets are read by several drivers, so
+/// the order holds within each bucket only.
+fn bucketed(input: Built, sort: Arc<Sort>) -> Built {
+    Built {
+        schema: Source::schema(&*sort),
+        node: Arc::new(BreakerNode {
+            input: input.node,
+            sink: Arc::clone(&sort) as Arc<dyn Sink>,
+            source: sort,
+            ordered: false,
+        }),
+    }
+}
+
 /// A breaker keeping its output order (sorts).
 fn breaker(input: Built, sink: Arc<dyn Sink>, source: Arc<dyn Source>) -> Built {
     Built {
@@ -699,6 +752,7 @@ pub(crate) fn scan_filter(
     Ok(PushedFilter {
         predicate: Arc::new(Compiled(compiled)),
         expr: crate::planner::pushdown::translate(predicate, &scan.output),
+        rows: crate::planner::pushdown::row_level(predicate, &scan.output, env.ansi),
     })
 }
 
@@ -770,6 +824,17 @@ pub(crate) fn hash_join(
     spill: Option<SpillScope>,
     cell: &mut dyn FnMut(FilterId) -> Result<Arc<RuntimeFilter>>,
 ) -> Result<HashJoin> {
+    if j.distinct_build && !j.distinct_build_allowed() {
+        return Err(internal(format!(
+            "a distinct build on a {:?} join{}",
+            j.join_type,
+            if j.residual.is_some() {
+                " with a residual condition"
+            } else {
+                ""
+            }
+        )));
+    }
     let join = HashJoin::try_new(JoinSpec {
         join_type: j.join_type,
         probe_schema: Arc::clone(probe),
@@ -778,6 +843,7 @@ pub(crate) fn hash_join(
         build_keys: j.build_keys.clone(),
         null_safe: j.null_safe.clone(),
         filter: residual(probe, build, j.residual.as_ref(), env)?,
+        single_match: j.single_match,
         spill,
     })?;
     if j.runtime_filters.is_empty() {
