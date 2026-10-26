@@ -244,7 +244,8 @@ fn nested_lists_reshape() {
 #[test]
 fn large_offsets_reshape() {
     // 100,000 single-element lists: the reshape is offset arithmetic.
-    let n = 100_000usize;
+    // Miri interprets every element, so it checks a reduced case.
+    let n = if cfg!(miri) { 1_000usize } else { 100_000 };
     let values: ArrayRef = Arc::new(Int32Array::from(vec![1; n]));
     let input = ListArray::new(
         field(),
