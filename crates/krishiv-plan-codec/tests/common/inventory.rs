@@ -949,8 +949,10 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
     // The expression environment flag the `legacy_statistical_aggregate`
-    // feature carries: the same root as `one_row`, under a session with
-    // `spark.sql.legacy.statisticalAggregate` set.
+    // feature is about: the same root as `one_row`, under a session with
+    // `spark.sql.legacy.statisticalAggregate` set. With no moment aggregate
+    // in the plan it lists no feature, so readers without it keep reading
+    // the plan; the flag itself still travels on the wire.
     let mut legacy = env();
     legacy.legacy_statistical_aggregate = true;
     out.push((

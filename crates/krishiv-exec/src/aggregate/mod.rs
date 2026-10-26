@@ -95,7 +95,7 @@ use crate::error::{Result, internal};
 /// Whether `f` is a moment aggregate (`stddev`, `variance`, `skewness`,
 /// `kurtosis`, `covar_*`, `corr`): it reads its arguments as doubles, and
 /// the window planner refuses it.
-pub(crate) fn is_moment(f: AggregateFunction) -> bool {
+pub fn is_moment(f: AggregateFunction) -> bool {
     moments::buffer(f).is_some()
 }
 

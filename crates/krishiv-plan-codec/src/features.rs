@@ -39,7 +39,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::AggregateFunction;
+use krishiv_exec::aggregate::{AggregateFunction, is_moment};
 use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, Literal, ResolvedExpr};
@@ -441,22 +441,31 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
 }
 
 /// The features `plan` uses: a pure function of its content. Subquery plans
-/// count; nothing recurses. The expression environment counts too: a plan
-/// whose session sets `spark.sql.legacy.statisticalAggregate` needs a reader
-/// that carries the flag, or it would compute NULL where Spark gives NaN.
+/// count; nothing recurses. The expression environment counts too, but only
+/// around a moment aggregate: a plan whose session sets
+/// `spark.sql.legacy.statisticalAggregate` needs a reader that carries the
+/// flag, or it would compute NULL where Spark gives NaN. A plan without one
+/// runs the same everywhere, so the flag alone lists no feature and readers
+/// without it keep reading the plan.
 #[must_use]
 pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     let mut out = BTreeSet::new();
-    if plan.env().legacy_statistical_aggregate {
-        out.insert(Feature::LegacyStatisticalAggregate);
-    }
+    let mut has_moment = false;
     let mut stack = vec![plan.root()];
     while let Some(node) = stack.pop() {
-        constructs_of(node, &mut |c| out.extend(feature_of(c)));
+        constructs_of(node, &mut |c| {
+            if matches!(c, Construct::Aggregate(function) if is_moment(function)) {
+                has_moment = true;
+            }
+            out.extend(feature_of(c));
+        });
         stack.extend(node.children());
     }
     for field in plan.schema().fields() {
         out.extend(feature_of(Construct::ArrowType(field.data_type())));
+    }
+    if has_moment && plan.env().legacy_statistical_aggregate {
+        out.insert(Feature::LegacyStatisticalAggregate);
     }
     out
 }
