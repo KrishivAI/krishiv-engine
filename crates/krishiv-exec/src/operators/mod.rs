@@ -84,5 +84,13 @@ pub(crate) fn no_state() -> LocalState {
     Box::new(())
 }
 
+/// Per-driver local state of an operator evaluating row expressions: the
+/// driver's partition index (see [`TaskContext::partition`](crate::context::TaskContext::partition)).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PartitionState {
+    /// The driver's partition index.
+    pub(crate) partition: u32,
+}
+
 #[cfg(all(test, not(loom)))]
 mod tests;

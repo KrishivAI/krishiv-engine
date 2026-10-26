@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "randn#8df4dfcb761d/ansi_on",
+      "reason": "SELECT randn(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "randn#8df4dfcb761d/ansi_off",
+      "reason": "SELECT randn(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "randn#905f1cb314d6/ansi_on",
+      "reason": "SELECT randn(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "randn#905f1cb314d6/ansi_off",
+      "reason": "SELECT randn(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "randn#9df340e4c4ed/ansi_on",
+      "reason": "SELECT randn(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "randn#9df340e4c4ed/ansi_off",
+      "reason": "SELECT randn(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "randn#db9474536e6f/ansi_on",
+      "reason": "SELECT randn(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "randn#db9474536e6f/ansi_off",
+      "reason": "SELECT randn(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "randn"
+}

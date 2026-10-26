@@ -1428,6 +1428,9 @@ impl Resolver<'_> {
                 }
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
+                // `typeof(x)` is Spark's `RuntimeReplaceable`; its type
+                // name is known once the call is typed.
+                let is_typeof = entry.id.name() == "typeof";
                 let call = ResolvedFunction {
                     id: entry.id,
                     kind: entry.kind,
@@ -1440,6 +1443,21 @@ impl Resolver<'_> {
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 let shown = self.call_shown(lookup_name, &expr, kids, &call_kids);
+                // `typeof(x)` is Spark's `RuntimeReplaceable`: the analyzer
+                // replaces it with the type name literal, keeping the call
+                // as the shown form (the executor gets no type logic).
+                let (expr, shown) = if is_typeof {
+                    let name = call_kids
+                        .first()
+                        .and_then(|k| k.ty.data_type.clone())
+                        .map_or_else(|| "void".to_owned(), |t| t.catalog_string());
+                    (
+                        rebuilt(ExprNode::Literal(Literal::String(name))),
+                        Some(expr),
+                    )
+                } else {
+                    (expr, shown)
+                };
                 let mut bound = Bound {
                     agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
@@ -3904,6 +3922,16 @@ fn call(
         _ if name.eq_ignore_ascii_case("to_varchar") => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("to_char({d}{})", k.join(", "))
+        }
+        // `current_database` and `current_schema` are one expression
+        // (Spark's `CurrentDatabase`, shown as `current_schema`);
+        // `current_catalog` shows without parentheses.
+        _ if name.eq_ignore_ascii_case("current_database") => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("current_schema({d}{})", k.join(", "))
+        }
+        _ if name.eq_ignore_ascii_case("current_catalog") && k.is_empty() && !distinct => {
+            "current_catalog".to_owned()
         }
         // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
         // two-argument math (`power`, `atan2`, `hypot`) print upper case,

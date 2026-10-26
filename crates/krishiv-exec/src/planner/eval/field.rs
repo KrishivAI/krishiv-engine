@@ -29,8 +29,8 @@ impl PhysExpr for GetField {
         self.nullable
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        Ok(match self.base.eval(batch)? {
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        Ok(match self.base.eval(batch, partition)? {
             Value::Array(a) => Value::Array(get(&a, self.ordinal)?),
             Value::Scalar(s) => Value::Scalar(get(&s, self.ordinal)?),
         })

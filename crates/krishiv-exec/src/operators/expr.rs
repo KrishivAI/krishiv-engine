@@ -20,6 +20,16 @@ pub trait Predicate: Send + Sync + fmt::Debug {
     /// Any error fails the query (for example a division by zero under
     /// ANSI mode).
     fn evaluate(&self, batch: &RecordBatch) -> Result<BooleanArray>;
+    /// As [`Self::evaluate`], in the executing partition `partition`
+    /// (Spark's partition index). The default runs [`Self::evaluate`], for
+    /// the stateless predicates.
+    ///
+    /// # Errors
+    /// As [`Self::evaluate`].
+    fn evaluate_in(&self, batch: &RecordBatch, partition: u32) -> Result<BooleanArray> {
+        let _ = partition;
+        self.evaluate(batch)
+    }
 }
 
 /// A scalar expression evaluated over a batch, for [`Project`](super::Project).
@@ -33,6 +43,16 @@ pub trait ScalarExpr: Send + Sync + fmt::Debug {
     /// # Errors
     /// Any error fails the query.
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef>;
+    /// As [`Self::evaluate`], in the executing partition `partition`
+    /// (Spark's partition index). The default runs [`Self::evaluate`], for
+    /// the stateless expressions.
+    ///
+    /// # Errors
+    /// As [`Self::evaluate`].
+    fn evaluate_in(&self, batch: &RecordBatch, partition: u32) -> Result<ArrayRef> {
+        let _ = partition;
+        self.evaluate(batch)
+    }
 }
 
 /// A [`Predicate`] from a closure.

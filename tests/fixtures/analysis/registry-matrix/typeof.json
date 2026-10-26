@@ -1,0 +1,62 @@
+{
+  "entries": [
+    {
+      "id": "typeof#737efe3cca2b/ansi_on",
+      "reason": "SELECT typeof(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+    },
+    {
+      "id": "typeof#737efe3cca2b/ansi_off",
+      "reason": "SELECT typeof(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+    },
+    {
+      "id": "typeof#85119c3e6111/ansi_on",
+      "reason": "SELECT typeof(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "typeof#85119c3e6111/ansi_off",
+      "reason": "SELECT typeof(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "typeof#86964662cdab/ansi_on",
+      "reason": "SELECT typeof(array(1)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "typeof#86964662cdab/ansi_off",
+      "reason": "SELECT typeof(array(1)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "typeof#8b64929c858b/ansi_on",
+      "reason": "SELECT typeof(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "typeof#8b64929c858b/ansi_off",
+      "reason": "SELECT typeof(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "typeof#94be9d2b4025/ansi_on",
+      "reason": "SELECT typeof(CAST(array() AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "typeof#94be9d2b4025/ansi_off",
+      "reason": "SELECT typeof(CAST(array() AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "typeof#bea7c4b2a1ca/ansi_on",
+      "reason": "SELECT typeof(CAST(array(NULL) AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "typeof#bea7c4b2a1ca/ansi_off",
+      "reason": "SELECT typeof(CAST(array(NULL) AS array<int>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
+    },
+    {
+      "id": "typeof#ef1847dcc457/ansi_on",
+      "reason": "SELECT typeof(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "typeof#ef1847dcc457/ansi_off",
+      "reason": "SELECT typeof(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "typeof"
+}

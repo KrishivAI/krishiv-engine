@@ -81,15 +81,32 @@ fn every_scalar_definition_binds_and_every_binding_is_defined() {
 fn lookups_are_case_insensitive_and_versioned() {
     let r = builtins();
     assert!(matches!(r.lookup("UpPeR", SparkProfile::V3_5), Lookup::Found(d) if d.name == "upper"));
-    // `randstr` arrived in 4.0 and is not implemented.
+    // `randstr` arrived in 4.0 and is implemented.
     assert!(matches!(
         r.lookup("randstr", SparkProfile::V3_5),
         Lookup::NotFound
     ));
     assert!(matches!(
         r.lookup("RANDSTR", SparkProfile::V4_0),
-        Lookup::KnownUnsupported
+        Lookup::Found(_)
     ));
+    // So are `uniform` (4.0) and the misc functions.
+    for name in [
+        "uniform",
+        "uuid",
+        "typeof",
+        "version",
+        "current_database",
+        "current_catalog",
+        "monotonically_increasing_id",
+        "spark_partition_id",
+        "input_file_name",
+    ] {
+        assert!(
+            matches!(r.lookup(name, SparkProfile::V4_2), Lookup::Found(_)),
+            "{name}"
+        );
+    }
     assert!(matches!(
         r.lookup("no_such_fn", SparkProfile::V4_2),
         Lookup::NotFound
@@ -132,13 +149,21 @@ fn kinds_determinism_and_execution() {
         assert_eq!(d.execution, Execution::Evaluator, "{name}");
         assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
     }
-    for name in ["rand", "randn", "uuid", "shuffle"] {
-        // Not implemented here, but the optimizer's flag comes from Spark.
+    for name in ["rand", "randn", "uuid", "uniform", "randstr", "shuffle"] {
+        // The optimizer's flag comes from Spark; the implemented ones are
+        // nondeterministic scalar bindings (`shuffle` stays unimplemented:
+        // it needs an array type the engine has no representation for).
         assert_eq!(
             builtins().spark_function(name).unwrap().deterministic,
             Some(false),
             "{name}"
         );
+    }
+    for name in ["rand", "randn", "uuid", "uniform", "randstr"] {
+        let d = def(name);
+        assert!(!d.deterministic, "{name}");
+        assert_eq!(d.execution, Execution::Scalar, "{name}");
+        assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
     }
     for name in [
         "round", "pmod", "hash", "try_add", "greatest", "abs", "sha2",
@@ -1026,6 +1051,307 @@ fn session_and_clock_functions() {
         builtins().lookup("current_time", SparkProfile::V4_2),
         Lookup::KnownUnsupported
     ));
+    // `shuffle` needs an array type the engine has no representation for:
+    // it stays known-unsupported where Spark has it.
+    assert!(matches!(
+        builtins().lookup("shuffle", SparkProfile::V4_2),
+        Lookup::KnownUnsupported
+    ));
+}
+
+/// The misc and seeded-random signatures: arities, inputs and result types.
+#[test]
+fn misc_signatures() {
+    let (s, i, l) = (
+        ty(DataType::String),
+        ty(DataType::Integer),
+        ty(DataType::Long),
+    );
+    // The session constants and `version` take no arguments and are never
+    // NULL.
+    for name in [
+        "version",
+        "current_database",
+        "current_schema",
+        "current_catalog",
+        "input_file_name",
+        "monotonically_increasing_id",
+        "spark_partition_id",
+        "typeof",
+        "uuid",
+        "rand",
+        "random",
+        "randn",
+    ] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Scalar, "{name}");
+        assert_eq!(d.execution, Execution::Scalar, "{name}");
+    }
+    for name in [
+        "version",
+        "current_database",
+        "current_schema",
+        "current_catalog",
+    ] {
+        assert_eq!(result(name, &[], &[]).unwrap(), s, "{name}");
+        assert!(def(name).deterministic, "{name}");
+    }
+    // The file placeholders and partition functions are nondeterministic.
+    for name in [
+        "input_file_name",
+        "input_file_block_start",
+        "input_file_block_length",
+        "monotonically_increasing_id",
+        "spark_partition_id",
+    ] {
+        assert!(!def(name).deterministic, "{name}");
+    }
+    assert_eq!(result("input_file_name", &[], &[]).unwrap(), s);
+    assert_eq!(
+        result("input_file_block_start", &[], &[]).unwrap(),
+        ty(DataType::Long)
+    );
+    assert_eq!(
+        result("input_file_block_length", &[], &[]).unwrap(),
+        ty(DataType::Long)
+    );
+    assert_eq!(result("monotonically_increasing_id", &[], &[]).unwrap(), l);
+    assert_eq!(result("spark_partition_id", &[], &[]).unwrap(), i);
+    assert_eq!(result("typeof", std::slice::from_ref(&s), &[]).unwrap(), s);
+    // Never NULL, even for a nullable or untyped-NULL argument.
+    assert_eq!(result("typeof", &[null_ty()], &[]).unwrap(), s);
+    assert_eq!(
+        result("typeof", &[ArgType::new(DataType::String, true)], &[]).unwrap(),
+        s
+    );
+    assert_eq!(result("uuid", &[], &[]).unwrap(), s);
+    assert_eq!(result("rand", &[], &[]).unwrap(), ty(DataType::Double));
+    assert_eq!(
+        result(
+            "rand",
+            std::slice::from_ref(&l),
+            &[Some(Constant::Integral(0))]
+        )
+        .unwrap(),
+        ty(DataType::Double)
+    );
+    // A NULL seed reads as 0.
+    assert_eq!(
+        result("rand", &[null_ty()], &[Some(Constant::Null)]).unwrap(),
+        ty(DataType::Double)
+    );
+    // A short seed is the wrong type; a non-foldable one is refused.
+    let err = result(
+        "rand",
+        &[ty(DataType::Short)],
+        &[Some(Constant::Integral(1))],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("(\"INT\" or \"BIGINT\")"), "{err}");
+    let err = result("rand", std::slice::from_ref(&i), &[]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::SeedExpressionIsUnfoldable);
+    assert!(err.to_string().contains("must be foldable"), "{err}");
+    // `uuid` wants a plain literal.
+    let err = result("uuid", std::slice::from_ref(&i), &[]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidParameterValueLong);
+    assert!(err.to_string().contains("`UUID`"), "{err}");
+    // A non-integral literal is the wrong seed too.
+    let err = result(
+        "uuid",
+        &[ty(DataType::Double)],
+        &[Some(Constant::Fractional(1))],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidParameterValueLong);
+}
+
+/// `uniform` and `randstr`: the golden types and errors.
+#[test]
+fn uniform_and_randstr_signatures() {
+    let (i, l) = (ty(DataType::Integer), ty(DataType::Long));
+    let (ten, twenty, zero) = (
+        Some(Constant::Integral(10)),
+        Some(Constant::Integral(20)),
+        Some(Constant::Integral(0)),
+    );
+    // Integral bounds widen; the seed does not change the type.
+    assert_eq!(
+        result(
+            "uniform",
+            &[i.clone(), i.clone(), i.clone()],
+            &[ten.clone(), twenty.clone(), zero.clone()]
+        )
+        .unwrap(),
+        i
+    );
+    assert_eq!(
+        result(
+            "uniform",
+            &[i.clone(), l.clone(), l.clone()],
+            &[ten.clone(), twenty.clone(), zero.clone()]
+        )
+        .unwrap(),
+        l
+    );
+    // A NULL bound is a NULL double; a NULL seed reads as 0.
+    assert_eq!(
+        result(
+            "uniform",
+            &[null_ty(), i.clone(), i.clone()],
+            &[Some(Constant::Null), twenty.clone(), zero.clone()]
+        )
+        .unwrap(),
+        ArgType::new(DataType::Double, true)
+    );
+    // Narrower integrals widen; decimals meet at the wider.
+    assert_eq!(
+        result(
+            "uniform",
+            &[ty(DataType::Byte), ty(DataType::Short)],
+            &[Some(Constant::Integral(1)), Some(Constant::Integral(2))]
+        )
+        .unwrap(),
+        ty(DataType::Short)
+    );
+    assert_eq!(
+        result(
+            "uniform",
+            &[ty(dec(10, 3)), ty(dec(11, 4))],
+            &[Some(Constant::Fractional(1)), Some(Constant::Fractional(2))]
+        )
+        .unwrap(),
+        ty(dec(11, 4))
+    );
+    assert_eq!(
+        result(
+            "uniform",
+            &[ty(DataType::Float), ty(DataType::Double)],
+            &[Some(Constant::Fractional(1)), Some(Constant::Fractional(2))]
+        )
+        .unwrap(),
+        ty(DataType::Double)
+    );
+    assert_eq!(
+        result(
+            "uniform",
+            &[i.clone(), i.clone(), null_ty()],
+            &[ten.clone(), twenty.clone(), Some(Constant::Null)]
+        )
+        .unwrap(),
+        ArgType::new(DataType::Integer, true)
+    );
+    // A string bound is the wrong type; a column seed is not foldable.
+    let s = ty(DataType::String);
+    let err = result(
+        "uniform",
+        &[s, i.clone(), i.clone()],
+        &[None, twenty.clone(), zero.clone()],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"NUMERIC\""), "{err}");
+    let err = result(
+        "uniform",
+        &[i.clone(), i.clone(), i.clone()],
+        &[ten.clone(), twenty.clone(), None],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    assert!(err.to_string().contains("`seed`"), "{err}");
+    // A failing fold propagates instead of typing the call.
+    let failed = Constant::Error(KrishivError::from(krishiv_common::error::InternalError {
+        message: "boom".to_owned(),
+    }));
+    let err = result(
+        "uniform",
+        &[i.clone(), i.clone(), i.clone()],
+        &[ten.clone(), twenty, Some(failed.clone())],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
+    let err = result(
+        "randstr",
+        &[i.clone(), i.clone()],
+        &[ten.clone(), Some(failed)],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InternalError);
+    // `randstr` is a string; a boolean length is the wrong type.
+    assert_eq!(
+        result("randstr", &[i.clone(), i.clone()], &[ten, zero]).unwrap(),
+        ty(DataType::String)
+    );
+    let err = result(
+        "randstr",
+        &[ty(DataType::Boolean), i],
+        &[Some(Constant::Boolean(true)), None],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"INT\""), "{err}");
+}
+
+/// The analyzer's `uniform` result type and the executor's bind type agree
+/// on every pair of bound kinds: both layers map their own type to the
+/// shared `uniform_result` rule, and the test pins the two mappers against
+/// each other so one side cannot drift without the other.
+#[test]
+fn uniform_result_agrees_with_the_executor_bind() {
+    use crate::scalar::{BindOptions, bind_scalar};
+    // One foldable constant per bound type, as the analyzer sees them.
+    let cases: Vec<(Option<DataType>, Option<Constant>)> = vec![
+        (Some(DataType::Byte), Some(Constant::Integral(1))),
+        (Some(DataType::Short), Some(Constant::Integral(1))),
+        (Some(DataType::Integer), Some(Constant::Integral(10))),
+        (Some(DataType::Long), Some(Constant::Integral(20))),
+        (Some(DataType::Float), Some(Constant::Fractional(1))),
+        (Some(DataType::Double), Some(Constant::Fractional(1))),
+        (Some(dec(10, 3)), Some(Constant::Fractional(1))),
+        (Some(dec(11, 4)), Some(Constant::Fractional(1))),
+        (None, Some(Constant::Null)),
+    ];
+    for (a, ca) in &cases {
+        for (b, cb) in &cases {
+            let args = [
+                ArgType {
+                    data_type: a.clone(),
+                    nullable: a.is_none(),
+                },
+                ArgType {
+                    data_type: b.clone(),
+                    nullable: b.is_none(),
+                },
+            ];
+            let reg = result("uniform", &args, &[ca.clone(), cb.clone()]).unwrap();
+            let bound = bind_scalar(
+                "uniform",
+                &[
+                    a.clone().unwrap_or(DataType::Null).to_arrow().into(),
+                    b.clone().unwrap_or(DataType::Null).to_arrow().into(),
+                ],
+                &BindOptions::new(),
+            )
+            .unwrap();
+            assert_eq!(
+                reg.data_type.clone().map(|t| t.to_arrow()),
+                Some(bound.return_type().clone()),
+                "uniform({a:?}, {b:?})"
+            );
+        }
+    }
 }
 
 #[test]
