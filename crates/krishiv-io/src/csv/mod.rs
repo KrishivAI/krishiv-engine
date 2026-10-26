@@ -10,12 +10,12 @@
 //! `columnNameOfCorruptRecord`, header checks and column pruning. Both are
 //! checked against Spark 4.2 (`tests/fixtures/spark-4.2.0/csv.json`).
 
-mod convert;
+pub(crate) mod convert;
 mod decode;
 mod encode;
 mod infer;
 mod options;
-mod sampling;
+pub(crate) mod sampling;
 mod tokenizer;
 
 use std::sync::Arc;
