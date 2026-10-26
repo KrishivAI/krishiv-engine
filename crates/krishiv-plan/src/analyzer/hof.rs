@@ -152,24 +152,22 @@ impl Resolver<'_> {
             .cloned()
     }
 
-    /// Binds the higher-order call `e`'s array child, then its lambda
-    /// child: the array first, so the lambda variables take its element
-    /// type. Returns each child with the address the generic path binds it
-    /// under; the caller records both and leaves the rest of the call to
-    /// the generic path.
+    /// Binds the higher-order call's array child, then its lambda child:
+    /// the array first, so the lambda variables take its element type.
+    /// Returns each child with the address the generic path binds it under;
+    /// the caller records both and leaves the rest of the call to the
+    /// generic path.
     ///
     /// # Errors
     /// A lambda error, as Spark reports it.
     pub(super) fn hof_children(
         &mut self,
-        e: &Arc<Expr>,
+        f: &FunctionCall,
         h: Hof,
         kids: &[(Arc<Expr>, Ctx)],
         cx: &Cx<'_>,
+        origin: Origin,
     ) -> Result<[(usize, Bound); 2], AnalysisError> {
-        let ExprNode::Function(f) = &e.node else {
-            return Err(unsupported("a higher-order call", e.origin));
-        };
         // Arity first, as Spark checks it: every function here takes the
         // array and the lambda.
         if f.args.len() != 2 {
@@ -180,7 +178,7 @@ impl Resolver<'_> {
                     actual_num: f.args.len().to_string(),
                     docroot: SPARK_DOC_ROOT.to_owned(),
                 },
-                e.origin,
+                origin,
             ));
         }
         let at = |i: usize| {

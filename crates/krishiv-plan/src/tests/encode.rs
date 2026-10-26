@@ -10,6 +10,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_types::DataType;
 
 use super::depth::self_joins;
+use crate::{AttrId, BoundColumn};
 use crate::{
     Builtin, ColumnRef, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition, JoinKind, Literal,
     LogicalPlan, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr, ResolvedFunction,
@@ -240,6 +241,51 @@ fn resolved_call(name: &str, id: u32, kind: FunctionKind, arg: &str) -> LogicalP
     };
     let call = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(func)));
     LogicalPlan::table(["t"]).project(vec![call])
+}
+
+/// A lambda and its variables enter the key: parameter names, the
+/// variable's name and identity, and the lambda/variable tags all count.
+#[test]
+fn lambda_and_its_variables_enter_the_key() {
+    let var = BoundColumn {
+        id: AttrId(2),
+        name: "y".to_owned(),
+        data_type: DataType::Integer,
+        nullable: false,
+    };
+    let body = Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(var.clone())));
+    let lam = |params: Vec<String>| {
+        Expr::new(ExprNode::Lambda {
+            params,
+            body: Arc::new(body.clone()),
+        })
+    };
+    let p = |e: Expr| key(LogicalPlan::table(["t"]).filter(e));
+    let base = p(lam(vec!["y".to_owned()]));
+    assert_ne!(p(lam(vec!["z".to_owned()])), base, "params");
+    let renamed = Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(BoundColumn {
+        id: AttrId(2),
+        name: "z".to_owned(),
+        data_type: DataType::Integer,
+        nullable: false,
+    })));
+    let renamed = Expr::new(ExprNode::Lambda {
+        params: vec!["z".to_owned()],
+        body: Arc::new(renamed),
+    });
+    assert_ne!(p(renamed), base, "variable name");
+    let reid = Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(BoundColumn {
+        id: AttrId(3),
+        ..var.clone()
+    })));
+    let reid = Expr::new(ExprNode::Lambda {
+        params: vec!["y".to_owned()],
+        body: Arc::new(reid),
+    });
+    assert_ne!(p(reid), base, "variable identity");
+    // A variable is not a column with the same name and identity.
+    let col = Expr::new(ExprNode::Resolved(ResolvedExpr::Column(var)));
+    assert_ne!(p(col), base, "variable tag");
 }
 
 /// A function's key is its name, kind and arguments, never its registry

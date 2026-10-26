@@ -380,26 +380,23 @@ fn list_cells(
     row: usize,
     element: &krishiv_types::ArrayType,
 ) -> Result<Vec<Cell>, EngineError> {
+    use arrow_buffer::ArrowNativeType as _;
+    // Offsets are non-negative by construction (`OffsetBuffer`) and no
+    // larger than the values' length (checked there), so they fit.
     let (start, stop, values) = match col.data_type() {
         ArrowType::List(_) => {
             let list = col.as_list::<i32>();
             (
-                usize::try_from(list.value_offsets()[row]).map_err(|_| {
-                    harness_error("a nested list with a negative offset".to_owned())
-                })?,
-                usize::try_from(list.value_offsets()[row + 1]).map_err(|_| {
-                    harness_error("a nested list with a negative offset".to_owned())
-                })?,
+                list.value_offsets()[row].as_usize(),
+                list.value_offsets()[row + 1].as_usize(),
                 Arc::clone(list.values()),
             )
         }
         ArrowType::LargeList(_) => {
             let list = col.as_list::<i64>();
             (
-                usize::try_from(list.value_offsets()[row])
-                    .map_err(|_| harness_error("a nested list with a bad offset".to_owned()))?,
-                usize::try_from(list.value_offsets()[row + 1])
-                    .map_err(|_| harness_error("a nested list with a bad offset".to_owned()))?,
+                list.value_offsets()[row].as_usize(),
+                list.value_offsets()[row + 1].as_usize(),
                 Arc::clone(list.values()),
             )
         }
@@ -418,31 +415,22 @@ fn list_cells(
 /// The map at `row` of `col` as key/value cells in storage order (the
 /// renderer sorts them as Spark does).
 fn map_cell(col: &ArrayRef, row: usize, map: &krishiv_types::MapType) -> Result<Cell, EngineError> {
-    let ArrowType::Map(entries, _) = col.data_type() else {
+    use arrow_buffer::ArrowNativeType as _;
+    let ArrowType::Map(..) = col.data_type() else {
         return Err(harness_error(format!(
             "Arrow type {} for {}",
             col.data_type(),
             DataType::Map(Arc::new(map.clone())).catalog_string()
         )));
     };
-    let ArrowType::Struct(kv) = entries.data_type() else {
-        return Err(harness_error(format!(
-            "Arrow map entries {}",
-            entries.data_type()
-        )));
-    };
-    if kv.len() != 2 {
-        return Err(harness_error(format!(
-            "Arrow map entries {}",
-            entries.data_type()
-        )));
-    }
+    // A map's entries are a struct of its keys and values by construction
+    // (`MapArray`), so no shape check repeats here.
     let entries = col.as_map();
+    // Offsets are non-negative by construction (`OffsetBuffer`) and no
+    // larger than the entries' length (checked there), so they fit.
     let (start, stop) = (
-        usize::try_from(entries.value_offsets()[row])
-            .map_err(|_| harness_error("a nested map with a negative offset".to_owned()))?,
-        usize::try_from(entries.value_offsets()[row + 1])
-            .map_err(|_| harness_error("a nested map with a negative offset".to_owned()))?,
+        entries.value_offsets()[row].as_usize(),
+        entries.value_offsets()[row + 1].as_usize(),
     );
     let keys = entries.keys();
     let values = entries.values();
@@ -1067,6 +1055,340 @@ mod tests {
             rows: vec![],
         };
         assert!(fixture_batch(&nested).map_err(err)?.is_none());
+        Ok(())
+    }
+
+    fn list_col(offsets: Vec<i32>, values: Vec<Option<i32>>) -> ArrayRef {
+        use arrow_array::{Int32Array, ListArray};
+        use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+        use arrow_schema::Field;
+        Arc::new(ListArray::new(
+            Arc::new(Field::new(
+                "element",
+                ArrowType::Int32,
+                values.iter().any(Option::is_none),
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            Arc::new(Int32Array::from(values)),
+            None,
+        ))
+    }
+
+    fn int_array_element() -> krishiv_types::ArrayType {
+        krishiv_types::ArrayType::new(krishiv_types::DataType::Integer, true)
+    }
+
+    #[test]
+    fn nested_lists_render_their_elements() -> R {
+        use arrow_array::Int32Array;
+        // `[[1, NULL], [], [3]]`.
+        let col = list_col(vec![0, 2, 2, 3], vec![Some(1), None, Some(3)]);
+        let element = int_array_element();
+        assert_eq!(
+            list_cells(&col, 0, &element).map_err(err)?,
+            vec![Cell::Int(1), Cell::Null]
+        );
+        assert_eq!(list_cells(&col, 1, &element).map_err(err)?, vec![]);
+        assert_eq!(
+            list_cells(&col, 2, &element).map_err(err)?,
+            vec![Cell::Int(3)]
+        );
+        // A column that holds no list at all is a harness error.
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let got = list_cells(&ints, 0, &element).unwrap_err();
+        assert!(got.message.contains("Arrow type Int32"), "{}", got.message);
+        Ok(())
+    }
+
+    #[test]
+    fn large_lists_render_like_lists() -> R {
+        use arrow_array::{Int32Array, LargeListArray};
+        use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+        use arrow_schema::Field;
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(4), Some(5)]));
+        let col: ArrayRef = Arc::new(LargeListArray::new(
+            Arc::new(Field::new("element", ArrowType::Int32, false)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 2])),
+            values,
+            None,
+        ));
+        assert_eq!(
+            list_cells(&col, 0, &int_array_element()).map_err(err)?,
+            vec![Cell::Int(4), Cell::Int(5)]
+        );
+        // A nested list of lists recurses.
+        let inner = list_col(vec![0, 2, 3], vec![Some(1), None, Some(3)]);
+        let nested: ArrayRef = Arc::new(arrow_array::ListArray::new(
+            Arc::new(Field::new(
+                "element",
+                ArrowType::List(Arc::new(Field::new("element", ArrowType::Int32, true))),
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2])),
+            inner,
+            None,
+        ));
+        let lists =
+            krishiv_types::ArrayType::new(DataType::Array(Arc::new(int_array_element())), true);
+        assert_eq!(
+            list_cells(&nested, 0, &lists).map_err(err)?,
+            vec![
+                Cell::Array(vec![Cell::Int(1), Cell::Null]),
+                Cell::Array(vec![Cell::Int(3)]),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_scalars_render_by_spark_type() -> R {
+        use arrow_array::{
+            BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+            Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray,
+            StringViewArray, TimestampMicrosecondArray,
+        };
+        let cell = |col: ArrayRef, ty: DataType| nested_cell(&col, 0, &ty).map_err(err);
+        let int = |v: Vec<Option<i32>>| -> ArrayRef { Arc::new(Int32Array::from(v)) };
+        // A NULL row is NULL whatever the type; an untyped NULL type is NULL
+        // even over a non-null row.
+        assert_eq!(cell(int(vec![None]), DataType::Integer)?, Cell::Null);
+        assert_eq!(cell(int(vec![Some(7)]), DataType::Null)?, Cell::Null);
+        assert_eq!(
+            cell(Arc::new(BooleanArray::from(vec![true])), DataType::Boolean)?,
+            Cell::Bool(true)
+        );
+        assert_eq!(
+            cell(Arc::new(Int8Array::from(vec![-3])), DataType::Byte)?,
+            Cell::Int(-3)
+        );
+        assert_eq!(
+            cell(Arc::new(Int16Array::from(vec![-300])), DataType::Short)?,
+            Cell::Int(-300)
+        );
+        assert_eq!(cell(int(vec![Some(7)]), DataType::Integer)?, Cell::Int(7));
+        assert_eq!(
+            cell(Arc::new(Int64Array::from(vec![8])), DataType::Long)?,
+            Cell::Int(8)
+        );
+        assert_eq!(
+            cell(Arc::new(Float32Array::from(vec![1.5])), DataType::Float)?,
+            Cell::Float(1.5)
+        );
+        assert_eq!(
+            cell(Arc::new(Float64Array::from(vec![2.5])), DataType::Double)?,
+            Cell::Double(2.5)
+        );
+        let dec: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![150])
+                .with_precision_and_scale(5, 2)
+                .map_err(|e| format!("decimal: {e}"))?,
+        );
+        assert_eq!(
+            cell(
+                dec,
+                DataType::Decimal(
+                    krishiv_types::DecimalType::try_new(5, 2).map_err(|e| format!("{e:?}"))?
+                )
+            )?,
+            Cell::Decimal(150, 2)
+        );
+        assert_eq!(
+            cell(Arc::new(StringArray::from(vec!["a"])), DataType::String)?,
+            Cell::Str("a".into())
+        );
+        assert_eq!(
+            cell(
+                Arc::new(LargeStringArray::from(vec!["b"])),
+                DataType::String
+            )?,
+            Cell::Str("b".into())
+        );
+        assert_eq!(
+            cell(Arc::new(StringViewArray::from(vec!["c"])), DataType::String)?,
+            Cell::Str("c".into())
+        );
+        assert_eq!(
+            cell(Arc::new(Date32Array::from(vec![1])), DataType::Date)?,
+            Cell::Date(1)
+        );
+        assert_eq!(
+            cell(
+                Arc::new(TimestampMicrosecondArray::from(vec![1_000_000])),
+                DataType::Timestamp
+            )?,
+            Cell::Timestamp(1_000_000)
+        );
+        assert_eq!(
+            cell(
+                Arc::new(TimestampMicrosecondArray::from(vec![2_000_000])),
+                DataType::TimestampNtz
+            )?,
+            Cell::TimestampNtz(2_000_000)
+        );
+        // A nested `binary` has no cell: the harness reports the mismatch.
+        let binary: ArrayRef = Arc::new(BinaryArray::from(vec![&b"a"[..]]));
+        let got = nested_cell(&binary, 0, &DataType::Binary).unwrap_err();
+        assert!(got.message.contains("Arrow type Binary"), "{}", got.message);
+        // So does any other Arrow/value mismatch.
+        let got = nested_cell(&int(vec![Some(1)]), 0, &DataType::String).unwrap_err();
+        assert!(
+            got.message.contains("Arrow type Int32 for string"),
+            "{}",
+            got.message
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_maps_render_key_value_cells() -> R {
+        use arrow_array::{Int32Array, MapArray, StringArray, StructArray};
+        use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+        use arrow_schema::Field;
+        let keys: ArrayRef = Arc::new(StringArray::from(vec!["k1", "k2"]));
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+        let entries = StructArray::new(
+            vec![
+                Field::new("key", ArrowType::Utf8, false),
+                Field::new("value", ArrowType::Int32, true),
+            ]
+            .into(),
+            vec![keys, values],
+            None,
+        );
+        let map_ty = krishiv_types::MapType::new(DataType::String, DataType::Integer, true);
+        let field = Field::new("entries", entries.data_type().clone(), false);
+        let col: ArrayRef = Arc::new(MapArray::new(
+            Arc::new(field),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2])),
+            entries,
+            None,
+            false,
+        ));
+        assert_eq!(
+            map_cell(&col, 0, &map_ty).map_err(err)?,
+            Cell::Map(vec![
+                (Cell::Str("k1".into()), Cell::Int(1)),
+                (Cell::Str("k2".into()), Cell::Null),
+            ])
+        );
+        assert_eq!(
+            arrow_cell(&col, 0, &DataType::Map(Arc::new(map_ty.clone()))).map_err(err)?,
+            Cell::Map(vec![
+                (Cell::Str("k1".into()), Cell::Int(1)),
+                (Cell::Str("k2".into()), Cell::Null),
+            ])
+        );
+        assert_eq!(
+            nested_cell(&col, 0, &DataType::Map(Arc::new(map_ty))).map_err(err)?,
+            Cell::Map(vec![
+                (Cell::Str("k1".into()), Cell::Int(1)),
+                (Cell::Str("k2".into()), Cell::Null),
+            ])
+        );
+        // A column that holds no map at all is a harness error.
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let bad = krishiv_types::MapType::new(DataType::String, DataType::Integer, false);
+        let got = map_cell(&ints, 0, &bad).unwrap_err();
+        assert!(got.message.contains("Arrow type Int32"), "{}", got.message);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_structs_render_named_fields() -> R {
+        use arrow_array::{Int32Array, StringArray, StructArray};
+        use arrow_schema::Field;
+        let struct_ty = krishiv_types::StructType::new([
+            krishiv_types::StructField::new("a", DataType::Integer, true),
+            krishiv_types::StructField::new("s", DataType::String, true),
+        ]);
+        let fields: arrow_schema::Fields = vec![
+            Field::new("a", ArrowType::Int32, true),
+            Field::new("s", ArrowType::Utf8, true),
+        ]
+        .into();
+        let col: ArrayRef = Arc::new(StructArray::new(
+            fields,
+            vec![
+                Arc::new(Int32Array::from(vec![Some(1), None])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("x"), None])) as ArrayRef,
+            ],
+            None,
+        ));
+        assert_eq!(
+            struct_cell(&col, 0, &struct_ty).map_err(err)?,
+            Cell::Struct(vec![
+                ("a".to_owned(), Cell::Int(1)),
+                ("s".to_owned(), Cell::Str("x".into())),
+            ])
+        );
+        assert_eq!(
+            struct_cell(&col, 1, &struct_ty).map_err(err)?,
+            Cell::Struct(vec![
+                ("a".to_owned(), Cell::Null),
+                ("s".to_owned(), Cell::Null),
+            ])
+        );
+        assert_eq!(
+            arrow_cell(&col, 0, &DataType::Struct(struct_ty.clone())).map_err(err)?,
+            Cell::Struct(vec![
+                ("a".to_owned(), Cell::Int(1)),
+                ("s".to_owned(), Cell::Str("x".into())),
+            ])
+        );
+        assert_eq!(
+            nested_cell(&col, 0, &DataType::Struct(struct_ty.clone())).map_err(err)?,
+            Cell::Struct(vec![
+                ("a".to_owned(), Cell::Int(1)),
+                ("s".to_owned(), Cell::Str("x".into())),
+            ])
+        );
+        // A column that holds no struct, and a struct of another shape, are
+        // harness errors.
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let got = struct_cell(&ints, 0, &struct_ty).unwrap_err();
+        assert!(got.message.contains("Arrow type Int32"), "{}", got.message);
+        let narrow = krishiv_types::StructType::new([krishiv_types::StructField::new(
+            "a",
+            DataType::Integer,
+            true,
+        )]);
+        let got = struct_cell(&col, 0, &narrow).unwrap_err();
+        assert!(got.message.contains("Arrow struct"), "{}", got.message);
+        Ok(())
+    }
+
+    #[test]
+    fn arrow_cell_reports_type_mismatches() -> R {
+        use arrow_array::{BooleanArray, Int32Array, LargeBinaryArray};
+        // A value of another Arrow type is a harness error naming both sides.
+        let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true]));
+        let got = arrow_cell(&bools, 0, &DataType::Integer).unwrap_err();
+        assert!(
+            got.message.contains("Arrow type Boolean for int"),
+            "{}",
+            got.message
+        );
+        // A `STRING` over a column with no bytes to read has no cell, and
+        // neither does a `BINARY` over a non-binary column.
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let got = arrow_cell(&ints, 0, &DataType::String).unwrap_err();
+        assert!(
+            got.message.contains("Arrow type Int32 for string"),
+            "{}",
+            got.message
+        );
+        let got = arrow_cell(&ints, 0, &DataType::Binary).unwrap_err();
+        assert!(
+            got.message.contains("Arrow type Int32 for binary"),
+            "{}",
+            got.message
+        );
+        // Every binary carrier reads its bytes.
+        let large: ArrayRef = Arc::new(LargeBinaryArray::from(vec![&b"ab"[..]]));
+        assert_eq!(
+            arrow_cell(&large, 0, &DataType::Binary).map_err(err)?,
+            Cell::Binary(b"ab".to_vec())
+        );
         Ok(())
     }
 }

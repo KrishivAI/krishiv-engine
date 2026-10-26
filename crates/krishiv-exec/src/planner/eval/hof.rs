@@ -55,7 +55,6 @@ pub(super) fn compile(
     let mut refs = Refs::default();
     collect(
         body,
-        0,
         params,
         &mut Vec::new(),
         input.env.case_sensitive,
@@ -149,8 +148,8 @@ pub(super) fn compile(
 }
 
 /// The columns a lambda body reads: root columns and enclosing calls'
-/// lambda variables at any depth (each level carries what the levels below
-/// need), and this call's element and index variables (depth 0).
+/// lambda variables (each level carries what the levels below need), and
+/// this call's element and index variables.
 #[derive(Default)]
 struct Refs {
     /// Captured root columns, in first-use order.
@@ -163,14 +162,14 @@ struct Refs {
     index: Option<AttrId>,
 }
 
-/// Collects `refs` from `body` against `params`, the enclosing lambda's
-/// parameters (a nested lambda collects against its own). A variable of an
+/// Collects `refs` from `body` against `params`, the current call's
+/// parameters (a nested call collects its own variables when it compiles:
+/// here its parameters only shadow, through `below`). A variable of an
 /// enclosing call is an outer reference here, carried through this level's
 /// flattened batch. Name matching follows `case_sensitive`, exactly like
 /// the analyzer resolves it.
 fn collect(
     body: &Arc<Expr>,
-    depth: usize,
     params: &[String],
     below: &mut Vec<String>,
     case_sensitive: bool,
@@ -181,8 +180,11 @@ fn collect(
             params: inner,
             body: nested,
         } => {
+            // The nested call collects its own variables when it compiles:
+            // this pass only gathers what the current level carries, so its
+            // parameters stay in scope and the nested ones shadow them.
             below.extend(inner.iter().cloned());
-            collect(nested, depth + 1, inner, below, case_sensitive, refs);
+            collect(nested, params, below, case_sensitive, refs);
             below.truncate(below.len() - inner.len());
         }
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
@@ -196,19 +198,24 @@ fn collect(
                         .flatten()
                 })
             };
-            if depth == 0 && at(params) == Some(0) {
+            if at(below).is_some() {
+                // A variable a nested call binds is that call's own: its
+                // flattening carries it, never this one.
+            } else if at(params) == Some(0) {
+                // This call's element variable, used directly or from a
+                // nested lambda: the flattened batch carries one element
+                // column per use, so both read it here.
                 if !refs.lambda.contains(&c.id) {
                     refs.lambda.push(c.id);
                 }
-            } else if depth == 0 && at(params).is_some() {
+            } else if at(params).is_some() {
                 if refs.index.is_none() {
                     refs.index = Some(c.id);
                 }
-            } else if depth == 0 || at(below).is_none() {
+            } else {
                 // Bound outside the current call (or the current call has
                 // no such parameter): carried by this level's flattened
-                // batch. A variable a nested call binds is that call's
-                // own: its flattening carries it, never this one.
+                // batch.
                 if !refs.outer_lambda.iter().any(|v| v.id == c.id) {
                     refs.outer_lambda.push(c.clone());
                 }
@@ -219,7 +226,7 @@ fn collect(
                 refs.outer.push(c.id);
             }
         }
-        _ => body.for_each_child(&mut |c| collect(c, depth, params, below, case_sensitive, refs)),
+        _ => body.for_each_child(&mut |c| collect(c, params, below, case_sensitive, refs)),
     }
 }
 
@@ -276,9 +283,6 @@ impl PhysExpr for Call {
                 .map_err(|_| internal("a higher-order list with a negative offset"))
         };
         let total = at(rows)?;
-        if list.values().len() < total {
-            return Err(internal("a higher-order list longer than its values"));
-        }
         // The row each element belongs to: `offsets[r]..offsets[r+1]`.
         let mut rows_of: Vec<u32> = Vec::with_capacity(total);
         for r in 0..rows {
@@ -304,13 +308,21 @@ impl PhysExpr for Call {
                 }
                 Source::Element => list.values().slice(0, total),
                 Source::Index => {
+                    // Positions within each row's run of `rows_of` (built
+                    // above: one entry per element, in row order), so each
+                    // new row restarts the count. The offsets were validated
+                    // non-decreasing there, and a run holds at most `total`
+                    // entries (`total` fits `i32`, as it is an offset), so
+                    // the count cannot overflow.
                     let mut at_vals: Vec<i32> = Vec::with_capacity(total);
-                    for r in 0..rows {
-                        let next = r.checked_add(1).ok_or_else(|| too_many(rows))?;
-                        let len = at(next)?.checked_sub(at(r)?).ok_or_else(|| {
-                            internal("a higher-order list with decreasing offsets")
-                        })?;
-                        at_vals.extend(0..i32::try_from(len).map_err(|_| too_many(len))?);
+                    let mut prev: Option<u32> = None;
+                    let mut pos: i32 = 0;
+                    for &r in rows_of.values() {
+                        if prev.replace(r) != Some(r) {
+                            pos = 0;
+                        }
+                        at_vals.push(pos);
+                        pos = pos.saturating_add(1);
                     }
                     Arc::new(Int32Array::from(at_vals))
                 }
@@ -377,5 +389,249 @@ impl PhysExpr for Call {
             )));
         }
         Ok(Value::Array(out))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, BooleanArray, Int32Array, ListArray, RecordBatch};
+    use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef};
+    use krishiv_common::error::ErrorClass;
+    use krishiv_kernels::KernelCtx;
+    use krishiv_plan::{
+        ColumnRef, Expr, ExprNode, FunctionId, FunctionKind, ResolvedExpr, ResolvedFunction,
+    };
+
+    use super::super::{EvalEnv, Input, PhysExpr, Value, compile};
+    use super::{Call, too_many};
+    use crate::error::Result;
+
+    /// A [`PhysExpr`] returning `array` for every batch.
+    #[derive(Debug)]
+    struct Const {
+        data_type: ArrowType,
+        nullable: bool,
+        array: ArrayRef,
+    }
+
+    impl PhysExpr for Const {
+        fn data_type(&self) -> &ArrowType {
+            &self.data_type
+        }
+
+        fn nullable(&self) -> bool {
+            self.nullable
+        }
+
+        fn eval(&self, _batch: &RecordBatch) -> Result<Value> {
+            Ok(Value::Array(Arc::clone(&self.array)))
+        }
+    }
+
+    fn env() -> EvalEnv {
+        EvalEnv {
+            ansi: true,
+            case_sensitive: false,
+            zone: None,
+            kernels: KernelCtx::new(),
+            query_start_micros: 0,
+            user: Arc::from("test"),
+        }
+    }
+
+    fn col() -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Column(ColumnRef {
+            name: vec!["a".to_owned()],
+            plan_id: None,
+        })))
+    }
+
+    fn lambda() -> Arc<Expr> {
+        Arc::new(Expr::lambda(vec!["x".to_owned()], Expr::column(["x"])))
+    }
+
+    fn func(name: &str, args: Vec<Arc<Expr>>) -> ResolvedFunction {
+        ResolvedFunction {
+            id: FunctionId::Registry {
+                name: name.to_owned(),
+                id: 0,
+            },
+            kind: FunctionKind::Scalar,
+            args,
+            distinct: false,
+            filter: None,
+            data_type: krishiv_types::DataType::Null,
+            nullable: true,
+            deterministic: true,
+        }
+    }
+
+    fn list(offsets: Vec<i32>, values: Vec<i32>) -> ArrayRef {
+        Arc::new(ListArray::new(
+            Arc::new(Field::new("element", ArrowType::Int32, true)),
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            Arc::new(Int32Array::from(values)),
+            None,
+        ))
+    }
+
+    fn batch(rows: usize) -> RecordBatch {
+        let schema: SchemaRef =
+            Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, false)]));
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![0; rows])) as ArrayRef],
+        )
+        .unwrap()
+    }
+
+    fn call(name: &str, array: ArrayRef, body: ArrayRef, out: ArrowType) -> Call {
+        Call {
+            name: name.to_owned(),
+            array: Arc::new(Const {
+                data_type: array.data_type().clone(),
+                nullable: false,
+                array,
+            }),
+            body: Arc::new(Const {
+                data_type: body.data_type().clone(),
+                nullable: true,
+                array: body,
+            }),
+            sources: Vec::new(),
+            out,
+            nullable: true,
+        }
+    }
+
+    #[test]
+    fn malformed_calls_are_internal_errors() {
+        let e = env();
+        let schema: SchemaRef = Arc::new(Schema::new(Vec::<Field>::new()));
+        let input = Input {
+            layout: &[],
+            schema: &schema,
+            env: &e,
+            subqueries: &[],
+        };
+        // Without the array and the lambda.
+        let f = func("transform", vec![lambda()]);
+        let err = compile(
+            &Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))),
+            input,
+        )
+        .unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::InternalError);
+        assert!(
+            err.to_string()
+                .contains("a higher-order call without its array and lambda"),
+            "{err}"
+        );
+        // Without a lambda as the second argument (the array never compiles).
+        let f = func("transform", vec![col(), col()]);
+        let err = compile(
+            &Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f))),
+            input,
+        )
+        .unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::InternalError);
+        assert!(
+            err.to_string()
+                .contains("a higher-order call without a lambda"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn too_many_names_the_row_count() {
+        let err = too_many(5);
+        assert_eq!(err.error_class(), ErrorClass::InternalError);
+        assert!(err.to_string().contains('5'), "{err}");
+    }
+
+    #[test]
+    fn mismatched_batches_are_internal_errors() {
+        // The array holds one row where the batch holds two.
+        let c = call(
+            "transform",
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(Int32Array::from(vec![1, 2])),
+            ArrowType::Boolean,
+        );
+        let err = c.eval(&batch(2)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a higher-order array of the wrong row count"),
+            "{err}"
+        );
+        // The body holds three values for two elements.
+        let c = call(
+            "transform",
+            list(vec![0, 2], vec![5, 6]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            ArrowType::Boolean,
+        );
+        let err = c.eval(&batch(1)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a higher-order body of the wrong row count"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_transform_over_a_non_list_is_an_internal_error() {
+        let c = call(
+            "transform",
+            list(vec![0, 2], vec![5, 6]),
+            Arc::new(Int32Array::from(vec![7, 8])),
+            ArrowType::Int32,
+        );
+        let err = c.eval(&batch(1)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a higher-order call over a non-list"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_higher_order_function_is_unsupported() {
+        let c = call(
+            "bogus",
+            list(vec![0, 2], vec![5, 6]),
+            Arc::new(BooleanArray::from(vec![true, false])),
+            ArrowType::Boolean,
+        );
+        let err = c.eval(&batch(1)).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        assert!(
+            err.to_string().contains("higher-order function bogus"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_body_of_an_unexpected_type_is_an_internal_error() {
+        let out = ArrowType::List(Arc::new(Field::new("element", ArrowType::Utf8, true)));
+        let c = call(
+            "transform",
+            list(vec![0, 2], vec![5, 6]),
+            Arc::new(Int32Array::from(vec![7, 8])),
+            out,
+        );
+        let err = c.eval(&batch(1)).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::InternalError);
+        assert!(
+            err.to_string().contains("transform returned List(Int32"),
+            "{err}"
+        );
+        assert!(
+            err.to_string().contains("analyzer typed List(Utf8"),
+            "{err}"
+        );
     }
 }

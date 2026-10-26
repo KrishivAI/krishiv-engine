@@ -273,6 +273,17 @@ fn exprs() -> Vec<(Expr, usize)> {
             Expr::new(ExprNode::Resolved(ResolvedExpr::OuterColumn(bound("a")))),
             0,
         ),
+        (
+            Expr::new(ExprNode::Lambda {
+                params: vec!["y".to_owned()],
+                body: col("a"),
+            }),
+            1,
+        ),
+        (
+            Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(bound("a")))),
+            0,
+        ),
         (resolved_call(vec![col("a")], Some(col("b"))), 2),
         (
             Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
@@ -315,6 +326,21 @@ fn every_expression_slot_is_rewritten_in_order() {
                 std::mem::discriminant(&e.node)
             );
         }
+    }
+}
+
+/// Leaves expose no slots: rewriting one visits nothing and changes nothing.
+#[test]
+fn leaves_have_no_slots_to_rewrite() {
+    for mut e in [
+        Expr::column(["a"]),
+        Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(bound("v")))),
+    ] {
+        let before = e.clone();
+        let mut visits = 0;
+        e.for_each_child_mut(&mut |_| visits += 1);
+        assert_eq!(visits, 0, "{e:?}");
+        assert_eq!(e, before);
     }
 }
 

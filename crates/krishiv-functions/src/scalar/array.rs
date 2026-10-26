@@ -52,3 +52,40 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         None => Some((listed, Err(bad_types(listed, args)))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use krishiv_common::error::ErrorClass;
+
+    use super::*;
+
+    /// Arguments of different types do not bind: the analyzer casts to a
+    /// common type first, so a mismatch here is a type error.
+    #[test]
+    fn mismatched_argument_types_do_not_bind() {
+        let args = vec![
+            BindArg::from(arrow_schema::DataType::Int32),
+            BindArg::from(arrow_schema::DataType::Utf8),
+        ];
+        let (listed_name, binding) = bind("array", &args, &BindOptions::new()).unwrap();
+        assert_eq!(listed_name, "array");
+        let Err(err) = binding else {
+            panic!("mismatched array argument types bound");
+        };
+        assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        assert!(err.to_string().contains("array("), "{err}");
+    }
+
+    /// An unlisted name is not this family's to bind.
+    #[test]
+    fn other_names_do_not_bind() {
+        assert!(
+            bind(
+                "transform",
+                &[BindArg::from(arrow_schema::DataType::Int32)],
+                &BindOptions::new()
+            )
+            .is_none()
+        );
+    }
+}

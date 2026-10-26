@@ -162,6 +162,89 @@ fn higher_order_functions_nest() {
 }
 
 #[test]
+fn nested_lambdas_capture_enclosing_variables() {
+    let s = session();
+    // The inner body reads the outer call's element variable: every level
+    // carries what the levels below need.
+    assert_eq!(
+        strings(
+            &s,
+            "transform(ys, y -> transform(array(1, 2), z -> z + y))",
+            "FROM t"
+        ),
+        [
+            Some("[[33, 34], [98, 99]]".to_owned()),
+            Some("[[78, 79], [-75, -74]]".to_owned()),
+            Some("[[13, 14]]".to_owned()),
+            None,
+            Some("[]".to_owned()),
+        ]
+    );
+    // The inner body reads the outer call's index variable.
+    assert_eq!(
+        strings(
+            &s,
+            "transform(ys, (y, i) -> transform(array(10, 2 * 10), z -> z + i))",
+            "FROM t"
+        ),
+        [
+            Some("[[10, 20], [11, 21]]".to_owned()),
+            Some("[[10, 20], [11, 21]]".to_owned()),
+            Some("[[10, 20]]".to_owned()),
+            None,
+            Some("[]".to_owned()),
+        ]
+    );
+    // An outer column reaches through two levels, beside the element.
+    assert_eq!(
+        strings(
+            &s,
+            "transform(ys, y -> transform(array(1, 2), z -> z + y + n))",
+            "FROM t"
+        ),
+        [
+            Some("[[34, 35], [99, 100]]".to_owned()),
+            Some("[[80, 81], [-73, -72]]".to_owned()),
+            Some("[[16, 17]]".to_owned()),
+            None,
+            Some("[]".to_owned()),
+        ]
+    );
+    // Three levels: the middle call carries both its element and the outer
+    // call's element down to the innermost body.
+    assert_eq!(
+        strings(
+            &s,
+            "transform(ys, y -> transform(ys, z -> transform(array(1), w -> w + y + z)))",
+            "FROM t"
+        ),
+        [
+            Some("[[[65], [130]], [[130], [195]]]".to_owned()),
+            Some("[[[155], [2]], [[2], [-151]]]".to_owned()),
+            Some("[[[25]]]".to_owned()),
+            None,
+            Some("[]".to_owned()),
+        ]
+    );
+    // Shadowing still binds the innermost variable: the inner `y` is its
+    // own element, not the outer call's.
+    assert_eq!(
+        strings(
+            &s,
+            "transform(ys, y -> transform(array(100), y -> y + 1))",
+            "FROM t"
+        ),
+        [
+            Some("[[101], [101]]".to_owned()),
+            Some("[[101], [101]]".to_owned()),
+            Some("[[101]]".to_owned()),
+            None,
+            Some("[]".to_owned()),
+        ]
+    );
+}
+
+#[test]
 fn filter_keeps_true_elements() {
     let s = session();
     assert_eq!(
@@ -230,6 +313,62 @@ fn exists_and_forall_fold_the_marks() {
     assert_eq!(
         strings(&s, "forall(array(1, NULL), x -> x >= 1)", ""),
         [Some("true".to_owned())]
+    );
+}
+
+#[test]
+fn higher_order_functions_report_bad_arguments() {
+    let s = session();
+    // Every higher-order call takes the array and the lambda.
+    for name in ["transform", "filter", "exists", "forall"] {
+        let e = error(&s, &format!("SELECT {name}(ys) FROM t"));
+        assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
+        assert!(e.to_string().contains(&format!("`{name}`")), "{e}");
+    }
+    // The array argument needs `ARRAY`, quoting the call as Spark does.
+    for name in ["transform", "filter", "exists", "forall"] {
+        let e = error(&s, &format!("SELECT {name}(1, x -> TRUE)"));
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{name}"
+        );
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \
+                 \"{name}(1, lambdafunction(true, x))\" due to data type mismatch: \
+                 The first parameter requires the \"ARRAY\" type, \
+                 however \"1\" has the type \"INT\". SQLSTATE: 42K09"
+            )
+        );
+    }
+}
+
+#[test]
+fn transform_keeps_null_elements() {
+    let s = session();
+    assert_eq!(
+        strings(&s, "transform(array(1, NULL, 3), x -> x)", ""),
+        [Some("[1, null, 3]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "transform(array(1, NULL, 3), (x, i) -> i)", ""),
+        [Some("[0, 1, 2]".to_owned())]
+    );
+}
+
+#[test]
+fn lambdas_outside_argument_position_are_rejected() {
+    let s = session();
+    // A lambda under a cast is no higher-order call's argument (its body
+    // binds on its own, so the lambda itself is what fails).
+    let e = error(&s, "SELECT CAST((x -> 1) AS STRING)");
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(
+        e.to_string()
+            .contains("lambda functions outside a higher-order function"),
+        "{e}"
     );
 }
 

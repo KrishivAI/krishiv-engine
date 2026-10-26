@@ -1578,7 +1578,12 @@ impl Lowerer {
             ExprKind::Lambda { params, body } => {
                 let params = params.iter().map(|p| p.value.clone()).collect();
                 let body = self.arg(body)?;
-                self.ex(ExprNode::Lambda { params, body }, sp)
+                self.ex(
+                    IrExpr::lambda(params, Arc::unwrap_or_clone(body))
+                        .node
+                        .clone(),
+                    sp,
+                )
             }
             ExprKind::Row(_) | ExprKind::Struct(_) => {
                 return Err(unsupported("row and struct constructors", sp));

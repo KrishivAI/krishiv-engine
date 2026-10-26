@@ -657,7 +657,7 @@ impl Resolver<'_> {
                             return Err(super::hof::not_higher_order(&f.name, x.origin));
                         };
                         let kids = self.child_ctx(&x, ctx);
-                        for (key, bound) in self.hof_children(&x, h, &kids, cx)? {
+                        for (key, bound) in self.hof_children(f, h, &kids, cx, x.origin)? {
                             let step = kids
                                 .iter()
                                 .find(|(c, _)| addr(&**c) == key)
@@ -1301,12 +1301,13 @@ impl Resolver<'_> {
                 }
             }
             ExprNode::Window(w) => self.window(e, w, kids, cx)?,
-            ExprNode::Resolved(r) => keep(match r {
-                ResolvedExpr::Column(c)
-                | ResolvedExpr::OuterColumn(c)
-                | ResolvedExpr::LambdaVar(c) => column(c),
-                ResolvedExpr::Alias { output, .. } => column(output),
-                ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+            ExprNode::Resolved(r) => keep({
+                use ResolvedExpr::{Column, LambdaVar, OuterColumn};
+                match r {
+                    Column(c) | OuterColumn(c) | LambdaVar(c) => column(c),
+                    ResolvedExpr::Alias { output, .. } => column(output),
+                    ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+                }
             }),
         };
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
@@ -3758,6 +3759,36 @@ const fn frame_shape(b: &crate::FrameBound) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `lambdafunction(body, arg1, ...)`: a resolved lambda variable
+    /// prints as its name, like Spark's `NamedLambdaVariable`.
+    #[test]
+    fn lambdas_print_as_sparks_lambdafunction() {
+        let var = BoundColumn {
+            id: AttrId(9),
+            name: "y".to_owned(),
+            data_type: DataType::Integer,
+            nullable: false,
+        };
+        let body = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(var))));
+        assert_eq!(pretty(&body, None), "y");
+        let lam = Expr::new(ExprNode::Lambda {
+            params: vec!["y".to_owned()],
+            body,
+        });
+        assert_eq!(pretty(&lam, None), "lambdafunction(y, y)");
+    }
+
+    /// `*` prints as itself (the arm beside the lambda printers).
+    #[test]
+    fn stars_print_as_sql() {
+        let star = Expr::new(ExprNode::Star(crate::Star {
+            qualifier: Vec::new(),
+            except: Vec::new(),
+            plan_id: None,
+        }));
+        assert_eq!(pretty(&star, None), "*");
+    }
 
     /// `call()` renders named arguments with their `name => ` prefixes and
     /// quantified forms in their SQL shape.

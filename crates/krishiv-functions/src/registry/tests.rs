@@ -1608,6 +1608,12 @@ fn hof_signatures() {
         assert_eq!(def(name).kind, FunctionKind::Scalar, "{name}");
     }
     assert_eq!(def("array").execution, Execution::Scalar);
+    // The arity check runs before typing, so a call typed without its
+    // array argument is an engine bug, never a user error.
+    for name in ["transform", "filter", "exists", "forall"] {
+        let err = result(name, &[], &[]).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::InternalError, "{name}");
+    }
 }
 
 mod text;

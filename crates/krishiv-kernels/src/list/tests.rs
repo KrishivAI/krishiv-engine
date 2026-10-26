@@ -128,6 +128,22 @@ fn transform_rejects_short_values() {
 }
 
 #[test]
+fn transform_ignores_values_past_the_elements() {
+    let input = list(&[Some(vec![Some(1), Some(2)])]);
+    let values: ArrayRef = Arc::new(Int32Array::from(vec![7, 8, 9]));
+    let out = transform_list(&input, &values, false).unwrap();
+    assert_eq!(rows(&out), vec![Some(vec![Some(7), Some(8)])]);
+    assert!(!out.value_field().is_nullable());
+}
+
+#[test]
+fn a_row_count_that_does_not_fit_is_an_internal_error() {
+    // No arguments: the interleaved length is the row count itself.
+    let err = create(&[], usize::MAX, false).unwrap_err();
+    assert!(err.to_string().contains(&usize::MAX.to_string()), "{err}");
+}
+
+#[test]
 fn filter_drops_unmarked_elements() {
     // `[1, NULL, 3], NULL, [], [4]`, keeping the first of each pair.
     let input = list(&[

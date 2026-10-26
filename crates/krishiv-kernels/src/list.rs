@@ -21,25 +21,16 @@ use arrow_schema::{DataType, Field};
 
 use super::error::KernelError;
 
-/// The offsets of `list`, as `usize` pairs.
-///
-/// # Errors
-/// [`KernelError`] when an offset does not fit.
-fn ranges(list: &ListArray) -> Result<Vec<(usize, usize)>, KernelError> {
+/// The offsets of `list`, as `usize` pairs. Offsets are non-negative by
+/// construction (`OffsetBuffer`), so they always fit.
+fn ranges(list: &ListArray) -> Vec<(usize, usize)> {
+    use arrow_buffer::ArrowNativeType as _;
     let offsets = list.value_offsets();
     let mut out = Vec::with_capacity(list.len());
     for pair in offsets.windows(2) {
-        let (start, stop) = (pair[0], pair[1]);
-        out.push((
-            usize::try_from(start).map_err(|_| bad_offset(start))?,
-            usize::try_from(stop).map_err(|_| bad_offset(stop))?,
-        ));
+        out.push((pair[0].as_usize(), pair[1].as_usize()));
     }
-    return Ok(out);
-
-    fn bad_offset(o: i32) -> KernelError {
-        KernelError::internal(format!("a list offset of {o}"))
-    }
+    out
 }
 
 /// `array(a, b, ...)`: one list per row holding each argument's value
@@ -141,7 +132,7 @@ pub fn transform_list(
     values: &ArrayRef,
     contains_null: bool,
 ) -> Result<ListArray, KernelError> {
-    let (_, end) = ranges(list)?.last().copied().unwrap_or((0, 0));
+    let (_, end) = ranges(list).last().copied().unwrap_or((0, 0));
     if values.len() < end {
         return Err(KernelError::internal(format!(
             "transform over {end} elements with {} values",
@@ -174,7 +165,7 @@ pub fn transform_list(
 /// [`KernelError`] when `keep` is shorter than the elements, or the kept
 /// length does not fit a 32-bit offset.
 pub fn filter_list(list: &ListArray, keep: &BooleanArray) -> Result<ListArray, KernelError> {
-    let ranges = ranges(list)?;
+    let ranges = ranges(list);
     let (_, end) = ranges.last().copied().unwrap_or((0, 0));
     if keep.len() < end {
         return Err(KernelError::internal(format!(
@@ -225,7 +216,7 @@ fn fold_flags(
     keep: &BooleanArray,
     any: bool,
 ) -> Result<BooleanArray, KernelError> {
-    let ranges = ranges(list)?;
+    let ranges = ranges(list);
     let (_, end) = ranges.last().copied().unwrap_or((0, 0));
     if keep.len() < end {
         return Err(KernelError::internal(format!(
