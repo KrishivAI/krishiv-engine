@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "randn#28f8edef6b0c/ansi_on",
-      "reason": "SELECT randn(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "randn#28f8edef6b0c/ansi_off",
-      "reason": "SELECT randn(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "randn#8df4dfcb761d/ansi_on",
       "reason": "SELECT randn(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

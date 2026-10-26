@@ -25,14 +25,6 @@
       "reason": "SELECT typeof(array(1)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
-      "id": "typeof#8a4ed8746829/ansi_on",
-      "reason": "SELECT typeof(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "typeof#8a4ed8746829/ansi_off",
-      "reason": "SELECT typeof(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
       "id": "typeof#8b64929c858b/ansi_on",
       "reason": "SELECT typeof(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },

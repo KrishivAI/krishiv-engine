@@ -49,14 +49,6 @@
       "reason": "SELECT uniform(10, 20, NULL) > 0 AS result | boolean where Spark has boolean not null"
     },
     {
-      "id": "uniform#523b3fcbd4d8/ansi_on",
-      "reason": "SELECT uniform(10, 20, named_struct('a', 1, 'b', 'x')) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#523b3fcbd4d8/ansi_off",
-      "reason": "SELECT uniform(10, 20, named_struct('a', 1, 'b', 'x')) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "uniform#5656d353ced6/ansi_on",
       "reason": "SELECT uniform(INTERVAL '1-2' YEAR TO MONTH, 20, 0) > 0 AS result | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -87,22 +79,6 @@
     {
       "id": "uniform#6afd046a5774/ansi_off",
       "reason": "SELECT uniform(10, 20, INTERVAL '1-2' YEAR TO MONTH) > 0 AS result | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#8f340576d087/ansi_on",
-      "reason": "SELECT uniform(10, named_struct('a', 1, 'b', 'x'), 0) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#8f340576d087/ansi_off",
-      "reason": "SELECT uniform(10, named_struct('a', 1, 'b', 'x'), 0) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#91babb0d6174/ansi_on",
-      "reason": "SELECT uniform(named_struct('a', 1, 'b', 'x'), 20, 0) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#91babb0d6174/ansi_off",
-      "reason": "SELECT uniform(named_struct('a', 1, 'b', 'x'), 20, 0) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "uniform#96fbf5c2c8f2/ansi_on",
