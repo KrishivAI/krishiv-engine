@@ -131,12 +131,17 @@ struct Written {
 }
 
 /// Writes [`batches`] with drop-behind window `window` and returns the file
-/// with its manager. With `ram` false and a window set, the file being
-/// written is inspected halfway, before `finish` (which drops everything
-/// itself), so the periodic drop-behind during the write is what is tested:
-/// the pages still cached are at most the window of the last drop, the
-/// window of the one writeback in flight and the unflushed buffer, plus
-/// page-boundary slack.
+/// with its manager. With `ram` false and a window set, the periodic
+/// drop-behind during the write (before `finish`, which drops everything
+/// itself) is tested halfway: the test syncs the file being written, so
+/// every page written so far is clean, then writes two more batches (each
+/// almost a window, so the writer drops at least once). A drop discards
+/// every clean page, so what is still cached afterwards is at most what was
+/// written after the sync, plus page-boundary slack.
+///
+/// The sync makes the check deterministic: without it, which pages a drop
+/// finds clean depends on how far the kernel's writeback got, which on a
+/// slow or busy disk (CI) can be several windows behind.
 fn write(window: u64, ram: bool) -> Written {
     let root_dir = dir();
     let manager = SpillManager::open(&SpillConfig {
@@ -158,15 +163,26 @@ fn write(window: u64, ram: bool) -> Written {
     let mut w = scope
         .writer(input[0].schema(), Reservation::new(Arc::clone(&pool), id))
         .unwrap();
+    let half = input.len() / 2;
+    let mut live = None;
     for (n, b) in input.iter().enumerate() {
         w.write(b).unwrap();
-        if n + 1 == input.len() / 2 && window > 0 && !ram {
-            let live = std::fs::read_dir(scope.dir())
+        if window == 0 || ram {
+            continue;
+        }
+        if n + 1 == half {
+            let path = std::fs::read_dir(scope.dir())
                 .unwrap()
                 .map(|e| e.unwrap().path())
                 .find(|p| p.to_string_lossy().ends_with(".spill.tmp"))
                 .expect("the file being written");
-            let (resident, pages) = resident_pages(&live);
+            // Every page written so far is now clean.
+            File::open(&path).unwrap().sync_all().unwrap();
+            live = Some(path);
+        }
+        if n + 1 == half + 2 {
+            let path = live.take().expect("synced halfway");
+            let (resident, pages) = resident_pages(&path);
             let bound = 3 * usize::try_from(window).unwrap().div_ceil(page_size()) + 64;
             eprintln!("mid-write: {resident} of {pages} pages cached (bound {bound})");
             assert!(pages > 2 * bound, "{pages}");
