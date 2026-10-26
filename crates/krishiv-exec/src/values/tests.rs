@@ -342,6 +342,7 @@ fn a_join_publishes_only_into_its_services_cells() {
             build_keys: vec![0],
             null_safe: vec![false],
             filter: None,
+            single_match: false,
             spill: None,
         })
         .unwrap()

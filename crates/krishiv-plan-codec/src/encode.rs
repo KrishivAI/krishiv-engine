@@ -11,9 +11,9 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution, JoinFilterPlan,
-    NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan, Residual, ScanFilter,
-    ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
+    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
+    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
+    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
@@ -130,6 +130,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: env.user.to_string(),
+        legacy_statistical_aggregate: env.legacy_statistical_aggregate,
     }
 }
 
@@ -370,6 +371,8 @@ impl Encoder {
             residual: self.residual(join.residual.as_ref())?,
             runtime_filters: join.runtime_filters.iter().map(join_filter).collect(),
             distribution: distribution(join.distribution) as i32,
+            single_match: join.single_match,
+            distinct_build: join.distinct_build,
         })
     }
 
@@ -565,6 +568,7 @@ fn join_type(t: JoinType) -> pb::JoinType {
         JoinType::LeftSemi => pb::JoinType::LeftSemi,
         JoinType::LeftAnti => pb::JoinType::LeftAnti,
         JoinType::NullAwareAnti => pb::JoinType::NullAwareAnti,
+        JoinType::Existence => pb::JoinType::Existence,
         JoinType::RightSemi => pb::JoinType::RightSemi,
         JoinType::RightAnti => pb::JoinType::RightAnti,
         JoinType::RightOuter => pb::JoinType::RightOuter,
@@ -582,8 +586,13 @@ fn partitioning(p: &Partitioning) -> pb::Partitioning {
     use pb::partitioning::Kind;
     pb::Partitioning {
         kind: Some(match p {
-            Partitioning::Hash { keys } => Kind::Hash(pb::HashPartitioning {
+            Partitioning::Hash { keys, scheme } => Kind::Hash(pb::HashPartitioning {
                 keys: indexes(keys),
+                scheme: match scheme {
+                    HashScheme::Unpinned => pb::HashScheme::Unpinned,
+                    HashScheme::KeyGroupV1 => pb::HashScheme::KeyGroupV1,
+                }
+                .into(),
             }),
             Partitioning::Single => Kind::Single(pb::Empty {}),
             Partitioning::Broadcast => Kind::Broadcast(pb::Empty {}),
@@ -714,13 +723,22 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
         AggregateFunction::Max => (pb::AggregateFunction::Max, false),
         AggregateFunction::First { ignore_nulls } => (pb::AggregateFunction::First, ignore_nulls),
         AggregateFunction::Last { ignore_nulls } => (pb::AggregateFunction::Last, ignore_nulls),
-        // The format has no ids for these yet.
-        AggregateFunction::AnyValue { .. }
+        // The format has no code for these yet.
+        f @ (AggregateFunction::StddevSamp
+        | AggregateFunction::StddevPop
+        | AggregateFunction::VarSamp
+        | AggregateFunction::VarPop
+        | AggregateFunction::Skewness
+        | AggregateFunction::Kurtosis
+        | AggregateFunction::Corr
+        | AggregateFunction::CovarSamp
+        | AggregateFunction::CovarPop
+        | AggregateFunction::AnyValue { .. }
         | AggregateFunction::MaxBy
-        | AggregateFunction::MinBy => {
-            return Err(CodecError::Unsupported(
-                "an aggregate function the format does not know".to_owned(),
-            ));
+        | AggregateFunction::MinBy) => {
+            return Err(CodecError::Unsupported(format!(
+                "the aggregate function {f:?}"
+            )));
         }
     };
     Ok(pb::AggregateExpr {

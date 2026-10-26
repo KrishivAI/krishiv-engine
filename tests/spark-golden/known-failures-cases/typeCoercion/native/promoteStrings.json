@@ -36,13 +36,7 @@
       290,
       291,
       302,
-      303,
-      308,
-      309,
-      312,
-      313,
-      314,
-      315
+      303
     ]
   },
   "file": "typeCoercion/native/promoteStrings",

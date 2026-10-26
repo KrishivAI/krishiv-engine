@@ -164,7 +164,7 @@ fn fixture(kt: KeyType, n: usize, probes_per_key: usize, spread: u64) -> Fixture
     let seed = HashSeed::new(Some(SEED));
     let build_ranks: Vec<u64> = (0..n as u64).collect();
     let col = kt.column(&build_ranks);
-    let keys = layout.encode(&[Arc::clone(&col)], 0).expect("encode");
+    let keys = layout.encode(&[Arc::clone(&col)]).expect("encode");
     let all: Vec<usize> = (0..n).collect();
     let arena = Arena {
         rows: keys.gather(&layout, &all).expect("gather"),
@@ -181,7 +181,7 @@ fn fixture(kt: KeyType, n: usize, probes_per_key: usize, spread: u64) -> Fixture
         let len = BATCH.min(total - start);
         let ranks: Vec<u64> = (0..len).map(|_| rng.next() % domain).collect();
         let col = kt.column(&ranks);
-        let enc = layout.encode(&[Arc::clone(&col)], 0).expect("encode");
+        let enc = layout.encode(&[Arc::clone(&col)]).expect("encode");
         let arrow = encoder.encode(&[col]).expect("arrow rows");
         let hashes = arrow.iter().map(|r| seed.hash(r.as_ref())).collect();
         probes.push((enc, arrow, hashes));
@@ -359,6 +359,7 @@ fn run_join(
         build_keys: vec![0],
         null_safe: vec![false],
         filter: None,
+        single_match: false,
         spill: None,
     };
     let scan = |b: &[Batch]| -> Arc<dyn ExecNode> {

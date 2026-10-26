@@ -11,7 +11,7 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
     SubqueryValueKind,
@@ -288,6 +288,12 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         .ok_or_else(|| corrupt("no expression environment"))?;
     let env = ExprEnv {
         ansi: env.ansi,
+        // The wire carries the flag for the `legacy_statistical_aggregate`
+        // feature: its absence in older bytes decodes as false, which is
+        // what every plan such an encoder could write carried (only a plan
+        // that sets it around a moment aggregate needs a reader with the
+        // feature).
+        legacy_statistical_aggregate: env.legacy_statistical_aggregate,
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),
@@ -556,21 +562,33 @@ impl Decoder {
         if probe_keys.len() != build_keys.len() || probe_keys.len() != j.null_safe.len() {
             return Err(corrupt("a hash join whose key lists differ in length"));
         }
-        Ok(HashJoinPlan {
+        let join_type = join_type(j.join_type)?;
+        if j.single_match && join_type != JoinType::LeftOuter {
+            return Err(corrupt("single match on a join that is not left outer"));
+        }
+        let plan = HashJoinPlan {
             probe: self.boxed(j.probe)?,
             build: self.boxed(j.build)?,
-            join_type: join_type(j.join_type)?,
+            join_type,
             probe_keys,
             build_keys,
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
+            single_match: j.single_match,
+            distinct_build: j.distinct_build,
             runtime_filters: j
                 .runtime_filters
                 .iter()
                 .map(join_filter)
                 .collect::<Result<_>>()?,
             distribution: distribution(j.distribution)?,
-        })
+        };
+        if plan.distinct_build && !plan.distinct_build_allowed() {
+            return Err(corrupt(
+                "a distinct build on a join that outputs or reads build rows",
+            ));
+        }
+        Ok(plan)
     }
 
     fn exchange(&mut self, e: &pb::ExchangeNode) -> Result<ExchangePlan> {
@@ -860,6 +878,7 @@ fn join_type(t: i32) -> Result<JoinType> {
         LeftSemi => JoinType::LeftSemi,
         LeftAnti => JoinType::LeftAnti,
         NullAwareAnti => JoinType::NullAwareAnti,
+        Existence => JoinType::Existence,
         RightSemi => JoinType::RightSemi,
         RightAnti => JoinType::RightAnti,
         RightOuter => JoinType::RightOuter,
@@ -883,6 +902,13 @@ fn partitioning(p: &pb::Partitioning) -> Result<Partitioning> {
     Ok(match required(&p.kind, "a partitioning kind")? {
         Kind::Hash(h) => Partitioning::Hash {
             keys: usizes(&h.keys)?,
+            // Not `enum_map!`: 0 is not "unspecified" here but the scheme of
+            // plans written before the field existed.
+            scheme: match pb::HashScheme::try_from(h.scheme) {
+                Ok(pb::HashScheme::Unpinned) => HashScheme::Unpinned,
+                Ok(pb::HashScheme::KeyGroupV1) => HashScheme::KeyGroupV1,
+                Err(_) => return Err(corrupt("an unknown hash scheme")),
+            },
         },
         Kind::Single(_) => Partitioning::Single,
         Kind::Broadcast(_) => Partitioning::Broadcast,

@@ -731,15 +731,16 @@ fn set_time_zone_sets_the_session_zone() {
 fn create_temp_view_rejects_qualified_names() {
     let s = Session::new().unwrap();
     // A qualified temporary view name parses and fails with
-    // `INVALID_TEMP_OBJ_QUALIFIER`, as in Spark.
+    // `INVALID_TEMP_OBJ_QUALIFIER`, naming the last part and its qualifier,
+    // as in Spark 4.2.0.
     let e = block_on(s.sql("CREATE TEMP VIEW a.b AS SELECT 1")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InvalidTempObjQualifier);
     assert_eq!(e.sql_state(), Some("42602"));
     assert_eq!(
         e.message_parameters(),
         [
-            ("objectType", "view".to_owned()),
-            ("objectName", "`a`.`b`".to_owned()),
+            ("objectType", "VIEW".to_owned()),
+            ("objectName", "`b`".to_owned()),
             ("qualifier", "`a`".to_owned()),
         ]
     );

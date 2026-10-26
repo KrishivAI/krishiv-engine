@@ -74,6 +74,10 @@ message ExprEnv {
   optional sint32 zone = 2;
   sint64 query_start_micros = 3;
   string user = 4;
+  // feature: legacy_statistical_aggregate
+  // `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+  // give NaN instead of NULL where Spark divides by zero.
+  bool legacy_statistical_aggregate = 5;
 }
 
 message ExplainNode {
@@ -375,6 +379,10 @@ enum JoinType {
   JOIN_TYPE_RIGHT_ANTI = 7;
   // feature: join_build_preserved
   JOIN_TYPE_RIGHT_OUTER = 8;
+  // Spark's `ExistenceJoin`: every probe row once, plus a non-nullable
+  // boolean `exists` (some build row matched).
+  // feature: existence_join
+  JOIN_TYPE_EXISTENCE = 9;
 }
 
 message Residual {
@@ -394,6 +402,15 @@ message HashJoinNode {
   // v2: how matching rows meet in one task. v1 bytes leave this as
   // `JOIN_DISTRIBUTION_UNSPECIFIED`, which decodes as broadcast.
   JoinDistribution distribution = 9;
+  // A left outer join that fails when a probe row matches more than once
+  // (a correlated scalar subquery without an aggregate); only `LeftOuter`
+  // joins set it.
+  // feature: join_single_match
+  bool single_match = 10;
+  // The build may keep each key once: only on a left semi, left anti or
+  // existence join without a residual.
+  // ignorable: a reader without it builds every row, with the same result.
+  bool distinct_build = 11;
 }
 
 enum JoinDistribution {
@@ -452,6 +469,20 @@ message Partitioning {
 
 message HashPartitioning {
   repeated uint64 keys = 1;
+  // feature: key_group_hash (when not UNPINNED)
+  // The routing function. Absent in plans written before it was named.
+  HashScheme scheme = 2;
+}
+
+// feature: key_group_hash
+// The function a hash exchange routes rows by.
+enum HashScheme {
+  // No function named (older plans): the exchange is only lowered on one
+  // worker and never routes.
+  HASH_SCHEME_UNPINNED = 0;
+  // Key-group ranges of the routing hash H_kg version 1: XXH64, seed 0, of
+  // the normalized key bytes, folded over several key columns.
+  HASH_SCHEME_KEY_GROUP_V1 = 1;
 }
 
 message RangePartitioning {

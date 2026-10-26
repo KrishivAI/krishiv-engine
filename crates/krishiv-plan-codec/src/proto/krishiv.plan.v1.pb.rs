@@ -67,6 +67,11 @@ pub struct ExprEnv {
     pub query_start_micros: i64,
     #[prost(string, tag = "4")]
     pub user: ::prost::alloc::string::String,
+    /// feature: legacy_statistical_aggregate
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+    /// give NaN instead of NULL where Spark divides by zero.
+    #[prost(bool, tag = "5")]
+    pub legacy_statistical_aggregate: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {
@@ -463,6 +468,17 @@ pub struct HashJoinNode {
     /// `JOIN_DISTRIBUTION_UNSPECIFIED`, which decodes as broadcast.
     #[prost(enumeration = "JoinDistribution", tag = "9")]
     pub distribution: i32,
+    /// A left outer join that fails when a probe row matches more than once
+    /// (a correlated scalar subquery without an aggregate); only `LeftOuter`
+    /// joins set it.
+    /// feature: join_single_match
+    #[prost(bool, tag = "10")]
+    pub single_match: bool,
+    /// The build may keep each key once: only on a left semi, left anti or
+    /// existence join without a residual.
+    /// ignorable: a reader without it builds every row, with the same result.
+    #[prost(bool, tag = "11")]
+    pub distinct_build: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
@@ -546,6 +562,10 @@ pub mod partitioning {
 pub struct HashPartitioning {
     #[prost(uint64, repeated, tag = "1")]
     pub keys: ::prost::alloc::vec::Vec<u64>,
+    /// feature: key_group_hash (when not UNPINNED)
+    /// The routing function. Absent in plans written before it was named.
+    #[prost(enumeration = "HashScheme", tag = "2")]
+    pub scheme: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RangePartitioning {
@@ -1193,6 +1213,10 @@ pub enum JoinType {
     RightAnti = 7,
     /// feature: join_build_preserved
     RightOuter = 8,
+    /// Spark's `ExistenceJoin`: every probe row once, plus a non-nullable
+    /// boolean `exists` (some build row matched).
+    /// feature: existence_join
+    Existence = 9,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1210,6 +1234,7 @@ impl JoinType {
             Self::RightSemi => "JOIN_TYPE_RIGHT_SEMI",
             Self::RightAnti => "JOIN_TYPE_RIGHT_ANTI",
             Self::RightOuter => "JOIN_TYPE_RIGHT_OUTER",
+            Self::Existence => "JOIN_TYPE_EXISTENCE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1224,6 +1249,7 @@ impl JoinType {
             "JOIN_TYPE_RIGHT_SEMI" => Some(Self::RightSemi),
             "JOIN_TYPE_RIGHT_ANTI" => Some(Self::RightAnti),
             "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
+            "JOIN_TYPE_EXISTENCE" => Some(Self::Existence),
             _ => None,
         }
     }
@@ -1253,6 +1279,38 @@ impl JoinDistribution {
             "JOIN_DISTRIBUTION_UNSPECIFIED" => Some(Self::Unspecified),
             "JOIN_DISTRIBUTION_BROADCAST" => Some(Self::Broadcast),
             "JOIN_DISTRIBUTION_PARTITIONED" => Some(Self::Partitioned),
+            _ => None,
+        }
+    }
+}
+/// feature: key_group_hash
+/// The function a hash exchange routes rows by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum HashScheme {
+    /// No function named (older plans): the exchange is only lowered on one
+    /// worker and never routes.
+    Unpinned = 0,
+    /// Key-group ranges of the routing hash H_kg version 1: XXH64, seed 0, of
+    /// the normalized key bytes, folded over several key columns.
+    KeyGroupV1 = 1,
+}
+impl HashScheme {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unpinned => "HASH_SCHEME_UNPINNED",
+            Self::KeyGroupV1 => "HASH_SCHEME_KEY_GROUP_V1",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "HASH_SCHEME_UNPINNED" => Some(Self::Unpinned),
+            "HASH_SCHEME_KEY_GROUP_V1" => Some(Self::KeyGroupV1),
             _ => None,
         }
     }

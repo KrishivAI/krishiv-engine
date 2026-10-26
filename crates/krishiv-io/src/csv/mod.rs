@@ -10,12 +10,12 @@
 //! `columnNameOfCorruptRecord`, header checks and column pruning. Both are
 //! checked against Spark 4.2 (`tests/fixtures/spark-4.2.0/csv.json`).
 
-mod convert;
+pub(crate) mod convert;
 mod decode;
 mod encode;
 mod infer;
 mod options;
-mod sampling;
+pub(crate) mod sampling;
 mod tokenizer;
 
 use std::sync::Arc;
@@ -36,6 +36,17 @@ use crate::text::TextMetadata;
 /// Spark's CSV format (see the module docs).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CsvFormat;
+
+/// The CSV reader's options, for callers that parse literals (see
+/// [`ddl_of_string`]).
+#[must_use]
+pub fn option_schema() -> &'static OptionSchema {
+    &OPTIONS
+}
+
+/// The DDL of a CSV literal (Spark's `schema_of_csv`; see
+/// [`ddl_of_string`] for the contract).
+pub use self::infer::ddl_of_string;
 
 impl FileFormat for CsvFormat {
     fn name(&self) -> &'static str {

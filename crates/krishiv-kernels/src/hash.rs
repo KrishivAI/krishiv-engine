@@ -21,9 +21,13 @@
 //! Spark's day-time intervals and `MAP` hashing are version-independent;
 //! `MAP` is rejected by the analyzer unless
 //! `spark.sql.legacy.allowHashOnMapType` is set, which is the caller's check.
+//!
+//! [`routing`] is not a Spark function: it is the engine's seedless routing
+//! hash `H_kg` and its key groups (internal exchanges, state keys).
 
 mod digest;
 mod murmur3;
+pub mod routing;
 mod xxh64;
 
 use arrow_array::cast::AsArray;
