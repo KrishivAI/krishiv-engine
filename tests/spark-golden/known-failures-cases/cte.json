@@ -1,10 +1,6 @@
 {
   "cases": {
-    "analyzer-bugs": [
-      24
-    ],
     "depends-on-command": [
-      16,
       19,
       31,
       32,

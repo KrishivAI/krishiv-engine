@@ -2057,7 +2057,7 @@ impl Resolver<'_> {
     /// it must be foldable (`IS_UNFOLDABLE` when it is not: a column, a
     /// nondeterministic call, a subquery), then an `INT`, not NULL and not
     /// negative. Columns resolve against the input's output (the select
-    /// list above it), so `LIMIT key` over an input holding `key` is
+    /// list the limit sits on top of), so `LIMIT key` over an input holding `key` is
     /// unfoldable rather than unresolved; a name the input outputs twice
     /// stays ambiguous when nothing below resolves it.
     pub(super) fn limit_like(
@@ -2190,20 +2190,33 @@ impl Resolver<'_> {
         // `ORDER BY` (not `AMBIGUOUS_REFERENCE`): Spark lists the
         // duplicates as proposals (checked against Spark 4.2.0).
         let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
-            for e in &exprs {
-                if let ExprNode::Column(col) = &e.node
-                    && col.plan_id.is_none()
-                    && col.name.len() == 1
-                    && c.out
-                        .iter()
-                        .filter(|a| same(&a.col.name, &col.name[0], self.ctx.conf.case_sensitive))
-                        .count()
-                        > 1
+            // The grouping attributes resolve a name the aggregate outputs
+            // twice (Spark 4.2.0: `SELECT 1 AS a, 2 AS a FROM t(a) GROUP BY a
+            // ORDER BY a` succeeds); with no grouping attribute of that name
+            // the duplicates are `UNRESOLVED_COLUMN` and not ambiguous.
+            let duplicate = exprs.iter().find_map(|e| match &e.node {
+                ExprNode::Column(col)
+                    if col.plan_id.is_none()
+                        && col.name.len() == 1
+                        && c.out
+                            .iter()
+                            .filter(|a| {
+                                same(&a.col.name, &col.name[0], self.ctx.conf.case_sensitive)
+                            })
+                            .count()
+                            > 1 =>
                 {
-                    return Err(unresolved(&col.name, &c.out, e.origin));
+                    Some((col.name.clone(), e.origin))
                 }
+                _ => None,
+            });
+            match self.over_agg(&c, &exprs, env, "Sort") {
+                Ok(found) => found,
+                Err(_) if let Some((name, origin)) = &duplicate => {
+                    return Err(unresolved(name, &c.out, *origin));
+                }
+                Err(e) => return Err(e),
             }
-            self.over_agg(&c, &exprs, env, "Sort")?
         } else {
             // A name the select list outputs twice is looked up below it,
             // as Spark does.

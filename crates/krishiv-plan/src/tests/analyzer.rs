@@ -3379,12 +3379,15 @@ fn group_by_resolves_backquoted_select_aliases() {
 #[test]
 fn group_by_picks_the_first_matching_alias() {
     let ctx = ctx();
-    // Two aliases `a`: the key resolves (to the first) instead of raising.
-    let dup = LogicalPlan::table(["t"]).aggregate(
-        vec![c("col2"), c("a")],
-        vec![c("a").alias("x"), c("b").alias("x")],
-    );
-    let _ = run(dup, &ctx);
+    // Checked on a Spark 4.2.0 server: `SELECT a AS x, a AS x FROM t GROUP BY x`
+    // groups by the first `x` and succeeds; with `b AS x` second the key
+    // still resolves, and the query fails only because `b` is not grouped.
+    let dup = LogicalPlan::table(["t"])
+        .aggregate(vec![c("x")], vec![c("a").alias("x"), c("a").alias("x")]);
+    run(dup, &ctx).unwrap();
+    let ungrouped = LogicalPlan::table(["t"])
+        .aggregate(vec![c("x")], vec![c("a").alias("x"), c("b").alias("x")]);
+    assert_eq!(class(&run(ungrouped, &ctx)), "MISSING_AGGREGATION");
     let dup_group = LogicalPlan::new(PlanNode::OneRowRelation)
         .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")]);
     let r = run(dup_group, &ctx);
@@ -3421,7 +3424,9 @@ fn having_and_order_by_prefer_grouping_over_duplicate_outputs() {
     let order_ambiguous = LogicalPlan::new(PlanNode::OneRowRelation)
         .aggregate(vec![int(1)], vec![int(1).alias("a"), int(2).alias("a")])
         .sort(vec![crate::SortOrder::asc(c("a"))]);
-    assert_eq!(class(&run(order_ambiguous, &ctx)), "AMBIGUOUS_REFERENCE");
+    // Spark 4.2.0 reports `UNRESOLVED_COLUMN` (not `AMBIGUOUS_REFERENCE`)
+    // for `SELECT 1 AS a, 2 AS a GROUP BY 1 ORDER BY a`.
+    assert!(class(&run(order_ambiguous, &ctx)).starts_with("UNRESOLVED_COLUMN"));
 }
 
 /// `ORDER BY` over duplicate select outputs looks below them (existing
@@ -3524,6 +3529,22 @@ fn limit_resolves_against_the_select_list() {
         .project(vec![int(1).alias("a"), int(2).alias("a")])
         .limit(c("a"));
     assert_eq!(class(&run(dup, &ctx)), "AMBIGUOUS_REFERENCE");
+    // Checked on a Spark 4.2.0 server: `SELECT a AS x, b AS x FROM t LIMIT x`
+    // is `AMBIGUOUS_REFERENCE`; the same attribute selected twice
+    // (`SELECT a, a FROM t LIMIT a`) is one attribute, so `LIMIT a` is
+    // unfoldable; and a name the select list lacks (`LIMIT b`) is
+    // unresolved: the limit reads the select list, not the table below it.
+    let twice = LogicalPlan::table(["t"])
+        .project(vec![c("a"), c("a")])
+        .limit(c("a"));
+    assert_eq!(
+        class(&run(twice, &ctx)),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+    let below = LogicalPlan::table(["t"])
+        .project(vec![c("a")])
+        .limit(c("b"));
+    assert!(class(&run(below, &ctx)).starts_with("UNRESOLVED_COLUMN"));
 }
 
 /// `GROUP BY` ordinals follow `spark.sql.groupByOrdinal`: with it on, an
