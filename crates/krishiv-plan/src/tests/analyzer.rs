@@ -3433,7 +3433,7 @@ fn having_and_order_by_prefer_grouping_over_duplicate_outputs() {
 /// leniency): with a single input column of that name it resolves there,
 /// otherwise it stays ambiguous rather than unresolved.
 #[test]
-fn order_by_duplicates_fall_back_then_stay_ambiguous() {
+fn order_by_duplicates_fall_back_then_stay_unresolved() {
     let ctx = ctx();
     // `SELECT 1 AS a, 2 AS a FROM t ORDER BY a`: the input `a` wins over
     // the duplicate outputs.
@@ -3441,11 +3441,12 @@ fn order_by_duplicates_fall_back_then_stay_ambiguous() {
         .project(vec![int(1).alias("a"), int(2).alias("a")])
         .sort(vec![crate::SortOrder::asc(c("a"))]);
     run(order, &ctx).unwrap();
-    // No input column of that name: ambiguous, not unresolved.
+    // No input column of that name: unresolved (Spark 4.2.0:
+    // `SELECT 1 AS a, 2 AS a ORDER BY a` is UNRESOLVED_COLUMN).
     let ambiguous = LogicalPlan::new(PlanNode::OneRowRelation)
         .project(vec![int(1).alias("a"), int(2).alias("a")])
         .sort(vec![crate::SortOrder::asc(c("a"))]);
-    assert_eq!(class(&run(ambiguous, &ctx)), "AMBIGUOUS_REFERENCE");
+    assert!(class(&run(ambiguous, &ctx)).starts_with("UNRESOLVED_COLUMN"));
 }
 
 /// `LIMIT` (and `OFFSET`) over a column is `IS_UNFOLDABLE`, not
@@ -3740,12 +3741,12 @@ fn limit_and_offset_share_sparks_checks() {
 #[test]
 fn order_by_leniency_and_group_by_star_rules() {
     let ctx = ctx();
-    // Duplicate outputs with no input column of that name are ambiguous,
-    // not unresolved.
+    // Duplicate outputs with no input column of that name are unresolved
+    // (Spark 4.2.0: `SELECT a AS k, b AS k FROM t ORDER BY k`).
     let order = LogicalPlan::table(["t"])
         .project(vec![c("a").alias("x"), c("b").alias("x")])
         .sort(vec![crate::SortOrder::asc(c("x"))]);
-    assert_eq!(class(&run(order, &ctx)), "AMBIGUOUS_REFERENCE");
+    assert!(class(&run(order, &ctx)).starts_with("UNRESOLVED_COLUMN"));
     // Star grouped by all of its columns resolves.
     let star_ok = LogicalPlan::table(["t"]).aggregate(vec![c("a"), c("b"), c("c")], vec![star()]);
     run(star_ok, &ctx).unwrap();

@@ -2189,6 +2189,29 @@ impl Resolver<'_> {
         // A name the aggregate outputs twice is `UNRESOLVED_COLUMN` in
         // `ORDER BY` (not `AMBIGUOUS_REFERENCE`): Spark lists the
         // duplicates as proposals (checked against Spark 4.2.0).
+        // The lookup below a duplicated name reports it as ambiguous; an
+        // `ORDER BY` reports it as unresolved (Spark 4.2.0:
+        // `SELECT a AS k, b AS k FROM t ORDER BY k`), only `LIMIT` and
+        // `HAVING` say ambiguous.
+        let reported = |e: AnalysisError| -> AnalysisError {
+            if !e
+                .error
+                .error_class()
+                .name()
+                .starts_with("AMBIGUOUS_REFERENCE")
+            {
+                return e;
+            }
+            exprs
+                .iter()
+                .find_map(|x| match &x.node {
+                    ExprNode::Column(col) if col.plan_id.is_none() && col.name.len() == 1 => {
+                        Some(unresolved(&col.name, &c.out, x.origin))
+                    }
+                    _ => None,
+                })
+                .unwrap_or(e)
+        };
         let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
             // The grouping attributes resolve a name the aggregate outputs
             // twice (Spark 4.2.0: `SELECT 1 AS a, 2 AS a FROM t(a) GROUP BY a
@@ -2241,16 +2264,16 @@ impl Resolver<'_> {
                             .starts_with("AMBIGUOUS_REFERENCE") =>
                 {
                     let Some((layers, inner)) = Self::through_to_agg(&c) else {
-                        return Err(e);
+                        return Err(reported(e));
                     };
                     // Over windows, Spark's `ORDER BY` reads the select list
                     // only: nothing resolves through them to the aggregate.
                     if inner.agg.as_ref().is_some_and(|i| i.has_windows()) {
-                        return Err(e);
+                        return Err(reported(e));
                     }
                     let Ok((bounds, grown, extended)) = self.over_agg(&inner, &exprs, env, "Sort")
                     else {
-                        return Err(e);
+                        return Err(reported(e));
                     };
                     let top = if extended {
                         self.rewrapped(&layers, grown)
@@ -2259,7 +2282,7 @@ impl Resolver<'_> {
                     };
                     (bounds, top, extended)
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(reported(e)),
             }
         };
         // A map does not order (`INVALID_ORDERING_TYPE`, as `SortOrder`).
