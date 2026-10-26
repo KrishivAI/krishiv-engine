@@ -20,6 +20,7 @@ mod csv;
 mod defs;
 mod hashing;
 mod math;
+mod misc;
 mod number;
 mod predicate;
 mod r#struct;

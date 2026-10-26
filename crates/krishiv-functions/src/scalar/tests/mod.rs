@@ -581,6 +581,7 @@ fn results_are_checked_against_the_binding() {
         types: vec![],
         return_type: DataType::Int32,
         body: Box::new(|_| Ok(Arc::new(StringArray::from(vec!["x"])) as ArrayRef)),
+        partitioned: None,
     };
     let err = wrong.invoke(&[], 1).unwrap_err();
     assert_eq!(class(&err), ErrorClass::InternalError);
@@ -590,8 +591,10 @@ fn results_are_checked_against_the_binding() {
 mod bitwise;
 mod calendar;
 mod families;
+mod misc;
 mod number;
 mod predicate;
+mod random;
 mod r#struct;
 mod text;
 mod url;
