@@ -11,9 +11,9 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution, JoinFilterPlan,
-    NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan, Residual, ScanFilter,
-    ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
+    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
+    JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
+    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
@@ -482,6 +482,19 @@ impl Encoder {
                     output: Some(bound_column(output, &self.nested)?),
                 })
             }
+            ExprNode::Resolved(ResolvedExpr::Field {
+                base,
+                ordinal,
+                name,
+                data_type,
+                nullable,
+            }) => Kind::Field(pb::FieldExpr {
+                base: self.child(base),
+                ordinal: u32::try_from(*ordinal).map_err(|_| unresolved("a field ordinal"))?,
+                name: name.clone(),
+                data_type: Some(spark_type(data_type, &self.nested)?),
+                nullable: *nullable,
+            }),
             ExprNode::Column(_) => return Err(unresolved("an unresolved column")),
             ExprNode::Star(_) => return Err(unresolved("an unresolved star")),
             ExprNode::Function(_) => return Err(unresolved("an unresolved function call")),
@@ -586,8 +599,13 @@ fn partitioning(p: &Partitioning) -> pb::Partitioning {
     use pb::partitioning::Kind;
     pb::Partitioning {
         kind: Some(match p {
-            Partitioning::Hash { keys } => Kind::Hash(pb::HashPartitioning {
+            Partitioning::Hash { keys, scheme } => Kind::Hash(pb::HashPartitioning {
                 keys: indexes(keys),
+                scheme: match scheme {
+                    HashScheme::Unpinned => pb::HashScheme::Unpinned,
+                    HashScheme::KeyGroupV1 => pb::HashScheme::KeyGroupV1,
+                }
+                .into(),
             }),
             Partitioning::Single => Kind::Single(pb::Empty {}),
             Partitioning::Broadcast => Kind::Broadcast(pb::Empty {}),

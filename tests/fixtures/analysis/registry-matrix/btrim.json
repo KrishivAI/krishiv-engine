@@ -25,14 +25,6 @@
       "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "btrim#5450b1642469/ansi_on",
-      "reason": "SELECT btrim(named_struct('a', 1, 'b', 'x'), 'SL') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "btrim#5450b1642469/ansi_off",
-      "reason": "SELECT btrim(named_struct('a', 1, 'b', 'x'), 'SL') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "btrim#5a1a560c70c8/ansi_on",
       "reason": "SELECT btrim(INTERVAL '1 02:03:04' DAY TO SECOND, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -73,14 +65,6 @@
       "reason": "SELECT btrim('SSparkSQLS', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "btrim#8919629c6f37/ansi_on",
-      "reason": "SELECT btrim('SSparkSQLS', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "btrim#8919629c6f37/ansi_off",
-      "reason": "SELECT btrim('SSparkSQLS', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "btrim#a36287350867/ansi_on",
       "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -111,14 +95,6 @@
     {
       "id": "btrim#ddadbcba5fdc/ansi_off",
       "reason": "SELECT btrim(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "btrim#fce00137b143/ansi_on",
-      "reason": "SELECT btrim(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "btrim#fce00137b143/ansi_off",
-      "reason": "SELECT btrim(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

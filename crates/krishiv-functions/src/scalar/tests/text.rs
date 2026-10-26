@@ -467,8 +467,14 @@ fn levenshtein_threshold_nulls() {
     // A NULL literal makes the whole call NULL.
     let null = ints(&[None]);
     let args = [
-        BindArg::Column(DataType::Utf8),
-        BindArg::Column(DataType::Utf8),
+        BindArg::Column {
+            ty: DataType::Utf8,
+            nullable: true,
+        },
+        BindArg::Column {
+            ty: DataType::Utf8,
+            nullable: true,
+        },
         BindArg::Literal(Arc::clone(&null)),
     ];
     let f = bind_scalar("levenshtein", &args, &BindOptions::new()).unwrap();

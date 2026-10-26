@@ -1287,8 +1287,14 @@ fn regex_bind_errors() {
     use crate::scalar::{BindArg, bind_scalar};
     use arrow_schema::DataType;
     let opts = crate::scalar::BindOptions::new();
-    let utf8 = || BindArg::Column(DataType::Utf8);
-    let int = || BindArg::Column(DataType::Int32);
+    let utf8 = || BindArg::Column {
+        ty: DataType::Utf8,
+        nullable: true,
+    };
+    let int = || BindArg::Column {
+        ty: DataType::Int32,
+        nullable: true,
+    };
     for (name, args) in [
         ("regexp_extract", vec![utf8()]),
         ("regexp_extract", vec![utf8(), utf8(), utf8(), int()]),

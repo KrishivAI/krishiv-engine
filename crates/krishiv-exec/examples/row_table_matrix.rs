@@ -187,7 +187,7 @@ impl Input {
         let start = Instant::now();
         let rows = batches
             .iter()
-            .map(|c| layout.encode(c, SEED).expect("encode"))
+            .map(|c| layout.encode(c).expect("encode"))
             .collect();
         let encode = start.elapsed().as_secs_f64();
         let start = Instant::now();

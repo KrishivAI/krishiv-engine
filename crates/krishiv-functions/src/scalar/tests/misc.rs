@@ -10,7 +10,7 @@ use arrow_array::types::{Int32Type, Int64Type};
 use arrow_schema::DataType;
 use krishiv_common::error::ErrorClass;
 
-use super::{BindArg, BindOptions, bind, bind_scalar, class, strs};
+use super::{BindOptions, bind, bind_scalar, class, strs};
 
 fn strings(f: &Arc<dyn super::ScalarFunction>, rows: usize, partition: u32) -> Vec<String> {
     let out = f.invoke_in(&[], rows, partition).unwrap();
@@ -34,12 +34,8 @@ fn version_reports_the_kernels_release_line() {
     // `typeof` never reaches execution: the analyzer rewrites it first.
     assert_eq!(
         class(
-            &super::bind_scalar(
-                "typeof",
-                &[BindArg::Column(DataType::Int32)],
-                &BindOptions::new()
-            )
-            .unwrap_err()
+            &super::bind_scalar("typeof", &[DataType::Int32.into()], &BindOptions::new())
+                .unwrap_err()
         ),
         ErrorClass::KrishivUnsupportedFeature
     );
@@ -125,12 +121,8 @@ fn misc_functions_take_no_arguments() {
     ] {
         assert_eq!(bind(name, &[]).name(), name);
         let arg = strs(&[Some("x")]);
-        let err = bind_scalar(
-            name,
-            &[BindArg::Column(arg.data_type().clone())],
-            &BindOptions::new(),
-        )
-        .unwrap_err();
+        let err =
+            bind_scalar(name, &[arg.data_type().clone().into()], &BindOptions::new()).unwrap_err();
         assert_eq!(class(&err), ErrorClass::KrishivUnsupportedFeature, "{name}");
         // The error names the bad signature, not a missing function.
         assert!(err.to_string().contains(name), "{name}: {err}");

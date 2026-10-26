@@ -58,11 +58,11 @@
     },
     {
       "id": "nvl#2305f5ee469a/ansi_on",
-      "reason": "SELECT nvl(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT nvl(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#2305f5ee469a/ansi_off",
-      "reason": "SELECT nvl(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+      "reason": "SELECT nvl(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#30624b2144a9/ansi_on",
@@ -87,14 +87,6 @@
     {
       "id": "nvl#707b2299b507/ansi_off",
       "reason": "SELECT nvl(1, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#7b57963d6974/ansi_on",
-      "reason": "SELECT nvl(NULL, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
-    },
-    {
-      "id": "nvl#7b57963d6974/ansi_off",
-      "reason": "SELECT nvl(NULL, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct"
     },
     {
       "id": "nvl#7cea853582ec/ansi_on",

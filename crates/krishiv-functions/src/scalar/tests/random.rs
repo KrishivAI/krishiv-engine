@@ -397,8 +397,7 @@ fn wrong_argument_types_do_not_bind() {
     // names the bad signature, not a missing function.
     for t in [DataType::Float64, DataType::Utf8] {
         let a = arrow_array::new_empty_array(&t);
-        let err =
-            super::bind_scalar("rand", &[BindArg::Column(t)], &BindOptions::new()).unwrap_err();
+        let err = super::bind_scalar("rand", &[t.into()], &BindOptions::new()).unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
         assert!(err.to_string().contains("rand("), "{err}");
         let _ = a;

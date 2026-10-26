@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "try_mod#01985c96110b/ansi_on",
-      "reason": "SELECT try_mod(3, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_mod#01985c96110b/ansi_off",
-      "reason": "SELECT try_mod(3, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_mod#02ec6588b5da/ansi_on",
       "reason": "SELECT try_mod(INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
@@ -31,14 +23,6 @@
     {
       "id": "try_mod#132344b1189f/ansi_off",
       "reason": "SELECT try_mod(3, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_mod#1eb6d9b3e6a7/ansi_on",
-      "reason": "SELECT try_mod(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_mod#1eb6d9b3e6a7/ansi_off",
-      "reason": "SELECT try_mod(named_struct('a', 1, 'b', 'x'), 2) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
       "id": "try_mod#2bbaaa7985fd/ansi_on",

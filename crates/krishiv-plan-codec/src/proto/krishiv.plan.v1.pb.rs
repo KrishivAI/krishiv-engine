@@ -562,6 +562,10 @@ pub mod partitioning {
 pub struct HashPartitioning {
     #[prost(uint64, repeated, tag = "1")]
     pub keys: ::prost::alloc::vec::Vec<u64>,
+    /// feature: key_group_hash (when not UNPINNED)
+    /// The routing function. Absent in plans written before it was named.
+    #[prost(enumeration = "HashScheme", tag = "2")]
+    pub scheme: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RangePartitioning {
@@ -711,7 +715,7 @@ pub struct BoundColumn {
 pub struct Expr {
     #[prost(message, optional, tag = "1")]
     pub origin: ::core::option::Option<Origin>,
-    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8")]
     pub kind: ::core::option::Option<expr::Kind>,
 }
 /// Nested message and enum types in `Expr`.
@@ -730,6 +734,9 @@ pub mod expr {
         Cast(super::Cast),
         #[prost(message, tag = "7")]
         Alias(super::AliasExpr),
+        /// feature: struct_field
+        #[prost(message, tag = "8")]
+        Field(super::FieldExpr),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -738,6 +745,21 @@ pub struct AliasExpr {
     pub expr: u32,
     #[prost(message, optional, tag = "2")]
     pub output: ::core::option::Option<BoundColumn>,
+}
+/// A struct field: the field `name` at `ordinal` of the struct `base`.
+/// feature: struct_field
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FieldExpr {
+    #[prost(uint32, tag = "1")]
+    pub base: u32,
+    #[prost(uint32, tag = "2")]
+    pub ordinal: u32,
+    #[prost(string, tag = "3")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "4")]
+    pub data_type: ::core::option::Option<DataType>,
+    #[prost(bool, tag = "5")]
+    pub nullable: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Cast {
@@ -1275,6 +1297,38 @@ impl JoinDistribution {
             "JOIN_DISTRIBUTION_UNSPECIFIED" => Some(Self::Unspecified),
             "JOIN_DISTRIBUTION_BROADCAST" => Some(Self::Broadcast),
             "JOIN_DISTRIBUTION_PARTITIONED" => Some(Self::Partitioned),
+            _ => None,
+        }
+    }
+}
+/// feature: key_group_hash
+/// The function a hash exchange routes rows by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum HashScheme {
+    /// No function named (older plans): the exchange is only lowered on one
+    /// worker and never routes.
+    Unpinned = 0,
+    /// Key-group ranges of the routing hash H_kg version 1: XXH64, seed 0, of
+    /// the normalized key bytes, folded over several key columns.
+    KeyGroupV1 = 1,
+}
+impl HashScheme {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unpinned => "HASH_SCHEME_UNPINNED",
+            Self::KeyGroupV1 => "HASH_SCHEME_KEY_GROUP_V1",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "HASH_SCHEME_UNPINNED" => Some(Self::Unpinned),
+            "HASH_SCHEME_KEY_GROUP_V1" => Some(Self::KeyGroupV1),
             _ => None,
         }
     }

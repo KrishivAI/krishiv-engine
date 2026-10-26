@@ -1310,7 +1310,7 @@ fn uniform_and_randstr_signatures() {
 /// each other so one side cannot drift without the other.
 #[test]
 fn uniform_result_agrees_with_the_executor_bind() {
-    use crate::scalar::{BindArg, BindOptions, bind_scalar};
+    use crate::scalar::{BindOptions, bind_scalar};
     // One foldable constant per bound type, as the analyzer sees them.
     let cases: Vec<(Option<DataType>, Option<Constant>)> = vec![
         (Some(DataType::Byte), Some(Constant::Integral(1))),
@@ -1339,8 +1339,8 @@ fn uniform_result_agrees_with_the_executor_bind() {
             let bound = bind_scalar(
                 "uniform",
                 &[
-                    BindArg::Column(a.clone().unwrap_or(DataType::Null).to_arrow()),
-                    BindArg::Column(b.clone().unwrap_or(DataType::Null).to_arrow()),
+                    a.clone().unwrap_or(DataType::Null).to_arrow().into(),
+                    b.clone().unwrap_or(DataType::Null).to_arrow().into(),
                 ],
                 &BindOptions::new(),
             )

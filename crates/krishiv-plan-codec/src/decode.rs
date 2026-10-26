@@ -11,7 +11,7 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
     SubqueryValueKind,
@@ -341,6 +341,7 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
     let (one, many): (Option<u32>, &[u32]) = match &m.kind {
         Some(Kind::Cast(c)) => (Some(c.expr), &[]),
         Some(Kind::Alias(a)) => (Some(a.expr), &[]),
+        Some(Kind::Field(f)) => (Some(f.base), &[]),
         Some(Kind::Function(f)) => (f.filter, &f.args),
         Some(Kind::Literal(_) | Kind::Column(_) | Kind::OuterColumn(_)) | None => (None, &[]),
     };
@@ -663,6 +664,14 @@ impl Decoder {
                 output: bound_column(required(&a.output, "an alias output")?)?,
             }),
             Kind::Function(f) => ExprNode::Resolved(ResolvedExpr::Function(self.function(f)?)),
+            Kind::Field(f) => ExprNode::Resolved(ResolvedExpr::Field {
+                base: self.expr_ref(f.base)?,
+                ordinal: usize::try_from(f.ordinal)
+                    .map_err(|_| corrupt("a field ordinal that does not fit"))?,
+                name: f.name.clone(),
+                data_type: spark_type(required(&f.data_type, "a field type")?)?,
+                nullable: f.nullable,
+            }),
         };
         let mut origin = Origin::UNKNOWN;
         if let Some(o) = &m.origin {
@@ -902,6 +911,13 @@ fn partitioning(p: &pb::Partitioning) -> Result<Partitioning> {
     Ok(match required(&p.kind, "a partitioning kind")? {
         Kind::Hash(h) => Partitioning::Hash {
             keys: usizes(&h.keys)?,
+            // Not `enum_map!`: 0 is not "unspecified" here but the scheme of
+            // plans written before the field existed.
+            scheme: match pb::HashScheme::try_from(h.scheme) {
+                Ok(pb::HashScheme::Unpinned) => HashScheme::Unpinned,
+                Ok(pb::HashScheme::KeyGroupV1) => HashScheme::KeyGroupV1,
+                Err(_) => return Err(corrupt("an unknown hash scheme")),
+            },
         },
         Kind::Single(_) => Partitioning::Single,
         Kind::Broadcast(_) => Partitioning::Broadcast,

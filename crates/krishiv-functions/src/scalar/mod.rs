@@ -38,6 +38,7 @@ mod random;
 mod regex;
 mod session;
 mod string;
+mod r#struct;
 mod url;
 
 pub use regex::{extract_all_pieces, split_regex};
@@ -59,8 +60,14 @@ use args::{Inputs, broadcast, internal, unsupported};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum BindArg {
-    /// A value computed per row, of this type.
-    Column(DataType),
+    /// A value computed per row, of this type; `nullable` whether it may be
+    /// null (struct construction copies it into its fields).
+    Column {
+        /// The argument's Arrow type.
+        ty: DataType,
+        /// Whether the argument may be null.
+        nullable: bool,
+    },
     /// A literal, as a one-row array. Some functions need the value to
     /// bind (the field of `extract`); others treat it as a column.
     Literal(ArrayRef),
@@ -71,15 +78,27 @@ impl BindArg {
     #[must_use]
     pub fn data_type(&self) -> DataType {
         match self {
-            Self::Column(t) => t.clone(),
+            Self::Column { ty, .. } => ty.clone(),
             Self::Literal(a) => a.data_type().clone(),
+        }
+    }
+
+    /// Whether the argument may be null: the column flag, or a null literal.
+    #[must_use]
+    pub fn nullable(&self) -> bool {
+        match self {
+            Self::Column { nullable, .. } => *nullable,
+            Self::Literal(a) => a.logical_null_count() > 0,
         }
     }
 }
 
 impl From<DataType> for BindArg {
     fn from(t: DataType) -> Self {
-        Self::Column(t)
+        Self::Column {
+            ty: t,
+            nullable: true,
+        }
     }
 }
 
@@ -370,7 +389,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 15] = [
+const FAMILIES: [(&[&str], Binder); 16] = [
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
@@ -385,6 +404,7 @@ const FAMILIES: [(&[&str], Binder); 15] = [
     (random::NAMES, random::bind),
     (chars::NAMES, chars::bind),
     (codec::NAMES, codec::bind),
+    (r#struct::NAMES, r#struct::bind),
     (url::NAMES, url::bind),
 ];
 
@@ -402,7 +422,7 @@ pub fn scalar_names() -> Vec<&'static str> {
 
 /// Whether the result of the scalar function `name` depends only on its
 /// arguments and `spark.sql.ansi.enabled`: the string (with its character and
-/// encoding families), math and arithmetic families. The datetime, session and
+/// encoding families), math, arithmetic and struct families. The datetime, session and
 /// hash families read the session time zone, the user or the query start, so a
 /// caller that evaluates a call before execution (constant folding) must not
 /// evaluate those.
@@ -415,6 +435,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         codec::NAMES,
         math::NAMES,
         arith::NAMES,
+        r#struct::NAMES,
     ]
     .iter()
     .any(|names| names.contains(&lower.as_str()))

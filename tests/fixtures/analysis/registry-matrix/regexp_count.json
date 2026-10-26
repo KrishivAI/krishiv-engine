@@ -49,14 +49,6 @@
       "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "regexp_count#5d692adb9c66/ansi_on",
-      "reason": "SELECT regexp_count(named_struct('a', 1, 'b', 'x'), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_count#5d692adb9c66/ansi_off",
-      "reason": "SELECT regexp_count(named_struct('a', 1, 'b', 'x'), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp_count#cdb52bc0b466/ansi_on",
       "reason": "SELECT regexp_count(array(1, 2), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -71,14 +63,6 @@
     {
       "id": "regexp_count#e50fca3b8f7b/ansi_off",
       "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_count#e5e31afb4760/ansi_on",
-      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_count#e5e31afb4760/ansi_off",
-      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

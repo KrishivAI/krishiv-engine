@@ -33,14 +33,6 @@
       "reason": "SELECT make_date(2013, INTERVAL '1 02:03:04' DAY TO SECOND, 15) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "make_date#3a67aed59e7c/ansi_on",
-      "reason": "SELECT make_date(named_struct('a', 1, 'b', 'x'), 7, 15) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_date#3a67aed59e7c/ansi_off",
-      "reason": "SELECT make_date(named_struct('a', 1, 'b', 'x'), 7, 15) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "make_date#3f5149e89e38/ansi_on",
       "reason": "SELECT make_date(2013, 7, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -55,14 +47,6 @@
     {
       "id": "make_date#50045c37172f/ansi_off",
       "reason": "SELECT make_date(2013, map('a', 1), 15) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_date#5dd9383be951/ansi_on",
-      "reason": "SELECT make_date(2013, named_struct('a', 1, 'b', 'x'), 15) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_date#5dd9383be951/ansi_off",
-      "reason": "SELECT make_date(2013, named_struct('a', 1, 'b', 'x'), 15) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_date#65c3a9e68abf/ansi_on",
@@ -87,14 +71,6 @@
     {
       "id": "make_date#71717f95eb32/ansi_off",
       "reason": "SELECT make_date(2013, 7, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_date#962428ae5586/ansi_on",
-      "reason": "SELECT make_date(2013, 7, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "make_date#962428ae5586/ansi_off",
-      "reason": "SELECT make_date(2013, 7, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "make_date#dc2fc7038c2e/ansi_on",
