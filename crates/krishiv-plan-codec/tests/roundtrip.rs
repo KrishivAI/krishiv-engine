@@ -295,10 +295,12 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             // A feature added after the freeze: above every frozen version.
             "window_group_limit" | "nested_types" => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
-            "hash_join_existence" | "hash_join_single_match" | "nested_loop_existence" => {
-                POST_MIGRATION_READER_VERSION
-            }
-            "window_frames" | "window_offset_values" => POST_MIGRATION_READER_VERSION,
+            "hash_join_existence"
+            | "hash_join_single_match"
+            | "nested_loop_existence"
+            | "exchange_hash_key_group"
+            | "window_frames"
+            | "window_offset_values" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");

@@ -11,7 +11,7 @@ use krishiv_common::secret::{OptionValue, SecretValue};
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
     SubqueryValueKind,
@@ -288,6 +288,12 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         .ok_or_else(|| corrupt("no expression environment"))?;
     let env = ExprEnv {
         ansi: env.ansi,
+        // The wire carries the flag for the `legacy_statistical_aggregate`
+        // feature: its absence in older bytes decodes as false, which is
+        // what every plan such an encoder could write carried (only a plan
+        // that sets it around a moment aggregate needs a reader with the
+        // feature).
+        legacy_statistical_aggregate: env.legacy_statistical_aggregate,
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),
@@ -896,6 +902,13 @@ fn partitioning(p: &pb::Partitioning) -> Result<Partitioning> {
     Ok(match required(&p.kind, "a partitioning kind")? {
         Kind::Hash(h) => Partitioning::Hash {
             keys: usizes(&h.keys)?,
+            // Not `enum_map!`: 0 is not "unspecified" here but the scheme of
+            // plans written before the field existed.
+            scheme: match pb::HashScheme::try_from(h.scheme) {
+                Ok(pb::HashScheme::Unpinned) => HashScheme::Unpinned,
+                Ok(pb::HashScheme::KeyGroupV1) => HashScheme::KeyGroupV1,
+                Err(_) => return Err(corrupt("an unknown hash scheme")),
+            },
         },
         Kind::Single(_) => Partitioning::Single,
         Kind::Broadcast(_) => Partitioning::Broadcast,
