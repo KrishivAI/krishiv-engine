@@ -63,7 +63,10 @@ pub(super) struct Cx<'s> {
     /// sets (see `analytics`).
     pub(super) grouping: bool,
     /// A name `scope` holds several times is looked up further rather
-    /// than ambiguous (Spark's `ORDER BY` over a select list).
+    /// than ambiguous (Spark's `ORDER BY` over a select list, `HAVING` and
+    /// `ORDER BY` over an aggregate's duplicate outputs among its grouping
+    /// attributes); when nothing further holds it either, the duplicates
+    /// stay ambiguous rather than unresolved.
     pub(super) lenient: bool,
     /// Whether names may resolve in enclosing queries.
     pub(super) outer: bool,
@@ -2492,17 +2495,29 @@ impl Resolver<'_> {
             Some(input) if in_agg => (input, None),
             _ => (cx.scope, cx.extra),
         };
+        // With leniency (an `ORDER BY` over duplicate outputs, a `HAVING`
+        // or `ORDER BY` over an aggregate whose select list repeats a
+        // name), duplicates in the first level are looked up below it; when
+        // nothing below resolves them either, they stay ambiguous rather
+        // than unresolved.
+        let mut lenient_dup = false;
         for (i, level) in [Some(scope), extra].into_iter().enumerate() {
             let Some(level) = level else { continue };
             let lenient = cx.lenient && i == 0;
-            if let Some((a, used)) = self.find(level, &c.name, origin, lenient)? {
-                self.used(&a);
-                let col = renamed(&a, &c.name, used);
-                return Ok(bound(
-                    ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
-                    &col,
-                    None,
-                ));
+            match self.find(level, &c.name, origin, lenient) {
+                Ok(Some((a, used))) => {
+                    self.used(&a);
+                    let col = renamed(&a, &c.name, used);
+                    return Ok(bound(
+                        ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
+                        &col,
+                        None,
+                    ));
+                }
+                Ok(None) => {
+                    lenient_dup = lenient_dup || lenient;
+                }
+                Err(e) => return Err(e),
             }
         }
         // A name no input column has may be a function written without
@@ -2618,6 +2633,11 @@ impl Resolver<'_> {
                     Expr::new(ExprNode::Column(c.clone())).with_origin(origin),
                 )),
             });
+        }
+        if lenient_dup {
+            // Duplicates in the first level, nothing below resolved them:
+            // they stay ambiguous rather than unresolved.
+            self.find(scope, &c.name, origin, false)?;
         }
         Err(unresolved(&c.name, cx.scope, origin))
     }

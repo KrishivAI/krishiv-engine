@@ -744,7 +744,8 @@ impl Resolver<'_> {
     /// in Spark: a dropped column hides an outer one of its name. Returns
     /// the bound expressions and the relation they read, wider than `c`
     /// when something was added. `lenient`: a name `c` outputs several
-    /// times is looked up below.
+    /// times is looked up below (and, when the below holds no such name
+    /// either, stays ambiguous rather than unresolved).
     pub(super) fn bind_missing(
         &mut self,
         c: &Rel,
@@ -769,9 +770,19 @@ impl Resolver<'_> {
                 .name()
                 .starts_with("UNRESOLVED_COLUMN")
         };
+        // With leniency, duplicates in the output are looked up below it:
+        // the first try (without the below) reports them as ambiguous
+        // rather than unresolved, so retry on either when there is a below.
+        let ambiguous = |e: &AnalysisError| {
+            lenient
+                && e.error
+                    .error_class()
+                    .name()
+                    .starts_with("AMBIGUOUS_REFERENCE")
+        };
         match self.bind_all(exprs, &cx) {
             Ok(bounds) => return Ok((bounds, c.clone())),
-            Err(e) if !unresolved(&e) || lookup.is_empty() => return Err(e),
+            Err(e) if (!unresolved(&e) && !ambiguous(&e)) || lookup.is_empty() => return Err(e),
             Err(_) => {}
         }
         cx.extra = Some(&lookup);
@@ -949,10 +960,14 @@ impl Resolver<'_> {
 
     /// Expressions over an aggregate (`HAVING`, `ORDER BY`): names resolve
     /// against its output, then its grouping attributes; aggregate-function
-    /// arguments against its input. Aggregate calls the aggregate does not
-    /// compute yet, and grouping attributes it does not output, are added
-    /// to it (and passed up through the projections of lateral aliases
-    /// above it); the flag says whether its output grew.
+    /// arguments against its input. A name the output holds twice is looked
+    /// up among the grouping attributes instead of failing as ambiguous
+    /// (Spark resolves `HAVING`/`ORDER BY` to the grouping column there);
+    /// when the grouping attributes hold no such name either, the duplicate
+    /// outputs stay ambiguous rather than unresolved. Aggregate calls the
+    /// aggregate does not compute yet, and grouping attributes it does not
+    /// output, are added to it (and passed up through the projections of
+    /// lateral aliases above it); the flag says whether its output grew.
     pub(super) fn over_agg(
         &mut self,
         agg: &Rel,
@@ -966,6 +981,12 @@ impl Resolver<'_> {
         let rels = [agg];
         let mut cx = Self::cx(&agg.out, &rels, env, op);
         cx.extra = Some(&info.keys);
+        // A name the select list outputs twice is looked up among the
+        // grouping attributes, as Spark looks a name an `ORDER BY` output
+        // holds twice up below it: without leniency the duplicate outputs
+        // are `AMBIGUOUS_REFERENCE` where Spark resolves to the grouping
+        // column.
+        cx.lenient = true;
         cx.agg_scope = Some(&info.input.out);
         cx.grouping = info.analytics.is_some();
         if op == "Filter" {
@@ -2033,7 +2054,12 @@ impl Resolver<'_> {
     }
 
     /// The count of a `LIMIT` or `OFFSET` (`name`), checked as Spark does:
-    /// it must be a constant, an `INT`, not NULL and not negative.
+    /// it must be foldable (`IS_UNFOLDABLE` when it is not: a column, a
+    /// nondeterministic call, a subquery), then an `INT`, not NULL and not
+    /// negative. Columns resolve against the input's output (the select
+    /// list above it), so `LIMIT key` over an input holding `key` is
+    /// unfoldable rather than unresolved; a name the input outputs twice
+    /// stays ambiguous when nothing below resolves it.
     pub(super) fn limit_like(
         &mut self,
         e: &Arc<Expr>,
@@ -2042,14 +2068,16 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Arc<Expr>, AnalysisError> {
         // Columns resolve against the input (so `OFFSET id` is "not
-        // constant", as in Spark, not an unresolved column).
+        // constant", as in Spark, not an unresolved column). A name the
+        // input outputs twice is looked up below it, as for `ORDER BY`.
         let rels = [input];
-        let cx = Self::cx(
+        let mut cx = Self::cx(
             &input.out,
             &rels,
             env,
             if name == "limit" { "Limit" } else { "Offset" },
         );
+        cx.lenient = true;
         let b = self.bind(e, &cx)?;
         // Spark's order: foldable, then the type, then the value.
         let unfoldable = not_constant(&b.expr);
@@ -2185,12 +2213,19 @@ impl Resolver<'_> {
                     (bounds, wide, extended)
                 }
                 // `HAVING ... ORDER BY`: the sort reads the aggregate below
-                // the filter, which grows what the sort needs.
+                // the filter, which grows what the sort needs. Duplicates in
+                // the select list are looked up below it first
+                // (`bind_missing` with leniency); when that is ambiguous
+                // too, the aggregate below still resolves grouping columns.
                 Err(e)
                     if e.error
                         .error_class()
                         .name()
-                        .starts_with("UNRESOLVED_COLUMN") =>
+                        .starts_with("UNRESOLVED_COLUMN")
+                        || e.error
+                            .error_class()
+                            .name()
+                            .starts_with("AMBIGUOUS_REFERENCE") =>
                 {
                     let Some((layers, inner)) = Self::through_to_agg(&c) else {
                         return Err(e);

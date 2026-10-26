@@ -3130,3 +3130,688 @@ fn inline_table_string_promotion_follows_ansi() {
     );
     assert_eq!(datatypes(&r.unwrap()), [DataType::Long]);
 }
+
+/// An unused CTE over a missing relation still fails the query with
+/// `TABLE_OR_VIEW_NOT_FOUND` (Spark golden `cte` cases 16 and 24): table
+/// existence is checked even though the definition is never resolved.
+/// Column errors of an unused definition still never fail the query.
+#[test]
+fn unused_cte_tables_still_fail() {
+    let ctx = ctx();
+    let missing = |name: &str| LogicalPlan::table([name]).project(vec![c("a")]);
+    // An unused definition over a missing table fails.
+    let unused_missing = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "u".to_owned(),
+            plan: Arc::new(missing("nope")),
+        }],
+    });
+    let e = run(unused_missing, &ctx).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(
+        params.get("relationName").map(String::as_str),
+        Some("`nope`")
+    );
+    // The main query reading only the valid definition still resolves when
+    // the other definition is ambiguous (column errors are skipped), but
+    // fails when the other definition reads a missing table.
+    let ambiguous = LogicalPlan::table(["t"])
+        .join(
+            LogicalPlan::table(["u"]),
+            JoinKind::Inner,
+            JoinCondition::None,
+        )
+        .project(vec![c("a")]);
+    assert_eq!(class(&run(ambiguous.clone(), &ctx)), "AMBIGUOUS_REFERENCE");
+    let ok = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["good"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "good".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "bad".to_owned(),
+                plan: Arc::new(ambiguous),
+            },
+        ],
+    });
+    run(ok, &ctx).unwrap();
+    let missing_bad = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["good"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "good".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "bad".to_owned(),
+                plan: Arc::new(missing("gone")),
+            },
+        ],
+    });
+    assert_eq!(class(&run(missing_bad, &ctx)), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+/// A forward reference inside a CTE falls through to tables: the later
+/// definition is not visible, so reading it is a missing table (Spark
+/// golden `cte` case 24, `with r1 as (select * from r2), r2 as ...`).
+#[test]
+fn cte_forward_references_are_missing_tables() {
+    let ctx = ctx();
+    let forward = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "r1".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["r2"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "r2".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+        ],
+    });
+    let e = run(forward, &ctx).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("relationName").map(String::as_str), Some("`r2`"));
+    // In dependency order the same definitions resolve.
+    let ordered = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["b"]).project(vec![c("a")])),
+        ctes: vec![
+            Cte {
+                name: "a".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            },
+            Cte {
+                name: "b".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["a"]).project(vec![c("a")])),
+            },
+        ],
+    });
+    run(ordered, &ctx).unwrap();
+}
+
+/// Unused CTE bodies nested inside an unused definition are checked too:
+/// a missing table at any depth fails the query, while an ambiguous
+/// column at any depth does not.
+#[test]
+fn unused_cte_tables_are_checked_at_any_depth() {
+    let ctx = ctx();
+    let nested_missing = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "u".to_owned(),
+            plan: Arc::new(LogicalPlan::new(PlanNode::WithCte {
+                input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                ctes: vec![Cte {
+                    name: "inner".to_owned(),
+                    plan: Arc::new(LogicalPlan::table(["missing_deep"]).project(vec![c("a")])),
+                }],
+            })),
+        }],
+    });
+    assert_eq!(class(&run(nested_missing, &ctx)), "TABLE_OR_VIEW_NOT_FOUND");
+    // A self-reference inside an unused definition is a missing table, not
+    // infinite recursion (Spark golden `cte` cases 4 and 5).
+    let self_ref = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "s".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["s"]).project(vec![c("a")])),
+        }],
+    });
+    assert_eq!(class(&run(self_ref, &ctx)), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+/// CTE name matching is case-insensitive by default: an unused definition
+/// shadowing a table with different casing still hides it from table
+/// checks, and exact when `caseSensitive` is set.
+#[test]
+fn unused_cte_shadowing_follows_case_sensitivity() {
+    let ctx = ctx();
+    // `T` (upper) shadows table `t` case-insensitively: reading `t` in the
+    // main query is the CTE, and the unused `T` body over `t` reads the
+    // table (which exists), so no table error.
+    let shadowed = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["T"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "T".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        }],
+    });
+    run(shadowed, &ctx).unwrap();
+    let sensitive = ResolutionConf {
+        case_sensitive: true,
+        ..ResolutionConf::default()
+    };
+    let sensitive_ctx = context(catalog(), sensitive);
+    // Case-sensitive: `T` does not shadow `t`, so the main query reads the
+    // table and the CTE body is unused but over an existing table too.
+    run(
+        LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            ctes: vec![Cte {
+                name: "T".to_owned(),
+                plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+            }],
+        }),
+        &sensitive_ctx,
+    )
+    .unwrap();
+    // Case-sensitive: an unused `T` over a missing `T` still fails, since
+    // no shadowing applies to its own body.
+    let missing = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "T".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["T_missing"]).project(vec![c("a")])),
+        }],
+    });
+    assert_eq!(
+        class(&run(missing, &sensitive_ctx)),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+}
+
+/// `GROUP BY` resolves a backquoted select-list alias (even an implicit one
+/// like `` `1` `` for `SELECT 1`): with `groupByAliases` on the key groups
+/// by the alias expression, with it off the same key is unresolved (Spark
+/// golden `group-by-alias` cases 11 and 32, `having` cases 24 and 25).
+/// Hand-built plans use plain names: backquotes are SQL syntax only.
+#[test]
+fn group_by_resolves_backquoted_select_aliases() {
+    let ctx = ctx();
+    // Explicit alias (`SELECT a AS k ... GROUP BY k`, backquoted in SQL).
+    let aliased = LogicalPlan::table(["t"]).aggregate(vec![c("k")], vec![c("a").alias("k")]);
+    run(aliased, &ctx).unwrap();
+    // Implicit alias: `SELECT 1 GROUP BY `1`` groups by the literal.
+    let implicit = LogicalPlan::new(PlanNode::OneRowRelation).aggregate(vec![c("1")], vec![int(1)]);
+    let a = run(implicit, &ctx).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["1"]
+    );
+    // With aliases off the same keys are unresolved, with a suggestion when
+    // the input has columns and without one over `OneRowRelation`.
+    let off = context(
+        catalog(),
+        ResolutionConf {
+            group_by_aliases: false,
+            ..ResolutionConf::default()
+        },
+    );
+    let aliased_off = LogicalPlan::table(["t"]).aggregate(vec![c("k")], vec![c("a").alias("k")]);
+    assert_eq!(
+        class(&run(aliased_off, &off)),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let implicit_off =
+        LogicalPlan::new(PlanNode::OneRowRelation).aggregate(vec![c("1")], vec![int(1)]);
+    assert_eq!(
+        class(&run(implicit_off, &off)),
+        "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION"
+    );
+    // `SELECT 1 AS `2`, 2 ... GROUP BY `2`` (Spark golden `having` cases 24
+    // and 25): the key resolves to the input column, which takes precedence
+    // over the select-list aliases (constants need no grouping).
+    let backquoted = LogicalPlan::table(["t"])
+        .aggregate(vec![c("b")], vec![int(1).alias("b"), int(2).alias("b")]);
+    run(backquoted, &ctx).unwrap();
+}
+
+/// `GROUP BY` resolves the first matching select-list alias: duplicate
+/// aliases do not fail the grouping itself (Spark golden `group-by-alias`
+/// case 27 succeeds).
+#[test]
+fn group_by_picks_the_first_matching_alias() {
+    let ctx = ctx();
+    // Two aliases `a`: the key resolves (to the first) instead of raising.
+    let dup = LogicalPlan::table(["t"]).aggregate(
+        vec![c("col2"), c("a")],
+        vec![c("a").alias("x"), c("b").alias("x")],
+    );
+    let _ = run(dup, &ctx);
+    let dup_group = LogicalPlan::new(PlanNode::OneRowRelation)
+        .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")]);
+    let r = run(dup_group, &ctx);
+    // Resolves (to the first alias) rather than raising `AMBIGUOUS`.
+    assert_ne!(class(&r), "AMBIGUOUS_REFERENCE");
+}
+
+/// `HAVING` and `ORDER BY` over an aggregate read grouping attributes when
+/// the select list repeats a name (Spark golden `having` cases 24 and 25,
+/// `group-by-alias` case 28's `HAVING`): without leniency the duplicate
+/// outputs are `AMBIGUOUS_REFERENCE` where Spark resolves to the grouping
+/// column.
+#[test]
+fn having_and_order_by_prefer_grouping_over_duplicate_outputs() {
+    let ctx = ctx();
+    // `SELECT 1 AS a, 2 AS a FROM t GROUP BY a HAVING a > 0`: `a` in the
+    // grouping and the `HAVING` resolves to the grouping column (input
+    // `a`), not to either duplicate output.
+    let having = LogicalPlan::table(["t"])
+        .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")])
+        .filter(gt(c("a"), int(0)));
+    run(having, &ctx).unwrap();
+    // Without a grouping column of that name, the same shape stays
+    // ambiguous: two outputs, nothing below to prefer.
+    let ambiguous = LogicalPlan::new(PlanNode::OneRowRelation)
+        .aggregate(vec![int(1)], vec![int(1).alias("a"), int(2).alias("a")]);
+    let ambiguous = ambiguous.filter(gt(c("a"), int(0)));
+    assert_eq!(class(&run(ambiguous, &ctx)), "AMBIGUOUS_REFERENCE");
+    // `ORDER BY` over the aggregate behaves the same way.
+    let order = LogicalPlan::table(["t"])
+        .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")])
+        .sort(vec![crate::SortOrder::asc(c("a"))]);
+    run(order, &ctx).unwrap();
+    let order_ambiguous = LogicalPlan::new(PlanNode::OneRowRelation)
+        .aggregate(vec![int(1)], vec![int(1).alias("a"), int(2).alias("a")])
+        .sort(vec![crate::SortOrder::asc(c("a"))]);
+    assert_eq!(class(&run(order_ambiguous, &ctx)), "AMBIGUOUS_REFERENCE");
+}
+
+/// `ORDER BY` over duplicate select outputs looks below them (existing
+/// leniency): with a single input column of that name it resolves there,
+/// otherwise it stays ambiguous rather than unresolved.
+#[test]
+fn order_by_duplicates_fall_back_then_stay_ambiguous() {
+    let ctx = ctx();
+    // `SELECT 1 AS a, 2 AS a FROM t ORDER BY a`: the input `a` wins over
+    // the duplicate outputs.
+    let order = LogicalPlan::table(["t"])
+        .project(vec![int(1).alias("a"), int(2).alias("a")])
+        .sort(vec![crate::SortOrder::asc(c("a"))]);
+    run(order, &ctx).unwrap();
+    // No input column of that name: ambiguous, not unresolved.
+    let ambiguous = LogicalPlan::new(PlanNode::OneRowRelation)
+        .project(vec![int(1).alias("a"), int(2).alias("a")])
+        .sort(vec![crate::SortOrder::asc(c("a"))]);
+    assert_eq!(class(&run(ambiguous, &ctx)), "AMBIGUOUS_REFERENCE");
+}
+
+/// `LIMIT` (and `OFFSET`) over a column is `IS_UNFOLDABLE`, not
+/// `UNRESOLVED_COLUMN` (Spark golden `limit` case 9): columns resolve
+/// against the input and then fail folding, exactly as nondeterministic
+/// calls do.
+#[test]
+fn limit_over_a_column_is_unfoldable() {
+    let ctx = ctx();
+    for (plan, name) in [
+        (LogicalPlan::table(["t"]).limit(gt(c("a"), int(3))), "limit"),
+        (LogicalPlan::table(["t"]).limit(c("a")), "limit"),
+        (LogicalPlan::table(["t"]).offset(c("b")), "offset"),
+    ] {
+        let e = run(plan, &ctx).unwrap_err();
+        assert_eq!(
+            e.error.error_class().name(),
+            "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE",
+            "{name}"
+        );
+        let params: std::collections::BTreeMap<_, _> = e
+            .error
+            .message_parameters()
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        assert_eq!(params.get("name").map(String::as_str), Some(name));
+    }
+    // Foldable non-integers are a type error, foldable negatives and nulls
+    // are value errors, in Spark's order (foldable, then type, then value).
+    let e = run(LogicalPlan::table(["t"]).limit(s("a")), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.DATA_TYPE"
+    );
+    let e = run(LogicalPlan::table(["t"]).limit(int(-1)), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE"
+    );
+    let e = run(
+        LogicalPlan::table(["t"]).limit(Expr::new(ExprNode::Literal(Literal::Null(Some(
+            krishiv_types::DataType::Integer,
+        ))))),
+        &ctx,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_NULL"
+    );
+    // A foldable integer limit resolves to a literal.
+    let a = run(LogicalPlan::table(["t"]).limit(add(int(1), int(2))), &ctx).unwrap();
+    assert!(
+        a.plan.root().to_string().contains("Limit"),
+        "{}",
+        a.plan.root()
+    );
+}
+
+/// `LIMIT` resolves against the select list: an alias the projection
+/// defines is visible (then fails folding when it names a column), and
+/// duplicates in the projection stay ambiguous rather than resolving
+/// below it.
+#[test]
+fn limit_resolves_against_the_select_list() {
+    let ctx = ctx();
+    // `SELECT a AS k FROM t LIMIT k`: `k` resolves to the projection
+    // (not `UNRESOLVED_COLUMN`), then fails as unfoldable since it names
+    // a column.
+    let aliased = LogicalPlan::table(["t"])
+        .project(vec![c("a").alias("k")])
+        .limit(c("k"));
+    assert_eq!(
+        class(&run(aliased, &ctx)),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+    // Duplicates in the projection are ambiguous, even though the input
+    // has a single column of that name.
+    let dup = LogicalPlan::table(["t"])
+        .project(vec![int(1).alias("a"), int(2).alias("a")])
+        .limit(c("a"));
+    assert_eq!(class(&run(dup, &ctx)), "AMBIGUOUS_REFERENCE");
+}
+
+/// `GROUP BY` ordinals follow `spark.sql.groupByOrdinal`: with it on, an
+/// integer literal names the n-th select item; with it off, the same
+/// literal is a constant grouping key.
+#[test]
+fn group_by_ordinals_follow_their_config() {
+    let ctx = ctx();
+    // `SELECT a, COUNT(b) FROM t GROUP BY 1`: groups by the first item.
+    let ordinal =
+        LogicalPlan::table(["t"]).aggregate(vec![int(1)], vec![c("a"), f("count", vec![c("b")])]);
+    let a = run(ordinal, &ctx).unwrap();
+    assert_eq!(a.output.len(), 2);
+    // Out of range is `GROUP_BY_POS_OUT_OF_RANGE`.
+    let out_of_range =
+        LogicalPlan::table(["t"]).aggregate(vec![int(5)], vec![c("a"), f("count", vec![c("b")])]);
+    assert_eq!(class(&run(out_of_range, &ctx)), "GROUP_BY_POS_OUT_OF_RANGE");
+    // With ordinals off, `GROUP BY 1` groups by the constant 1 (one group).
+    let off = context(
+        catalog(),
+        ResolutionConf {
+            group_by_ordinal: false,
+            ..ResolutionConf::default()
+        },
+    );
+    let constant =
+        LogicalPlan::table(["t"]).aggregate(vec![int(1)], vec![f("count", vec![star()])]);
+    let a = run(constant, &off).unwrap();
+    assert_eq!(a.output.len(), 1);
+    // Star with an ordinal key is `STAR_GROUP_BY_POS`.
+    let star = LogicalPlan::table(["t"]).aggregate(vec![int(1)], vec![star()]);
+    assert_eq!(class(&run(star, &ctx)), "STAR_GROUP_BY_POS");
+}
+
+/// `ORDER BY` ordinals follow `spark.sql.orderByOrdinal`: with it on, an
+/// integer literal names the n-th output column; with it off, the same
+/// literal sorts by its constant value.
+#[test]
+fn order_by_ordinals_follow_their_config() {
+    let ctx = ctx();
+    // `SELECT a, b FROM t ORDER BY 2`: sorts by the second output (`b`).
+    let ordinal = LogicalPlan::table(["t"])
+        .project(vec![c("a"), c("b")])
+        .sort(vec![crate::SortOrder::asc(int(2))]);
+    let a = run(ordinal, &ctx).unwrap();
+    assert!(
+        a.plan.root().to_string().contains("b#"),
+        "{}",
+        a.plan.root()
+    );
+    // Out of range is `ORDER_BY_POS_OUT_OF_RANGE`.
+    let out_of_range = LogicalPlan::table(["t"])
+        .project(vec![c("a")])
+        .sort(vec![crate::SortOrder::asc(int(5))]);
+    assert_eq!(class(&run(out_of_range, &ctx)), "ORDER_BY_POS_OUT_OF_RANGE");
+    // With ordinals off, `ORDER BY 2` sorts by the constant 2.
+    let off = context(
+        catalog(),
+        ResolutionConf {
+            order_by_ordinal: false,
+            ..ResolutionConf::default()
+        },
+    );
+    run(
+        LogicalPlan::table(["t"])
+            .project(vec![c("a")])
+            .sort(vec![crate::SortOrder::asc(int(2))]),
+        &off,
+    )
+    .unwrap();
+}
+
+/// `GROUP BY` attribute precedence and `HAVING`/`ORDER BY` over the
+/// aggregate: an input column wins over select-list aliases of that name,
+/// and later clauses resolve to the grouping column rather than either
+/// duplicate output.
+#[test]
+fn group_by_attributes_take_precedence_over_aliases() {
+    let ctx = ctx();
+    // `SELECT 1 AS a, 2 AS a FROM t(a) GROUP BY a`: the key is the input
+    // column, not either alias.
+    let key = LogicalPlan::table(["t"])
+        .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")]);
+    // Fails without the input column (missing aggregation for the
+    // constants is fine, but the test table `t` has `a`, so it resolves).
+    run(key, &ctx).unwrap();
+    // Without an input column of that name, the first alias wins for the
+    // grouping itself (Spark golden `group-by-alias` case 27 succeeds).
+    let no_input = LogicalPlan::new(PlanNode::OneRowRelation)
+        .aggregate(vec![c("a")], vec![int(1).alias("a"), int(2).alias("a")]);
+    run(no_input, &ctx).unwrap();
+}
+
+/// CTE shadowing across nesting levels: an inner `WITH` name hides the
+/// outer one inside its scope, and reads outside still need the outer
+/// definition (which is checked for missing tables even when unused
+/// elsewhere).
+#[test]
+fn cte_shadowing_applies_at_every_level() {
+    let ctx = ctx();
+    let good = || LogicalPlan::table(["t"]).project(vec![c("a")]);
+    let bad = || {
+        LogicalPlan::table(["t"])
+            .join(
+                LogicalPlan::table(["u"]),
+                JoinKind::Inner,
+                JoinCondition::None,
+            )
+            .project(vec![c("a")])
+    };
+    // Inner `x` shadows outer `x`: only the inner (valid) definition is
+    // read, so the outer ambiguity never fails the query.
+    let shadowed = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::new(PlanNode::WithCte {
+            input: Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")])),
+            ctes: vec![Cte {
+                name: "x".to_owned(),
+                plan: Arc::new(good()),
+            }],
+        })),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(bad()),
+        }],
+    });
+    run(shadowed, &ctx).unwrap();
+    // A read outside the inner scope still needs the outer definition: its
+    // ambiguity fails the query.
+    let outer_read = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(
+            LogicalPlan::new(PlanNode::WithCte {
+                input: Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")])),
+                ctes: vec![Cte {
+                    name: "x".to_owned(),
+                    plan: Arc::new(good()),
+                }],
+            })
+            .join(
+                LogicalPlan::table(["x"]).project(vec![c("a")]),
+                JoinKind::Inner,
+                JoinCondition::None,
+            ),
+        ),
+        ctes: vec![Cte {
+            name: "x".to_owned(),
+            plan: Arc::new(bad()),
+        }],
+    });
+    assert_eq!(class(&run(outer_read, &ctx)), "AMBIGUOUS_REFERENCE");
+}
+
+/// `LIMIT` and `OFFSET` share Spark's checks: foldable, then type, then
+/// value, with the same error classes and parameters as the golden
+/// `limit.sql.out` shows.
+#[test]
+fn limit_and_offset_share_sparks_checks() {
+    let ctx = ctx();
+    // Foldable non-literals pass through as literals for the planner.
+    let folded = LogicalPlan::table(["t"]).limit(add(int(1), int(2)));
+    let a = run(folded, &ctx).unwrap();
+    assert!(
+        a.plan.root().to_string().contains("Limit"),
+        "{}",
+        a.plan.root()
+    );
+    // Offsets behave like limits (name `offset` in the parameters).
+    let e = run(LogicalPlan::table(["t"]).offset(c("a")), &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+    assert_eq!(
+        e.error
+            .message_parameters()
+            .iter()
+            .find(|(k, _)| *k == "name")
+            .map(|(_, v)| v.as_str()),
+        Some("offset")
+    );
+    // A subquery limit is unfoldable (cited at the expression).
+    let sub = LogicalPlan::table(["t"]).limit(crate::tests::dsl::scalar(
+        LogicalPlan::table(["u"]).project(vec![c("a")]),
+    ));
+    assert_eq!(
+        class(&run(sub, &ctx)),
+        "INVALID_LIMIT_LIKE_EXPRESSION.IS_UNFOLDABLE"
+    );
+}
+
+/// `ORDER BY` over a non-aggregate with duplicate outputs resolves below
+/// them (existing leniency), and `GROUP BY` ordinal out-of-range and
+/// star-group-by-pos keep their own classes.
+#[test]
+fn order_by_leniency_and_group_by_star_rules() {
+    let ctx = ctx();
+    // Duplicate outputs with no input column of that name are ambiguous,
+    // not unresolved.
+    let order = LogicalPlan::table(["t"])
+        .project(vec![c("a").alias("x"), c("b").alias("x")])
+        .sort(vec![crate::SortOrder::asc(c("x"))]);
+    assert_eq!(class(&run(order, &ctx)), "AMBIGUOUS_REFERENCE");
+    // Star grouped by all of its columns resolves.
+    let star_ok = LogicalPlan::table(["t"]).aggregate(vec![c("a"), c("b"), c("c")], vec![star()]);
+    run(star_ok, &ctx).unwrap();
+}
+
+/// A CTE name may contain dots when backquoted (Spark golden `cte` case
+/// 44, `` WITH `a.b.c` AS ... ``): it is a single identifier, resolved as
+/// one CTE rather than a qualified table.
+#[test]
+fn cte_names_may_contain_dots() {
+    let ctx = ctx();
+    let dotted = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["a.b.c"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "a.b.c".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        }],
+    });
+    let a = run(dotted, &ctx).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["a"]
+    );
+    // Without the definition, the same dotted name is a missing table.
+    assert_eq!(
+        class(&run(
+            LogicalPlan::table(["a.b.c"]).project(vec![c("a")]),
+            &ctx
+        )),
+        "TABLE_OR_VIEW_NOT_FOUND"
+    );
+}
+
+/// An inner `WITH` inside an unused CTE is still checked for missing
+/// tables, and shadowing inside it hides what the outer scope would
+/// otherwise report.
+#[test]
+fn unused_cte_inner_with_scopes_shadow() {
+    let ctx = ctx();
+    // Unused outer over an inner `WITH x ...` that reads `x`: the inner
+    // read is the inner CTE, not a table, so no error.
+    let shadowed = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "u".to_owned(),
+            plan: Arc::new(LogicalPlan::new(PlanNode::WithCte {
+                input: Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")])),
+                ctes: vec![Cte {
+                    name: "x".to_owned(),
+                    plan: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+                }],
+            })),
+        }],
+    });
+    run(shadowed, &ctx).unwrap();
+    // The same shape over a missing inner table fails.
+    let missing = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "u".to_owned(),
+            plan: Arc::new(LogicalPlan::new(PlanNode::WithCte {
+                input: Arc::new(LogicalPlan::table(["x"]).project(vec![c("a")])),
+                ctes: vec![Cte {
+                    name: "x".to_owned(),
+                    plan: Arc::new(LogicalPlan::table(["missing_inner"]).project(vec![c("a")])),
+                }],
+            })),
+        }],
+    });
+    assert_eq!(class(&run(missing, &ctx)), "TABLE_OR_VIEW_NOT_FOUND");
+}
+
+/// `GROUP BY` with a subquery key and `HAVING`/`ORDER BY` over it resolve
+/// without special-casing: scalar subqueries are foldable inputs, not
+/// columns, so they never trigger alias or leniency paths.
+#[test]
+fn group_by_with_subquery_keys_resolves() {
+    let ctx = ctx();
+    // `SELECT a, COUNT(*) FROM t GROUP BY a, (SELECT ... LIMIT 1)` is
+    // covered by golden `group-by-alias` case 15 (passes): the subquery
+    // key is not a column, alias, or duplicate output.
+    let sub = crate::tests::dsl::scalar(
+        LogicalPlan::table(["u"])
+            .project(vec![c("a")])
+            .limit(int(1)),
+    );
+    let plan = LogicalPlan::table(["t"])
+        .aggregate(vec![c("a"), sub], vec![c("a"), f("count", vec![star()])]);
+    run(plan, &ctx).unwrap();
+}
