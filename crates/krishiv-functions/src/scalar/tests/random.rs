@@ -50,17 +50,18 @@ fn rand_zero_matches_spark() {
 
 #[test]
 fn rand_advances_one_draw_per_row() {
-    // `SELECT uniform(10, 20, 0) FROM VALUES (0), (1), (2)` is 15, 16, 17:
-    // the rows draw consecutively from one stream.
+    // Oracle: `SELECT rand(0) FROM range(0, 3, 1, 1)` on a Spark 4.2.0
+    // server: the rows draw consecutively from one stream.
     let s = seed_i32(0);
     let got = seeded("rand", &s, 3, 0);
-    let rows = f64s(&got);
-    assert_eq!(rows.len(), 3);
-    assert!(
-        (rows[0].unwrap() - 0.7604953758285915).abs() < 1e-15,
-        "{rows:?}"
+    assert_eq!(
+        f64s(&got),
+        vec![
+            Some(0.7604953758285915),
+            Some(0.5234194256885571),
+            Some(0.0953472826424725)
+        ]
     );
-    assert!(rows.windows(2).all(|w| w[0] != w[1]), "{rows:?}");
 }
 
 #[test]
@@ -99,13 +100,31 @@ fn long_seeds_match_int_seeds() {
 fn partitions_own_their_streams() {
     // The same query in another partition draws another stream; the
     // partition seeds the generator (`seed + partitionIndex`, Spark's
-    // `initializeInternal`).
+    // `initializeInternal`). Oracle: `SELECT spark_partition_id(), rand(0)
+    // FROM range(0, 6, 1, 2)` on a Spark 4.2.0 server gives partition 0
+    // 0.7604953758285915, 0.5234194256885571, 0.0953472826424725 and
+    // partition 1 0.6363787615254752, 0.5993846534021868, 0.134842710012538.
     let s = seed_i32(0);
     let p0 = f64s(&seeded("rand", &s, 3, 0));
     let p1 = f64s(&seeded("rand", &s, 3, 1));
-    assert_ne!(p0, p1);
-    // `monotonically_increasing_id` and `rand` of two partitions differ,
-    // and one partition is stable across batches.
+    assert_eq!(
+        p1,
+        vec![
+            Some(0.6363787615254752),
+            Some(0.5993846534021868),
+            Some(0.134842710012538)
+        ]
+    );
+    assert_eq!(
+        p0,
+        vec![
+            Some(0.7604953758285915),
+            Some(0.5234194256885571),
+            Some(0.0953472826424725)
+        ]
+    );
+    // One partition continues its stream across batches: the second batch
+    // starts where the first stopped (the third draw of the stream).
     let f = super::bind_scalar(
         "rand",
         &[BindArg::Literal(Arc::clone(&s))],
@@ -115,7 +134,11 @@ fn partitions_own_their_streams() {
     let lit = Arg::Scalar(Arc::clone(&s));
     let a = f.invoke_in(std::slice::from_ref(&lit), 2, 0).unwrap();
     let b = f.invoke_in(std::slice::from_ref(&lit), 2, 0).unwrap();
-    assert_ne!(f64s(&a), f64s(&b));
+    assert_eq!(
+        f64s(&a),
+        vec![Some(0.7604953758285915), Some(0.5234194256885571)]
+    );
+    assert_eq!(f64s(&b)[0], Some(0.0953472826424725));
 }
 
 #[test]
