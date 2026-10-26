@@ -118,27 +118,21 @@ fn filter_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// `exists(arr, p)`: a boolean, with a boolean body. The result is
-/// nullable when the array is, when the body is (a NULL mark decides
-/// nothing, so the fold stays NULL), or when the array may hold NULL
-/// elements (Spark's three-valued default).
+/// nullable when the array is or when the body is (a NULL mark decides
+/// nothing, so the fold stays NULL). Spark derives nullability from the
+/// array and body alone; `containsNull` is not part of the rule.
 fn exists_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    let (_, contains_null, nullable) = array_argument("exists", c)?;
+    let (_, _, nullable) = array_argument("exists", c)?;
     let body_nullable = boolean_body("exists", c)?;
-    Ok(ArgType::new(
-        DataType::Boolean,
-        nullable || body_nullable || contains_null,
-    ))
+    Ok(ArgType::new(DataType::Boolean, nullable || body_nullable))
 }
 
 /// `forall(arr, p)`: a boolean, with a boolean body (same nullability
 /// as `exists`: a NULL mark decides nothing either way).
 fn forall_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    let (_, contains_null, nullable) = array_argument("forall", c)?;
+    let (_, _, nullable) = array_argument("forall", c)?;
     let body_nullable = boolean_body("forall", c)?;
-    Ok(ArgType::new(
-        DataType::Boolean,
-        nullable || body_nullable || contains_null,
-    ))
+    Ok(ArgType::new(DataType::Boolean, nullable || body_nullable))
 }
 
 /// The signatures of this family.

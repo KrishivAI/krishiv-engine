@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 12 };
+        let kinds = if depth == 0 { 5 } else { 14 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -245,6 +245,10 @@ impl Gen<'_> {
                 expr: Arc::new(self.expr(d)),
                 output: self.bound(),
             }),
+            10 => ExprNode::Lambda {
+                params: vec![self.bound()],
+                body: Arc::new(self.expr(d)),
+            },
             11 => ExprNode::Window(WindowExpr {
                 function: Arc::new(self.expr(d)),
                 window: if self.flag() {
@@ -265,6 +269,7 @@ impl Gen<'_> {
                     })
                 },
             }),
+            12 => ExprNode::Resolved(ResolvedExpr::LambdaVar(self.bound())),
             _ => ExprNode::Subquery {
                 kind: match self.pick(3) {
                     0 => SubqueryKind::Scalar,
@@ -747,8 +752,16 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
         ExprNode::Lambda { params, body } => {
-            site!(w, params.push("x".to_owned()));
-            m_expr(body, w)
+            site!(
+                w,
+                params.push(BoundColumn {
+                    id: AttrId(99),
+                    name: "x".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                })
+            );
+            params.iter_mut().any(|p| m_bound(p, w)) || m_expr(body, w)
         }
         ExprNode::Subquery { kind, plan } => {
             let other = match kind {

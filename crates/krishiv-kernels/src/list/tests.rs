@@ -182,15 +182,15 @@ fn exists_folds_any_true() {
         None,
         Some(vec![]),
     ]);
-    // Marks: row 0 has a true, row 1 only nulls, row 3 is empty.
+    // Row 0 has no true but a NULL: NULL. Row 1 only nulls: NULL.
     let keep = marks(vec![Some(false), None, None, None]);
     let out = exists_list(&input, &keep).unwrap();
     let got: Vec<Option<bool>> = out.iter().collect();
-    assert_eq!(got, vec![Some(false), Some(false), None, Some(false)]);
+    assert_eq!(got, vec![None, None, None, Some(false)]);
     let keep = marks(vec![Some(true), None, None, None]);
     let out = exists_list(&input, &keep).unwrap();
     let got: Vec<Option<bool>> = out.iter().collect();
-    assert_eq!(got, vec![Some(true), Some(false), None, Some(false)]);
+    assert_eq!(got, vec![Some(true), None, None, Some(false)]);
 }
 
 #[test]
@@ -201,15 +201,15 @@ fn forall_folds_no_false() {
         None,
         Some(vec![]),
     ]);
-    // NULL marks decide nothing: row 0 is all-true, row 1 vacuous.
+    // Row 0 has no false but a NULL: NULL. Row 1 only nulls: NULL.
     let keep = marks(vec![Some(true), None, None]);
     let out = forall_list(&input, &keep).unwrap();
     let got: Vec<Option<bool>> = out.iter().collect();
-    assert_eq!(got, vec![Some(true), Some(true), None, Some(true)]);
+    assert_eq!(got, vec![None, None, None, Some(true)]);
     let keep = marks(vec![Some(true), Some(false), None]);
     let out = forall_list(&input, &keep).unwrap();
     let got: Vec<Option<bool>> = out.iter().collect();
-    assert_eq!(got, vec![Some(false), Some(true), None, Some(true)]);
+    assert_eq!(got, vec![Some(false), None, None, Some(true)]);
 }
 
 #[test]

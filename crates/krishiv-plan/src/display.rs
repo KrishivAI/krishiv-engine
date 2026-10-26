@@ -685,7 +685,8 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             out.push(Piece::Owned(format!("outer({}#{})", c.name, c.id.0)));
         }
         ExprNode::Lambda { params, body } => {
-            out.push(Piece::Owned(format!("({}) -> ", params.join(", "))));
+            let names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+            out.push(Piece::Owned(format!("({}) -> ", names.join(", "))));
             out.push(Piece::Expr(body));
         }
         ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {

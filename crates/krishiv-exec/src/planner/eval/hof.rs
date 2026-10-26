@@ -16,7 +16,7 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch, UInt32Array};
+use arrow_array::{Array, ArrayRef, Int32Array, ListArray, RecordBatch, UInt32Array};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use krishiv_kernels::list;
 use krishiv_plan::{AttrId, BoundColumn, Expr, ExprNode, ResolvedExpr, ResolvedFunction};
@@ -53,13 +53,7 @@ pub(super) fn compile(
         return Err(internal("a higher-order call over a non-list"));
     };
     let mut refs = Refs::default();
-    collect(
-        body,
-        params,
-        &mut Vec::new(),
-        input.env.case_sensitive,
-        &mut refs,
-    );
+    collect(body, params, &mut Vec::new(), &mut refs);
     // The flattened batch's columns: the captured outer columns, then this
     // call's element variables and index. A scalar subquery reads the root
     // batch, which a nested call no longer sees, so bodies may not hold
@@ -163,18 +157,12 @@ struct Refs {
 }
 
 /// Collects `refs` from `body` against `params`, the current call's
-/// parameters (a nested call collects its own variables when it compiles:
-/// here its parameters only shadow, through `below`). A variable of an
-/// enclosing call is an outer reference here, carried through this level's
-/// flattened batch. Name matching follows `case_sensitive`, exactly like
-/// the analyzer resolves it.
-fn collect(
-    body: &Arc<Expr>,
-    params: &[String],
-    below: &mut Vec<String>,
-    case_sensitive: bool,
-    refs: &mut Refs,
-) {
+/// parameters with their stable identities (a nested call collects its own
+/// variables when it compiles: here its parameters only shadow, through
+/// `below`). A variable of an enclosing call is an outer reference here,
+/// carried through this level's flattened batch. Matching is by
+/// [`AttrId`], never by name, so case sensitivity cannot change it.
+fn collect(body: &Arc<Expr>, params: &[BoundColumn], below: &mut Vec<AttrId>, refs: &mut Refs) {
     match &body.node {
         ExprNode::Lambda {
             params: inner,
@@ -183,39 +171,28 @@ fn collect(
             // The nested call collects its own variables when it compiles:
             // this pass only gathers what the current level carries, so its
             // parameters stay in scope and the nested ones shadow them.
-            below.extend(inner.iter().cloned());
-            collect(nested, params, below, case_sensitive, refs);
+            below.extend(inner.iter().map(|p| p.id));
+            collect(nested, params, below, refs);
             below.truncate(below.len() - inner.len());
         }
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
-            // The innermost scope naming the variable, like the analyzer
-            // resolves it: exact when case-sensitive, else a
-            // case-insensitive fallback.
-            let at = |scope: &[String]| {
-                scope.iter().position(|p| p == &c.name).or_else(|| {
-                    (!case_sensitive)
-                        .then(|| scope.iter().position(|p| p.eq_ignore_ascii_case(&c.name)))
-                        .flatten()
-                })
-            };
-            if at(below).is_some() {
+            if below.contains(&c.id) {
                 // A variable a nested call binds is that call's own: its
                 // flattening carries it, never this one.
-            } else if at(params) == Some(0) {
+            } else if params.first().is_some_and(|p| p.id == c.id) {
                 // This call's element variable, used directly or from a
                 // nested lambda: the flattened batch carries one element
                 // column per use, so both read it here.
                 if !refs.lambda.contains(&c.id) {
                     refs.lambda.push(c.id);
                 }
-            } else if at(params).is_some() {
+            } else if params.iter().skip(1).any(|p| p.id == c.id) {
                 if refs.index.is_none() {
                     refs.index = Some(c.id);
                 }
             } else {
-                // Bound outside the current call (or the current call has
-                // no such parameter): carried by this level's flattened
-                // batch.
+                // Bound outside the current call: carried by this level's
+                // flattened batch.
                 if !refs.outer_lambda.iter().any(|v| v.id == c.id) {
                     refs.outer_lambda.push(c.clone());
                 }
@@ -226,7 +203,7 @@ fn collect(
                 refs.outer.push(c.id);
             }
         }
-        _ => body.for_each_child(&mut |c| collect(c, params, below, case_sensitive, refs)),
+        _ => body.for_each_child(&mut |c| collect(c, params, below, refs)),
     }
 }
 
@@ -277,12 +254,43 @@ impl PhysExpr for Call {
         let list = array
             .as_list_opt::<i32>()
             .ok_or_else(|| internal("a higher-order array that is no list"))?;
+        // Rebase a sliced list to zero-based offsets once: a slice keeps
+        // the absolute offsets, so `offsets[0]` may be non-zero while the
+        // kernels see zero-based lists.
+        let at = |offsets: &[i32], i: usize| {
+            usize::try_from(offsets[i])
+                .map_err(|_| internal("a higher-order list with a negative offset"))
+        };
+        let offsets = list.value_offsets();
+        let base = at(offsets, 0)?;
+        let end = at(offsets, rows)?;
+        let total = end
+            .checked_sub(base)
+            .ok_or_else(|| internal("a higher-order list with decreasing offsets"))?;
+        let rebased = {
+            let mut norm = Vec::with_capacity(rows + 1);
+            for i in 0..=rows {
+                let v = at(offsets, i)?
+                    .checked_sub(base)
+                    .ok_or_else(|| internal("a higher-order list with decreasing offsets"))?;
+                norm.push(
+                    i32::try_from(v)
+                        .map_err(|_| internal("a higher-order list with a negative offset"))?,
+                );
+            }
+            ListArray::new(
+                Arc::clone(list.value_field()),
+                arrow_buffer::OffsetBuffer::new(arrow_buffer::ScalarBuffer::from(norm)),
+                list.values().slice(base, total),
+                list.nulls().cloned(),
+            )
+        };
+        let list = &rebased;
         let offsets = list.value_offsets();
         let at = |i: usize| {
             usize::try_from(offsets[i])
                 .map_err(|_| internal("a higher-order list with a negative offset"))
         };
-        let total = at(rows)?;
         // The row each element belongs to: `offsets[r]..offsets[r+1]`.
         let mut rows_of: Vec<u32> = Vec::with_capacity(total);
         for r in 0..rows {
@@ -434,7 +442,6 @@ mod tests {
     fn env() -> EvalEnv {
         EvalEnv {
             ansi: true,
-            case_sensitive: false,
             zone: None,
             kernels: KernelCtx::new(),
             query_start_micros: 0,
@@ -611,6 +618,32 @@ mod tests {
         assert!(
             err.to_string().contains("higher-order function bogus"),
             "{err}"
+        );
+    }
+
+    #[test]
+    fn a_sliced_list_rebases_to_zero_based_offsets() {
+        use arrow_array::Array as _;
+        use arrow_array::cast::AsArray as _;
+        // `[[1, 2], [3]]` sliced to its second row: absolute offsets
+        // `[2, 3]` with one element.
+        let sliced = list(vec![0, 2, 3], vec![1, 2, 3]).slice(1, 1);
+        let mut c = call(
+            "transform",
+            sliced,
+            Arc::new(Int32Array::from(vec![9])),
+            ArrowType::List(Arc::new(Field::new("element", ArrowType::Int32, true))),
+        );
+        c.sources = vec![super::Source::Element];
+        let out = c.eval(&batch(1)).unwrap().into_array(1).unwrap();
+        let out = out.as_list::<i32>();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out.value_offsets(), &[0, 1]);
+        assert_eq!(
+            out.values()
+                .as_primitive::<arrow_array::types::Int32Type>()
+                .values(),
+            &[9]
         );
     }
 

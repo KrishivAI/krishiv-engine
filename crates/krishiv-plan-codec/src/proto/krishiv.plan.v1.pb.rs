@@ -463,6 +463,17 @@ pub struct HashJoinNode {
     /// `JOIN_DISTRIBUTION_UNSPECIFIED`, which decodes as broadcast.
     #[prost(enumeration = "JoinDistribution", tag = "9")]
     pub distribution: i32,
+    /// A left outer join that fails when a probe row matches more than once
+    /// (a correlated scalar subquery without an aggregate); only `LeftOuter`
+    /// joins set it.
+    /// feature: join_single_match
+    #[prost(bool, tag = "10")]
+    pub single_match: bool,
+    /// The build may keep each key once: only on a left semi, left anti or
+    /// existence join without a residual.
+    /// ignorable: a reader without it builds every row, with the same result.
+    #[prost(bool, tag = "11")]
+    pub distinct_build: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
@@ -725,10 +736,10 @@ pub mod expr {
 /// A lambda (`x -> body`): the bound body of a higher-order function's
 /// argument, with its variables as `lambda_var` leaves.
 /// feature: lambda_functions
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Lambda {
-    #[prost(string, repeated, tag = "1")]
-    pub params: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag = "1")]
+    pub params: ::prost::alloc::vec::Vec<BoundColumn>,
     #[prost(uint32, tag = "2")]
     pub body: u32,
 }
@@ -1209,6 +1220,10 @@ pub enum JoinType {
     RightAnti = 7,
     /// feature: join_build_preserved
     RightOuter = 8,
+    /// Spark's `ExistenceJoin`: every probe row once, plus a non-nullable
+    /// boolean `exists` (some build row matched).
+    /// feature: existence_join
+    Existence = 9,
 }
 impl JoinType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1226,6 +1241,7 @@ impl JoinType {
             Self::RightSemi => "JOIN_TYPE_RIGHT_SEMI",
             Self::RightAnti => "JOIN_TYPE_RIGHT_ANTI",
             Self::RightOuter => "JOIN_TYPE_RIGHT_OUTER",
+            Self::Existence => "JOIN_TYPE_EXISTENCE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1240,6 +1256,7 @@ impl JoinType {
             "JOIN_TYPE_RIGHT_SEMI" => Some(Self::RightSemi),
             "JOIN_TYPE_RIGHT_ANTI" => Some(Self::RightAnti),
             "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
+            "JOIN_TYPE_EXISTENCE" => Some(Self::Existence),
             _ => None,
         }
     }

@@ -15,13 +15,14 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
     DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
-    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    FailedToParseTooComplex, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
     NamedParametersNotSupported, NestedAggregateFunction, RequiredParameterNotFound,
     UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
     UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithoutSuggestion,
 };
+use krishiv_common::stack::on_big_stack;
 use krishiv_types::DataType;
 use twox_hash::XxHash3_128;
 
@@ -31,7 +32,7 @@ use super::builtins::{NamedDefault, NamedParam, named_signature};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::fold;
-use super::resolve::{Attr, Env, Rel, Resolver};
+use super::resolve::{Attr, Env, RESOLVE_STEP, Rel, Resolver};
 use super::suggest::closest;
 use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
@@ -621,8 +622,27 @@ impl Resolver<'_> {
     /// Binds `e` in `cx` under the step context `top` (see [`Self::expr`]).
     /// Higher-order calls bind their children through this with each
     /// child's own context, so names inside lambdas resolve as the generic
-    /// path would resolve them.
+    /// path would resolve them. Every [`RESOLVE_STEP`] levels of
+    /// higher-order nesting run on a fresh stack (see [`Resolver::rel`).
     pub(super) fn expr_in(
+        &mut self,
+        top: Ctx,
+        e: &Arc<Expr>,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        self.expr_depth += 1;
+        let r = if self.expr_depth.is_multiple_of(RESOLVE_STEP) {
+            on_big_stack(|| self.expr_in_on_stack(top, e, cx))
+                .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, e.origin)))
+        } else {
+            self.expr_in_on_stack(top, e, cx)
+        };
+        self.expr_depth -= 1;
+        r
+    }
+
+    /// [`Self::expr_in`] on the current stack.
+    fn expr_in_on_stack(
         &mut self,
         top: Ctx,
         e: &Arc<Expr>,
@@ -1037,12 +1057,27 @@ impl Resolver<'_> {
             }
             // A lambda outside a higher-order function's argument list:
             // lambdas in argument position are bound by the higher-order
-            // call itself (see `hof`), never here.
-            ExprNode::Lambda { .. } => {
-                return Err(unsupported(
-                    "lambda functions outside a higher-order function",
-                    e.origin,
-                ));
+            // call itself (see `hof`), never here. An already-bound lambda
+            // (re-analysis of a resolved plan) is preserved as-is; its body
+            // already holds `LambdaVar` leaves.
+            ExprNode::Lambda { body, .. } => {
+                let bound = crate::walk::visit_distinct(crate::walk::Node::Expr(body), |n| {
+                    if let crate::walk::Node::Expr(x) = n
+                        && matches!(&x.node, ExprNode::Resolved(ResolvedExpr::LambdaVar(_)))
+                    {
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    std::ops::ControlFlow::Continue(())
+                })
+                .is_break();
+                if bound && let Some(kid) = kids.first() {
+                    keep(kid.ty.clone())
+                } else {
+                    return Err(unsupported(
+                        "lambda functions outside a higher-order function",
+                        e.origin,
+                    ));
+                }
             }
             ExprNode::Function(f) => {
                 let n = f.args.len();
@@ -1258,7 +1293,13 @@ impl Resolver<'_> {
             }
             ExprNode::Subquery { kind, plan } => {
                 let env = self.sub_env(cx);
-                let rel = self.rel(plan, &env)?;
+                // A subquery resolves without the enclosing lambda scopes:
+                // its columns must not bind to enclosing lambda variables.
+                let saved = std::mem::take(&mut self.lambdas);
+                let rel = self.rel(plan, &env);
+                let stale = std::mem::replace(&mut self.lambdas, saved);
+                debug_assert!(stale.is_empty(), "a subquery leaks lambda scopes");
+                let rel = rel?;
                 let (data_type, nullable) = match kind {
                     SubqueryKind::Scalar => {
                         if rel.out.len() != 1 {
@@ -3148,7 +3189,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         // as `namedlambdavariable()` when hidden (see `hof`).
         ExprNode::Lambda { params, .. } => {
             let mut args = vec![k[0].to_owned()];
-            args.extend(params.iter().cloned());
+            args.extend(params.iter().map(|p| p.name.clone()));
             format!("lambdafunction({})", args.join(", "))
         }
         ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => c.name.clone(),
@@ -3770,10 +3811,12 @@ mod tests {
             data_type: DataType::Integer,
             nullable: false,
         };
-        let body = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(var))));
+        let body = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
+            var.clone(),
+        ))));
         assert_eq!(pretty(&body, None), "y");
         let lam = Expr::new(ExprNode::Lambda {
-            params: vec!["y".to_owned()],
+            params: vec![var],
             body,
         });
         assert_eq!(pretty(&lam, None), "lambdafunction(y, y)");

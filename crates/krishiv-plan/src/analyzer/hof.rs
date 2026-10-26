@@ -215,7 +215,10 @@ impl Resolver<'_> {
     ) -> Result<Bound, AnalysisError> {
         let hidden = !matches!(node.node, ExprNode::Lambda { .. });
         let (params, inner) = match &node.node {
-            ExprNode::Lambda { params, body } => (params.clone(), Arc::clone(body)),
+            ExprNode::Lambda { params, body } => (
+                params.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+                Arc::clone(body),
+            ),
             // A constant lambda: the argument is the body.
             _ => (vec!["namedlambdavariable()".to_owned()], Arc::clone(node)),
         };
@@ -262,7 +265,7 @@ impl Resolver<'_> {
                 nullable: false,
             });
         }
-        self.lambdas.push(LambdaFrame { vars });
+        self.lambdas.push(LambdaFrame { vars: vars.clone() });
         let body = self.expr_in(step, &inner, cx);
         self.lambdas.pop();
         let body = body?;
@@ -285,7 +288,7 @@ impl Resolver<'_> {
         Ok(Bound {
             expr: Arc::new(
                 Expr::new(ExprNode::Lambda {
-                    params,
+                    params: vars,
                     body: Arc::clone(&body.expr),
                 })
                 .with_origin(node.origin),

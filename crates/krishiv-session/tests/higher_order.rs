@@ -305,14 +305,14 @@ fn exists_and_forall_fold_the_marks() {
         [None]
     );
     // NULL marks decide nothing: no true for `exists`, no false for
-    // `forall` (Spark's source shape, unverified against a run).
+    // `forall`, so each folds to NULL.
     assert_eq!(
         strings(&s, "exists(array(1, NULL), x -> x > 1)", ""),
-        [Some("false".to_owned())]
+        [None]
     );
     assert_eq!(
         strings(&s, "forall(array(1, NULL), x -> x >= 1)", ""),
-        [Some("true".to_owned())]
+        [None]
     );
 }
 

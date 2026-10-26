@@ -26,7 +26,7 @@ use crate::{
 /// levels on the caller's stack; deeper levels run on fresh 64 MiB
 /// segments. The test thread stays at 2 MiB, so deep plans are still proven
 /// to resolve on a small stack.
-const RESOLVE_STEP: usize = 16;
+pub(super) const RESOLVE_STEP: usize = 16;
 
 /// An attribute in scope: the column, its qualifier and, for a table
 /// column, the securable it belongs to and its catalog name.
@@ -134,6 +134,10 @@ pub(super) struct Resolver<'a> {
     /// bind now, innermost last (see `hof`).
     pub(super) lambdas: Vec<super::hof::LambdaFrame>,
     depth: usize,
+    /// Expression-binding recursion through higher-order calls (see
+    /// `exprs::expr_in`): every [`RESOLVE_STEP`] levels run on a fresh
+    /// stack.
+    pub(super) expr_depth: usize,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
@@ -162,6 +166,7 @@ pub(super) fn resolve(
         canon: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
+        expr_depth: 0,
         op_outer: None,
         root_env: None,
         folds: std::cell::RefCell::default(),
@@ -211,10 +216,19 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
                 if let ExprNode::Resolved(
                     ResolvedExpr::Column(c)
                     | ResolvedExpr::OuterColumn(c)
+                    | ResolvedExpr::LambdaVar(c)
                     | ResolvedExpr::Alias { output: c, .. },
                 ) = &e.node
                 {
                     bump(c);
+                }
+                if let ExprNode::Lambda { params, .. } = &e.node {
+                    // Unresolved lambdas carry placeholder identities (see
+                    // `Expr::lambda`); only bound variables reserve ids.
+                    params
+                        .iter()
+                        .filter(|c| c.id.0 != u64::MAX)
+                        .for_each(&mut bump);
                 }
             }
         }

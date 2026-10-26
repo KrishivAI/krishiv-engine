@@ -369,6 +369,8 @@ fn join(join_type: JoinType) -> HashJoinPlan {
         build_keys: vec![1, 0],
         null_safe: vec![false, true],
         residual: Some(residual()),
+        single_match: false,
+        distinct_build: false,
         runtime_filters: vec![JoinFilterPlan {
             id: FilterId(3),
             key: 0,
@@ -382,6 +384,25 @@ fn join(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_fpp: 0.05,
             },
         }],
+        distribution: JoinDistribution::Broadcast,
+    }
+}
+
+/// An existence or single-match join over one key, without a residual
+/// condition or runtime filters (the single-match flag rides on a plain
+/// left outer join).
+fn subquery_join(join_type: JoinType) -> HashJoinPlan {
+    HashJoinPlan {
+        probe: boxed(scan()),
+        build: boxed(PhysNode::Scan(file_scan())),
+        join_type,
+        probe_keys: vec![0],
+        build_keys: vec![1],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+        distinct_build: false,
+        runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
     }
 }
@@ -653,6 +674,29 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             }),
         ),
         (
+            "hash_join_existence",
+            PhysNode::HashJoin(HashJoinPlan {
+                distinct_build: true,
+                ..subquery_join(JoinType::Existence)
+            }),
+        ),
+        (
+            "hash_join_single_match",
+            PhysNode::HashJoin(HashJoinPlan {
+                single_match: true,
+                ..subquery_join(JoinType::LeftOuter)
+            }),
+        ),
+        (
+            "nested_loop_existence",
+            PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe: boxed(scan()),
+                build: boxed(PhysNode::OneRow),
+                join_type: JoinType::Existence,
+                residual: Some(residual()),
+            }),
+        ),
+        (
             "nested_loop_join",
             PhysNode::NestedLoopJoin(NestedLoopPlan {
                 probe: boxed(scan()),
@@ -875,7 +919,7 @@ pub(crate) fn lambda_functions() -> PhysNode {
             args: vec![
                 xs,
                 Arc::new(Expr::new(ExprNode::Lambda {
-                    params: vec!["x".to_owned()],
+                    params: vec![column(11, "x", DataType::Integer, true)],
                     body: doubled,
                 })),
             ],

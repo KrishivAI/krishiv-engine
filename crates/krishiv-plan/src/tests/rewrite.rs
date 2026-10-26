@@ -275,7 +275,7 @@ fn exprs() -> Vec<(Expr, usize)> {
         ),
         (
             Expr::new(ExprNode::Lambda {
-                params: vec!["y".to_owned()],
+                params: vec![bound("y")],
                 body: col("a"),
             }),
             1,

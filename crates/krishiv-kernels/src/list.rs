@@ -34,11 +34,10 @@ fn ranges(list: &ListArray) -> Vec<(usize, usize)> {
 }
 
 /// `array(a, b, ...)`: one list per row holding each argument's value
-/// (`[a[r], b[r], ...]`), the values interleaved by one `take` over the
-/// concatenated arguments. An empty argument list is an empty list per
-/// row. The arguments share one type (the analyzer casts them);
-/// `contains_null` is whether elements may be null (the analyzer's, from
-/// the arguments' nullability).
+/// (`[a[r], b[r], ...]`), interleaved in one pass in row-major order. An
+/// empty argument list is an empty list per row. The arguments share one
+/// type (the analyzer casts them); `contains_null` is whether elements may
+/// be null (the analyzer's, from the arguments' nullability).
 ///
 /// # Errors
 /// [`KernelError`] when the arguments' lengths disagree with `rows`, or a
@@ -69,25 +68,16 @@ pub fn create(
         ));
     }
     let refs: Vec<&dyn Array> = args.iter().map(AsRef::as_ref).collect();
-    let joined =
-        arrow_select::concat::concat(&refs).map_err(|e| KernelError::internal(e.to_string()))?;
-    // Row `r` takes element `r` of each argument: argument `c` starts at
-    // `c * rows` in the concatenation.
-    let stride = u32::try_from(rows).map_err(|_| too_big(rows))?;
-    let per_arg = u32::try_from(args.len()).map_err(|_| too_big(args.len()))?;
-    let mut take: Vec<u32> = Vec::with_capacity(len);
-    for r in 0..stride {
-        for c in 0..per_arg {
-            take.push(
-                c.checked_mul(stride)
-                    .and_then(|at| at.checked_add(r))
-                    .ok_or_else(|| too_big(rows))?,
-            );
+    // Row `r` takes element `r` of each argument: `(argument, row)` index
+    // pairs interleave the arguments in one pass, in row-major order.
+    let mut indices: Vec<(usize, usize)> = Vec::with_capacity(len);
+    for r in 0..rows {
+        for c in 0..args.len() {
+            indices.push((c, r));
         }
     }
-    let values =
-        arrow_select::take::take(joined.as_ref(), &arrow_array::UInt32Array::from(take), None)
-            .map_err(|e| KernelError::internal(e.to_string()))?;
+    let values = arrow_select::interleave::interleave(&refs, &indices)
+        .map_err(|e| KernelError::internal(e.to_string()))?;
     let per_row = i32::try_from(args.len()).map_err(|_| too_big(args.len()))?;
     let mut offsets = Vec::with_capacity(usize::checked_add(rows, 1).ok_or_else(|| too_big(rows))?);
     for r in 0..=i32::try_from(rows).map_err(|_| too_big(rows))? {
@@ -207,10 +197,12 @@ pub fn filter_list(list: &ListArray, keep: &BooleanArray) -> Result<ListArray, K
     ))
 }
 
-/// Folds `keep` (one entry per element of `list`) to one boolean per list:
-/// `any` is true when some mark is true, `all` is false when some mark is
-/// false. NULL marks decide nothing either way (a NULL list stays NULL,
-/// an empty one is `any = false`, `all = true`).
+/// Folds `keep` (one entry per element of `list`) to one boolean per list
+/// with Spark's three-valued logic: `any` (`exists`) is true when some
+/// mark is true, else NULL when some mark is NULL, else false; `all`
+/// (`forall`) is false when some mark is false, else NULL when some mark
+/// is NULL, else true. A NULL list stays NULL; an empty one is
+/// `any = false`, `all = true`.
 fn fold_flags(
     list: &ListArray,
     keep: &BooleanArray,
@@ -230,17 +222,25 @@ fn fold_flags(
             out.append_null();
             continue;
         }
-        let mut hit = false;
+        let mut decided = false;
+        let mut seen_null = false;
         for e in start..stop {
             if !keep.is_valid(e) {
+                seen_null = true;
                 continue;
             }
             if keep.value(e) == any {
-                hit = true;
+                decided = true;
                 break;
             }
         }
-        out.append_value(if any { hit } else { !hit });
+        if decided {
+            out.append_value(any);
+        } else if seen_null {
+            out.append_null();
+        } else {
+            out.append_value(!any);
+        }
     }
     Ok(out.finish())
 }

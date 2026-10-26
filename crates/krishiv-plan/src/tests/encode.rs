@@ -254,15 +254,21 @@ fn lambda_and_its_variables_enter_the_key() {
         nullable: false,
     };
     let body = Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(var.clone())));
-    let lam = |params: Vec<String>| {
+    let lam = |params: Vec<BoundColumn>| {
         Expr::new(ExprNode::Lambda {
             params,
             body: Arc::new(body.clone()),
         })
     };
+    let param = |name: &str| BoundColumn {
+        id: AttrId(2),
+        name: name.to_owned(),
+        data_type: DataType::Integer,
+        nullable: false,
+    };
     let p = |e: Expr| key(LogicalPlan::table(["t"]).filter(e));
-    let base = p(lam(vec!["y".to_owned()]));
-    assert_ne!(p(lam(vec!["z".to_owned()])), base, "params");
+    let base = p(lam(vec![param("y")]));
+    assert_ne!(p(lam(vec![param("z")])), base, "params");
     let renamed = Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(BoundColumn {
         id: AttrId(2),
         name: "z".to_owned(),
@@ -270,7 +276,7 @@ fn lambda_and_its_variables_enter_the_key() {
         nullable: false,
     })));
     let renamed = Expr::new(ExprNode::Lambda {
-        params: vec!["z".to_owned()],
+        params: vec![param("z")],
         body: Arc::new(renamed),
     });
     assert_ne!(p(renamed), base, "variable name");
@@ -279,7 +285,10 @@ fn lambda_and_its_variables_enter_the_key() {
         ..var.clone()
     })));
     let reid = Expr::new(ExprNode::Lambda {
-        params: vec!["y".to_owned()],
+        params: vec![BoundColumn {
+            id: AttrId(3),
+            ..param("y")
+        }],
         body: Arc::new(reid),
     });
     assert_ne!(p(reid), base, "variable identity");
@@ -336,7 +345,7 @@ fn keys_are_stable() {
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
     assert_eq!(encoding.len(), 493, "{encoding:?}");
-    assert_eq!(hash.to_string(), "c52735ab283b4cec155d3ea789487c38");
+    assert_eq!(hash.to_string(), "eaeeb9e9da010966fde69769c8d36f0f");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -348,7 +357,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "062cd8e7cfaceee9a9e908d776219685");
+    assert_eq!(hash.to_string(), "abc19dd01ab19870f695f43bf481168f");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in

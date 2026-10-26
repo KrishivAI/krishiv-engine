@@ -71,11 +71,13 @@ pub enum ExprNode {
     /// only as a direct argument of a higher-order function (`transform`,
     /// `filter`, `exists`, `forall`, ...), where its variables take the
     /// argument's element types (Spark's `NamedLambdaVariable`). The node
-    /// stays in place when bound: its body then holds
-    /// [`ResolvedExpr::LambdaVar`] leaves.
+    /// stays in place when bound: its `params` are then the variables
+    /// themselves (with stable [`AttrId`] identities), and its body holds
+    /// [`ResolvedExpr::LambdaVar`] leaves reading them.
     Lambda {
-        /// The variable names, as written.
-        params: Vec<String>,
+        /// The variables, in parameter order (with their stable identities
+        /// once bound; placeholders before).
+        params: Vec<BoundColumn>,
         /// The body, resolved against the variables and the enclosing
         /// query's columns.
         body: Arc<Expr>,
@@ -456,11 +458,21 @@ impl Expr {
         }))
     }
 
-    /// An unresolved `params -> body` lambda.
+    /// An unresolved `params -> body` lambda. Parameter identities are
+    /// placeholders (`AttrId(u64::MAX)`) until the analyzer binds them;
+    /// passes that reserve fresh ids (see `first_free_id`) skip them.
     #[must_use]
     pub fn lambda(params: Vec<String>, body: Self) -> Self {
         Self::new(ExprNode::Lambda {
-            params,
+            params: params
+                .into_iter()
+                .map(|name| BoundColumn {
+                    id: AttrId(u64::MAX),
+                    name,
+                    data_type: DataType::Null,
+                    nullable: true,
+                })
+                .collect(),
             body: Arc::new(body),
         })
     }

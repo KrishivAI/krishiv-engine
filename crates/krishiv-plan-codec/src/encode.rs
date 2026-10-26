@@ -370,6 +370,8 @@ impl Encoder {
             residual: self.residual(join.residual.as_ref())?,
             runtime_filters: join.runtime_filters.iter().map(join_filter).collect(),
             distribution: distribution(join.distribution) as i32,
+            single_match: join.single_match,
+            distinct_build: join.distinct_build,
         })
     }
 
@@ -473,7 +475,10 @@ impl Encoder {
                 Kind::OuterColumn(bound_column(c, &self.nested)?)
             }
             ExprNode::Lambda { params, body } => Kind::Lambda(pb::Lambda {
-                params: params.clone(),
+                params: params
+                    .iter()
+                    .map(|p| bound_column(p, &self.nested))
+                    .collect::<Result<_>>()?,
                 body: self.child(body),
             }),
             ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
@@ -572,6 +577,7 @@ fn join_type(t: JoinType) -> pb::JoinType {
         JoinType::LeftSemi => pb::JoinType::LeftSemi,
         JoinType::LeftAnti => pb::JoinType::LeftAnti,
         JoinType::NullAwareAnti => pb::JoinType::NullAwareAnti,
+        JoinType::Existence => pb::JoinType::Existence,
         JoinType::RightSemi => pb::JoinType::RightSemi,
         JoinType::RightAnti => pb::JoinType::RightAnti,
         JoinType::RightOuter => pb::JoinType::RightOuter,

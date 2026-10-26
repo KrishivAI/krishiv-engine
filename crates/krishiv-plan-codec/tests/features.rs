@@ -111,6 +111,40 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         None
     );
     assert_eq!(
+        feature_of(Construct::Join(krishiv_exec::JoinType::Existence)),
+        Some(Feature::ExistenceJoin)
+    );
+    // The single-match flag is a property of the hash join node: a plain
+    // left outer join is the baseline, a single-match one needs the
+    // feature. `distinct_build` needs none: a reader that ignores it builds
+    // every row and returns the same result.
+    let join = |single_match, distinct_build, join_type| {
+        let (_, plan) = cases()
+            .into_iter()
+            .find(|(n, _)| n == "hash_join_single_match")
+            .unwrap();
+        match plan.root() {
+            PhysNode::HashJoin(join) => feature_of(Construct::Node(&PhysNode::HashJoin(
+                krishiv_exec::physical::HashJoinPlan {
+                    single_match,
+                    distinct_build,
+                    join_type,
+                    ..join.clone()
+                },
+            ))),
+            _ => None,
+        }
+    };
+    let (outer, semi) = (
+        krishiv_exec::JoinType::LeftOuter,
+        krishiv_exec::JoinType::LeftSemi,
+    );
+    assert_eq!(join(false, false, outer), None);
+    assert_eq!(join(true, false, outer), Some(Feature::JoinSingleMatch));
+    assert_eq!(join(false, true, semi), None);
+    assert_eq!(Feature::ExistenceJoin.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::JoinSingleMatch.kind(), FeatureKind::Semantic);
+    assert_eq!(
         feature_of(Construct::Partitioning(
             &krishiv_exec::physical::Partitioning::Single
         )),

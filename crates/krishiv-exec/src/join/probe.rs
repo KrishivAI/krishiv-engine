@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, Int64Array, UInt32Array, new_null_array};
+use arrow_array::{Array, ArrayRef, BooleanArray, Int64Array, UInt32Array, new_null_array};
 use futures::future::BoxFuture;
-use krishiv_common::error::{ArithmeticOverflow, KrishivError};
+use krishiv_common::error::{ArithmeticOverflow, KrishivError, ScalarSubqueryTooManyRows};
 use krishiv_memory::SpillSignal;
 use krishiv_types::batch::{Batch, Weights};
 
@@ -230,6 +230,14 @@ impl Cursor {
         };
         for (j, &i) in probe.iter().enumerate() {
             if mask.as_ref().is_none_or(|k| k.value(j)) {
+                // A single-match join holds at most one match per probe
+                // row: the pairs of one row arrive in order, so a row that
+                // is already marked matched this row twice. The mark lives
+                // in `state`, so it survives across output batches, the
+                // in-memory and grace phases alike.
+                if shared.single_match && self.state[i as usize] == MATCHED {
+                    return Err(too_many_rows());
+                }
                 self.state[i as usize] = MATCHED;
             }
         }
@@ -274,6 +282,8 @@ impl Cursor {
             }
             JoinType::LeftSemi => MATCHED,
             JoinType::LeftOuter | JoinType::LeftAnti | JoinType::NullAwareAnti => UNMATCHED,
+            // Every probe row once, with whether it matched.
+            JoinType::Existence => return self.tail_exists(shared),
         };
         let rows: Vec<u32> = (0..self.state.len())
             .filter(|&i| self.state[i] == want)
@@ -302,6 +312,35 @@ impl Cursor {
         let out = Batch::with_weights(record(&shared.schema, columns, m)?, weights);
         out.map(Some).map_err(|e| internal(e.to_string()))
     }
+
+    /// Every probe row once plus `exists`: whether some build row matched
+    /// it. Never NULL: a NULL `=` key matches nothing and reads FALSE.
+    /// Rows deferred to a spilled partition are skipped here and joined in
+    /// the grace phase.
+    fn tail_exists(&self, shared: &Shared) -> Result<Option<Batch>> {
+        let mut rows = Vec::new();
+        let mut marks: Vec<bool> = Vec::new();
+        for (i, &state) in self.state.iter().enumerate() {
+            if state == SKIP {
+                continue;
+            }
+            rows.push(u32::try_from(i).map_err(|_| internal("probe batch too large".to_owned()))?);
+            marks.push(state == MATCHED);
+        }
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let taken = if rows.len() == self.batch.num_rows() {
+            self.batch.clone()
+        } else {
+            take_batch(&self.batch, &UInt32Array::from(rows))?
+        };
+        let (data, weights) = taken.into_parts();
+        let mut columns = data.columns().to_vec();
+        columns.push(Arc::new(BooleanArray::from(marks)) as ArrayRef);
+        let out = Batch::with_weights(record(&shared.schema, columns, data.num_rows())?, weights);
+        out.map(Some).map_err(|e| internal(e.to_string()))
+    }
 }
 
 fn overflow() -> KrishivError {
@@ -311,6 +350,12 @@ fn overflow() -> KrishivError {
         config: "\"krishiv.ivm\"".to_owned(),
     }
     .into()
+}
+
+/// A probe row matched more than once in a single-match left outer join: a
+/// correlated scalar subquery returned more than one row.
+fn too_many_rows() -> KrishivError {
+    ScalarSubqueryTooManyRows {}.into()
 }
 
 struct ProbeLocal {
