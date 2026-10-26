@@ -245,9 +245,9 @@ impl PhysExpr for Call {
         self.nullable
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let rows = batch.num_rows();
-        let array = self.array.eval(batch)?.into_array(rows)?;
+        let array = self.array.eval(batch, partition)?.into_array(rows)?;
         if array.len() != rows {
             return Err(internal("a higher-order array of the wrong row count"));
         }
@@ -357,7 +357,7 @@ impl PhysExpr for Call {
             )
             .map_err(|e| internal(&e.to_string()))?
         };
-        let body = self.body.eval(&flat)?.into_array(total)?;
+        let body = self.body.eval(&flat, partition)?.into_array(total)?;
         if body.len() != total {
             return Err(internal("a higher-order body of the wrong row count"));
         }
@@ -434,7 +434,7 @@ mod tests {
             self.nullable
         }
 
-        fn eval(&self, _batch: &RecordBatch) -> Result<Value> {
+        fn eval(&self, _batch: &RecordBatch, _partition: u32) -> Result<Value> {
             Ok(Value::Array(Arc::clone(&self.array)))
         }
     }
@@ -447,6 +447,7 @@ mod tests {
             kernels: KernelCtx::new(),
             query_start_micros: 0,
             user: Arc::from("test"),
+            seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -569,7 +570,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2])),
             ArrowType::Boolean,
         );
-        let err = c.eval(&batch(2)).unwrap_err();
+        let err = c.eval(&batch(2), 0).unwrap_err();
         assert!(
             err.to_string()
                 .contains("a higher-order array of the wrong row count"),
@@ -582,7 +583,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![1, 2, 3])),
             ArrowType::Boolean,
         );
-        let err = c.eval(&batch(1)).unwrap_err();
+        let err = c.eval(&batch(1), 0).unwrap_err();
         assert!(
             err.to_string()
                 .contains("a higher-order body of the wrong row count"),
@@ -598,7 +599,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![7, 8])),
             ArrowType::Int32,
         );
-        let err = c.eval(&batch(1)).unwrap_err();
+        let err = c.eval(&batch(1), 0).unwrap_err();
         assert!(
             err.to_string()
                 .contains("a higher-order call over a non-list"),
@@ -614,7 +615,7 @@ mod tests {
             Arc::new(BooleanArray::from(vec![true, false])),
             ArrowType::Boolean,
         );
-        let err = c.eval(&batch(1)).unwrap_err();
+        let err = c.eval(&batch(1), 0).unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
         assert!(
             err.to_string().contains("higher-order function bogus"),
@@ -636,7 +637,7 @@ mod tests {
             ArrowType::List(Arc::new(Field::new("element", ArrowType::Int32, true))),
         );
         c.sources = vec![super::Source::Element];
-        let out = c.eval(&batch(1)).unwrap().into_array(1).unwrap();
+        let out = c.eval(&batch(1), 0).unwrap().into_array(1).unwrap();
         let out = out.as_list::<i32>();
         assert_eq!(out.len(), 1);
         assert_eq!(out.value_offsets(), &[0, 1]);
@@ -657,7 +658,7 @@ mod tests {
             Arc::new(Int32Array::from(vec![7, 8])),
             out,
         );
-        let err = c.eval(&batch(1)).unwrap_err();
+        let err = c.eval(&batch(1), 0).unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::InternalError);
         assert!(
             err.to_string().contains("transform returned List(Int32"),

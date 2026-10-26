@@ -17,14 +17,6 @@
       "reason": "SELECT uniform(10, INTERVAL '1 02:03:04' DAY TO SECOND, 0) > 0 AS result | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "uniform#30c2e2b398e9/ansi_on",
-      "reason": "SELECT uniform(array(1, 2), 20, 0) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#30c2e2b398e9/ansi_off",
-      "reason": "SELECT uniform(array(1, 2), 20, 0) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "uniform#310b01a5b4ae/ansi_on",
       "reason": "SELECT uniform(10, INTERVAL '1-2' YEAR TO MONTH, 0) > 0 AS result | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -55,14 +47,6 @@
     {
       "id": "uniform#5656d353ced6/ansi_off",
       "reason": "SELECT uniform(INTERVAL '1-2' YEAR TO MONTH, 20, 0) > 0 AS result | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#5ff5470f6623/ansi_on",
-      "reason": "SELECT uniform(10, 20, array(1, 2)) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#5ff5470f6623/ansi_off",
-      "reason": "SELECT uniform(10, 20, array(1, 2)) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "uniform#681f70cb51f1/ansi_on",
@@ -111,14 +95,6 @@
     {
       "id": "uniform#ab6b99e0333b/ansi_off",
       "reason": "SELECT uniform(10, NULL, 0) > 0 AS result | boolean where Spark has boolean not null"
-    },
-    {
-      "id": "uniform#ac2a6eb487eb/ansi_on",
-      "reason": "SELECT uniform(10, array(1, 2), 0) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "uniform#ac2a6eb487eb/ansi_off",
-      "reason": "SELECT uniform(10, array(1, 2), 0) > 0 AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "uniform#d54a4a610339/ansi_on",
