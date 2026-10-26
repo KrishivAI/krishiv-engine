@@ -584,16 +584,13 @@ const PROFILE: &str = r#"{"format":"krishiv.query-profile","version":1,"query":{
 #[test]
 fn summary_shows_wall_time_and_three_slowest() {
     let s = summarize_profile(PROFILE).unwrap();
-    assert!(s.contains("query wall time: 3000000 ns (3.000 ms)"), "{s}");
-    let lines: Vec<&str> = s.lines().collect();
-    assert_eq!(lines.len(), 5, "{s}");
-    assert!(
-        lines[2].contains("Filter") && lines[2].contains("300 ns"),
-        "{s}"
+    assert_eq!(
+        s,
+        "query wall time: 3000000 ns (3.000 ms)\nslowest operators:\n\
+         - Filter: 300 ns (0.000 ms) compute\n\
+         - HashJoin: 200 ns (0.000 ms) compute\n\
+         - Scan: 100 ns (0.000 ms) compute"
     );
-    assert!(lines[3].contains("HashJoin"), "{s}");
-    assert!(lines[4].contains("Scan"), "{s}");
-    assert!(!s.contains("Sort"), "{s}");
 }
 
 #[test]
@@ -601,11 +598,14 @@ fn summary_handles_few_operators() {
     let one = r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":7},"operators":[
 {"name":"Only","metrics":{"compute_time_ns":7}}]}"#;
     let s = summarize_profile(one).unwrap();
-    assert!(s.contains("query wall time: 7 ns"), "{s}");
-    assert!(s.contains("Only"), "{s}");
+    assert_eq!(
+        s,
+        "query wall time: 7 ns (0.000 ms)\nslowest operators:\n\
+         - Only: 7 ns (0.000 ms) compute"
+    );
     let empty = r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":7},"operators":[]}"#;
     let s = summarize_profile(empty).unwrap();
-    assert!(s.contains("slowest operators:"), "{s}");
+    assert_eq!(s, "query wall time: 7 ns (0.000 ms)\nslowest operators:");
 }
 
 #[test]
@@ -639,7 +639,8 @@ fn summary_rejects_multi_statement_output() {
     let line = r#"{"format":"krishiv.query-profile","version":1,"query":{"wall_time_ns":1},"operators":[]}"#;
     let two = format!("{line}\n{line}\n");
     let e = summarize_profile(&two).unwrap_err();
-    assert!(e.contains("not JSON"), "{e}");
+    assert!(e.contains("more than one JSON document"), "{e}");
+    assert!(e.contains("single statement"), "{e}");
 }
 
 #[test]
@@ -700,7 +701,8 @@ fn write_exe(dir: &Path, name: &str, body: &str) -> PathBuf {
 }
 
 /// A fake workspace root whose `target/release/krishiv` prints `stdout_text`
-/// and exits `code`.
+/// and exits `code`. The stub records the arguments it received, one per
+/// line, in `target/release/krishiv.args`.
 #[cfg(unix)]
 fn fake_root(dir: &Path, stdout_text: &str, code: i32) -> PathBuf {
     let bin_dir = dir.join("target").join("release");
@@ -708,9 +710,22 @@ fn fake_root(dir: &Path, stdout_text: &str, code: i32) -> PathBuf {
     write_exe(
         &bin_dir,
         "krishiv",
-        &format!("#!/bin/sh\ncat <<'PROFILE_EOF'\n{stdout_text}\nPROFILE_EOF\nexit {code}\n"),
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/krishiv.args\"\ncat <<'PROFILE_EOF'\n{stdout_text}\nPROFILE_EOF\nexit {code}\n",
+        ),
     );
     dir.to_owned()
+}
+
+/// Arguments the `fake_root` stub saw, one entry per argv element.
+#[cfg(unix)]
+fn recorded_cli_args(dir: &Path) -> Vec<String> {
+    let p = dir.join("target").join("release").join("krishiv.args");
+    std::fs::read_to_string(&p)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect()
 }
 
 #[cfg(unix)]
@@ -758,7 +773,24 @@ fn run_profile_writes_profile_json_without_flamegraph() {
     )
     .unwrap();
     let written = std::fs::read_to_string(out.join("profile.json")).unwrap();
-    assert!(written.contains("wall_time_ns"), "{written}");
+    assert_eq!(written, format!("{PROFILE}\n"));
+    assert_eq!(
+        recorded_cli_args(dir.path()),
+        [
+            "sql",
+            "--explain-analyze",
+            "--json",
+            "--table",
+            "t=/d/t",
+            "--conf",
+            "k=v",
+            "-e",
+            "SELECT 1",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -782,7 +814,14 @@ fn run_profile_reads_the_query_file_and_defaults_the_out_dir() {
     assert_eq!(entries.len(), 1, "{:?}", base);
     let entry = entries.pop().unwrap().unwrap();
     let written = std::fs::read_to_string(entry.path().join("profile.json")).unwrap();
-    assert!(written.contains("wall_time_ns"), "{written}");
+    assert_eq!(written, format!("{PROFILE}\n"));
+    assert_eq!(
+        recorded_cli_args(dir.path()),
+        ["sql", "--explain-analyze", "--json", "-f", "q.sql",]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]

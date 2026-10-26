@@ -324,15 +324,47 @@ pub fn cargo_build_argv() -> Vec<OsString> {
 }
 
 /// Where `cargo build` puts the release CLI: `CARGO_TARGET_DIR` when set,
-/// else `target` under the workspace root. `cargo build` itself honors
-/// `CARGO_TARGET_DIR` (contributors give each worktree its own), so the
-/// lookup must too; otherwise the build succeeds and the binary is reported
-/// missing.
+/// else the `target_directory` `cargo metadata` reports (which honors
+/// `build.target-dir` in cargo config), else `target` under the workspace
+/// root. `cargo build` itself honors both, so the lookup must too; otherwise
+/// the build succeeds and the binary is reported missing.
 #[must_use]
 pub fn cli_bin_path(root: &Path, cargo_target_dir: Option<&OsStr>) -> PathBuf {
     let base = cargo_target_dir.map_or_else(|| root.join("target"), PathBuf::from);
     base.join("release")
         .join(format!("krishiv{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// Reads `target_directory` from `cargo metadata --format-version 1` JSON,
+/// falling back to `target` under `root` when absent.
+fn target_dir_from_metadata(json: &str, root: &Path) -> Result<PathBuf, String> {
+    let meta: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| format!("bad cargo metadata: {e}"))?;
+    Ok(meta
+        .get("target_directory")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(|| root.join("target"), PathBuf::from))
+}
+
+/// Resolves the cargo target directory: `CARGO_TARGET_DIR` when set (cargo
+/// itself prefers the environment over config), else the `target_directory`
+/// `cargo metadata` reports (which honors `build.target-dir`), else `target`
+/// under `root` when metadata cannot run.
+fn resolve_target_dir(root: &Path, cargo: &OsStr, cargo_target_dir: Option<&OsStr>) -> PathBuf {
+    if let Some(dir) = cargo_target_dir {
+        return PathBuf::from(dir);
+    }
+    let out = Command::new(cargo)
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(root)
+        .output();
+    match out {
+        Ok(out) if out.status.success() => {
+            let json = String::from_utf8_lossy(&out.stdout);
+            target_dir_from_metadata(&json, root).unwrap_or_else(|_| root.join("target"))
+        }
+        _ => root.join("target"),
+    }
 }
 
 /// `krishiv sql --explain-analyze --json ...`: the query plus its tables and
@@ -456,13 +488,20 @@ pub fn utc_now_millis() -> u64 {
 /// # Errors
 /// Returns a message when the directory already exists or cannot be created.
 pub fn create_out_dir(dir: &Path) -> Result<(), String> {
+    check_out_dir_absent(dir)?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))
+}
+
+/// Rejects an out directory that already exists, before any build or
+/// directory creation, so a failed run leaves nothing behind.
+fn check_out_dir_absent(dir: &Path) -> Result<(), String> {
     if dir.exists() {
         return Err(format!(
             "refusing to overwrite existing {}: pass --out DIR",
             dir.display()
         ));
     }
-    std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))
+    Ok(())
 }
 
 /// Reads the query: inline SQL, or the file `-f` named (relative to `root`).
@@ -505,8 +544,21 @@ struct SlowOp {
 /// # Errors
 /// Returns a message when the document is not a query profile.
 pub fn summarize_profile(text: &str) -> Result<String, String> {
-    let v: serde_json::Value =
-        serde_json::from_str(text).map_err(|e| format!("profile is not JSON: {e}"))?;
+    let v: serde_json::Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(e) => {
+            let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+            if lines.len() > 1 && serde_json::from_str::<serde_json::Value>(lines[0].trim()).is_ok()
+            {
+                return Err(
+                    "profile has more than one JSON document: pass a single statement \
+                     (the CLI prints one JSON line per statement)"
+                        .to_owned(),
+                );
+            }
+            return Err(format!("profile is not JSON: {e}"));
+        }
+    };
     if v.get("format").and_then(serde_json::Value::as_str) != Some(PROFILE_FORMAT) {
         return Err(format!("profile format is not {PROFILE_FORMAT}"));
     }
@@ -749,11 +801,18 @@ pub fn run_profile_with_env(
 ) -> Result<(), String> {
     let args = parse_args(flags)?;
     let query_text = resolve_query_text(&args.query, &args.file, root)?;
+    // `Path::join` leaves absolute paths unchanged, so every stage shares
+    // one directory however `--out` was spelled. `cargo xtask` keeps the
+    // caller's working directory while `perf`/`samply` run with
+    // `current_dir(root)`: a relative `--out` must resolve against `root`.
     let out_dir = args
         .out
         .clone()
+        .map(|p| root.join(&p))
         .unwrap_or_else(|| default_out_dir(root, utc_now_millis()));
-    create_out_dir(&out_dir)?;
+    // Fail early on an existing directory without creating anything, so a
+    // failed build leaves nothing behind.
+    check_out_dir_absent(&out_dir)?;
 
     // (1) The release CLI with line tables, so the sampler resolves symbols.
     let build_status = Command::new(cargo)
@@ -765,10 +824,14 @@ pub fn run_profile_with_env(
     if !build_status.success() {
         return Err("cargo build -p krishiv-cli --release failed".to_owned());
     }
-    let bin = cli_bin_path(root, cargo_target_dir);
+    // `cargo metadata` knows the configured `build.target-dir`; an explicit
+    // `CARGO_TARGET_DIR` still wins.
+    let target_dir = resolve_target_dir(root, cargo, cargo_target_dir);
+    let bin = cli_bin_path(root, Some(target_dir.as_os_str()));
     if !bin.is_file() {
         return Err(format!("built no binary at {}", bin.display()));
     }
+    create_out_dir(&out_dir)?;
 
     // (2) The query profile as JSON.
     let query_src = if args.query.is_some() {
@@ -779,8 +842,12 @@ pub fn run_profile_with_env(
     let cli_args = cli_sql_argv(&query_src.0, &query_src.1, &args.tables, &args.confs);
     let stdout = run_argv(bin.as_os_str(), &cli_args, root)
         .map_err(|e| format!("krishiv sql --explain-analyze --json failed: {e}"))?;
+    let text = String::from_utf8(stdout).map_err(|e| format!("profile is not UTF-8: {e}"))?;
+    // Summarize before sampling: a multi-statement query is a usage error,
+    // and it should surface before the slow sampled re-run.
+    let summary = summarize_profile(&text)?;
     let profile_path = out_dir.join(PROFILE_JSON);
-    std::fs::write(&profile_path, &stdout)
+    std::fs::write(&profile_path, text.as_bytes())
         .map_err(|e| format!("cannot write {}: {e}", profile_path.display()))?;
     println!("wrote {}", profile_path.display());
 
@@ -802,10 +869,7 @@ pub fn run_profile_with_env(
         }
     }
 
-    // The summary reads the profile the CLI just wrote.
-    let text = std::fs::read_to_string(&profile_path)
-        .map_err(|e| format!("cannot read {}: {e}", profile_path.display()))?;
-    let summary = summarize_profile(&text)?;
+    // The summary was computed from the profile JSON before sampling.
     println!("output: {}", out_dir.display());
     println!("{summary}");
     if let Some(e) = sampler_err {
