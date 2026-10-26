@@ -150,6 +150,7 @@ __all__ = [
     "nvl2",
     "octet_length",
     "overlay",
+    "parse_url",
     "percent_rank",
     "pi",
     "pmod",
@@ -217,6 +218,7 @@ __all__ = [
     "try_divide",
     "try_mod",
     "try_multiply",
+    "try_parse_url",
     "try_subtract",
     "try_to_binary",
     "try_to_number",
@@ -882,6 +884,11 @@ def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, l
     )
 
 
+def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``parse_url``."""
+    return _call("parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
+
+
 def percent_rank() -> Column:
     """Calls the registry function ``percent_rank``."""
     return _call("percent_rank")
@@ -1221,6 +1228,11 @@ def try_mod(left: ColumnOrName, right: ColumnOrName) -> Column:
 def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_multiply``."""
     return _call("try_multiply", _named(left, "left"), _named(right, "right"))
+
+
+def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``try_parse_url``."""
+    return _call("try_parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
 
 
 def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column:

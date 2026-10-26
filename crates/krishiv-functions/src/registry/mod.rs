@@ -16,12 +16,14 @@
 mod bitwise;
 mod catalog;
 mod conditional;
+mod csv;
 mod defs;
 mod hashing;
 mod math;
 mod number;
 mod predicate;
 mod text;
+mod url;
 
 use std::collections::HashMap;
 use std::fmt;
