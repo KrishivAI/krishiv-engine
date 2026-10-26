@@ -740,8 +740,9 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
         offset: 0,
         claimed: 0,
         rows: super::RowStage::new(&[], &schema(), super::RowStageSettings::default()),
+        partition: 0,
     };
-    let e = scan.next_piece(&mut local, 4).unwrap_err();
+    let e = scan.next_piece(&mut local, 4, 0).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     // A cursor that hands out a morsel the global state does not have.
     let global: crate::GlobalState = Arc::new(ScanGlobal {

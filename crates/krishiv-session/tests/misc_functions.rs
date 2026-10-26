@@ -483,6 +483,23 @@ fn nondeterministic_queries_are_deterministic_per_partition() {
     assert_eq!(value("SELECT input_file_name()"), [""]);
     assert_eq!(value("SELECT input_file_block_start()"), ["-1"]);
     assert_eq!(value("SELECT input_file_block_length()"), ["-1"]);
+    // UNION ALL numbers its children's partitions one after another, as
+    // Spark's `UnionRDD` does (Spark 4.2.0, local[1]: 0, 1, 2 and
+    // 0, 8589934592).
+    assert_eq!(
+        value(
+            "SELECT spark_partition_id() AS p FROM (SELECT 1 AS x UNION ALL \
+             SELECT 2 AS x UNION ALL SELECT 3 AS x) ORDER BY p"
+        ),
+        ["0", "1", "2"]
+    );
+    assert_eq!(
+        value(
+            "SELECT monotonically_increasing_id() AS m FROM (SELECT 1 AS x \
+             UNION ALL SELECT 2 AS x) ORDER BY m"
+        ),
+        ["0", "8589934592"]
+    );
     // A stateful predicate sees the same partition stream.
     let v = values_session();
     assert_eq!(

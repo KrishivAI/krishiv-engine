@@ -119,8 +119,9 @@ fn since(executor: &dyn Executor, start: Instant) -> Duration {
     executor.now().saturating_duration_since(start)
 }
 
-/// Spawns one driver of `run`: `partition` is the driver's index in the
-/// run (see [`TaskContext::with_partition`]).
+/// Spawns one driver of `run`: `partition` is the driver's
+/// scheduler-assigned globally unique partition id within its pipeline
+/// group (see [`TaskContext::with_partition`]).
 pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle {
     let pipeline = run.pipeline.index;
     let query = Arc::clone(&run.query);
