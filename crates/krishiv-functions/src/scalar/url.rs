@@ -69,7 +69,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let keys = keyed.then(|| x.strings(2)).transpose()?;
                 // Values go straight into the Arrow buffer: every part is a
                 // slice of the URL or its query.
-                let mut out = StringBuilder::with_capacity(urls.len(), urls.value_data().len());
+                let mut out = StringBuilder::with_capacity(urls.len(), 0);
                 // The compiled key pattern of the last distinct key: a
                 // literal key compiles once per call.
                 let mut keys_cache: Option<KeyPattern> = None;
