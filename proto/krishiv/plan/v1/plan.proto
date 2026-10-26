@@ -473,6 +473,20 @@ message Partitioning {
 
 message HashPartitioning {
   repeated uint64 keys = 1;
+  // feature: key_group_hash (when not UNPINNED)
+  // The routing function. Absent in plans written before it was named.
+  HashScheme scheme = 2;
+}
+
+// feature: key_group_hash
+// The function a hash exchange routes rows by.
+enum HashScheme {
+  // No function named (older plans): the exchange is only lowered on one
+  // worker and never routes.
+  HASH_SCHEME_UNPINNED = 0;
+  // Key-group ranges of the routing hash H_kg version 1: XXH64, seed 0, of
+  // the normalized key bytes, folded over several key columns.
+  HASH_SCHEME_KEY_GROUP_V1 = 1;
 }
 
 message RangePartitioning {

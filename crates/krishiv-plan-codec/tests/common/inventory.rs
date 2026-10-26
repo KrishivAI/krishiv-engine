@@ -11,7 +11,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
     SubqueryValueKind,
@@ -724,7 +724,22 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Exchange(ExchangePlan {
                 id: ExchangeId(11),
                 input: boxed(scan()),
-                partitioning: Partitioning::Hash { keys: vec![0, 1] },
+                // A plan from before the routing hash was named.
+                partitioning: Partitioning::Hash {
+                    keys: vec![0, 1],
+                    scheme: HashScheme::Unpinned,
+                },
+            }),
+        ),
+        (
+            "exchange_hash_key_group",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(16),
+                input: boxed(scan()),
+                partitioning: Partitioning::Hash {
+                    keys: vec![1, 0],
+                    scheme: HashScheme::KeyGroupV1,
+                },
             }),
         ),
         (

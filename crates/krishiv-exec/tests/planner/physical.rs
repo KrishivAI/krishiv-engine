@@ -341,3 +341,43 @@ fn submit_instantiates_inside_its_future() {
     assert_eq!(rows, 10);
     assert_eq!(counting.1.load(Ordering::SeqCst), 1);
 }
+
+/// A hash exchange routes by the function its plan names: `KeyGroupV1`
+/// sends each row to the partition owning its key group under the routing
+/// hash, the same on every worker; an `Unpinned` exchange (a plan written
+/// before the function was fixed) refuses to route at all.
+#[test]
+fn hash_exchanges_route_by_the_named_function() {
+    use arrow_array::{Array, Int64Array, StringArray};
+    use krishiv_exec::physical::HashScheme;
+    use krishiv_kernels::hash::routing;
+
+    let a = Int64Array::from_iter_values(0..1000);
+    let b = StringArray::from_iter_values((0..1000).map(|i| format!("k{}", i % 13)));
+    let keys: [&dyn Array; 2] = [&a, &b];
+    let mut h = Vec::new();
+    routing::hash_columns(&keys, &mut h).unwrap_or_else(|e| panic!("{e}"));
+    let mut out = vec![7];
+    for n in [1, 3, 64, 4096] {
+        HashScheme::KeyGroupV1
+            .partitions(&keys, n, &mut out)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let want: Vec<u32> = h.iter().map(|&h| routing::partition_of(h, n)).collect();
+        assert_eq!(out, want, "{n} partitions");
+        assert!(out.iter().all(|&p| p < n));
+    }
+    let err = HashScheme::Unpinned
+        .partitions(&keys, 4, &mut out)
+        .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InternalError, "{err}");
+    let unsupported: [&dyn Array; 1] = [&arrow_array::ListArray::from_iter_primitive::<
+        arrow_array::types::Int32Type,
+        _,
+        _,
+    >(vec![Some(vec![Some(1)])])];
+    assert!(
+        HashScheme::KeyGroupV1
+            .partitions(&unsupported, 4, &mut out)
+            .is_err()
+    );
+}
