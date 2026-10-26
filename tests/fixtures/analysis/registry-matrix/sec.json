@@ -23,14 +23,6 @@
     {
       "id": "sec#c2e9bb28ade3/ansi_off",
       "reason": "SELECT sec(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sec#faa27900f220/ansi_on",
-      "reason": "SELECT sec(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sec#faa27900f220/ansi_off",
-      "reason": "SELECT sec(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

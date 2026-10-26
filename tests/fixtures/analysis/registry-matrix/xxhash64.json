@@ -1,62 +1,6 @@
 {
   "entries": [
     {
-      "id": "xxhash64#04d801e25e35/ansi_on",
-      "reason": "SELECT xxhash64(CAST(NULL AS string), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#04d801e25e35/ansi_off",
-      "reason": "SELECT xxhash64(CAST(NULL AS string), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#095784466712/ansi_on",
-      "reason": "SELECT xxhash64(1.5D, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#095784466712/ansi_off",
-      "reason": "SELECT xxhash64(1.5D, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#13b30bbffb5a/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#13b30bbffb5a/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1 AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#1446772cdb17/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#1446772cdb17/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1.5 AS DECIMAL(38,18))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#178bee7fcf10/ansi_on",
-      "reason": "SELECT xxhash64(CAST(1.5 AS FLOAT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#178bee7fcf10/ansi_off",
-      "reason": "SELECT xxhash64(CAST(1.5 AS FLOAT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#1c0a6e612b22/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#1c0a6e612b22/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), TIMESTAMP'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#262bbf2d0fc5/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#262bbf2d0fc5/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "xxhash64#27bf617616cb/ansi_on",
       "reason": "SELECT xxhash64('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
@@ -65,28 +9,12 @@
       "reason": "SELECT xxhash64('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
-      "id": "xxhash64#2c84929b4420/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#2c84929b4420/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "xxhash64#30b81390e09c/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#30b81390e09c/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
-    },
-    {
-      "id": "xxhash64#349ac41dfb58/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), '1') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#349ac41dfb58/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), '1') | KRISHIV_UNSUPPORTED_FEATURE: function array"
+      "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#36cc90cab019/ansi_on",
@@ -97,148 +25,12 @@
       "reason": "SELECT xxhash64('Spark', array(123), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "xxhash64#3ca12993a520/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#3ca12993a520/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#3ebf8dfbd92e/ansi_on",
-      "reason": "SELECT xxhash64(TIMESTAMP'2024-02-29 12:34:56.123456', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#3ebf8dfbd92e/ansi_off",
-      "reason": "SELECT xxhash64(TIMESTAMP'2024-02-29 12:34:56.123456', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#3ed299546ff7/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#3ed299546ff7/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), DATE'2024-02-29') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "xxhash64#46bae09a5a04/ansi_on",
       "reason": "SELECT xxhash64(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "xxhash64#46bae09a5a04/ansi_off",
       "reason": "SELECT xxhash64(INTERVAL '1-2' YEAR TO MONTH, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#4de68e47e367/ansi_on",
-      "reason": "SELECT xxhash64('', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#4de68e47e367/ansi_off",
-      "reason": "SELECT xxhash64('', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#5b1bb149749b/ansi_on",
-      "reason": "SELECT xxhash64(1, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#5b1bb149749b/ansi_off",
-      "reason": "SELECT xxhash64(1, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#5f7f062051c0/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#5f7f062051c0/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#6175a87d7b79/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(2147483647 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#6175a87d7b79/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(2147483647 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#69b363904109/ansi_on",
-      "reason": "SELECT xxhash64('1', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#69b363904109/ansi_off",
-      "reason": "SELECT xxhash64('1', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#6c0515f68f16/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), 1L) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#6c0515f68f16/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), 1L) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#6c344a698829/ansi_on",
-      "reason": "SELECT xxhash64(CAST(1.5 AS DECIMAL(10,2)), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#6c344a698829/ansi_off",
-      "reason": "SELECT xxhash64(CAST(1.5 AS DECIMAL(10,2)), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#6c62c17e8044/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#6c62c17e8044/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7146dfbaadba/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7146dfbaadba/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), 1.5D) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7a3e36bf27da/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7a3e36bf27da/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1.5 AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7f651b551773/ansi_on",
-      "reason": "SELECT xxhash64('abc', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7f651b551773/ansi_off",
-      "reason": "SELECT xxhash64('abc', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7fb8bab3c253/ansi_on",
-      "reason": "SELECT xxhash64(1L, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7fb8bab3c253/ansi_off",
-      "reason": "SELECT xxhash64(1L, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7fc5a11f73c0/ansi_on",
-      "reason": "SELECT xxhash64(' \\t a\\u3000\\n ', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#7fc5a11f73c0/ansi_off",
-      "reason": "SELECT xxhash64(' \\t a\\u3000\\n ', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#88be02abdc0a/ansi_on",
-      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#88be02abdc0a/ansi_off",
-      "reason": "SELECT xxhash64('Spark', CAST(array() AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#89b3d078d407/ansi_on",
@@ -249,124 +41,12 @@
       "reason": "SELECT xxhash64('Spark', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "xxhash64#900c868e26bb/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(NULL AS int)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#900c868e26bb/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(NULL AS int)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#a3f82a9411a5/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), X'01') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#a3f82a9411a5/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), X'01') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#a4386f4089b0/ansi_on",
-      "reason": "SELECT xxhash64(NULL, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#a4386f4089b0/ansi_off",
-      "reason": "SELECT xxhash64(NULL, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "xxhash64#aa4cafed551d/ansi_on",
       "reason": "SELECT xxhash64('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "xxhash64#aa4cafed551d/ansi_off",
       "reason": "SELECT xxhash64('Spark', INTERVAL '1 02:03:04' DAY TO SECOND, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#b8b7ba805159/ansi_on",
-      "reason": "SELECT xxhash64(CAST(1 AS TINYINT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#b8b7ba805159/ansi_off",
-      "reason": "SELECT xxhash64(CAST(1 AS TINYINT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c1bdc4c0e4da/ansi_on",
-      "reason": "SELECT xxhash64(CAST(1 AS SMALLINT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c1bdc4c0e4da/ansi_off",
-      "reason": "SELECT xxhash64(CAST(1 AS SMALLINT), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c46cdfcda1d4/ansi_on",
-      "reason": "SELECT xxhash64(CAST(1.5 AS DECIMAL(38,18)), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c46cdfcda1d4/ansi_off",
-      "reason": "SELECT xxhash64(CAST(1.5 AS DECIMAL(38,18)), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c4f7bcbebdee/ansi_on",
-      "reason": "SELECT xxhash64('Ä€日本語😀é', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c4f7bcbebdee/ansi_off",
-      "reason": "SELECT xxhash64('Ä€日本語😀é', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c695d37e19e8/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c695d37e19e8/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1 AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c9a780cf156a/ansi_on",
-      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#c9a780cf156a/ansi_off",
-      "reason": "SELECT xxhash64('Spark', CAST(array(NULL) AS array<int>), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#d38029db62a8/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#d38029db62a8/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#d90fd88f99d5/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(-2147483648 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#d90fd88f99d5/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(-2147483648 AS INT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#da904e59abfa/ansi_on",
-      "reason": "SELECT xxhash64(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#da904e59abfa/ansi_off",
-      "reason": "SELECT xxhash64(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#dd7cffaf7f2d/ansi_on",
-      "reason": "SELECT xxhash64(DATE'2024-02-29', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#dd7cffaf7f2d/ansi_off",
-      "reason": "SELECT xxhash64(DATE'2024-02-29', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#e03cf1df4795/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#e03cf1df4795/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), 'abc') | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "xxhash64#e69ca7f985b4/ansi_on",
@@ -377,54 +57,6 @@
       "reason": "SELECT xxhash64('Spark', array(123), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "xxhash64#e988f0567582/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#e988f0567582/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), NULL) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#ed4eed24ba64/ansi_on",
-      "reason": "SELECT xxhash64(true, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#ed4eed24ba64/ansi_off",
-      "reason": "SELECT xxhash64(true, array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#ee8d57c192df/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#ee8d57c192df/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), CAST(1.5 AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#eea7d24d6cde/ansi_on",
-      "reason": "SELECT xxhash64(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#eea7d24d6cde/ansi_off",
-      "reason": "SELECT xxhash64(named_struct('a', 1, 'b', 'x'), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#f20293a2a3c7/ansi_on",
-      "reason": "SELECT xxhash64(X'01', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#f20293a2a3c7/ansi_off",
-      "reason": "SELECT xxhash64(X'01', array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#f37dcdf02cd4/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), true) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#f37dcdf02cd4/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), true) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "xxhash64#f5d3d559ad3a/ansi_on",
       "reason": "SELECT xxhash64(map('a', 1), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
@@ -433,28 +65,12 @@
       "reason": "SELECT xxhash64(map('a', 1), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
-      "id": "xxhash64#f79d45019309/ansi_on",
-      "reason": "SELECT xxhash64(CAST(X'C328FF' AS STRING), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#f79d45019309/ansi_off",
-      "reason": "SELECT xxhash64(CAST(X'C328FF' AS STRING), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "xxhash64#f916e9e6b8e7/ansi_on",
       "reason": "SELECT xxhash64(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "xxhash64#f916e9e6b8e7/ansi_off",
       "reason": "SELECT xxhash64(INTERVAL '1 02:03:04' DAY TO SECOND, array(123), 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "xxhash64#fb104518ccd7/ansi_on",
-      "reason": "SELECT xxhash64(array(1, 2), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "xxhash64#fb104518ccd7/ansi_off",
-      "reason": "SELECT xxhash64(array(1, 2), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     }
   ],
   "format_version": 1,

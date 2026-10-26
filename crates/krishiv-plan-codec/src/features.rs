@@ -122,6 +122,7 @@ registry! {
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
+    (lambda_functions, LambdaFunctions, POST_MIGRATION_READER_VERSION, Semantic, "Lambda expressions (`x -> body`) and variables: the bound bodies of higher-order function arguments (`transform`, `filter`, `exists`, `forall`)."),
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
@@ -175,6 +176,9 @@ pub enum Construct<'a> {
     /// a subquery's value, a runtime filter's key, a window offset function's
     /// value, the plan's output schema).
     ArrowType(&'a arrow_schema::DataType),
+    /// A lambda expression or variable: the bound body of a higher-order
+    /// function's argument.
+    Lambda,
 }
 
 /// Whether an Arrow type is or contains an array, map or struct.
@@ -261,6 +265,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 Some(Feature::WindowOffsetFunctions)
             }
         },
+        // A lambda is plan data behind its own feature: a reader without
+        // it misreads the higher-order call's argument.
+        Construct::Lambda => Some(Feature::LambdaFunctions),
         // A type Krishiv does not know cannot be encoded at all. A later
         // feature for a type that can sit inside an array, map or struct
         // (variant, char/varchar, intervals) must look through them: its
@@ -355,6 +362,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         f(Construct::ArrowType(t));
     }
     for e in exprs_of(node) {
+        if matches!(
+            &e.node,
+            ExprNode::Lambda { .. } | ExprNode::Resolved(ResolvedExpr::LambdaVar(_))
+        ) {
+            f(Construct::Lambda);
+        }
         f(Construct::Expr(e));
     }
 }
@@ -405,7 +418,9 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
         match &e.node {
             ExprNode::Cast { to, .. } => out.push(to),
             ExprNode::Literal(Literal::Null(Some(t))) => out.push(t),
-            ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+            ExprNode::Resolved(
+                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c),
+            ) => {
                 out.push(&c.data_type);
             }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),

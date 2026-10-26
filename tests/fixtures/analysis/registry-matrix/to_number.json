@@ -17,14 +17,6 @@
       "reason": "SELECT to_number(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "to_number#672ac52e1b84/ansi_on",
-      "reason": "SELECT to_number('454', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_number#672ac52e1b84/ansi_off",
-      "reason": "SELECT to_number('454', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "to_number#7e6e35712586/ansi_on",
       "reason": "SELECT to_number('454', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_TOKEN"
     },
@@ -39,14 +31,6 @@
     {
       "id": "to_number#8152f955c6c4/ansi_off",
       "reason": "SELECT to_number('454', TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has INVALID_FORMAT.UNEXPECTED_TOKEN"
-    },
-    {
-      "id": "to_number#8d4c3a7592dc/ansi_on",
-      "reason": "SELECT to_number(array(1, 2), '999') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_number#8d4c3a7592dc/ansi_off",
-      "reason": "SELECT to_number(array(1, 2), '999') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "to_number#8e822c2c1477/ansi_on",

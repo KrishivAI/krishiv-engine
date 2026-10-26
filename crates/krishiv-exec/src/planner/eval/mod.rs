@@ -27,6 +27,7 @@ mod cast;
 mod cond;
 mod field;
 mod func;
+mod hof;
 mod logic;
 mod nested_cast;
 mod strings;
@@ -43,7 +44,7 @@ use krishiv_common::config::{
 };
 use krishiv_kernels::KernelCtx;
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
     ResolvedFunction,
 };
 
@@ -212,7 +213,9 @@ impl EvalEnv {
         }
     }
 
-    /// The environment a plan fixed, with this worker's kernels.
+    /// The environment a plan fixed, with this worker's kernels. Lambda
+    /// variables match by stable identity, so no name-resolution flag is
+    /// plan data.
     pub(crate) fn from_plan(env: &ExprEnv) -> Self {
         Self {
             ansi: env.ansi,
@@ -250,6 +253,23 @@ pub(crate) struct Input<'a> {
     pub(crate) subqueries: &'a [(AttrId, Arc<dyn PhysExpr>)],
 }
 
+/// A column of `input`'s batch: the layout position's field. A lambda
+/// variable reads such a column of the flattened batch the higher-order
+/// call compiled around the body (see `hof`).
+fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
+    let index = input
+        .layout
+        .iter()
+        .position(|a| *a == c.id)
+        .ok_or_else(|| internal(&format!("attribute #{} is not an input column", c.id.0)))?;
+    let field = input.schema.field(index);
+    Ok(Arc::new(Column {
+        index,
+        data_type: field.data_type().clone(),
+        nullable: field.is_nullable(),
+    }))
+}
+
 /// Compiles `e` over `input`.
 pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     match &e.node {
@@ -258,20 +278,11 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             if let Some((_, v)) = input.subqueries.iter().find(|(a, _)| *a == c.id) {
                 return Ok(Arc::clone(v));
             }
-            let index = input
-                .layout
-                .iter()
-                .position(|a| *a == c.id)
-                .ok_or_else(|| {
-                    internal(&format!("attribute #{} is not an input column", c.id.0))
-                })?;
-            let field = input.schema.field(index);
-            Ok(Arc::new(Column {
-                index,
-                data_type: field.data_type().clone(),
-                nullable: field.is_nullable(),
-            }))
+            column(input, c)
         }
+        // A lambda variable: a column of the flattened batch the
+        // higher-order call compiled around the body (see `hof`).
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => column(input, c),
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
         ExprNode::Resolved(ResolvedExpr::Field {
             base,
@@ -287,6 +298,11 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         ),
         ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
+            if let FunctionId::Registry { name, .. } = &f.id
+                && hof::is_supported(name)
+            {
+                return hof::compile(name, f, input, e);
+            }
             let args = f
                 .args
                 .iter()

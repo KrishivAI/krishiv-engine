@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "regexp_substr#057311aea945/ansi_on",
-      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_substr#057311aea945/ansi_off",
-      "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp_substr#5cb59df0f0ef/ansi_on",
       "reason": "SELECT regexp_substr(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -39,14 +31,6 @@
     {
       "id": "regexp_substr#892ffdc712e7/ansi_off",
       "reason": "SELECT regexp_substr('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "regexp_substr#97d5b3fe669b/ansi_on",
-      "reason": "SELECT regexp_substr(array(1, 2), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_substr#97d5b3fe669b/ansi_off",
-      "reason": "SELECT regexp_substr(array(1, 2), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp_substr#cc9e77840c0c/ansi_on",

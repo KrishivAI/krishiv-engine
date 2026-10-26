@@ -23,14 +23,6 @@
     {
       "id": "bit_count#b49e21523e6e/ansi_off",
       "reason": "SELECT bit_count(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_count#dc4f784b72ec/ansi_on",
-      "reason": "SELECT bit_count(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_count#dc4f784b72ec/ansi_off",
-      "reason": "SELECT bit_count(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

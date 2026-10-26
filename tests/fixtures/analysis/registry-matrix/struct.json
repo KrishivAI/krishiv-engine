@@ -9,14 +9,6 @@
       "reason": "SELECT struct(1, 2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "struct#2c5df2f35ff9/ansi_on",
-      "reason": "SELECT struct(array(1, 2), 2, 3) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "struct#2c5df2f35ff9/ansi_off",
-      "reason": "SELECT struct(array(1, 2), 2, 3) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "struct#3de026bd0cd4/ansi_on",
       "reason": "SELECT struct(1, 2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
@@ -49,14 +41,6 @@
       "reason": "SELECT struct(1, map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
     {
-      "id": "struct#5346837348d2/ansi_on",
-      "reason": "SELECT struct(1, 2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "struct#5346837348d2/ansi_off",
-      "reason": "SELECT struct(1, 2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "struct#5f8c80f88ab9/ansi_on",
       "reason": "SELECT struct(1, INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -87,14 +71,6 @@
     {
       "id": "struct#e2beeee445bf/ansi_off",
       "reason": "SELECT struct(INTERVAL '1-2' YEAR TO MONTH, 2, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "struct#ee27f4432a36/ansi_on",
-      "reason": "SELECT struct(1, array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "struct#ee27f4432a36/ansi_off",
-      "reason": "SELECT struct(1, array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     }
   ],
   "format_version": 1,

@@ -17,22 +17,6 @@
       "reason": "SELECT randstr(3, INTERVAL '1 02:03:04' DAY TO SECOND) AS result | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "randstr#72a2793557e6/ansi_on",
-      "reason": "SELECT randstr(array(1, 2), 0) AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "randstr#72a2793557e6/ansi_off",
-      "reason": "SELECT randstr(array(1, 2), 0) AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "randstr#78a2b0d4ee1a/ansi_on",
-      "reason": "SELECT randstr(3, array(1, 2)) AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "randstr#78a2b0d4ee1a/ansi_off",
-      "reason": "SELECT randstr(3, array(1, 2)) AS result | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "randstr#9e4c25337d0d/ansi_on",
       "reason": "SELECT randstr(map('a', 1), 0) AS result | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

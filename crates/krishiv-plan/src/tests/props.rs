@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 14 };
+        let kinds = if depth == 0 { 5 } else { 16 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -245,11 +245,15 @@ impl Gen<'_> {
                 expr: Arc::new(self.expr(d)),
                 output: self.bound(),
             }),
-            10 => ExprNode::Field {
+            10 => ExprNode::Lambda {
+                params: vec![self.bound()],
+                body: Arc::new(self.expr(d)),
+            },
+            13 => ExprNode::Field {
                 base: Arc::new(self.expr(d)),
                 name: self.name(),
             },
-            12 => ExprNode::Resolved(ResolvedExpr::Field {
+            14 => ExprNode::Resolved(ResolvedExpr::Field {
                 base: Arc::new(self.expr(d)),
                 ordinal: usize::from(self.pick(9)),
                 name: self.name(),
@@ -276,6 +280,7 @@ impl Gen<'_> {
                     })
                 },
             }),
+            12 => ExprNode::Resolved(ResolvedExpr::LambdaVar(self.bound())),
             _ => ExprNode::Subquery {
                 kind: match self.pick(3) {
                     0 => SubqueryKind::Scalar,
@@ -757,6 +762,18 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             m_type(to, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
+        ExprNode::Lambda { params, body } => {
+            site!(
+                w,
+                params.push(BoundColumn {
+                    id: AttrId(99),
+                    name: "x".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                })
+            );
+            params.iter_mut().any(|p| m_bound(p, w)) || m_expr(body, w)
+        }
         ExprNode::Field { base, name } => m_string(name, w) || m_expr(base, w),
         ExprNode::Subquery { kind, plan } => {
             let other = match kind {
@@ -787,7 +804,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             inside || m_expr(function, w)
         }
         ExprNode::Resolved(r) => match r {
-            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => m_bound(c, w),
+            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c) => {
+                m_bound(c, w)
+            }
             ResolvedExpr::Function(ResolvedFunction {
                 id,
                 kind,

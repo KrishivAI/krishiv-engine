@@ -475,6 +475,16 @@ impl Encoder {
             ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
                 Kind::OuterColumn(bound_column(c, &self.nested)?)
             }
+            ExprNode::Lambda { params, body } => Kind::Lambda(pb::Lambda {
+                params: params
+                    .iter()
+                    .map(|p| bound_column(p, &self.nested))
+                    .collect::<Result<_>>()?,
+                body: self.child(body),
+            }),
+            ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
+                Kind::LambdaVar(bound_column(c, &self.nested)?)
+            }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => Kind::Function(self.function(f)?),
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
                 Kind::Alias(pb::AliasExpr {

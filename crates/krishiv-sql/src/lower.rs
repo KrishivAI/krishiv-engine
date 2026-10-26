@@ -1588,7 +1588,16 @@ impl Lowerer {
             ExprKind::Collate(..) => return Err(unsupported("COLLATE", sp)),
             ExprKind::VariantGet(..) => return Err(unsupported("variant paths", sp)),
             ExprKind::TableArgument(_) => return Err(unsupported("TABLE arguments", sp)),
-            ExprKind::Lambda { .. } => return Err(unsupported("lambda functions", sp)),
+            ExprKind::Lambda { params, body } => {
+                let params = params.iter().map(|p| p.value.clone()).collect();
+                let body = self.arg(body)?;
+                self.ex(
+                    IrExpr::lambda(params, Arc::unwrap_or_clone(body))
+                        .node
+                        .clone(),
+                    sp,
+                )
+            }
             ExprKind::Row(_) => {
                 return Err(unsupported("row and struct constructors", sp));
             }

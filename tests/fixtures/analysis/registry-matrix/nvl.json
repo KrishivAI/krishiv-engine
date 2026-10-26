@@ -1,116 +1,12 @@
 {
   "entries": [
     {
-      "id": "nvl#0460fbe2242f/ansi_on",
-      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#0460fbe2242f/ansi_off",
-      "reason": "SELECT nvl(NULL, CAST(array() AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#07bf6900cb48/ansi_on",
-      "reason": "SELECT nvl(NULL, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#07bf6900cb48/ansi_off",
-      "reason": "SELECT nvl(NULL, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#0f4aeb376d5f/ansi_on",
-      "reason": "SELECT nvl(CAST(1.5 AS FLOAT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#0f4aeb376d5f/ansi_off",
-      "reason": "SELECT nvl(CAST(1.5 AS FLOAT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "nvl#13de9ce1fe22/ansi_on",
       "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#13de9ce1fe22/ansi_off",
       "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#18036545751d/ansi_on",
-      "reason": "SELECT nvl(CAST(1.5 AS DECIMAL(38,18)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#18036545751d/ansi_off",
-      "reason": "SELECT nvl(CAST(1.5 AS DECIMAL(38,18)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#1cf818db1216/ansi_on",
-      "reason": "SELECT nvl(X'01', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#1cf818db1216/ansi_off",
-      "reason": "SELECT nvl(X'01', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#207e88f971e0/ansi_on",
-      "reason": "SELECT nvl(true, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#207e88f971e0/ansi_off",
-      "reason": "SELECT nvl(true, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#2305f5ee469a/ansi_on",
-      "reason": "SELECT nvl(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#2305f5ee469a/ansi_off",
-      "reason": "SELECT nvl(named_struct('a', 1, 'b', 'x'), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#30624b2144a9/ansi_on",
-      "reason": "SELECT nvl(CAST(1 AS SMALLINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#30624b2144a9/ansi_off",
-      "reason": "SELECT nvl(CAST(1 AS SMALLINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#57346bea4d30/ansi_on",
-      "reason": "SELECT nvl(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#57346bea4d30/ansi_off",
-      "reason": "SELECT nvl(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#707b2299b507/ansi_on",
-      "reason": "SELECT nvl(1, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#707b2299b507/ansi_off",
-      "reason": "SELECT nvl(1, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#7cea853582ec/ansi_on",
-      "reason": "SELECT nvl('1', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#7cea853582ec/ansi_off",
-      "reason": "SELECT nvl('1', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#880ab25c6d7a/ansi_on",
-      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#880ab25c6d7a/ansi_off",
-      "reason": "SELECT nvl(NULL, CAST(array(NULL) AS array<string>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#90bda17a241c/ansi_on",
-      "reason": "SELECT nvl(1.5D, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#90bda17a241c/ansi_off",
-      "reason": "SELECT nvl(1.5D, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#9e1045de78bd/ansi_on",
@@ -121,60 +17,12 @@
       "reason": "SELECT nvl(NULL, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "nvl#9efd37c3d6f2/ansi_on",
-      "reason": "SELECT nvl(1L, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#9efd37c3d6f2/ansi_off",
-      "reason": "SELECT nvl(1L, array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#a1c66c5ed996/ansi_on",
-      "reason": "SELECT nvl(array(1, 2), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#a1c66c5ed996/ansi_off",
-      "reason": "SELECT nvl(array(1, 2), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#a81f8052130a/ansi_on",
-      "reason": "SELECT nvl('abc', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#a81f8052130a/ansi_off",
-      "reason": "SELECT nvl('abc', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "nvl#b47cc5fd236f/ansi_on",
       "reason": "SELECT nvl(INTERVAL '1 02:03:04' DAY TO SECOND, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#b47cc5fd236f/ansi_off",
       "reason": "SELECT nvl(INTERVAL '1 02:03:04' DAY TO SECOND, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#bcd71d6d3a0f/ansi_on",
-      "reason": "SELECT nvl(CAST(1 AS TINYINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#bcd71d6d3a0f/ansi_off",
-      "reason": "SELECT nvl(CAST(1 AS TINYINT), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#c72f6b63d89a/ansi_on",
-      "reason": "SELECT nvl(TIMESTAMP'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#c72f6b63d89a/ansi_off",
-      "reason": "SELECT nvl(TIMESTAMP'2024-02-29 12:34:56.123456', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#d2c5155ff20e/ansi_on",
-      "reason": "SELECT nvl(DATE'2024-02-29', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#d2c5155ff20e/ansi_off",
-      "reason": "SELECT nvl(DATE'2024-02-29', array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#d806a1029577/ansi_on",
@@ -185,28 +33,12 @@
       "reason": "SELECT nvl(NULL, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "nvl#db213cc5bb1d/ansi_on",
-      "reason": "SELECT nvl(CAST(1.5 AS DECIMAL(10,2)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#db213cc5bb1d/ansi_off",
-      "reason": "SELECT nvl(CAST(1.5 AS DECIMAL(10,2)), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "nvl#e0e8f9112791/ansi_on",
       "reason": "SELECT nvl(INTERVAL '1-2' YEAR TO MONTH, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl#e0e8f9112791/ansi_off",
       "reason": "SELECT nvl(INTERVAL '1-2' YEAR TO MONTH, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl#f89a839e7d85/ansi_on",
-      "reason": "SELECT nvl(NULL, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "nvl#f89a839e7d85/ansi_off",
-      "reason": "SELECT nvl(NULL, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "nvl#fd2b816559e6/ansi_on",

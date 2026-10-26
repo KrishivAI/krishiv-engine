@@ -852,6 +852,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::url::specs());
     out.extend(super::csv::specs());
     out.extend(super::text::specs());
+    out.extend(super::hof::specs());
     out.extend(super::r#struct::specs());
     out
 }

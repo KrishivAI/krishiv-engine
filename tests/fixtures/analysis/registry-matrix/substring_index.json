@@ -17,14 +17,6 @@
       "reason": "SELECT substring_index('www.apache.org', '.', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "substring_index#431d84dbcf7a/ansi_on",
-      "reason": "SELECT substring_index('www.apache.org', '.', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#431d84dbcf7a/ansi_off",
-      "reason": "SELECT substring_index('www.apache.org', '.', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "substring_index#52f4898847e9/ansi_on",
       "reason": "SELECT substring_index('www.apache.org', '.', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -39,22 +31,6 @@
     {
       "id": "substring_index#8dcf07f370c5/ansi_off",
       "reason": "SELECT substring_index(map('a', 1), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#9c979ef1f520/ansi_on",
-      "reason": "SELECT substring_index(array(1, 2), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#9c979ef1f520/ansi_off",
-      "reason": "SELECT substring_index(array(1, 2), '.', 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#a6fe796b7f5b/ansi_on",
-      "reason": "SELECT substring_index('www.apache.org', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "substring_index#a6fe796b7f5b/ansi_off",
-      "reason": "SELECT substring_index('www.apache.org', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "substring_index#ab14b0f764a7/ansi_on",

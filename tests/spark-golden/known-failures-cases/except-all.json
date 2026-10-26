@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      10
-    ]
-  },
-  "file": "except-all",
-  "format_version": 1
-}

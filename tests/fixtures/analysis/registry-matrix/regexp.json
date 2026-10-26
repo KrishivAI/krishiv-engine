@@ -41,22 +41,6 @@
       "reason": "SELECT regexp('%SystemDrive%\\Users\\John', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "regexp#7e85a4423a0c/ansi_on",
-      "reason": "SELECT regexp(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#7e85a4423a0c/ansi_off",
-      "reason": "SELECT regexp(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#b5e72f23ba3a/ansi_on",
-      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#b5e72f23ba3a/ansi_off",
-      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp#f2d787a50f4c/ansi_on",
       "reason": "SELECT regexp(map('a', 1), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
