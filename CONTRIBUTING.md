@@ -90,18 +90,34 @@ prints one table of pass, fail or skipped (with the reason) per check. It exits 
 should pass CI on its first run.
 
 ```text
-cargo xtask precheck [--base origin/main] [--fast] [--full] [--memory-cap 12G]
+cargo xtask precheck [--base origin/main] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap 12G]
 ```
 
+The default is the full gate. `--fast` is the quick loop (no coverage, budgets or Python wheel tests).
+
+- `base-fresh`: fails when your branch lacks the newest commits of the base. CI tests the merge of the PR with
+  `main`, so a stale branch can pass locally and fail there (registry coverage, `ty`, Python tests). Merge the base
+  and re-run; `--allow-stale` skips the check.
 - Rust checks run on the touched crates (tests also on their dependents); a change to `Cargo.toml`, `Cargo.lock`, the
   toolchain or lint config runs the whole workspace.
-- `--fast` skips coverage and budgets for quick iteration. Budgets also run only when a manifest changed, or with `--full`.
-- `--memory-cap SIZE` puts the heavy steps (clippy, doc, tests, coverage, budgets) under a `systemd-run` memory cap.
-  Putting the whole command under `systemd-run --user --scope -p MemoryMax=...` works too.
+- `diff-coverage` runs `cargo llvm-cov nextest` on the touched crates only, in a dedicated target directory
+  (`$CARGO_TARGET_DIR-precheck-cov`, or `target/precheck-cov`) that precheck deletes afterwards, then applies CI's
+  90% gate to the changed lines. Tests in dependent crates also cover lines in CI: if only those cover your lines, add
+  `--coverage-dependents` (slower), or better, a test in the crate itself.
+- `policy` runs everything CI's policy job runs: SPDX, source guard, registry coverage, large files, DCO, the
+  AI-attribution ban (your commits; the PR title and body are checked in CI) and the PR size cap, plus `workflow-lint`.
+- Python: `python-quality` (ruff check, ruff format, ty) and `python-tests` (bench) run when their directories change;
+  `python-wheel-tests` builds the extension with `maturin develop` into a throwaway venv and runs `python/tests` when
+  `python/` changed or `krishiv-python` depends on a touched crate (needs `uv` and network).
+- `codeql-proxy` is a cheap stand-in for the one CodeQL query that has failed PRs (`rust/cleartext-logging`: a
+  variable named `secret`, `password`, ... in a log, print, panic or assert message, also across lines and in untracked files). **CodeQL itself stays CI-only.**
+- `--memory-cap SIZE` puts the heavy steps (clippy, doc, tests, coverage, budgets, wheel tests) under a `systemd-run`
+  memory cap. Putting the whole command under `systemd-run --user --scope -p MemoryMax=...` works too.
+- Budgets run only when a manifest changed, or with `--full`.
 - A tool that is not installed (`cargo-nextest`, `cargo-llvm-cov`, `zizmor`, `typos`, `taplo`, `uv`, ...) is reported as
   `not installed`, never skipped silently. Full logs are in `target/precheck/<check>.log`.
-- Checks CI runs elsewhere (`hack`, `msrv`, the wheel matrix, `wheel-sizes`, `dependency-review`, CodSpeed, OSV) are
-  not run locally. Python tests of `python/` need the wheel build and run only in CI; `bench/` tests run locally.
+- Checks CI runs elsewhere (`hack`, `msrv`, the wheel matrix, `wheel-sizes`, `dependency-review`, CodeQL, CodSpeed,
+  OSV) are not run locally.
 
 The mapping from each required CI check to a precheck step is in `xtask/src/precheck.rs`; a policy test in
 `xtask/tests/precheck.rs` fails when a required check has no mapping. When branch protection gains a required check,

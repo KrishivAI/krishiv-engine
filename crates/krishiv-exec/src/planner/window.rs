@@ -14,6 +14,7 @@ use krishiv_plan::{
 use super::aggregate::{aggregate_expr, lower};
 use super::build::{Planned, Planner, internal, list, orders, unsupported};
 use super::properties::Distribution;
+use crate::aggregate::is_moment;
 use crate::error::Result;
 use crate::operator::Source;
 use crate::operators::SortKey;
@@ -289,9 +290,14 @@ impl Planner<'_> {
                 other => return Err(unsupported(&format!("the window function {other}"))),
             });
         }
-        let function = lower(c.f)
-            .ok_or_else(|| unsupported(&format!("the window aggregate {name}")))?
-            .function;
+        let lowered =
+            lower(c.f).ok_or_else(|| unsupported(&format!("the window aggregate {name}")))?;
+        // The moment aggregates have no window form yet: refused, never
+        // computed as another function.
+        if is_moment(lowered.function) {
+            return Err(unsupported(&format!("the window aggregate {name}")));
+        }
+        let function = lowered.function;
         // The analyzer rejects `count(DISTINCT x) OVER (...)` as Spark does;
         // a plan that still holds one must not be computed as `count(x)`.
         if c.f.distinct {
