@@ -1,0 +1,62 @@
+{
+  "entries": [
+    {
+      "query": "SELECT '1' + cast('2017-12-11 09:30:00' as date)        FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "query": "SELECT '1' + cast('2017-12-11 09:30:00.0' as timestamp) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "query": "SELECT '1' - cast('2017-12-11 09:30:00' as date)        FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "query": "SELECT '1' - cast('2017-12-11 09:30:00.0' as timestamp) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "query": "SELECT cast('2017-12-11 09:30:00' as date)        + '1' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "query": "SELECT cast('2017-12-11 09:30:00' as date)        - '1' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "query": "SELECT cast('2017-12-11 09:30:00.0' as timestamp) + '1' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "query": "SELECT cast('2017-12-11 09:30:00.0' as timestamp) - '1' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "query": "SELECT kurtosis('1') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function kurtosis"
+    },
+    {
+      "query": "SELECT skewness('1') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function skewness"
+    },
+    {
+      "query": "SELECT stddev_pop('1') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function stddev_pop"
+    },
+    {
+      "query": "SELECT stddev_samp('1') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function stddev_samp"
+    },
+    {
+      "query": "SELECT var_pop('1') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function var_pop"
+    },
+    {
+      "query": "SELECT var_samp('1') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function var_samp"
+    }
+  ],
+  "file": "typeCoercion/native/promoteStrings",
+  "format_version": 1
+}

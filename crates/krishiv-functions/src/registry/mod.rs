@@ -22,6 +22,7 @@ mod math;
 mod misc;
 mod number;
 mod predicate;
+mod text;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -67,6 +68,12 @@ pub enum Aggregate {
     First,
     /// `last` / `last_value`; `ignoreNulls` is the second argument.
     Last,
+    /// `any_value`; `ignoreNulls` is the second argument.
+    AnyValue,
+    /// `max_by(x, y)`.
+    MaxBy,
+    /// `min_by(x, y)`.
+    MinBy,
 }
 
 /// A built-in function.

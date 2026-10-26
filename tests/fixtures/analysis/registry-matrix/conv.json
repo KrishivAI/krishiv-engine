@@ -1,0 +1,126 @@
+{
+  "entries": [
+    {
+      "id": "conv#0d4fe942fe9d/ansi_on",
+      "reason": "SELECT conv('100', 2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#0d4fe942fe9d/ansi_off",
+      "reason": "SELECT conv('100', 2, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#2fc4a1cce6e3/ansi_on",
+      "reason": "SELECT conv('100', 2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#2fc4a1cce6e3/ansi_off",
+      "reason": "SELECT conv('100', 2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#308fccd7a450/ansi_on",
+      "reason": "SELECT conv(named_struct('a', 1, 'b', 'x'), 2, 10) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#308fccd7a450/ansi_off",
+      "reason": "SELECT conv(named_struct('a', 1, 'b', 'x'), 2, 10) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#3a9a9a7f27dc/ansi_on",
+      "reason": "SELECT conv('100', named_struct('a', 1, 'b', 'x'), 10) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#3a9a9a7f27dc/ansi_off",
+      "reason": "SELECT conv('100', named_struct('a', 1, 'b', 'x'), 10) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#7461c93e555c/ansi_on",
+      "reason": "SELECT conv(INTERVAL '1 02:03:04' DAY TO SECOND, 2, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "conv#7461c93e555c/ansi_off",
+      "reason": "SELECT conv(INTERVAL '1 02:03:04' DAY TO SECOND, 2, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "conv#7a657a811c87/ansi_on",
+      "reason": "SELECT conv(array(1, 2), 2, 10) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#7a657a811c87/ansi_off",
+      "reason": "SELECT conv(array(1, 2), 2, 10) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#81a1f2194627/ansi_on",
+      "reason": "SELECT conv('100', INTERVAL '1-2' YEAR TO MONTH, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#81a1f2194627/ansi_off",
+      "reason": "SELECT conv('100', INTERVAL '1-2' YEAR TO MONTH, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#83889cba804a/ansi_on",
+      "reason": "SELECT conv(INTERVAL '1-2' YEAR TO MONTH, 2, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "conv#83889cba804a/ansi_off",
+      "reason": "SELECT conv(INTERVAL '1-2' YEAR TO MONTH, 2, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "conv#847e4eeb237e/ansi_on",
+      "reason": "SELECT conv('100', map('a', 1), 10) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#847e4eeb237e/ansi_off",
+      "reason": "SELECT conv('100', map('a', 1), 10) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#921f200c75eb/ansi_on",
+      "reason": "SELECT conv('100', INTERVAL '1 02:03:04' DAY TO SECOND, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#921f200c75eb/ansi_off",
+      "reason": "SELECT conv('100', INTERVAL '1 02:03:04' DAY TO SECOND, 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#94a8f88df66a/ansi_on",
+      "reason": "SELECT conv('100', 2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#94a8f88df66a/ansi_off",
+      "reason": "SELECT conv('100', 2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#99e8cdec0d93/ansi_on",
+      "reason": "SELECT conv('100', array(1, 2), 10) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#99e8cdec0d93/ansi_off",
+      "reason": "SELECT conv('100', array(1, 2), 10) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#bb384aabc1fa/ansi_on",
+      "reason": "SELECT conv('100', 2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#bb384aabc1fa/ansi_off",
+      "reason": "SELECT conv('100', 2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#c45bee861796/ansi_on",
+      "reason": "SELECT conv(map('a', 1), 2, 10) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#c45bee861796/ansi_off",
+      "reason": "SELECT conv(map('a', 1), 2, 10) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#ec214d3068bf/ansi_on",
+      "reason": "SELECT conv('100', 2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "conv#ec214d3068bf/ansi_off",
+      "reason": "SELECT conv('100', 2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "conv"
+}

@@ -3,8 +3,10 @@
 //! `TIMESTAMP` (`Timestamp(Microsecond, Some(_))`, an instant) and
 //! `TIMESTAMP_NTZ` (`Timestamp(Microsecond, None)`, a local date-time):
 //! `date_add`/`date_sub`/`datediff`, field extraction (`year`, `month`,
-//! `day`, `extract`/`date_part`), `date`/`timestamp` ± interval, and
-//! `current_date`/`current_timestamp`.
+//! `day`, `extract`/`date_part`), `date`/`timestamp` ± interval,
+//! `current_date`/`current_timestamp`, and the calendar functions of the
+//! `calendar` submodule (`monthname`, `last_day`, `next_day`, `trunc`,
+//! `date_trunc`, `months_between`, `make_date`, ...).
 //!
 //! Time zones come in as [`TimeZoneRules`] (the session zone resolved by the
 //! caller, [`FixedOffset`] for `UTC` and `+hh:mm`); this module never sees a
@@ -22,7 +24,13 @@ use arrow_array::{
 use arrow_buffer::NullBuffer;
 use arrow_schema::DataType;
 
+mod calendar;
+
 pub use crate::cast::{FixedOffset, TimeZoneRules};
+pub use calendar::{
+    TruncUnit, Zones, convert_timezone, day_name, from_utc_timestamp, last_day, make_date,
+    month_name, months_between, next_day, to_utc_timestamp, trunc_date, trunc_timestamp, unix_date,
+};
 
 use crate::cast::datetime::{
     MICROS_PER_DAY, civil_from_days, days_from_civil, local_to_utc, utc_to_local,

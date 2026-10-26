@@ -27,6 +27,7 @@ mod cast;
 mod cond;
 mod func;
 mod logic;
+mod nested_cast;
 mod strings;
 
 use std::fmt;
@@ -349,9 +350,9 @@ fn builtin(
             logic::and_or(true, ge, le)
         }
         (Builtin::Like, 2 | 3) => strings::like(args)?,
-        // `rlike(a, b)` is Spark's `RLike(a, b)`: the registry's
-        // `regexp_like` kernel over the same arguments.
-        (Builtin::RLike, 2) => func::compile("regexp_like", f, args, input, e)?,
+        // `rlike(a, b)` is Spark's `RLike(a, b)`: the `regexp_like` kernel
+        // over the same arguments, reporting Spark's `rlike` name.
+        (Builtin::RLike, 2) => func::compile("rlike", f, args, input, e)?,
         (Builtin::When, n) if n >= 2 => cond::when(args, out)?,
         (Builtin::Concat, _) => strings::concat(args, f.nullable)?,
         _ => {

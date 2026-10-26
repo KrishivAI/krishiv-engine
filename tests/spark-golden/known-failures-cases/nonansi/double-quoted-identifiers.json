@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "nested-interval-types": [
+      20,
+      24
+    ],
+    "sql-commands": [
+      10,
+      11,
+      12
+    ]
+  },
+  "file": "nonansi/double-quoted-identifiers",
+  "format_version": 1
+}

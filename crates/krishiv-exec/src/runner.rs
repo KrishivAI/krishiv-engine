@@ -9,7 +9,9 @@
 //! which starts each pipeline once its dependencies have finalized:
 //! `min(worker slots, source parallelism)` drivers per pipeline (one if it
 //! must keep order). The pipelines of a fan-in (`UNION ALL`) end in one
-//! sink and start together, sharing its state. The coordinator awaits every driver; the first error
+//! sink: they run one after another, in pipeline order, when none of
+//! their shared operators needs a cross-driver flush, and start together
+//! otherwise, sharing the sink's state either way. The coordinator awaits every driver; the first error
 //! (a driver's error, a panic, a memory abort, cancellation) wins and
 //! cancels the rest, which are also aborted. The result stream ends only
 //! after every task has ended and every pipeline's state is dropped, so the
@@ -282,14 +284,31 @@ async fn run_pipelines(
                     todo[i].take()
                 })
                 .collect();
-            match start_group(executor, query, members, &finalized) {
-                Ok((rs, hs)) => {
-                    handles.0.extend(hs);
-                    runs.extend(rs);
-                }
+            let group = match start_group(executor, query, members, &finalized) {
+                Ok(group) => group,
                 Err(e) => {
                     query.fail(e);
                     break;
+                }
+            };
+            if fan_in_is_sequential(&group) {
+                match run_group_sequential(executor, query, group).await {
+                    Ok(rs) => runs.extend(rs),
+                    Err(e) => {
+                        query.fail(e);
+                        break;
+                    }
+                }
+            } else {
+                match spawn_group(executor, query, group) {
+                    Ok((rs, hs)) => {
+                        handles.0.extend(hs);
+                        runs.extend(rs);
+                    }
+                    Err(e) => {
+                        query.fail(e);
+                        break;
+                    }
                 }
             }
         }
@@ -350,13 +369,17 @@ fn record_extra_metrics(query: &QueryContext, runs: &[Arc<PipelineRun>]) {
 
 /// Starts the pipelines of one sink: one pipeline, or the pipelines of a
 /// fan-in, which share the sink's state, its finalize countdown and the
-/// flush barriers of the operators they share.
+/// flush barriers of the operators they share. Pipelines of a fan-in
+/// whose branches share no operator needing a cross-driver flush run one
+/// after another, in pipeline order (a fan-in's branches, left to right),
+/// so the union emits its branches' rows in order; any other group starts
+/// together and runs as one.
 fn start_group(
     executor: &Arc<dyn Executor>,
     query: &Arc<QueryContext>,
     members: Vec<Pipeline>,
     finalized: &HashMap<OperatorId, GlobalState>,
-) -> Result<(Vec<Arc<PipelineRun>>, Vec<TaskHandle>)> {
+) -> Result<GroupStart> {
     // Global-state contexts get an owner nobody services: memory reserved
     // in `global_state` is never asked to spill (see `Sink::global_state`).
     let ctx = |(id, name)| {
@@ -398,47 +421,155 @@ fn start_group(
                 .min(source.max_parallelism(&source_global))
                 .max(1)
         };
-        started.push((pipeline, operator_deps, source_global, drivers));
+        started.push(MemberStart {
+            pipeline,
+            operator_deps,
+            source_global,
+            drivers,
+        });
     }
     // One barrier per operator, over the drivers of every pipeline it is in.
     let mut barrier_drivers: HashMap<OperatorId, usize> = HashMap::new();
-    for (p, _, _, drivers) in &started {
-        for (id, _) in &p.operators {
-            *barrier_drivers.entry(*id).or_default() += drivers;
+    for m in &started {
+        for (id, _) in &m.pipeline.operators {
+            *barrier_drivers.entry(*id).or_default() += m.drivers;
         }
     }
     let barriers: HashMap<OperatorId, Arc<Barrier>> = barrier_drivers
         .into_iter()
         .map(|(id, n)| (id, Arc::new(Barrier::new(n))))
         .collect();
-    let total = started.iter().map(|s| s.3).sum();
+    let total = started.iter().map(|s| s.drivers).sum();
     let countdown = Arc::new(Countdown::new(total));
-    let mut runs = Vec::with_capacity(started.len());
-    let mut handles = Vec::with_capacity(total);
-    for (pipeline, operator_deps, source_global, drivers) in started {
-        let barriers = pipeline
-            .operators
+    Ok(GroupStart {
+        sink_global,
+        countdown,
+        barriers,
+        members: started,
+    })
+}
+
+/// One pipeline of a group: its breaker inputs resolved, its drivers counted.
+struct MemberStart {
+    pipeline: Pipeline,
+    operator_deps: Vec<Option<GlobalState>>,
+    source_global: GlobalState,
+    drivers: usize,
+}
+
+/// A pipeline group planned but not yet running: the state its members
+/// share and the members in pipeline order.
+struct GroupStart {
+    sink_global: GlobalState,
+    countdown: Arc<Countdown>,
+    barriers: HashMap<OperatorId, Arc<Barrier>>,
+    members: Vec<MemberStart>,
+}
+
+/// Whether the members of `group` run one after another, in pipeline
+/// order: a fan-in (`UNION ALL`) whose branches share no operator needing
+/// a cross-driver flush. Sequential branches emit their rows in branch
+/// order; concurrent ones interleave batches by arrival, so a downstream
+/// that observes row order (`LIMIT` without `ORDER BY`, the golden harness
+/// over a sorted child) sees nondeterministic rows. A flush barrier waits
+/// for every driver's arrival, so a group sharing one stays concurrent.
+fn fan_in_is_sequential(group: &GroupStart) -> bool {
+    group.members.len() > 1
+        && group
+            .members
             .iter()
-            .map(|(id, _)| barriers.get(id).cloned())
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| internal("an operator without a barrier".to_owned()))?;
+            .all(|m| m.pipeline.operators.iter().all(|(_, op)| !op.needs_flush()))
+}
+
+/// The barriers of `member`'s operators.
+fn member_barriers(
+    member: &MemberStart,
+    barriers: &HashMap<OperatorId, Arc<Barrier>>,
+) -> Result<Vec<Arc<Barrier>>> {
+    member
+        .pipeline
+        .operators
+        .iter()
+        .map(|(id, _)| barriers.get(id).cloned())
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| internal("an operator without a barrier".to_owned()))
+}
+
+/// Starts every member of `group` together, sharing the sink's state.
+fn spawn_group(
+    executor: &Arc<dyn Executor>,
+    query: &Arc<QueryContext>,
+    group: GroupStart,
+) -> Result<(Vec<Arc<PipelineRun>>, Vec<TaskHandle>)> {
+    let GroupStart {
+        sink_global,
+        countdown,
+        barriers,
+        members,
+    } = group;
+    let total = members.iter().map(|m| m.drivers).sum();
+    let mut runs = Vec::with_capacity(members.len());
+    let mut handles = Vec::with_capacity(total);
+    for m in members {
+        let member_barriers = member_barriers(&m, &barriers)?;
         let run = Arc::new(PipelineRun {
-            pipeline,
-            operator_deps,
-            barriers,
-            source_global,
+            pipeline: m.pipeline,
+            operator_deps: m.operator_deps,
+            barriers: member_barriers,
+            source_global: m.source_global,
             sink_global: Arc::clone(&sink_global),
             countdown: Arc::clone(&countdown),
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
-        handles.extend((0..drivers).map(|i| {
+        handles.extend((0..m.drivers).map(|i| {
             let partition = u32::try_from(i).unwrap_or(u32::MAX);
             spawn_driver(Arc::clone(&run), partition)
         }));
         runs.push(run);
     }
     Ok((runs, handles))
+}
+
+/// Runs the members of `group` one after another, in pipeline order (see
+/// [`fan_in_is_sequential`]): the next member starts once the previous
+/// one's drivers have ended, sharing the sink's state, its finalize
+/// countdown and the flush barriers exactly as concurrent members do.
+async fn run_group_sequential(
+    executor: &Arc<dyn Executor>,
+    query: &Arc<QueryContext>,
+    group: GroupStart,
+) -> Result<Vec<Arc<PipelineRun>>> {
+    let GroupStart {
+        sink_global,
+        countdown,
+        barriers,
+        members,
+    } = group;
+    let mut runs = Vec::with_capacity(members.len());
+    for m in members {
+        let member_barriers = member_barriers(&m, &barriers)?;
+        let run = Arc::new(PipelineRun {
+            pipeline: m.pipeline,
+            operator_deps: m.operator_deps,
+            barriers: member_barriers,
+            source_global: m.source_global,
+            sink_global: Arc::clone(&sink_global),
+            countdown: Arc::clone(&countdown),
+            query: Arc::clone(query),
+            executor: Arc::clone(executor),
+        });
+        let mut handles = Drivers(FuturesUnordered::new());
+        handles.0.extend((0..m.drivers).map(|i| {
+            let partition = u32::try_from(i).unwrap_or(u32::MAX);
+            spawn_driver(Arc::clone(&run), partition)
+        }));
+        await_drivers(query, &mut handles).await;
+        record_extra_metrics(query, std::slice::from_ref(&run));
+        query.check_cancelled()?;
+        runs.push(run);
+    }
+    Ok(runs)
 }
 
 /// A wave's drivers, aborted if the coordinator is dropped mid-wave (so

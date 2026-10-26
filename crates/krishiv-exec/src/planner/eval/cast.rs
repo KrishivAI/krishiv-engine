@@ -9,6 +9,7 @@ use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, ca
 use krishiv_plan::CastMode;
 use krishiv_types::DataType;
 
+use super::nested_cast;
 use super::strings::{from_view, to_view};
 use super::{Input, PhysExpr, Value};
 use crate::error::Result;
@@ -75,8 +76,33 @@ pub(super) fn parts(
     })
 }
 
+impl CastParts {
+    /// The cast of an element, value or field to `to`, in the same mode
+    /// and zone.
+    pub(super) fn child(&self, to: &ArrowType) -> Self {
+        let kernel_to = match to {
+            ArrowType::Utf8View => ArrowType::Utf8,
+            ArrowType::BinaryView => ArrowType::Binary,
+            other => other.clone(),
+        };
+        Self {
+            to: to.clone(),
+            kernel_to,
+            mode: self.mode,
+            zone: self.zone,
+        }
+    }
+}
+
 /// `a` through `p`.
 pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
+    // Every value of a `void` array is NULL, of any type.
+    if a.data_type() == &ArrowType::Null {
+        return Ok(arrow_array::new_null_array(&p.to, a.len()));
+    }
+    if nested_cast::is_nested(a.data_type()) || nested_cast::is_nested(&p.to) {
+        return nested_cast::cast(p, a);
+    }
     let input = from_view(a)?;
     let opts = CastOptions {
         mode: p.mode,

@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "depends-on-command": [
+      7,
+      14,
+      21
+    ]
+  },
+  "file": "join-empty-relation",
+  "format_version": 1
+}

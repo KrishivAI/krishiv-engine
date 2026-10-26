@@ -1963,14 +1963,14 @@ mod tests {
         ] {
             not_run(cell("=", sql, on, rows("boolean", json!(3))));
         }
-        not_run(cell(
+        let pass = |f, sql, m, e| assert_eq!(cell(f, sql, m, e), CellOutcome::Pass, "{sql}");
+        pass("+", "SELECT NULL + NULL", on, rows("double", Value::Null));
+        pass(
             "cast",
             "SELECT CAST('a' AS BINARY)",
             on,
             rows("binary", json!({"hex": "61"})),
-        ));
-        let pass = |f, sql, m, e| assert_eq!(cell(f, sql, m, e), CellOutcome::Pass, "{sql}");
-        pass("+", "SELECT NULL + NULL", on, rows("double", Value::Null));
+        );
         pass(
             "div",
             "SELECT NULL div NULL",

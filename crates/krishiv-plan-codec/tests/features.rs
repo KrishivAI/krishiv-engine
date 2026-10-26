@@ -101,6 +101,40 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         None
     );
     assert_eq!(
+        feature_of(Construct::Join(krishiv_exec::JoinType::Existence)),
+        Some(Feature::ExistenceJoin)
+    );
+    // The single-match flag is a property of the hash join node: a plain
+    // left outer join is the baseline, a single-match one needs the
+    // feature. `distinct_build` needs none: a reader that ignores it builds
+    // every row and returns the same result.
+    let join = |single_match, distinct_build, join_type| {
+        let (_, plan) = cases()
+            .into_iter()
+            .find(|(n, _)| n == "hash_join_single_match")
+            .unwrap();
+        match plan.root() {
+            PhysNode::HashJoin(join) => feature_of(Construct::Node(&PhysNode::HashJoin(
+                krishiv_exec::physical::HashJoinPlan {
+                    single_match,
+                    distinct_build,
+                    join_type,
+                    ..join.clone()
+                },
+            ))),
+            _ => None,
+        }
+    };
+    let (outer, semi) = (
+        krishiv_exec::JoinType::LeftOuter,
+        krishiv_exec::JoinType::LeftSemi,
+    );
+    assert_eq!(join(false, false, outer), None);
+    assert_eq!(join(true, false, outer), Some(Feature::JoinSingleMatch));
+    assert_eq!(join(false, true, semi), None);
+    assert_eq!(Feature::ExistenceJoin.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::JoinSingleMatch.kind(), FeatureKind::Semantic);
+    assert_eq!(
         feature_of(Construct::Partitioning(
             &krishiv_exec::physical::Partitioning::Single
         )),
@@ -304,4 +338,173 @@ fn features_of_refuses_what_it_cannot_interpret() {
         features_of(&m.encode_to_vec()).unwrap_err(),
         CodecError::Corrupt("feature ids that are not sorted or repeat".to_owned())
     );
+}
+
+#[test]
+fn nested_types_need_their_feature() {
+    let m = message("nested_types");
+    assert_eq!(m.features, ["nested_types"]);
+    let bytes = m.encode_to_vec();
+    // A reader without the feature refuses the plan before reading a node,
+    // naming it; one with it reads the plan back.
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::NestedTypes),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "nested_types")
+        .unwrap();
+    assert_eq!(decode(&bytes).unwrap(), plan);
+    assert_eq!(Feature::NestedTypes.kind(), FeatureKind::Semantic);
+    // The header cannot hide it.
+    let mut hidden = m;
+    hidden.features.clear();
+    hidden.min_reader_version = 2;
+    corrupt(
+        &hidden,
+        "the feature header does not match the plan's constructs",
+    );
+}
+
+#[test]
+fn a_malformed_nested_type_is_corrupt() {
+    let m = message("nested_types");
+    let nested = pb::data_type::Kind::Nested as i32;
+    let with_type = |edit: &dyn Fn(&mut pb::DataType)| {
+        let mut m = m.clone();
+        let mut done = false;
+        for e in &mut m.exprs {
+            if let Some(pb::expr::Kind::Cast(c)) = &mut e.kind
+                && let Some(t) = c.to.as_mut().filter(|t| t.kind == nested)
+            {
+                edit(t);
+                done = true;
+            }
+        }
+        assert!(done, "no nested cast in the case");
+        m
+    };
+    for json in ["", "not json", r#""integer""#, &"[".repeat(10_000)] {
+        corrupt(
+            &with_type(&|t| t.json = json.to_owned()),
+            "an invalid nested type",
+        );
+    }
+    // Only the canonical form (the encoder's) decodes.
+    corrupt(
+        &with_type(&|t| t.json = t.json.replace(':', ": ")),
+        "an invalid nested type",
+    );
+    let deep = format!(
+        "{}\"integer\"{}",
+        r#"{"type":"array","elementType":"#.repeat(40),
+        r#","containsNull":true}"#.repeat(40)
+    );
+    corrupt(
+        &with_type(&|t| t.json = deep.clone()),
+        "an invalid nested type",
+    );
+    corrupt(
+        &with_type(&|t| {
+            t.kind = pb::data_type::Kind::Integer as i32;
+        }),
+        "a JSON form on a type that is not nested",
+    );
+}
+
+#[test]
+fn a_type_too_deep_for_readers_does_not_encode() {
+    use krishiv_types::{ArrayType, DataType};
+    let mut t = DataType::Integer;
+    for _ in 0..=DataType::MAX_NESTING_DEPTH {
+        t = ArrayType::new(t, true).into();
+    }
+    let plan = plan_of(PhysNode::Project {
+        input: Box::new(PhysNode::OneRow),
+        layout: Vec::new(),
+        items: vec![krishiv_exec::physical::ProjectItemPlan::Expr {
+            name: "x".to_owned(),
+            expr: inventory::lit(krishiv_plan::Literal::Null(Some(t))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    });
+    assert!(matches!(encode(&plan), Err(CodecError::Unsupported(_))));
+}
+
+/// An Arrow type holding an array, a map or a struct.
+fn arrow_list() -> arrow_schema::DataType {
+    use arrow_schema::{DataType as A, Field};
+    A::List(std::sync::Arc::new(Field::new("item", A::Int32, true)))
+}
+
+#[test]
+fn a_nested_type_only_in_an_arrow_field_needs_the_feature() {
+    use arrow_schema::{DataType as A, Field, Fields};
+    use krishiv_exec::physical::{AggregatePlan, SubqueryPlan};
+    let aggregate = {
+        let mut a = inventory::aggregate_exprs().remove(1);
+        a.arg_type = arrow_list();
+        a
+    };
+    let struct_type = A::Struct(Fields::from(vec![Field::new("a", A::Int32, true)]));
+    let with_schema = |t: A| {
+        let plan = plan_of(PhysNode::OneRow);
+        krishiv_exec::physical::PhysicalPlan::new(
+            plan.root().clone(),
+            std::sync::Arc::new(arrow_schema::Schema::new(vec![Field::new("c", t, true)])),
+            plan.explain().clone(),
+            plan.env().clone(),
+        )
+    };
+    let plans = [
+        // A subquery's value type.
+        plan_of(PhysNode::Filter {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            predicate: inventory::predicate(),
+            subqueries: vec![SubqueryPlan {
+                data_type: arrow_list(),
+                ..inventory::subquery()
+            }],
+        }),
+        // An aggregate's argument type.
+        plan_of(PhysNode::Aggregate {
+            input: Box::new(PhysNode::OneRow),
+            aggregate: AggregatePlan {
+                group_by: Vec::new(),
+                distinct: vec![false],
+                aggregates: vec![aggregate],
+                output: krishiv_exec::aggregate::AggregateOutput::Partial,
+            },
+        }),
+        // The plan's output schema.
+        with_schema(struct_type),
+    ];
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::NestedTypes),
+    );
+    for plan in plans {
+        assert!(plan_features(&plan).contains(&Feature::NestedTypes));
+        let bytes = encode(&plan).unwrap();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["nested_types".to_owned()]
+            }
+        );
+        assert_eq!(decode(&bytes).unwrap(), plan);
+    }
 }
