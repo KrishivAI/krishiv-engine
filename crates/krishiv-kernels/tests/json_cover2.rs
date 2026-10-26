@@ -30,6 +30,12 @@ fn read(texts: &[Option<&str>], target: &DataType, opts: &JsonOptions) -> ArrayR
     read_json(&strs(texts), target, opts, &zone(), 0).unwrap()
 }
 
+/// A malformed record: a valid struct row whose every field is `NULL`.
+fn unreadable(out: &ArrayRef, row: usize) -> bool {
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    st.is_valid(row) && st.columns().iter().all(|c| c.is_null(row))
+}
+
 fn struct_of(fields: Vec<Field>) -> DataType {
     DataType::Struct(fields.into())
 }
@@ -89,12 +95,7 @@ fn lexer_edges_for_skips_escapes_and_keys() {
     bare.allow_unquoted_field_names = true;
     let t = struct_of(vec![Field::new("a", DataType::Int32, true)]);
     let out = read(&[Some("{,}")], &t, &bare);
-    assert!(
-        out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
-    );
+    assert!(unreadable(&out, 0));
     // A 1001-deep skipped value is too deep.
     let deep_val = format!("{}1{}", "[".repeat(1001), "]".repeat(1001));
     let out = read(
@@ -102,12 +103,7 @@ fn lexer_edges_for_skips_escapes_and_keys() {
         &struct_of(vec![Field::new("a", DataType::Utf8View, true)]),
         &opts,
     );
-    assert!(
-        out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
-    );
+    assert!(unreadable(&out, 0));
     // A missing colon inside a skipped value fails the query.
     let out = json_object_keys(&strs(&[Some("{\"a\": {\"b\" 1}}")])).unwrap();
     assert!(out.as_any().downcast_ref::<ListArray>().unwrap().is_null(0));
@@ -220,13 +216,7 @@ fn read_struct_and_nested_edges() {
     // A missing colon or trailing garbage fails the row.
     for bad in ["{\"a\" 1}", "{\"a\":1 \"b\":2}"] {
         let out = read(&[Some(bad)], &ints, &opts);
-        assert!(
-            out.as_any()
-                .downcast_ref::<StructArray>()
-                .unwrap()
-                .is_null(0),
-            "{bad}"
-        );
+        assert!(unreadable(&out, 0), "{bad}");
     }
     // A JSON null into a nested list is a null list, not a poisoned row.
     let nested = struct_of(vec![Field::new(
@@ -297,13 +287,7 @@ fn read_string_field_renders_every_token() {
         "{\"a\":{\"x\":1}",
     ] {
         let out = read(&[Some(bad)], &t, &opts);
-        assert!(
-            out.as_any()
-                .downcast_ref::<StructArray>()
-                .unwrap()
-                .is_null(0),
-            "{bad}"
-        );
+        assert!(unreadable(&out, 0), "{bad}");
     }
     // Bare keys work with the flag.
     let mut bare = JsonOptions::new();
@@ -337,12 +321,7 @@ fn read_string_field_renders_every_token() {
         [Some("[{\"b\":1}]".to_owned())]
     );
     let out = read(&[Some("{\"a\":{b 1}}")], &t, &bare);
-    assert!(
-        out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
-    );
+    assert!(unreadable(&out, 0));
 }
 
 #[test]

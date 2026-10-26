@@ -720,6 +720,34 @@ fn read_failfast_valid_unaffected_and_malformed_fails() {
     assert_eq!(a, [None]);
 }
 
+/// A malformed record in PERMISSIVE mode is a struct of NULLs, not a NULL
+/// struct, whether the lexer fails at once (`nope`), mid-document (a
+/// truncated object) or in a string escape; a non-struct target stays NULL.
+#[test]
+fn read_malformed_records_are_structs_of_nulls() {
+    let target = struct_of(vec![Field::new("a", DataType::Int32, true)]);
+    let out = read(
+        &[
+            Some("nope"),
+            Some("{\"a\":1"),
+            Some("{\"a\":\"\\q\"}"),
+            Some("{\"a\":2}"),
+            Some("null"),
+        ],
+        &target,
+        &JsonOptions::new(),
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let valid: Vec<bool> = (0..st.len()).map(|i| st.is_valid(i)).collect();
+    assert_eq!(valid, [true, true, true, true, false]);
+    let a: Vec<Option<i32>> = st.column(0).as_primitive::<Int32Type>().iter().collect();
+    assert_eq!(a, [None, None, None, Some(2), None]);
+    let list = list_of(Arc::new(Field::new("element", DataType::Int32, true)));
+    let out = read(&[Some("[1"), Some("nope")], &list, &JsonOptions::new());
+    let lists = out.as_any().downcast_ref::<ListArray>().unwrap();
+    assert!(lists.is_null(0) && lists.is_null(1));
+}
+
 #[test]
 fn read_maps_keep_duplicate_keys_struct_last_wins() {
     // Duplicate keys in a map target are kept.

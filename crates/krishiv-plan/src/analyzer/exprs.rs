@@ -15,13 +15,15 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
     DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
-    InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    FailedToParseTooComplex, InternalError, InvalidAggregateFilterNotBoolean,
+    InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
     NamedParametersNotSupported, NestedAggregateFunction, RequiredParameterNotFound,
     UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
     UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithoutSuggestion,
 };
+use krishiv_common::stack::on_big_stack;
 use krishiv_types::DataType;
 use twox_hash::XxHash3_128;
 
@@ -31,7 +33,7 @@ use super::builtins::{NamedDefault, NamedParam, named_signature};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::fold;
-use super::resolve::{Attr, Env, Rel, Resolver};
+use super::resolve::{Attr, Env, RESOLVE_STEP, Rel, Resolver};
 use super::suggest::closest;
 use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
@@ -598,9 +600,9 @@ fn is_special(value: &str) -> bool {
 /// `sum(x)` in `sum(x) OVER w` is a window aggregate, not an aggregate of
 /// the operator).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Ctx {
-    agg: bool,
-    window_fn: bool,
+pub(super) struct Ctx {
+    pub(super) agg: bool,
+    pub(super) window_fn: bool,
 }
 
 enum Step {
@@ -614,14 +616,46 @@ impl Resolver<'_> {
     /// Binds `e` in `cx`, post-order with an explicit stack; a node shared
     /// within the expression is bound once.
     pub(super) fn expr(&mut self, e: &Arc<Expr>, cx: &Cx<'_>) -> Result<Bound, AnalysisError> {
-        let mut done: HashMap<(usize, Ctx), Bound> = HashMap::new();
-        // Rewritten calls stay alive for the pass: `done` is keyed by
-        // address.
-        let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
         let top = Ctx {
             agg: false,
             window_fn: false,
         };
+        self.expr_in(top, e, cx)
+    }
+
+    /// Binds `e` in `cx` under the step context `top` (see [`Self::expr`]).
+    /// Higher-order calls bind their children through this with each
+    /// child's own context, so names inside lambdas resolve as the generic
+    /// path would resolve them. Every [`RESOLVE_STEP`] levels of
+    /// higher-order nesting run on a fresh stack (see [`Resolver::rel`).
+    pub(super) fn expr_in(
+        &mut self,
+        top: Ctx,
+        e: &Arc<Expr>,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        self.expr_depth += 1;
+        let r = if self.expr_depth.is_multiple_of(RESOLVE_STEP) {
+            on_big_stack(|| self.expr_in_on_stack(top, e, cx))
+                .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, e.origin)))
+        } else {
+            self.expr_in_on_stack(top, e, cx)
+        };
+        self.expr_depth -= 1;
+        r
+    }
+
+    /// [`Self::expr_in`] on the current stack.
+    fn expr_in_on_stack(
+        &mut self,
+        top: Ctx,
+        e: &Arc<Expr>,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let mut done: HashMap<(usize, Ctx), Bound> = HashMap::new();
+        // Rewritten calls stay alive for the pass: `done` is keyed by
+        // address.
+        let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
         let mut stack = vec![Step::Enter(Arc::clone(e), top)];
         while let Some(step) = stack.pop() {
             match step {
@@ -633,6 +667,36 @@ impl Resolver<'_> {
                         rewritten_calls.push(Arc::clone(&rewritten));
                         stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
                         stack.push(Step::Enter(rewritten, ctx));
+                        continue;
+                    }
+                    // A lambda binds where it is used: a higher-order
+                    // call binds its array and lambda children itself
+                    // (see `hof`), while a lambda anywhere else is no
+                    // higher-order call's argument.
+                    if let ExprNode::Function(f) = &x.node
+                        && (super::hof::Hof::of(&f.name).is_some()
+                            || super::hof::has_direct_lambda(f))
+                    {
+                        let Some(h) = super::hof::Hof::of(&f.name) else {
+                            return Err(super::hof::not_higher_order(&f.name, x.origin));
+                        };
+                        let kids = self.child_ctx(&x, ctx);
+                        for (key, bound) in self.hof_children(f, h, &kids, cx, x.origin)? {
+                            let step = kids
+                                .iter()
+                                .find(|(c, _)| addr(&**c) == key)
+                                .map(|(_, k)| *k)
+                                .unwrap_or(ctx);
+                            done.insert((key, step), bound);
+                        }
+                        stack.push(Step::Exit(Arc::clone(&x), ctx));
+                        let lambda = addr(&*f.args[1]);
+                        stack.extend(
+                            kids.into_iter()
+                                .rev()
+                                .filter(|(c, _)| addr(&**c) != lambda)
+                                .map(|(c, k)| Step::Enter(c, k)),
+                        );
                         continue;
                     }
                     stack.push(Step::Exit(Arc::clone(&x), ctx));
@@ -697,7 +761,10 @@ impl Resolver<'_> {
     }
 
     /// A call with `*` arguments, rewritten: `count(*)` is `count(1)`, any
-    /// other call takes the input columns.
+    /// other call takes the input columns. A qualified star of a struct
+    /// column in `struct`/`named_struct` (the `STRUCT(t.*)` syntax) takes
+    /// the struct's fields instead; in `named_struct` it replaces a
+    /// preceding placeholder name from that same syntax.
     fn star_args(&mut self, e: &Expr, cx: &Cx<'_>) -> Result<Option<Arc<Expr>>, AnalysisError> {
         let ExprNode::Function(f) = &e.node else {
             return Ok(None);
@@ -707,6 +774,8 @@ impl Resolver<'_> {
         }
         let count_star = f.name.eq_ignore_ascii_case("count")
             && matches!(&f.args[..], [a] if matches!(&a.node, ExprNode::Star(s) if s.qualifier.is_empty() && s.plan_id.is_none()));
+        let struct_star =
+            f.name.eq_ignore_ascii_case("struct") || f.name.eq_ignore_ascii_case("named_struct");
         let mut args = Vec::new();
         let mut arg_names = Vec::new();
         for (i, a) in f.args.iter().enumerate() {
@@ -717,6 +786,32 @@ impl Resolver<'_> {
                         Expr::literal(Literal::Integer(1)).with_origin(a.origin),
                     ));
                     arg_names.push(name);
+                }
+                ExprNode::Star(s) if struct_star => {
+                    let is_named = f.name.eq_ignore_ascii_case("named_struct");
+                    // A `STRUCT(t.*)` placeholder name precedes the star in
+                    // a `named_struct` the syntax lowered: the expansion
+                    // carries its own names.
+                    if is_named
+                        && matches!(
+                            args.last().map(|a| &a.node),
+                            Some(ExprNode::Literal(Literal::String(_)))
+                        )
+                    {
+                        args.pop();
+                        arg_names.pop();
+                    }
+                    for (name, field) in self.struct_star(s, cx, a.origin)? {
+                        if is_named {
+                            args.push(Arc::new(
+                                Expr::new(ExprNode::Literal(Literal::String(name)))
+                                    .with_origin(a.origin),
+                            ));
+                            arg_names.push(None);
+                        }
+                        args.push(field);
+                        arg_names.push(None);
+                    }
                 }
                 ExprNode::Star(s) => {
                     for attr in self.expand(s, cx, a.origin)? {
@@ -745,6 +840,80 @@ impl Resolver<'_> {
         Ok(Some(Arc::new(
             Expr::new(ExprNode::Function(call)).with_origin(e.origin),
         )))
+    }
+
+    /// The fields of the struct `s` (a qualified `t.*`) names, as resolved
+    /// field expressions. An unqualified star, a star with `EXCEPT` or a
+    /// DataFrame star, a qualifier no column has, or a qualifier of a
+    /// non-struct column falls back to the input columns
+    /// ([`Self::expand_star_as_columns`]): an unqualified star is all of
+    /// them, while a qualified one that is not a struct errors there when
+    /// nothing matches.
+    fn struct_star(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Vec<(String, Arc<Expr>)>, AnalysisError> {
+        let st = match s.qualifier[..] {
+            [] => None,
+            [..] if !s.except.is_empty() || s.plan_id.is_some() => None,
+            _ => match self.find(cx.scope, &s.qualifier, origin, false)? {
+                Some((a, used)) if used == s.qualifier.len() => match &a.col.data_type {
+                    DataType::Struct(st) => Some((a.clone(), st.clone())),
+                    _ => return self.columns_with_names(s, cx, origin),
+                },
+                _ => return self.columns_with_names(s, cx, origin),
+            },
+        };
+        let Some((attr, st)) = st else {
+            return self.columns_with_names(s, cx, origin);
+        };
+        self.used(&attr);
+        Ok(st
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(ordinal, field)| {
+                let nullable = field.nullable() || attr.col.nullable;
+                let name = field.name().to_owned();
+                let field = Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                        base: Arc::new(
+                            Expr::new(ExprNode::Resolved(ResolvedExpr::Column(attr.col.clone())))
+                                .with_origin(origin),
+                        ),
+                        ordinal,
+                        name: name.clone(),
+                        data_type: field.data_type().clone(),
+                        nullable,
+                    }))
+                    .with_origin(origin),
+                );
+                (name, field)
+            })
+            .collect())
+    }
+
+    /// [`Self::expand`] as resolved column expressions with their names.
+    fn columns_with_names(
+        &mut self,
+        s: &Star,
+        cx: &Cx<'_>,
+        origin: Origin,
+    ) -> Result<Vec<(String, Arc<Expr>)>, AnalysisError> {
+        Ok(self
+            .expand(s, cx, origin)?
+            .into_iter()
+            .map(|attr| {
+                let name = attr.col.name.clone();
+                let expr = Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Column(attr.col)))
+                        .with_origin(origin),
+                );
+                (name, expr)
+            })
+            .collect())
     }
 
     /// The attributes `*`, `t.*` or `df["*"]` stands for.
@@ -995,6 +1164,78 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
+            // A lambda outside a higher-order function's argument list:
+            // lambdas in argument position are bound by the higher-order
+            // call itself (see `hof`), never here. An already-bound lambda
+            // (re-analysis of a resolved plan) is preserved as-is; its body
+            // already holds `LambdaVar` leaves.
+            ExprNode::Lambda { body, .. } => {
+                let bound = crate::walk::visit_distinct(crate::walk::Node::Expr(body), |n| {
+                    if let crate::walk::Node::Expr(x) = n
+                        && matches!(&x.node, ExprNode::Resolved(ResolvedExpr::LambdaVar(_)))
+                    {
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    std::ops::ControlFlow::Continue(())
+                })
+                .is_break();
+                if bound && let Some(kid) = kids.first() {
+                    keep(kid.ty.clone())
+                } else {
+                    return Err(unsupported(
+                        "lambda functions outside a higher-order function",
+                        e.origin,
+                    ));
+                }
+            }
+            ExprNode::Field { base: _, name } => {
+                let b = &kids[0];
+                let st = match &b.ty.data_type {
+                    Some(DataType::Struct(st)) => st.clone(),
+                    _ => {
+                        let other =
+                            b.ty.data_type
+                                .as_ref()
+                                .map_or_else(|| "VOID".to_owned(), DataType::sql);
+                        return Err(AnalysisError::new(
+                            InvalidExtractBaseFieldType {
+                                base: format!(
+                                    "\"{}\"",
+                                    pretty(&b.shown(), self.ctx.conf.session_zone)
+                                ),
+                                other: format!("\"{other}\""),
+                            },
+                            e.origin,
+                        ));
+                    }
+                };
+                let cs = self.ctx.conf.case_sensitive;
+                let Some((ordinal, field)) = st
+                    .fields()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, f)| same(f.name(), name, cs))
+                else {
+                    return Err(unresolved_field(
+                        &[pretty(&b.shown(), self.ctx.conf.session_zone), name.clone()],
+                        &st,
+                        e.origin,
+                    ));
+                };
+                let ty = arg_type(field.data_type().clone(), field.nullable() || b.ty.nullable);
+                let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Field {
+                    base: Arc::clone(&b.expr),
+                    ordinal,
+                    name: name.clone(),
+                    data_type: ty.data_type.clone().unwrap_or(DataType::Null),
+                    nullable: ty.nullable,
+                }));
+                Bound {
+                    expr,
+                    ty: ty.clone(),
+                    ..keep(ty)
+                }
+            }
             ExprNode::Function(f) => {
                 let n = f.args.len();
                 if let Some(filter) = kids.get(n)
@@ -1083,6 +1324,31 @@ impl Resolver<'_> {
                 if !window_fn {
                     call_checks(&entry, e, &kids, n)?;
                 }
+                // `struct(a, ...)`: children with names keep them (a column
+                // contributes its name, a struct field its field name), so a
+                // call with any named child becomes `named_struct(name, ...)`
+                // with `colN` defaults; all-default calls stay `struct`.
+                if entry.id.name() == "struct"
+                    && let Some(rewritten) = self.struct_names(f, &kids[..n], e.origin)
+                {
+                    // The children are bound already, and rebinding a
+                    // resolved child drops its markers: carry them over.
+                    let mut b = self.expr(&rewritten, cx)?;
+                    for k in &kids[..n] {
+                        b.agg = b.agg.or(k.agg);
+                        b.win = b.win.or(k.win);
+                        b.outer = match (b.outer, k.outer) {
+                            (Some(x), Some(y)) => Some(x.min(y)),
+                            (x, y) => x.or(y),
+                        };
+                        for id in &k.lateral {
+                            if !b.lateral.contains(id) {
+                                b.lateral.push(*id);
+                            }
+                        }
+                    }
+                    return Ok(b);
+                }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
                 // Spark's constructor materializes the default message, so
                 // the schema names it (`assert_true(true, 'true' is not
@@ -1128,6 +1394,26 @@ impl Resolver<'_> {
                         owned.push(filter.clone());
                     }
                     (&owned[..], 3)
+                } else if entry.id.name() == "named_struct" && n > 0 {
+                    owned = kids.clone();
+                    // A foldable name that is not a literal becomes one, so
+                    // the executor binds it (the result rule already read it
+                    // folded; the shown form keeps the written argument for
+                    // error quotes).
+                    for k in owned.iter_mut().step_by(2) {
+                        if !matches!(k.expr.node, ExprNode::Literal(_))
+                            && let Some(Constant::String(name)) =
+                                self.fold(&k.expr, self.ctx.conf.ansi)
+                        {
+                            let lit = Arc::new(
+                                Expr::new(ExprNode::Literal(Literal::String(name)))
+                                    .with_origin(k.expr.origin),
+                            );
+                            k.shown = Some(Arc::clone(&k.expr));
+                            k.expr = lit;
+                        }
+                    }
+                    (&owned[..], n)
                 } else {
                     (&kids[..], n)
                 };
@@ -1135,11 +1421,19 @@ impl Resolver<'_> {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
+                // `schema_of_csv(lit)` resolves below to the DDL literal.
+                // The registry lookup is ASCII case-insensitive and
+                // `id.name()` is the canonical lower-case name, so a
+                // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
+                let is_schema_of_csv = entry.id.name() == "schema_of_csv";
                 if lookup_name.eq_ignore_ascii_case("mask") {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
+                // `typeof(x)` is Spark's `RuntimeReplaceable`; its type
+                // name is known once the call is typed.
+                let is_typeof = entry.id.name() == "typeof";
                 let call = ResolvedFunction {
                     id: entry.id,
                     kind: entry.kind,
@@ -1152,7 +1446,22 @@ impl Resolver<'_> {
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 let shown = self.call_shown(lookup_name, &expr, kids, &call_kids);
-                Bound {
+                // `typeof(x)` is Spark's `RuntimeReplaceable`: the analyzer
+                // replaces it with the type name literal, keeping the call
+                // as the shown form (the executor gets no type logic).
+                let (expr, shown) = if is_typeof {
+                    let name = call_kids
+                        .first()
+                        .and_then(|k| k.ty.data_type.clone())
+                        .map_or_else(|| "void".to_owned(), |t| t.catalog_string());
+                    (
+                        rebuilt(ExprNode::Literal(Literal::String(name))),
+                        Some(expr),
+                    )
+                } else {
+                    (expr, shown)
+                };
+                let mut bound = Bound {
                     agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
                     } else {
@@ -1161,7 +1470,14 @@ impl Resolver<'_> {
                     shown,
                     expr,
                     ..keep(ty)
+                };
+                // `schema_of_csv(lit)` resolves during analysis (Spark's
+                // `SchemaOfCsv` evaluates its foldable child): the DDL
+                // literal, shown as the call.
+                if is_schema_of_csv {
+                    self.resolve_schema_of_csv(e, &kids[..n], &mut bound)?;
                 }
+                bound
             }
             ExprNode::Cast { to, mode, .. } => {
                 let mode = match mode {
@@ -1209,7 +1525,13 @@ impl Resolver<'_> {
             }
             ExprNode::Subquery { kind, plan } => {
                 let env = self.sub_env(cx);
-                let rel = self.rel(plan, &env)?;
+                // A subquery resolves without the enclosing lambda scopes:
+                // its columns must not bind to enclosing lambda variables.
+                let saved = std::mem::take(&mut self.lambdas);
+                let rel = self.rel(plan, &env);
+                let stale = std::mem::replace(&mut self.lambdas, saved);
+                debug_assert!(stale.is_empty(), "a subquery leaks lambda scopes");
+                let rel = rel?;
                 let (data_type, nullable) = match kind {
                     SubqueryKind::Scalar => {
                         if rel.out.len() != 1 {
@@ -1252,10 +1574,18 @@ impl Resolver<'_> {
                 }
             }
             ExprNode::Window(w) => self.window(e, w, kids, cx)?,
-            ExprNode::Resolved(r) => keep(match r {
-                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => column(c),
-                ResolvedExpr::Alias { output, .. } => column(output),
-                ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+            ExprNode::Resolved(r) => keep({
+                use ResolvedExpr::{Column, LambdaVar, OuterColumn};
+                match r {
+                    Column(c) | OuterColumn(c) | LambdaVar(c) => column(c),
+                    ResolvedExpr::Alias { output, .. } => column(output),
+                    ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+                    ResolvedExpr::Field {
+                        data_type,
+                        nullable,
+                        ..
+                    } => arg_type(data_type.clone(), *nullable),
+                }
             }),
         };
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
@@ -1359,6 +1689,56 @@ impl Resolver<'_> {
             );
         }
         kids
+    }
+
+    /// `schema_of_csv(csv)` as the DDL literal it resolves to (Spark's
+    /// `SchemaOfCsv` evaluates its foldable child during analysis, keeping
+    /// the call as the output name). The signature's result rule already
+    /// rejected a non-foldable, null or non-string child, so anything but
+    /// a folded string here (a custom registry's rule) keeps the call;
+    /// that call has no scalar binding and fails at execution binding, so
+    /// it never resolves silently. Only the one-argument form resolves
+    /// here: the two-argument options form is rejected by the signature
+    /// (options are a map, which Krishiv cannot type yet), so the default
+    /// options below always match the accepted call. Out of line: it is on
+    /// the path of every call.
+    #[inline(never)]
+    fn resolve_schema_of_csv(
+        &self,
+        e: &Arc<Expr>,
+        kids: &[Bound],
+        bound: &mut Bound,
+    ) -> Result<(), AnalysisError> {
+        if kids.len() != 1 {
+            return Ok(());
+        }
+        let csv = kids
+            .first()
+            .and_then(|k| self.fold(&k.expr, self.ctx.conf.ansi));
+        let Some(Constant::String(csv)) = csv else {
+            return Ok(());
+        };
+        let options = krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema());
+        let ddl = krishiv_io::csv::ddl_of_string(&csv, &options).map_err(|err| {
+            AnalysisError::new(
+                match err {
+                    krishiv_io::FormatError::Other(e) => e,
+                    other => InternalError {
+                        message: other.to_string(),
+                    }
+                    .into(),
+                },
+                e.origin,
+            )
+        })?;
+        // Keep the form the call already shows (a session variable's name,
+        // not its value); otherwise show the call itself.
+        if bound.shown.is_none() {
+            bound.shown = Some(Arc::clone(&bound.expr));
+        }
+        bound.expr =
+            Arc::new(Expr::new(ExprNode::Literal(Literal::String(ddl))).with_origin(e.origin));
+        Ok(())
     }
 
     /// The shown form of the call `expr` (see [`shown_call`]); `date_add(d,
@@ -2481,6 +2861,19 @@ impl Resolver<'_> {
             col.name.clone_from(&parts[used - 1]);
             col
         };
+        if c.plan_id.is_none()
+            && let [name] = &c.name[..]
+            && let Some(var) = self.lambda_var(name)
+        {
+            // A lambda variable shadows the enclosing query's columns.
+            let mut col = var;
+            col.name.clone_from(name);
+            return Ok(bound(
+                ExprNode::Resolved(ResolvedExpr::LambdaVar(col.clone())),
+                &col,
+                None,
+            ));
+        }
         if let Some(id) = c.plan_id {
             let a = self.plan_column(id, &c.name, cx, origin)?;
             self.used(&a);
@@ -2500,12 +2893,7 @@ impl Resolver<'_> {
             let lenient = cx.lenient && i == 0;
             if let Some((a, used)) = self.find(level, &c.name, origin, lenient)? {
                 self.used(&a);
-                let col = renamed(&a, &c.name, used);
-                return Ok(bound(
-                    ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
-                    &col,
-                    None,
-                ));
+                return self.resolve_attr(&a, used, &c.name, origin, None);
             }
         }
         // A name no input column has may be a function written without
@@ -2583,12 +2971,7 @@ impl Resolver<'_> {
         for (level, outer) in levels.filter(|_| cx.outer) {
             if let Some((a, used)) = self.find(&outer.scope, &c.name, origin, false)? {
                 self.used(&a);
-                let col = renamed(&a, &c.name, used);
-                return Ok(bound(
-                    ExprNode::Resolved(ResolvedExpr::OuterColumn(col.clone())),
-                    &col,
-                    Some(level),
-                ));
+                return self.resolve_attr(&a, used, &c.name, origin, Some(level));
             }
         }
         // A name no column or outer reference has may be a session
@@ -2675,7 +3058,9 @@ impl Resolver<'_> {
     /// The attribute `parts` names in `scope` and how many parts it used:
     /// with a qualifier of 3, 2 or 1 parts (a suffix of the attribute's),
     /// then by name alone; the first form with any match decides. Several
-    /// matches are `AMBIGUOUS_REFERENCE`, or no match when `lenient`.
+    /// matches are `AMBIGUOUS_REFERENCE`, or no match when `lenient`. A
+    /// single match with leftover parts resolves them as struct fields in
+    /// [`Self::resolve_attr`].
     fn find(
         &self,
         scope: &[Attr],
@@ -2702,15 +3087,10 @@ impl Resolver<'_> {
             match hits[..] {
                 [] => continue,
                 [a] if parts.len() > q + 1 => {
-                    // Struct fields: no nested types exist yet, so any
-                    // field access is on a non-struct column.
-                    return Err(AnalysisError::new(
-                        InvalidExtractBaseFieldType {
-                            base: format!("\"{}\"", parts[q]),
-                            other: format!("\"{}\"", a.col.data_type.sql()),
-                        },
-                        origin,
-                    ));
+                    // A longer path may name struct fields below the
+                    // column; the caller resolves them (or reports the
+                    // base type when the column is not a struct).
+                    return Ok(Some((a.clone(), q + 1)));
                 }
                 [a] => return Ok(Some((a.clone(), q + 1))),
                 _ if lenient => return Ok(None),
@@ -2735,6 +3115,133 @@ impl Resolver<'_> {
             }
         }
         Ok(None)
+    }
+
+    /// `struct` with named children as `named_struct`, or `None` when every
+    /// child defaults to `colN`: a column contributes its (written) name, a
+    /// struct field its field name, an alias its output name.
+    fn struct_names(&self, f: &FunctionCall, kids: &[Bound], origin: Origin) -> Option<Arc<Expr>> {
+        let mut names = Vec::with_capacity(kids.len());
+        for (i, k) in kids.iter().enumerate() {
+            let name = match &k.expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
+                    c.name.clone()
+                }
+                ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
+                ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
+                _ => format!("col{}", i + 1),
+            };
+            names.push(name);
+        }
+        if names
+            .iter()
+            .enumerate()
+            .all(|(i, n)| *n == format!("col{}", i + 1))
+        {
+            return None;
+        }
+        let mut args = Vec::with_capacity(2 * kids.len());
+        for (name, k) in names.into_iter().zip(kids) {
+            args.push(Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(name))).with_origin(origin),
+            ));
+            args.push(Arc::clone(&k.expr));
+        }
+        Some(Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                name: "named_struct".to_owned(),
+                qualifier: Vec::new(),
+                args,
+                arg_names: Vec::new(),
+                distinct: f.distinct,
+                filter: None,
+            }))
+            .with_origin(origin),
+        ))
+    }
+
+    /// The attribute `a` matched with `used` of `parts`: the column itself,
+    /// or the struct fields the leftover parts name below it (Spark's
+    /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
+    /// `outer` is `Some` for a column of the enclosing query.
+    fn resolve_attr(
+        &mut self,
+        a: &Attr,
+        used: usize,
+        parts: &[String],
+        origin: Origin,
+        outer: Option<usize>,
+    ) -> Result<Bound, AnalysisError> {
+        // A reference keeps the spelling it was written with.
+        let mut col = a.col.clone();
+        col.name.clone_from(&parts[used - 1]);
+        let node = match outer {
+            None => ExprNode::Resolved(ResolvedExpr::Column(col.clone())),
+            Some(_) => ExprNode::Resolved(ResolvedExpr::OuterColumn(col.clone())),
+        };
+        if used == parts.len() {
+            return Ok(Bound {
+                expr: Arc::new(Expr::new(node).with_origin(origin)),
+                ty: column(&col),
+                agg: None,
+                win: None,
+                outer,
+                lateral: Vec::new(),
+                shown: None,
+            });
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        let mut ty = column(&col);
+        let mut base = Arc::new(Expr::new(node).with_origin(origin));
+        let mut parent = parts[used - 1].clone();
+        for part in &parts[used..] {
+            let st = match &ty.data_type {
+                Some(DataType::Struct(st)) => st.clone(),
+                _ => {
+                    let other = ty
+                        .data_type
+                        .as_ref()
+                        .map_or_else(|| "VOID".to_owned(), DataType::sql);
+                    return Err(AnalysisError::new(
+                        InvalidExtractBaseFieldType {
+                            base: format!("\"{parent}\""),
+                            other: format!("\"{other}\""),
+                        },
+                        origin,
+                    ));
+                }
+            };
+            let Some((ordinal, field)) = st
+                .fields()
+                .iter()
+                .enumerate()
+                .find(|(_, f)| same(f.name(), part, cs))
+            else {
+                return Err(unresolved_field(parts, &st, origin));
+            };
+            parent.clone_from(part);
+            let field_ty = arg_type(field.data_type().clone(), field.nullable() || ty.nullable);
+            base = Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                    base: Arc::clone(&base),
+                    ordinal,
+                    name: part.clone(),
+                    data_type: field_ty.data_type.clone().unwrap_or(DataType::Null),
+                    nullable: field_ty.nullable,
+                }))
+                .with_origin(origin),
+            );
+            ty = field_ty;
+        }
+        Ok(Bound {
+            expr: base,
+            ty,
+            agg: None,
+            win: None,
+            outer,
+            lateral: Vec::new(),
+            shown: None,
+        })
     }
 
     pub(super) fn sub_env(&mut self, cx: &Cx<'_>) -> Arc<Env> {
@@ -2785,6 +3292,30 @@ fn fold_case(name: &str, case_sensitive: bool) -> String {
 /// Whether folded path `a` is a prefix of (or equal to) folded path `b`.
 fn is_prefix(a: &[String], b: &[String]) -> bool {
     a.len() <= b.len() && a.iter().zip(b).all(|(x, y)| x == y)
+}
+
+/// `UNRESOLVED_COLUMN` for a struct field `parts` names below a struct
+/// with `fields` (Spark's `GetStructField` by an unknown name): the full
+/// path as the object, up to five of the struct's fields as the proposal.
+fn unresolved_field(
+    parts: &[String],
+    fields: &krishiv_types::StructType,
+    origin: Origin,
+) -> AnalysisError {
+    let proposal = fields
+        .fields()
+        .iter()
+        .take(5)
+        .map(|f| quoted(std::slice::from_ref(&f.name().to_owned())))
+        .collect::<Vec<_>>()
+        .join(", ");
+    AnalysisError::new(
+        UnresolvedColumnWithSuggestion {
+            object_name: quoted(parts),
+            proposal,
+        },
+        origin,
+    )
 }
 
 /// `UNRESOLVED_COLUMN`, with up to five of `scope`'s columns ranked by edit
@@ -3060,6 +3591,9 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             format!("{cast}({} AS {})", k[0], to.sql())
         }
         ExprNode::Alias { .. } | ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
+        ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
+            format!("{}.{}", k[0], name)
+        }
         ExprNode::Subquery { kind, plan } => {
             // Spark lists the outer references.
             let outer = outer_names(plan);
@@ -3079,6 +3613,14 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             }
         }
         ExprNode::Star(_) => "*".to_owned(),
+        // Spark's `lambdafunction(body, arg1, ...)`: the variables render
+        // as `namedlambdavariable()` when hidden (see `hof`).
+        ExprNode::Lambda { params, .. } => {
+            let mut args = vec![k[0].to_owned()];
+            args.extend(params.iter().map(|p| p.name.clone()));
+            format!("lambdafunction({})", args.join(", "))
+        }
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => c.name.clone(),
         ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall {
             name,
@@ -3376,6 +3918,12 @@ fn call(
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{})", name.to_lowercase(), k[0])
         }
+        // `JsonToStructs` has the JSON text as its only child: the schema and
+        // the options are not shown.
+        _ if name.eq_ignore_ascii_case("from_json") && !k.is_empty() => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("from_json({d}{})", k[0])
+        }
         // The bitwise operators show infix (`(20181117 >> 2)`), `~`
         // prefix; `to_varchar` shows as `to_char`.
         _ if k.len() == 2 && matches!(name, "&" | "|" | "^" | "<<" | ">>" | ">>>") => infix(name),
@@ -3383,6 +3931,16 @@ fn call(
         _ if name.eq_ignore_ascii_case("to_varchar") => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("to_char({d}{})", k.join(", "))
+        }
+        // `current_database` and `current_schema` are one expression
+        // (Spark's `CurrentDatabase`, shown as `current_schema`);
+        // `current_catalog` shows without parentheses.
+        _ if name.eq_ignore_ascii_case("current_database") => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("current_schema({d}{})", k.join(", "))
+        }
+        _ if name.eq_ignore_ascii_case("current_catalog") && k.is_empty() && !distinct => {
+            "current_catalog".to_owned()
         }
         // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
         // two-argument math (`power`, `atan2`, `hypot`) print upper case,
@@ -3699,6 +4257,38 @@ mod tests {
         assert_eq!(literal.to_string(), "MAP('mode', 'FAILFAST')");
     }
 
+    /// `lambdafunction(body, arg1, ...)`: a resolved lambda variable
+    /// prints as its name, like Spark's `NamedLambdaVariable`.
+    #[test]
+    fn lambdas_print_as_sparks_lambdafunction() {
+        let var = BoundColumn {
+            id: AttrId(9),
+            name: "y".to_owned(),
+            data_type: DataType::Integer,
+            nullable: false,
+        };
+        let body = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
+            var.clone(),
+        ))));
+        assert_eq!(pretty(&body, None), "y");
+        let lam = Expr::new(ExprNode::Lambda {
+            params: vec![var],
+            body,
+        });
+        assert_eq!(pretty(&lam, None), "lambdafunction(y, y)");
+    }
+
+    /// `*` prints as itself (the arm beside the lambda printers).
+    #[test]
+    fn stars_print_as_sql() {
+        let star = Expr::new(ExprNode::Star(crate::Star {
+            qualifier: Vec::new(),
+            except: Vec::new(),
+            plan_id: None,
+        }));
+        assert_eq!(pretty(&star, None), "*");
+    }
+
     /// `call()` renders named arguments with their `name => ` prefixes and
     /// quantified forms in their SQL shape.
     #[test]
@@ -3735,6 +4325,21 @@ mod tests {
             ),
             "notlikeall(c)"
         );
+    }
+
+    /// `from_json` is named after its JSON argument alone, with or without
+    /// options (Spark's `JsonToStructs` has one child).
+    #[test]
+    fn from_json_is_named_after_the_json_argument() {
+        for k in [
+            &["value", "a INT"][..],
+            &["value", "a INT", "MAP('mode', 'FAILFAST')"][..],
+        ] {
+            assert_eq!(
+                call("from_json", None, false, k, None, None),
+                "from_json(value)"
+            );
+        }
     }
 
     /// The `UNRECOGNIZED_PARAMETER_NAME` proposal follows Spark's similarity

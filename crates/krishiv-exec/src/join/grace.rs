@@ -516,8 +516,9 @@ async fn reverse(
     let hashing = hashing.clone();
     let handle = Arc::clone(ctx.consumer().consumer());
     let query = Arc::clone(ctx.query());
+    let partition = ctx.partition();
     let out = ctx
-        .run_blocking(move || reverse_blocking(&shared, &hashing, task, &handle, &query))
+        .run_blocking(move || reverse_blocking(&shared, &hashing, task, &handle, &query, partition))
         .await;
     ctx.consumer().consumer().release_credit();
     out
@@ -536,6 +537,7 @@ fn reverse_blocking(
     task: Task,
     handle: &Arc<ConsumerHandle>,
     query: &QueryContext,
+    partition: u32,
 ) -> Result<Reversed> {
     // Everything the join holds is reserved before it is allocated, and the
     // reversal declines while it still can (before the build stream starts):
@@ -648,10 +650,10 @@ fn reverse_blocking(
                 }
             }
             if pairs.len() >= PAIR_BATCH {
-                mark_pairs(shared, &probe, &mut pairs, &mut matched)?;
+                mark_pairs(shared, &probe, &mut pairs, &mut matched, partition)?;
             }
         }
-        mark_pairs(shared, &probe, &mut pairs, &mut matched)
+        mark_pairs(shared, &probe, &mut pairs, &mut matched, partition)
     };
     for_each(
         build,
@@ -684,6 +686,7 @@ fn mark_pairs(
     probe: &Batch,
     pairs: &mut Vec<(u32, &[u8])>,
     matched: &mut [bool],
+    partition: u32,
 ) -> Result<()> {
     let Some(filter) = &shared.filter else {
         pairs.clear();
@@ -701,7 +704,7 @@ fn mark_pairs(
     let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
     columns.extend(build_cols);
     let candidates = super::record(&shared.filter_schema, columns, m)?;
-    let mask = filter.evaluate(&candidates)?;
+    let mask = filter.evaluate_in(&candidates, partition)?;
     if mask.len() != m {
         return Err(internal(
             "a join filter returned the wrong row count".to_owned(),
@@ -770,10 +773,11 @@ pub(crate) async fn step(
         .get()
         .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
     let limit = ctx.query().config().batch_size.max(1);
+    let partition = ctx.partition();
     if let Some(a) = &mut st.active {
         if let Some(c) = &mut a.cursor {
             let tables = Tables::Single(&a.table);
-            let (out, done) = c.next(shared, &tables, limit)?;
+            let (out, done) = c.next(shared, &tables, limit, partition)?;
             if done {
                 a.cursor = None;
             }
@@ -1642,6 +1646,7 @@ mod tests {
             build_keys: vec![0],
             null_safe: vec![false],
             filter: None,
+            single_match: false,
             spill: Some(scope.clone()),
         })
         .unwrap();
@@ -1675,9 +1680,14 @@ mod tests {
         let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
         filler.try_grow(LIMIT - root.reserved()).unwrap();
         let handle = Arc::clone(ctx.consumer().consumer());
-        let Ok(Reversed::Declined(task)) =
-            reverse_blocking(shared, &hashing, task, &handle, ctx.query())
-        else {
+        let Ok(Reversed::Declined(task)) = reverse_blocking(
+            shared,
+            &hashing,
+            task,
+            &handle,
+            ctx.query(),
+            ctx.partition(),
+        ) else {
             panic!("the probe rows cannot fit");
         };
         assert_eq!(task.probe.files.len(), files, "nothing was consumed");
@@ -1685,9 +1695,14 @@ mod tests {
         // With room, the same task joins: a semi join with no build rows
         // emits nothing, and the probe files are gone with the task.
         drop(filler);
-        let Ok(Reversed::Joined(out)) =
-            reverse_blocking(shared, &hashing, task, &handle, ctx.query())
-        else {
+        let Ok(Reversed::Joined(out)) = reverse_blocking(
+            shared,
+            &hashing,
+            task,
+            &handle,
+            ctx.query(),
+            ctx.partition(),
+        ) else {
             panic!("the probe rows fit now");
         };
         assert!(out.is_none());

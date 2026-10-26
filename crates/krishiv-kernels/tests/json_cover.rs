@@ -46,6 +46,12 @@ fn write(col: &ArrayRef, opts: &JsonOptions) -> Vec<Option<String>> {
         .collect()
 }
 
+/// A malformed record: a valid struct row whose every field is `NULL`.
+fn unreadable(out: &ArrayRef, row: usize) -> bool {
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    st.is_valid(row) && st.columns().iter().all(|c| c.is_null(row))
+}
+
 fn struct_of(fields: Vec<Field>) -> DataType {
     DataType::Struct(fields.into())
 }
@@ -472,20 +478,10 @@ fn leniency_flags_open_up_the_lexer() {
     assert!(!st.is_null(0) && !st.is_null(1));
     // Unterminated block comment poisons.
     let out = read(&[Some("{\"a\":1 /* xx")], &target, &o);
-    assert!(
-        out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
-    );
+    assert!(unreadable(&out, 0));
     // A bare slash outside comments is malformed even with the flag.
     let out = read(&[Some("/{\"a\":1}")], &target, &o);
-    assert!(
-        out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
-    );
+    assert!(unreadable(&out, 0));
 
     // Single quotes.
     let mut o = JsonOptions::new();
@@ -508,12 +504,7 @@ fn leniency_flags_open_up_the_lexer() {
     assert_eq!(st.column(0).as_primitive::<Int32Type>().value(0), 7);
     // Without the flag that poisons.
     let out = read(&[Some("{\"a\":007}")], &t, &JsonOptions::new());
-    assert!(
-        out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
-    );
+    assert!(unreadable(&out, 0));
 
     // Backslash-escaping-any + unquoted names + unquoted control chars.
     let mut o = JsonOptions::new();
@@ -537,12 +528,7 @@ fn leniency_flags_open_up_the_lexer() {
     let mut o2 = JsonOptions::new();
     o2.allow_unquoted_field_names = true;
     let out = read(&[Some("{a:\"\\q\"}")], &t, &o2);
-    assert!(
-        out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
-    );
+    assert!(unreadable(&out, 0));
     // Bare non-ascii names read with the flag, matching the field.
     let mut o3 = JsonOptions::new();
     o3.allow_unquoted_field_names = true;
@@ -566,12 +552,7 @@ fn leniency_flags_open_up_the_lexer() {
         &struct_of(vec![Field::new("é", DataType::Int32, true)]),
         &JsonOptions::new(),
     );
-    assert!(
-        out.as_any()
-            .downcast_ref::<StructArray>()
-            .unwrap()
-            .is_null(0)
-    );
+    assert!(unreadable(&out, 0));
 }
 
 #[test]
@@ -599,13 +580,7 @@ fn escapes_numbers_and_literals() {
         "{\"a\":\"a\x01b\"}",
     ] {
         let out = read(&[Some(bad)], &t, &opts);
-        assert!(
-            out.as_any()
-                .downcast_ref::<StructArray>()
-                .unwrap()
-                .is_null(0),
-            "{bad}"
-        );
+        assert!(unreadable(&out, 0), "{bad}");
     }
     for bad in [
         "{\"a\":\"\\uD834\"}",
@@ -632,13 +607,7 @@ fn escapes_numbers_and_literals() {
         "{\"a\":--1}",
     ] {
         let out = read(&[Some(bad)], &ti, &opts);
-        assert!(
-            out.as_any()
-                .downcast_ref::<StructArray>()
-                .unwrap()
-                .is_null(0),
-            "{bad}"
-        );
+        assert!(unreadable(&out, 0), "{bad}");
     }
     // Control chars rejected without the flag, accepted with it.
     let mut o = JsonOptions::new();
@@ -948,9 +917,69 @@ fn read_decimal_rounds_once_and_bounds_exponents() {
         .iter()
         .collect();
     assert_eq!(values, [Some(123), Some(124), Some(-123), Some(250)]);
+    // A small exponent rounds to zero (`1e-50` is `0.00`, as is `0.001`),
+    // `0.005` rounds up, and `0.05` into a whole-number decimal is `0`.
+    let out = read(
+        &[
+            Some("{\"d\":1e-50}"),
+            Some("{\"d\":0.001}"),
+            Some("{\"d\":0.005}"),
+            Some("{\"d\":5e-3}"),
+        ],
+        &t,
+        &opts,
+    );
+    let values: Vec<Option<i128>> = out
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .unwrap()
+        .column(0)
+        .as_primitive::<Decimal128Type>()
+        .iter()
+        .collect();
+    assert_eq!(values, [Some(0), Some(0), Some(1), Some(1)]);
+    let whole = struct_of(vec![Field::new("d", DataType::Decimal128(10, 0), true)]);
+    let out = read(&[Some("{\"d\":0.05}"), Some("{\"d\":0.5}")], &whole, &opts);
+    let values: Vec<Option<i128>> = out
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .unwrap()
+        .column(0)
+        .as_primitive::<Decimal128Type>()
+        .iter()
+        .collect();
+    assert_eq!(values, [Some(0), Some(1)]);
+    // A mantissa past the precision rounds at the scale (Spark reads
+    // `0.1234567890123456789012345678901234567890` into `DECIMAL(38,38)` as
+    // `...679`); an integer part past the precision is `NULL`.
+    let wide = struct_of(vec![Field::new("d", DataType::Decimal128(38, 38), true)]);
+    let out = read(
+        &[
+            Some("{\"d\":0.1234567890123456789012345678901234567890}"),
+            Some("{\"d\":1.5}"),
+        ],
+        &wide,
+        &opts,
+    );
+    let values: Vec<Option<i128>> = out
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .unwrap()
+        .column(0)
+        .as_primitive::<Decimal128Type>()
+        .iter()
+        .collect();
+    assert_eq!(
+        values,
+        [
+            Some(12_345_678_901_234_567_890_123_456_789_012_345_679),
+            None
+        ]
+    );
     // An untrusted exponent cannot set a loop count: these return at once.
-    // A scale past 38 never fits (`1e-2000000000` is `NULL`), while zero
-    // of any exponent reads as zero (`0e2000000000` is `0.00`).
+    // A rescale past what `BigDecimal.setScale` can do (`1e-2000000000`)
+    // is `NULL`, while zero of any exponent reads as zero (`0e2000000000`
+    // is `0.00`).
     let out = read(
         &[
             Some("{\"d\":1e-2000000000}"),
@@ -1053,13 +1082,12 @@ fn read_non_numeric_numbers_with_the_flag() {
     assert!(st.column(0).is_null(0));
     assert!(st.column(1).is_null(0));
     // Without the flag the spellings are malformed: span splitting fails,
-    // so the whole row is `NULL`.
+    // so the row is a struct of `NULL`s.
     let mut strict = JsonOptions::new();
     strict.allow_non_numeric_numbers = false;
     let t = struct_of(vec![Field::new("d", DataType::Float64, true)]);
     let out = read(&[Some("{\"d\":NaN}")], &t, &strict);
-    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
-    assert!(st.is_null(0));
+    assert!(unreadable(&out, 0));
     // `schema_of_json` infers a `DOUBLE` for them.
     let got = infer_json(&strs(&[Some("{\"a\":NaN}")]), &opts).unwrap();
     assert_eq!(

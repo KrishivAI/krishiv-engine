@@ -56,6 +56,7 @@ use super::args::{Inputs, Prim, Str, internal, is_string};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 mod java;
+pub(super) use java::translate;
 
 /// The most backtracking steps one match attempt may take (the
 /// `fancy_regex` default, set explicitly so an upgrade cannot change it).

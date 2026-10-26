@@ -8,7 +8,8 @@
 //! (structural queries). The text parser is shared: a strict JSON lexer
 //! with the `JSONOptions` flags Spark's JSON reader has (comments, single
 //! quotes, leading zeros, ...). In `PERMISSIVE` mode (the default)
-//! malformed input is a `NULL`; in `FAILFAST` mode (`mode => FAILFAST`)
+//! malformed input is a struct of `NULL`s for a struct schema and a `NULL`
+//! otherwise; in `FAILFAST` mode (`mode => FAILFAST`)
 //! `from_json` fails the read with
 //! `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION`. Only unreachable
 //! states (a kernel called with the wrong Arrow type, or a builder past

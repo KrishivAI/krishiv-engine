@@ -39,8 +39,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::AggregateFunction;
-use krishiv_exec::physical::{Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
+use krishiv_exec::aggregate::{AggregateFunction, is_moment};
+use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, Literal, ResolvedExpr};
 use krishiv_types::DataType;
@@ -117,10 +117,16 @@ macro_rules! registry {
 // The registry: one line per feature, kept alphabetically sorted by id.
 // (id, variant, legacy level, kind, meaning)
 registry! {
+    (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
+    (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
+    (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
+    (lambda_functions, LambdaFunctions, POST_MIGRATION_READER_VERSION, Semantic, "Lambda expressions (`x -> body`) and variables: the bound bodies of higher-order function arguments (`transform`, `filter`, `exists`, `forall`)."),
+    (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -162,12 +168,17 @@ pub enum Construct<'a> {
     Frame(&'a WindowFrame),
     /// An aggregate function (of an aggregate or a window).
     Aggregate(AggregateFunction),
+    /// A resolved expression (a struct field access needs its feature).
+    Expr(&'a Expr),
     /// A Spark type in an expression or a column.
     Type(&'a DataType),
     /// An Arrow type the plan carries as IPC bytes (an aggregate's argument,
     /// a subquery's value, a runtime filter's key, a window offset function's
     /// value, the plan's output schema).
     ArrowType(&'a arrow_schema::DataType),
+    /// A lambda expression or variable: the bound body of a higher-order
+    /// function's argument.
+    Lambda,
 }
 
 /// Whether an Arrow type is or contains an array, map or struct.
@@ -199,6 +210,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
     match construct {
         Construct::Node(node) => match node {
             PhysNode::Limit { offset, .. } => (*offset != 0).then_some(Feature::LimitOffset),
+            PhysNode::HashJoin(j) => j.single_match.then_some(Feature::JoinSingleMatch),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
@@ -210,7 +222,6 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::Sort { .. }
             | PhysNode::TopN { .. }
             | PhysNode::Aggregate { .. }
-            | PhysNode::HashJoin(_)
             | PhysNode::NestedLoopJoin(_)
             | PhysNode::Union { .. }
             | PhysNode::WriteFiles { .. }
@@ -226,13 +237,17 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | JoinType::LeftSemi
             | JoinType::LeftAnti
             | JoinType::NullAwareAnti => None,
+            JoinType::Existence => Some(Feature::ExistenceJoin),
             JoinType::RightSemi | JoinType::RightAnti | JoinType::RightOuter => {
                 Some(Feature::JoinBuildPreserved)
             }
         },
         Construct::Partitioning(p) => match p {
-            Partitioning::Hash { .. }
-            | Partitioning::Single
+            Partitioning::Hash { scheme, .. } => match scheme {
+                HashScheme::Unpinned => None,
+                HashScheme::KeyGroupV1 => Some(Feature::KeyGroupHash),
+            },
+            Partitioning::Single
             | Partitioning::Broadcast
             | Partitioning::RoundRobin
             | Partitioning::Range { .. } => None,
@@ -250,6 +265,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 Some(Feature::WindowOffsetFunctions)
             }
         },
+        // A lambda is plan data behind its own feature: a reader without
+        // it misreads the higher-order call's argument.
+        Construct::Lambda => Some(Feature::LambdaFunctions),
         // A type Krishiv does not know cannot be encoded at all. A later
         // feature for a type that can sit inside an array, map or struct
         // (variant, char/varchar, intervals) must look through them: its
@@ -257,6 +275,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // `array<variant>` needs it too.
         Construct::Type(t) => t.is_nested().then_some(Feature::NestedTypes),
         Construct::ArrowType(t) => arrow_nested(t).then_some(Feature::NestedTypes),
+        Construct::Expr(e) => match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),
+            _ => None,
+        },
         // The `Window` node's format carries every frame between unbounded
         // and current-row bounds; an offset bound is newer. `FrameBound` is
         // non-exhaustive, so a bound added later counts as newer too.
@@ -279,6 +301,17 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::Max
             | AggregateFunction::First { .. }
             | AggregateFunction::Last { .. }
+            // These are not encodable yet: the encoder refuses them, so
+            // none reaches a worker.
+            | AggregateFunction::StddevSamp
+            | AggregateFunction::StddevPop
+            | AggregateFunction::VarSamp
+            | AggregateFunction::VarPop
+            | AggregateFunction::Skewness
+            | AggregateFunction::Kurtosis
+            | AggregateFunction::Corr
+            | AggregateFunction::CovarSamp
+            | AggregateFunction::CovarPop
             | AggregateFunction::AnyValue { .. }
             | AggregateFunction::MaxBy
             | AggregateFunction::MinBy => None,
@@ -328,6 +361,15 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
     for t in arrow_types_of(node) {
         f(Construct::ArrowType(t));
     }
+    for e in exprs_of(node) {
+        if matches!(
+            &e.node,
+            ExprNode::Lambda { .. } | ExprNode::Resolved(ResolvedExpr::LambdaVar(_))
+        ) {
+            f(Construct::Lambda);
+        }
+        f(Construct::Expr(e));
+    }
 }
 
 /// The Arrow types `node` carries as IPC bytes.
@@ -371,6 +413,30 @@ fn arrow_types_of(node: &PhysNode) -> Vec<&arrow_schema::DataType> {
 /// The Spark types `node` holds: those of its scan columns and of every
 /// expression in it (columns, casts, functions, aliases, typed NULLs).
 fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
+    let mut out: Vec<&'a DataType> = Vec::new();
+    for e in exprs_of(node) {
+        match &e.node {
+            ExprNode::Cast { to, .. } => out.push(to),
+            ExprNode::Literal(Literal::Null(Some(t))) => out.push(t),
+            ExprNode::Resolved(
+                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c),
+            ) => {
+                out.push(&c.data_type);
+            }
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
+            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
+            ExprNode::Resolved(ResolvedExpr::Field { data_type, .. }) => out.push(data_type),
+            _ => {}
+        }
+    }
+    if let PhysNode::Scan(scan) = node {
+        out.extend(scan.scan.output.iter().map(|c| &c.data_type));
+    }
+    out
+}
+
+/// Every expression `node` holds, each once (shared subtrees visited once).
+fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
     fn items(items: &[ProjectItemPlan]) -> impl Iterator<Item = &Arc<Expr>> {
         items.iter().filter_map(|i| match i {
             ProjectItemPlan::Expr { expr, .. } => Some(expr),
@@ -378,10 +444,8 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
         })
     }
     let mut roots: Vec<&'a Arc<Expr>> = Vec::new();
-    let mut out: Vec<&'a DataType> = Vec::new();
     match node {
         PhysNode::Scan(scan) => {
-            out.extend(scan.scan.output.iter().map(|c| &c.data_type));
             roots.extend(scan.filter.iter().map(|f| &f.predicate));
         }
         PhysNode::Filter { predicate, .. } => roots.push(predicate),
@@ -406,37 +470,43 @@ fn types_of<'a>(node: &'a PhysNode) -> Vec<&'a DataType> {
     // Expressions share subtrees: each is visited once.
     let mut seen = std::collections::HashSet::new();
     let mut stack = roots;
+    let mut out = Vec::new();
     while let Some(e) = stack.pop() {
         if !seen.insert(Arc::as_ptr(e)) {
             continue;
         }
-        match &e.node {
-            ExprNode::Cast { to, .. } => out.push(to),
-            ExprNode::Literal(Literal::Null(Some(t))) => out.push(t),
-            ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c)) => {
-                out.push(&c.data_type);
-            }
-            ExprNode::Resolved(ResolvedExpr::Function(f)) => out.push(&f.data_type),
-            ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => out.push(&output.data_type),
-            _ => {}
-        }
+        out.push(e);
         e.for_each_child(&mut |c| stack.push(c));
     }
     out
 }
 
 /// The features `plan` uses: a pure function of its content. Subquery plans
-/// count; nothing recurses.
+/// count; nothing recurses. The expression environment counts too, but only
+/// around a moment aggregate: a plan whose session sets
+/// `spark.sql.legacy.statisticalAggregate` needs a reader that carries the
+/// flag, or it would compute NULL where Spark gives NaN. A plan without one
+/// runs the same everywhere, so the flag alone lists no feature and readers
+/// without it keep reading the plan.
 #[must_use]
 pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     let mut out = BTreeSet::new();
+    let mut has_moment = false;
     let mut stack = vec![plan.root()];
     while let Some(node) = stack.pop() {
-        constructs_of(node, &mut |c| out.extend(feature_of(c)));
+        constructs_of(node, &mut |c| {
+            if matches!(c, Construct::Aggregate(function) if is_moment(function)) {
+                has_moment = true;
+            }
+            out.extend(feature_of(c));
+        });
         stack.extend(node.children());
     }
     for field in plan.schema().fields() {
         out.extend(feature_of(Construct::ArrowType(field.data_type())));
+    }
+    if has_moment && plan.env().legacy_statistical_aggregate {
+        out.insert(Feature::LegacyStatisticalAggregate);
     }
     out
 }

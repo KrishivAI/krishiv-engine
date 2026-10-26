@@ -79,7 +79,7 @@ fn run_build(layout: &RowLayout, input: &[ArrayRef], name: &str) -> usize {
     let mut pages = RowPages::new(layout);
     let mut ids = Vec::new();
     for a in input {
-        let keys = layout.encode(&[Arc::clone(a)], 42).expect("encode");
+        let keys = layout.encode(&[Arc::clone(a)]).expect("encode");
         table
             .find_or_insert(layout, &keys, &mut pages, &mut ids)
             .expect("insert");
@@ -116,7 +116,7 @@ fn bench(c: &mut Criterion) {
         let mut pages = RowPages::new(&layout);
         let mut ids = Vec::new();
         for a in &input {
-            let keys = layout.encode(&[Arc::clone(a)], 42).expect("encode");
+            let keys = layout.encode(&[Arc::clone(a)]).expect("encode");
             table
                 .find_or_insert(&layout, &keys, &mut pages, &mut ids)
                 .expect("insert");
@@ -125,7 +125,7 @@ fn bench(c: &mut Criterion) {
             b.iter(|| {
                 let mut out = Vec::new();
                 for a in &probes {
-                    let keys = layout.encode(&[Arc::clone(a)], 42).expect("encode");
+                    let keys = layout.encode(&[Arc::clone(a)]).expect("encode");
                     table.find(&layout, &keys, &pages, &mut out);
                     black_box(&out);
                 }
@@ -134,7 +134,7 @@ fn bench(c: &mut Criterion) {
     }
     // Short keys: the inline-view encode and hash alone.
     for (name, t) in [("view", DataType::Utf8View), ("utf8", DataType::Utf8)] {
-        let layout = RowLayout::new(&[t.clone()], &[false]).expect("layout");
+        let layout = RowLayout::new(std::slice::from_ref(&t), &[false]).expect("layout");
         let short: Vec<ArrayRef> = build
             .chunks(BATCH)
             .map(|c| -> ArrayRef {
@@ -149,7 +149,7 @@ fn bench(c: &mut Criterion) {
         g.bench_function(format!("encode_short_{name}_128k"), |b| {
             b.iter(|| {
                 for a in &short {
-                    black_box(layout.encode(&[Arc::clone(a)], 42).expect("encode"));
+                    black_box(layout.encode(&[Arc::clone(a)]).expect("encode"));
                 }
             });
         });

@@ -89,28 +89,12 @@
       "reason": "SELECT get_json_object(INTERVAL '1-2' YEAR TO MONTH, '$.a') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "get_json_object#5434c14147bb/ansi_on",
-      "reason": "SELECT get_json_object(named_struct('a', 1, 'b', 'x'), '$.a') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#5434c14147bb/ansi_off",
-      "reason": "SELECT get_json_object(named_struct('a', 1, 'b', 'x'), '$.a') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "get_json_object#54c85710a81f/ansi_on",
       "reason": "SELECT get_json_object(1L, '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#54c85710a81f/ansi_off",
       "reason": "SELECT get_json_object(1L, '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#62816eec506f/ansi_on",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#62816eec506f/ansi_off",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#76bf117ef726/ansi_on",
@@ -135,14 +119,6 @@
     {
       "id": "get_json_object#7856641f9155/ansi_off",
       "reason": "SELECT get_json_object(CAST(1 AS SMALLINT), '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#8071429759d8/ansi_on",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#8071429759d8/ansi_off",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#8418c3d5dbfc/ansi_on",
@@ -223,14 +199,6 @@
     {
       "id": "get_json_object#baa767cf2fb6/ansi_off",
       "reason": "SELECT get_json_object(true, '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#be3f4679741b/ansi_on",
-      "reason": "SELECT get_json_object(array(1, 2), '$.a') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#be3f4679741b/ansi_off",
-      "reason": "SELECT get_json_object(array(1, 2), '$.a') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#c89703ae4b5d/ansi_on",

@@ -149,8 +149,8 @@ impl PhysExpr for Cast {
         self.nullable
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let v = self.e.eval(batch)?;
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.e.eval(batch, partition)?;
         let out = apply(&self.parts, v.array())?;
         Ok(match v {
             Value::Scalar(_) => Value::Scalar(out),

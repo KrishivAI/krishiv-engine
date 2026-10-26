@@ -1,36 +1,12 @@
 {
   "entries": [
     {
-      "id": "date_sub#3cf02a673ae2/ansi_on",
-      "reason": "SELECT date_sub('2016-07-30', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_sub#3cf02a673ae2/ansi_off",
-      "reason": "SELECT date_sub('2016-07-30', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "date_sub#71cca371ad5a/ansi_on",
       "reason": "SELECT date_sub('2016-07-30', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_sub#71cca371ad5a/ansi_off",
       "reason": "SELECT date_sub('2016-07-30', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_sub#8fdbd3642b64/ansi_on",
-      "reason": "SELECT date_sub(named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_sub#8fdbd3642b64/ansi_off",
-      "reason": "SELECT date_sub(named_struct('a', 1, 'b', 'x'), 1) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_sub#a24ef0a9b5b8/ansi_on",
-      "reason": "SELECT date_sub(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_sub#a24ef0a9b5b8/ansi_off",
-      "reason": "SELECT date_sub(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_sub#adae19b649ad/ansi_on",
@@ -47,14 +23,6 @@
     {
       "id": "date_sub#b39d32775713/ansi_off",
       "reason": "SELECT date_sub(INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_sub#c2416e1a06e9/ansi_on",
-      "reason": "SELECT date_sub('2016-07-30', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "date_sub#c2416e1a06e9/ansi_off",
-      "reason": "SELECT date_sub('2016-07-30', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "date_sub#c296eaac697f/ansi_on",

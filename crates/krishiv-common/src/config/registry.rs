@@ -30,6 +30,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
     &SPILL_ZSTD_LEVEL,
+    &SPILL_DROP_BEHIND_BYTES,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
     &IO_STRICT_OPTIONS,
@@ -60,6 +61,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &LEGACY_STATISTICAL_AGGREGATE,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -97,6 +99,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
+    ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     (
         "krishiv.memory.spillWaitTimeout",
@@ -164,6 +167,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
     (
+        "spark.sql.legacy.statisticalAggregate",
+        &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.minRows",
         &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     ),
@@ -178,6 +185,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "spark.sql.sources.bucketing.maxBuckets",
         &BUCKETING_MAX_BUCKETS,
+    ),
+    (
+        "krishiv.sql.legacy.statisticalAggregate",
+        &LEGACY_STATISTICAL_AGGREGATE,
     ),
     (
         "krishiv.runtimeFilter.exactSet.maxValues",
@@ -471,6 +482,21 @@ pub static SPILL_ZSTD_LEVEL: ConfigEntry = ConfigEntry {
     doc: "Zstandard compression level for spill files when `krishiv.spill.compression` is \
           `zstd`: 1 is fastest; higher levels (up to 22) give smaller files and cost more CPU. \
           Levels from -131072 (ultra-fast) are accepted.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Spill-file page-cache drop-behind window.
+pub static SPILL_DROP_BEHIND_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.spill.dropBehindBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(8 << 20)),
+    doc: "How many bytes a spill writer writes before it asks the kernel to write them to disk \
+          and drop them from the page cache (Linux). Dirty spill pages count against a memory \
+          cgroup's limit and cannot be reclaimed until written back, so without this a spilling \
+          query can push its cgroup into the OOM killer. A finished file is written back and \
+          dropped too. `0` disables it; other platforms ignore it.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
@@ -841,4 +867,17 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `spark.sql.legacy.statisticalAggregate`.
+pub static LEGACY_STATISTICAL_AGGREGATE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.statisticalAggregate",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, `stddev_samp`, `var_samp`, `covar_samp` and `corr` of a single row, and \
+          `skewness` and `kurtosis` of values without variance, return NaN; when false they \
+          return NULL, as Spark 4 does.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.statisticalAggregate"),
 };

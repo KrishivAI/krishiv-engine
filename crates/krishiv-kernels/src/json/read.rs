@@ -51,9 +51,10 @@ use crate::text::{
 
 /// Reads `json` into `target`, one row per string.
 ///
-/// `PERMISSIVE` (the default) maps malformed input to `NULL` (a struct
-/// field catches a failure and is `NULL` instead); `FAILFAST` fails the
-/// whole read with `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION`.
+/// `PERMISSIVE` (the default) maps malformed input to a struct of `NULL`s
+/// for a struct target and to `NULL` otherwise (a struct field catches a
+/// failure and is `NULL` instead); `FAILFAST` fails the whole read with
+/// `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION`.
 pub fn read_json(
     json: &StringArray,
     target: &ArrowType,
@@ -88,10 +89,10 @@ pub fn read_json(
                 .into());
             }
             Err(Fault::Poison) => {
-                out.append_null().map_err(|e| match e {
+                append_malformed(&mut out).map_err(|e| match e {
                     Fault::Internal(e) => e,
                     Fault::Poison => InternalError {
-                        message: "a poisoned JSON row poisoned its NULL fallback".to_owned(),
+                        message: "a poisoned JSON row poisoned its fallback".to_owned(),
                     }
                     .into(),
                 })?;
@@ -100,6 +101,24 @@ pub fn read_json(
         }
     }
     out.finish(target)
+}
+
+/// A malformed record in `PERMISSIVE` mode: a struct target reads as a struct
+/// of `NULL`s, as Spark does (`'nope'`, a truncated document and a bad escape
+/// all read as `{null, null}`), anything else as `NULL`. Nothing of the row
+/// is appended before it poisons, so the columns stay aligned.
+fn append_malformed(out: &mut Builder) -> Result<(), Fault> {
+    let Builder::Struct {
+        children, valid, ..
+    } = out
+    else {
+        return out.append_null();
+    };
+    for child in children.iter_mut() {
+        child.append_null()?;
+    }
+    valid.push(true);
+    Ok(())
 }
 
 /// What reading one value can report.
@@ -140,30 +159,13 @@ struct Ctx<'a> {
 }
 
 /// One row's value at the top level: empty input and JSON `null` are
-/// `NULL`, anything else is read against `target`. A struct target maps
-/// even unparseable text (but not empty input) to a struct of `NULL`s, as
-/// Spark does (`'abc'` reads as `{null, null}`) in `PERMISSIVE` mode; in
-/// `FAILFAST` mode that unparseable text poisons the row instead.
+/// `NULL`, anything else is read against `target`. Unparseable text poisons
+/// the row; [`append_malformed`] decides what a poisoned row reads as.
 fn read_top(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(), Fault> {
     lexer.skip_trivia()?;
     match lexer.peek() {
         Ok(None) => {
             out.append_null()?;
-            Ok(())
-        }
-        Err(_) if matches!(out, Builder::Struct { .. }) => {
-            if matches!(ctx.opts.mode, ParseMode::FailFast) {
-                return Err(Poison.into());
-            }
-            if let Builder::Struct {
-                children, valid, ..
-            } = out
-            {
-                for child in children.iter_mut() {
-                    child.append_null()?;
-                }
-                valid.push(true);
-            }
             Ok(())
         }
         Err(_) => Err(Poison.into()),
@@ -906,9 +908,9 @@ fn read_number(text: &str, is_float: bool, out: &mut Scalar) -> Result<(), Fault
 /// `HALF_UP`; `None` past the precision or for malformed text.
 ///
 /// Only the most significant discarded digit decides the rounding: the
-/// rest truncate. Every count here is bounded by the input text (digits
-/// kept, precisions and scales are all at most 38), so no untrusted
-/// exponent can set a loop count.
+/// rest truncate, so a mantissa longer than the precision rounds as
+/// Spark's does. Every loop count here is bounded by the input text or by
+/// the precision, so no untrusted exponent can set a loop count.
 fn decimal_from_text(text: &str, p: u8, s: i8) -> Option<i128> {
     let bytes = text.as_bytes();
     let (negative, digits) = match bytes.first() {
@@ -979,12 +981,14 @@ fn decimal_from_text(text: &str, p: u8, s: i8) -> Option<i128> {
     let scale = i64::try_from(frac.len())
         .ok()?
         .checked_sub(i64::from(exp))?;
-    if scale > 38 {
-        // A scale past 38 never fits at these precisions.
-        return None;
-    }
     let target = i64::from(s);
     let drop = scale.checked_sub(target)?;
+    // Spark rescales with `BigDecimal.setScale`, which raises (so the value
+    // is `NULL`) once `10^drop` overflows a `BigInteger`; smaller exponents
+    // round to zero. No loop below runs `drop` times.
+    if drop > MAX_RESCALE_DIGITS {
+        return None;
+    }
     let value: i128 = if drop < 0 {
         // Widen by `-drop`: more than `p` digits never fits.
         let widen = drop.checked_neg()?;
@@ -998,9 +1002,9 @@ fn decimal_from_text(text: &str, p: u8, s: i8) -> Option<i128> {
                 .checked_add(i128::from(digits(i).checked_sub(b'0')?))?;
         }
         value.checked_mul(10_i128.checked_pow(u32::try_from(widen).ok()?)?)?
-    } else if drop >= significant {
-        // Less than one at this scale: the leading digit rounds once.
-        if digits(0) >= b'5' { 1 } else { 0 }
+    } else if drop > significant {
+        // The first discarded digit is a leading zero: it rounds to zero.
+        0
     } else {
         // Truncate every discarded digit but the most significant, then
         // round once on that one (`HALF_UP`).
@@ -1026,6 +1030,10 @@ fn decimal_from_text(text: &str, p: u8, s: i8) -> Option<i128> {
         value
     })
 }
+
+/// The most digits a decimal is rescaled down by before Java's
+/// `BigInteger.pow` (behind `BigDecimal.setScale`) overflows: 2^29.
+const MAX_RESCALE_DIGITS: i64 = 1 << 29;
 
 /// A scalar builder.
 enum Scalar {

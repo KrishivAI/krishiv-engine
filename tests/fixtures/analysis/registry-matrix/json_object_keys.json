@@ -41,14 +41,6 @@
       "reason": "SELECT json_object_keys(CAST(1.5 AS DECIMAL(10,2))) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "json_object_keys#58bbcfd6a75b/ansi_on",
-      "reason": "SELECT json_object_keys(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "json_object_keys#58bbcfd6a75b/ansi_off",
-      "reason": "SELECT json_object_keys(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "json_object_keys#5f18f96b9d65/ansi_on",
       "reason": "SELECT json_object_keys(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -95,14 +87,6 @@
     {
       "id": "json_object_keys#84991ac35a64/ansi_off",
       "reason": "SELECT json_object_keys(1L) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "json_object_keys#873fcfdf10bc/ansi_on",
-      "reason": "SELECT json_object_keys(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "json_object_keys#873fcfdf10bc/ansi_off",
-      "reason": "SELECT json_object_keys(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "json_object_keys#93a0a14dab9b/ansi_on",

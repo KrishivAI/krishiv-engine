@@ -91,7 +91,7 @@ fn array_length_counts_and_nulls() {
     assert!(
         bind_scalar(
             "json_array_length",
-            &[BindArg::Column(one.data_type().clone())],
+            &[BindArg::from(one.data_type().clone())],
             &BindOptions::new(),
         )
         .is_err()
@@ -125,7 +125,7 @@ fn object_keys_lists_and_nulls() {
     assert!(
         bind_scalar(
             "json_object_keys",
-            &[BindArg::Column(one.data_type().clone())],
+            &[BindArg::from(one.data_type().clone())],
             &BindOptions::new(),
         )
         .is_err()
@@ -160,7 +160,7 @@ fn get_object_selects_and_nulls() {
             "get_json_object",
             &[
                 json.data_type().clone().into(),
-                BindArg::Column(one.data_type().clone()),
+                BindArg::from(one.data_type().clone()),
             ],
             &BindOptions::new(),
         )
@@ -238,7 +238,7 @@ fn schema_of_json_infers_and_reads_options() {
     assert!(
         bind_scalar(
             "schema_of_json",
-            &[json.data_type().clone().into(), BindArg::Column(options_ty),],
+            &[json.data_type().clone().into(), BindArg::from(options_ty),],
             &BindOptions::new(),
         )
         .is_err()
@@ -403,10 +403,7 @@ fn from_json_reads_options_and_dates() {
     assert!(
         bind_scalar(
             "from_json",
-            &[
-                BindArg::Column(one.data_type().clone()),
-                schema_arg("a INT")
-            ],
+            &[BindArg::from(one.data_type().clone()), schema_arg("a INT")],
             &BindOptions::new(),
         )
         .is_err()
@@ -416,7 +413,7 @@ fn from_json_reads_options_and_dates() {
             "from_json",
             &[
                 json.data_type().clone().into(),
-                BindArg::Column(ArrowDataType::Utf8),
+                BindArg::from(ArrowDataType::Utf8),
             ],
             &BindOptions::new(),
         )
@@ -478,7 +475,7 @@ fn to_json_writes_structs_and_nulls() {
     assert!(
         bind_scalar(
             "to_json",
-            &[BindArg::Column(one.data_type().clone())],
+            &[BindArg::from(one.data_type().clone())],
             &BindOptions::new(),
         )
         .is_err()
@@ -489,7 +486,7 @@ fn to_json_writes_structs_and_nulls() {
             "to_json",
             &[
                 structs.data_type().clone().into(),
-                BindArg::Column(ArrowDataType::Utf8),
+                BindArg::from(ArrowDataType::Utf8),
             ],
             &BindOptions::new(),
         )
@@ -601,7 +598,7 @@ fn json_names_are_canonical() {
 #[test]
 fn json_bind_rejects_bad_arities_and_types() {
     let one = ints(&[Some(1)]);
-    let one_col = BindArg::Column(one.data_type().clone());
+    let one_col = BindArg::from(one.data_type().clone());
     let s = strs(&[Some("x")]);
     let s_col: BindArg = s.data_type().clone().into();
     // `json_array_length(json)`.

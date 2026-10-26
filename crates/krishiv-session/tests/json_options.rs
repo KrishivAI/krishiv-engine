@@ -105,3 +105,53 @@ fn schema_of_json_reads_options_from_a_map_literal() {
         ]
     );
 }
+
+#[test]
+fn from_json_is_named_after_the_json_argument() {
+    let s = session();
+    // Spark's `JsonToStructs` has the JSON text as its only child, so the
+    // schema and the options are not part of the column name.
+    let df = block_on(s.sql("SELECT from_json(j, 'a INT') FROM v")).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    assert_eq!(batches[0].schema().field(0).name(), "from_json(j)");
+    let df = s.table("v").select([
+        call_function("from_json", [col("j"), lit("a INT")]),
+        call_function("from_json", [col("j"), lit("a INT"), options()]),
+    ]);
+    let batches = block_on(df.collect()).unwrap();
+    let schema = batches[0].schema();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["from_json(j)", "from_json(j)"]);
+}
+
+#[test]
+fn from_json_reads_a_malformed_record_as_a_struct_of_nulls() {
+    let s = session();
+    s.register_batches(
+        "m",
+        Arc::new(Schema::new(vec![Field::new("j", ArrowType::Utf8, true)])),
+        vec![
+            RecordBatch::try_new(
+                Arc::new(Schema::new(vec![Field::new("j", ArrowType::Utf8, true)])),
+                vec![Arc::new(StringArray::from(vec![
+                    Some("{\"a\":1"),
+                    Some("{\"a\":\"\\q\"}"),
+                    Some("nope"),
+                    Some("{\"a\":2}"),
+                ])) as ArrayRef],
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    let df = block_on(s.sql("SELECT from_json(j, 'a INT') AS r FROM m")).unwrap();
+    let batches = block_on(df.collect()).unwrap();
+    let st = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StructArray>()
+        .unwrap();
+    assert_eq!(st.null_count(), 0);
+    let a: Vec<Option<i32>> = st.column(0).as_primitive::<Int32Type>().iter().collect();
+    assert_eq!(a, [None, None, None, Some(2)]);
+}

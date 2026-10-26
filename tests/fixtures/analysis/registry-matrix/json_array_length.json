@@ -17,14 +17,6 @@
       "reason": "SELECT json_array_length(CAST(1.5 AS DECIMAL(38,18))) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "json_array_length#15b2ba5d1844/ansi_on",
-      "reason": "SELECT json_array_length(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "json_array_length#15b2ba5d1844/ansi_off",
-      "reason": "SELECT json_array_length(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "json_array_length#21ca2eead917/ansi_on",
       "reason": "SELECT json_array_length(CAST(1 AS TINYINT)) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -103,14 +95,6 @@
     {
       "id": "json_array_length#7532175613eb/ansi_off",
       "reason": "SELECT json_array_length(1L) | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "json_array_length#aab90f546bf2/ansi_on",
-      "reason": "SELECT json_array_length(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "json_array_length#aab90f546bf2/ansi_off",
-      "reason": "SELECT json_array_length(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "json_array_length#b9bd160d2232/ansi_on",
