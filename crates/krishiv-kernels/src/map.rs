@@ -1794,4 +1794,114 @@ mod tests {
         .unwrap();
         assert_eq!(m.len(), 1);
     }
+
+    #[test]
+    fn equal_keys_cover_every_primitive_and_struct_carrier() {
+        use arrow_array::{
+            BinaryArray, BooleanArray, Date32Array, Float32Array, Int8Array, Int16Array,
+            Int64Array, NullArray, StructArray, TimestampMicrosecondArray, UInt8Array, UInt16Array,
+            UInt32Array, UInt64Array,
+        };
+        // Each pair: (a, b) where row 0 of `a` equals row 0 of `b` and row 1 differs.
+        let pairs: Vec<(ArrayRef, ArrayRef)> = vec![
+            (
+                Arc::new(BooleanArray::from(vec![true, false])),
+                Arc::new(BooleanArray::from(vec![true, true])),
+            ),
+            (
+                Arc::new(Int8Array::from(vec![1, 2])),
+                Arc::new(Int8Array::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(Int16Array::from(vec![1, 2])),
+                Arc::new(Int16Array::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(Int64Array::from(vec![1, 2])),
+                Arc::new(Int64Array::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(UInt8Array::from(vec![1, 2])),
+                Arc::new(UInt8Array::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(UInt16Array::from(vec![1, 2])),
+                Arc::new(UInt16Array::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(UInt32Array::from(vec![1, 2])),
+                Arc::new(UInt32Array::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(UInt64Array::from(vec![1, 2])),
+                Arc::new(UInt64Array::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(Float32Array::from(vec![1.5, 2.5])),
+                Arc::new(Float32Array::from(vec![1.5, 3.5])),
+            ),
+            (
+                Arc::new(Date32Array::from(vec![1, 2])),
+                Arc::new(Date32Array::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![1, 2])),
+                Arc::new(TimestampMicrosecondArray::from(vec![1, 3])),
+            ),
+            (
+                Arc::new(BinaryArray::from(vec![&b"a"[..], &b"b"[..]])),
+                Arc::new(BinaryArray::from(vec![&b"a"[..], &b"c"[..]])),
+            ),
+        ];
+        for (a, b) in &pairs {
+            assert!(
+                keys_equal(a.as_ref(), 0, b.as_ref(), 0).unwrap(),
+                "{:?}",
+                a.data_type()
+            );
+            assert!(
+                !keys_equal(a.as_ref(), 1, b.as_ref(), 1).unwrap(),
+                "{:?}",
+                a.data_type()
+            );
+        }
+        let n = NullArray::new(1);
+        assert!(keys_equal(&n, 0, &n, 0).unwrap());
+        // Structs compare field by field, by name.
+        let st = |x: Vec<i32>, y: Vec<&str>| -> ArrayRef {
+            Arc::new(StructArray::from(vec![
+                (
+                    Arc::new(Field::new("x", DataType::Int32, true)),
+                    Arc::new(Int32Array::from(x)) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("y", DataType::Utf8, true)),
+                    Arc::new(StringArray::from(y)) as ArrayRef,
+                ),
+            ]))
+        };
+        let (s1, s2) = (
+            st(vec![1, 2], vec!["a", "b"]),
+            st(vec![1, 2], vec!["a", "c"]),
+        );
+        assert!(keys_equal(s1.as_ref(), 0, s2.as_ref(), 0).unwrap());
+        assert!(!keys_equal(s1.as_ref(), 1, s2.as_ref(), 1).unwrap());
+        // Structs of different arity are never equal; fields pair by position.
+        let narrow: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+        )]));
+        assert!(!keys_equal(s1.as_ref(), 0, narrow.as_ref(), 0).unwrap());
+        let renamed: ArrayRef = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("x", DataType::Int32, true)),
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("z", DataType::Utf8, true)),
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+            ),
+        ]));
+        assert!(keys_equal(s1.as_ref(), 0, renamed.as_ref(), 0).unwrap());
+    }
 }

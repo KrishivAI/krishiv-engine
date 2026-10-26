@@ -638,6 +638,20 @@ mod tests {
             Arc::new(Field::new("x", DataType::Int32, true)),
             arr(Int32Array::from(vec![7])),
         )]);
+        let mut mb = krishiv::arrow::array::builder::MapBuilder::new(
+            None,
+            krishiv::arrow::array::builder::StringBuilder::new(),
+            krishiv::arrow::array::builder::Int32Builder::new(),
+        );
+        mb.keys().append_value("a");
+        mb.values().append_value(1);
+        mb.keys().append_value("b");
+        mb.values().append_null();
+        mb.append(true).expect("map entry");
+        mb.append(true).expect("empty map");
+        let map = mb.finish();
+        assert_eq!(cell(&map, 0, "NULL", 0), "{a -> 1, b -> NULL}");
+        assert_eq!(cell(&map, 1, "NULL", 0), "{}");
         let cases: Vec<(ArrayRef, &str)> = vec![
             (arr(BooleanArray::from(vec![true])), "true"),
             (arr(UInt8Array::from(vec![5])), "5"),
