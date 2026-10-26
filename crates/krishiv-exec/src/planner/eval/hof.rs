@@ -442,6 +442,7 @@ mod tests {
     fn env() -> EvalEnv {
         EvalEnv {
             ansi: true,
+            legacy_statistical_aggregate: false,
             zone: None,
             kernels: KernelCtx::new(),
             query_start_micros: 0,

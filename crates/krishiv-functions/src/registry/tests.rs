@@ -1616,4 +1616,187 @@ fn hof_signatures() {
     }
 }
 
+#[test]
+fn moment_aggregates_are_registered_as_doubles() {
+    let r = builtins();
+    for (name, agg, arguments) in [
+        ("stddev", Aggregate::StddevSamp, 1),
+        ("std", Aggregate::StddevSamp, 1),
+        ("stddev_samp", Aggregate::StddevSamp, 1),
+        ("stddev_pop", Aggregate::StddevPop, 1),
+        ("variance", Aggregate::VarSamp, 1),
+        ("var_samp", Aggregate::VarSamp, 1),
+        ("var_pop", Aggregate::VarPop, 1),
+        ("skewness", Aggregate::Skewness, 1),
+        ("kurtosis", Aggregate::Kurtosis, 1),
+        ("corr", Aggregate::Corr, 2),
+        ("covar_samp", Aggregate::CovarSamp, 2),
+        ("covar_pop", Aggregate::CovarPop, 2),
+    ] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert_eq!(d.execution, Execution::Aggregate(agg), "{name}");
+        assert!(d.deterministic, "{name}");
+        assert!(
+            d.arity.accepts(arguments) && !d.arity.accepts(3 - arguments),
+            "{name}"
+        );
+        // Found in every profile that has the name, and only there.
+        let since = r.spark_function(name).unwrap().since;
+        for p in SparkProfile::ALL {
+            assert_eq!(
+                matches!(r.lookup(name, p), Lookup::Found(_)),
+                p >= since,
+                "{name} {p:?}"
+            );
+        }
+        // Every argument is cast to DOUBLE: an integer, a decimal and a
+        // string become one; the result is a nullable DOUBLE whatever the
+        // arguments (no rows, one row).
+        let args: Vec<ArgType> = (0..arguments).map(|_| ty(DataType::Integer)).collect();
+        assert_eq!(
+            d.inputs.expected(&CallTypes::new(&args, &[])),
+            Some(vec![InputType::Exact(DataType::Double)]),
+            "{name}"
+        );
+        assert_eq!(
+            result(name, &args, &[]).unwrap(),
+            ArgType::new(DataType::Double, true),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn moment_aggregates_reject_the_wrong_number_of_arguments() {
+    for (name, wrong) in [
+        ("stddev", 2),
+        ("corr", 1),
+        ("covar_pop", 3),
+        ("kurtosis", 0),
+    ] {
+        assert!(!def(name).arity.accepts(wrong), "{name}({wrong})");
+    }
+}
+
 mod text;
+
+/// `parse_url` and `try_parse_url`: arities, inputs and result types.
+#[test]
+fn url_signatures() {
+    let s = ty(DataType::String);
+    let strict = InputType::Strict(DataType::String);
+    // `parse_url`/`try_parse_url` take two or three strict strings (an
+    // `int` URL is refused, not cast) and are always nullable.
+    for name in ["parse_url", "try_parse_url"] {
+        let d = def(name);
+        assert!(d.deterministic, "{name}");
+        assert!(!d.arity.accepts(1) && d.arity.accepts(2) && d.arity.accepts(3));
+        assert!(!d.arity.accepts(4));
+        assert_eq!(
+            d.inputs,
+            Inputs::Expects(vec![strict.clone(), strict.clone(), strict.clone()])
+        );
+        assert_eq!(
+            result(name, &[s.clone(), s.clone()], &[]).unwrap(),
+            ArgType::new(DataType::String, true)
+        );
+        assert_eq!(
+            result(name, &[s.clone(), s.clone(), s.clone()], &[]).unwrap(),
+            ArgType::new(DataType::String, true)
+        );
+    }
+    // `try_parse_url` arrived in 4.0.
+    assert!(matches!(
+        builtins().lookup("try_parse_url", SparkProfile::V3_5),
+        Lookup::NotFound
+    ));
+}
+
+/// `schema_of_csv`: Spark's checks in Spark's order (the options map,
+/// whether the CSV folds, whether it is null, whether it is a string).
+#[test]
+fn csv_signatures() {
+    let s = ty(DataType::String);
+    let d = def("schema_of_csv");
+    assert!(d.deterministic);
+    assert!(d.arity.accepts(1) && d.arity.accepts(2) && !d.arity.accepts(0));
+    assert!(!d.arity.accepts(3));
+    assert_eq!(d.inputs, Inputs::Any);
+    // A folded string resolves to a non-nullable string (the DDL).
+    let csv = |v: &str| [Some(Constant::String(v.to_owned()))];
+    assert_eq!(
+        result("schema_of_csv", std::slice::from_ref(&s), &csv("1,abc")).unwrap(),
+        ty(DataType::String)
+    );
+    // Anything but a one-argument string map is refused first.
+    let err = result("schema_of_csv", &[s.clone(), s.clone()], &csv("1")).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidOptionsNonMapFunction);
+    // A non-foldable CSV names itself.
+    let err = result("schema_of_csv", std::slice::from_ref(&s), &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    assert!(err.to_string().contains("`csv`"), "{err}");
+    // A null CSV is `UNEXPECTED_NULL`.
+    let err = result(
+        "schema_of_csv",
+        std::slice::from_ref(&s),
+        &[Some(Constant::Null)],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedNull
+    );
+    assert!(err.to_string().contains("must not be null"), "{err}");
+    // A folded non-string is the wrong type, not a cast.
+    let err = result(
+        "schema_of_csv",
+        &[ty(DataType::Integer)],
+        &[Some(Constant::Integral(42))],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert!(err.to_string().contains("\"STRING\""), "{err}");
+    // A plain literal the folder has no constant for (a timestamp or a
+    // binary) is still folded in Spark: non-null, so the wrong type.
+    for t in [DataType::Timestamp, DataType::TimestampNtz, DataType::Date] {
+        let args = [ty(t)];
+        let err =
+            (def("schema_of_csv").result)(&CallTypes::new(&args, &[None]).with_literals(&[true]))
+                .unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType
+        );
+    }
+    // A folding failure propagates.
+    let failed = Constant::Error(KrishivError::from(
+        krishiv_common::error::CastInvalidInput {
+            expression: "'abc'".to_owned(),
+            source_type: "\"STRING\"".to_owned(),
+            target_type: "\"INT\"".to_owned(),
+        },
+    ));
+    let err = result("schema_of_csv", std::slice::from_ref(&s), &[Some(failed)]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::CastInvalidInput);
+}
+
+/// `schema_of_csv` never executes: the analyzer replaces every
+/// well-typed call with the DDL literal, so it has no scalar binding. A
+/// call that kept its shape (unreachable with the built-in registry: the
+/// signature rejects everything the analyzer does not resolve) fails at
+/// execution binding rather than running something unassigned.
+#[test]
+fn schema_of_csv_has_no_scalar_binding() {
+    use crate::scalar::{BindArg, BindOptions, bind_scalar};
+    assert_eq!(def("schema_of_csv").execution, Execution::Evaluator);
+    let args = [BindArg::from(arrow_schema::DataType::Utf8)];
+    let err = bind_scalar("schema_of_csv", &args, &BindOptions::new()).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
+}
