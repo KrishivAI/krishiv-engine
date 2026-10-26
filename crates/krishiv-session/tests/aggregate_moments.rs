@@ -390,6 +390,10 @@ fn mean_plans_as_avg_in_group_by() -> R {
 
 #[test]
 fn moments_over_the_golden_tables_follow_the_flags() -> R {
+    // Oracle: these exact queries (over the same `testData` rows) were run on
+    // a Spark 4.2.0 server with `spark.sql.legacy.statisticalAggregate` unset
+    // and set to true; the expected rows below are what it returned (NULLs,
+    // then NaNs, with the population statistics 0.0 in both).
     let s = session()?;
     let one = |query: &str| -> R<String> {
         let (schema, batches) = run(&s, query)?;
@@ -409,11 +413,21 @@ fn moments_over_the_golden_tables_follow_the_flags() -> R {
     s.conf()
         .set("spark.sql.legacy.statisticalAggregate", "false")?;
     assert_eq!(one(spread)?, with);
+    // The native key is the same setting as the Spark alias.
+    s.conf()
+        .set("krishiv.sql.legacy.statisticalAggregate", "true")?;
+    assert_eq!(one(q)?, "NaN\tNaN\tNaN\tNaN\tNaN\tNaN\t0.0\t0.0\t0.0");
+    s.conf()
+        .set("krishiv.sql.legacy.statisticalAggregate", "false")?;
+    assert_eq!(one(q)?, "NULL\tNULL\tNULL\tNULL\tNULL\tNULL\t0.0\t0.0\t0.0");
     Ok(())
 }
 
 #[test]
 fn corr_of_a_constant_column_follows_ansi() -> R {
+    // Oracle: on a Spark 4.2.0 server this query returns NULL with
+    // `spark.sql.ansi.enabled=false` and fails with DIVIDE_BY_ZERO with it
+    // true, for `spark.sql.legacy.statisticalAggregate` false and true alike.
     let s = session()?;
     // `a` is 3 in every row of the filtered input, `b` varies.
     let q = "SELECT corr(a, b) FROM testData WHERE a = 3 AND b IS NOT NULL";
