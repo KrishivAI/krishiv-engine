@@ -1501,10 +1501,7 @@ fn create_view_statements() {
     );
     assert_eq!(e.error.sql_state(), Some("42601"));
     // Spark names the view by its unquoted parts.
-    assert_eq!(
-        e.error.message_parameters(),
-        [("viewName", "v".to_owned())]
-    );
+    assert_eq!(e.error.message_parameters(), [("viewName", "v".to_owned())]);
     // The view's query gets Spark's post-parse checks.
     let e = parse_statement("CREATE TEMP VIEW v AS SELECT DATE '2020-02-30'", &d).unwrap_err();
     assert_eq!(e.error.error_class(), ErrorClass::InvalidTypedLiteral);
@@ -1550,7 +1547,10 @@ fn create_view_statements() {
     assert_eq!(e.span.range(), 27..29);
     assert_eq!(
         e.error.message_parameters(),
-        [("error", "'AS'".to_owned()), ("hint", ": missing 'USING'".to_owned())]
+        [
+            ("error", "'AS'".to_owned()),
+            ("hint", ": missing 'USING'".to_owned())
+        ]
     );
     let e = fail("CREATE TEMP VIEW v () AS SELECT 1");
     assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError);

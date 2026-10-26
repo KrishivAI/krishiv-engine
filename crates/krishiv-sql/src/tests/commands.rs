@@ -202,7 +202,11 @@ fn property_list_shapes() {
         ),
     ] {
         let e = err(sql);
-        assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0035, "{sql}");
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::LegacyErrorTemp0035,
+            "{sql}"
+        );
         assert_eq!(
             e.error.message_parameters(),
             [("message", message.to_owned())],
@@ -298,21 +302,40 @@ fn create_full_view_errors() {
     // Syntax errors: (statement, error text, hint, position).
     for (sql, near, hint, at) in [
         // A datasource view is always temporary.
-        ("CREATE VIEW v USING parquet AS SELECT 1", "'USING'", "", 14..19),
+        (
+            "CREATE VIEW v USING parquet AS SELECT 1",
+            "'USING'",
+            "",
+            14..19,
+        ),
         ("CREATE VIEW v USING parquet", "'USING'", "", 14..19),
         // `GLOBAL` needs `TEMPORARY`.
         ("CREATE GLOBAL VIEW v AS SELECT 1", "'VIEW'", "", 14..18),
         // A datasource view's name has at most two parts.
-        ("CREATE TEMPORARY VIEW system.session.v USING parquet", "'USING'", "", 39..44),
+        (
+            "CREATE TEMPORARY VIEW system.session.v USING parquet",
+            "'USING'",
+            "",
+            39..44,
+        ),
         // No query and no provider.
         ("CREATE VIEW v", "end of input", "", 13..13),
         // A column type reads only in a temporary view's typed list: at
         // the type in a permanent view, and as "extra input" in a
         // temporary view whose first column has none.
         ("CREATE VIEW v (a INT) AS SELECT 1", "'INT'", "", 17..20),
-        ("CREATE VIEW v (a INT) AS SELEC", "'INT'", "", 17..20),
-        ("CREATE VIEW v (a DECIMAL(10, 2)) AS SELECT 1", "'DECIMAL'", "", 17..24),
-        ("CREATE VIEW v (b, a INT COMMENT 'x') AS SELECT 1, 2", "'INT'", "", 20..23),
+        (
+            "CREATE VIEW v (a DECIMAL(10, 2)) AS SELECT 1",
+            "'DECIMAL'",
+            "",
+            17..24,
+        ),
+        (
+            "CREATE VIEW v (b, a INT COMMENT 'x') AS SELECT 1, 2",
+            "'INT'",
+            "",
+            20..23,
+        ),
         (
             "CREATE TEMPORARY VIEW v (a, b INT) USING parquet",
             "'INT'",
@@ -326,8 +349,18 @@ fn create_full_view_errors() {
             30..37,
         ),
         // A typed list needs a type on every column and then `USING`.
-        ("CREATE TEMPORARY VIEW v (a INT, b) USING parquet", "')'", "", 33..34),
-        ("CREATE TEMPORARY VIEW v (a INT, b, c INT) USING parquet", "','", "", 33..34),
+        (
+            "CREATE TEMPORARY VIEW v (a INT, b) USING parquet",
+            "')'",
+            "",
+            33..34,
+        ),
+        (
+            "CREATE TEMPORARY VIEW v (a INT, b, c INT) USING parquet",
+            "','",
+            "",
+            33..34,
+        ),
         (
             "CREATE TEMPORARY VIEW v (a INT) AS SELECT 1",
             "'AS'",
@@ -354,15 +387,30 @@ fn create_full_view_errors() {
             "",
             57..59,
         ),
-        ("CREATE TEMPORARY VIEW v USING parquet COMMENT 'c'", "'COMMENT'", "", 38..45),
+        (
+            "CREATE TEMPORARY VIEW v USING parquet COMMENT 'c'",
+            "'COMMENT'",
+            "",
+            38..45,
+        ),
         (
             "CREATE TEMPORARY VIEW v USING parquet TBLPROPERTIES ('a' = 'b')",
             "'TBLPROPERTIES'",
             "",
             38..51,
         ),
-        ("CREATE TEMPORARY VIEW v USING parquet WITH SCHEMA BINDING", "'WITH'", "", 38..42),
-        ("CREATE TEMPORARY VIEW IF NOT EXISTS v USING parquet", "'USING'", "", 38..43),
+        (
+            "CREATE TEMPORARY VIEW v USING parquet WITH SCHEMA BINDING",
+            "'WITH'",
+            "",
+            38..42,
+        ),
+        (
+            "CREATE TEMPORARY VIEW IF NOT EXISTS v USING parquet",
+            "'USING'",
+            "",
+            38..43,
+        ),
     ] {
         let e = err(sql);
         assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError, "{sql}");
@@ -387,6 +435,13 @@ fn create_full_view_errors() {
     );
     let e = err("CREATE TEMPORARY VIEW db.v USING parquet");
     assert_eq!(e.error.error_class(), ErrorClass::InvalidTempObjQualifier);
+    // A global datasource view keeps its database, which Spark rejects.
+    let e = err("CREATE GLOBAL TEMPORARY VIEW db.v USING parquet");
+    assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp1292);
+    assert_eq!(
+        e.error.message_parameters(),
+        [("tableIdent", "`db`.`v`".to_owned())]
+    );
     // `session` and `system.session` are a temporary view's own.
     assert!(matches!(
         checked("CREATE TEMPORARY VIEW session.v AS SELECT 1"),
@@ -440,7 +495,11 @@ fn create_full_view_errors() {
         "CREATE TEMPORARY VIEW IF NOT EXISTS v AS SELECT DATE '2020-02-30'",
         "CREATE TEMPORARY VIEW db.v AS SELECT DATE '2020-02-30'",
     ] {
-        assert_eq!(err(sql).error.error_class(), ErrorClass::InvalidTypedLiteral, "{sql}");
+        assert_eq!(
+            err(sql).error.error_class(),
+            ErrorClass::InvalidTypedLiteral,
+            "{sql}"
+        );
     }
     // The other builder checks, over the statement.
     for (sql, class) in [
@@ -469,7 +528,9 @@ fn create_full_view_errors() {
         assert_eq!(e.error.error_class(), class, "{sql}");
         assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
     }
-    let e = err("CREATE VIEW v DEFAULT COLLATION UTF8_BINARY DEFAULT COLLATION UTF8_BINARY AS SELECT 1");
+    let e = err(
+        "CREATE VIEW v DEFAULT COLLATION UTF8_BINARY DEFAULT COLLATION UTF8_BINARY AS SELECT 1",
+    );
     assert_eq!(
         e.error.message_parameters(),
         [("clauseName", "DEFAULT COLLATION".to_owned())]
@@ -627,17 +688,45 @@ fn insert_errors() {
     // `FROM`, set operator or parentheses of its own.
     for (sql, near, at) in [
         ("INSERT INTO SELECT * FROM s", "'*'", 19..20),
-        ("INSERT INTO t (a) PARTITION (p = 1) SELECT 1", "'PARTITION'", 18..27),
+        (
+            "INSERT INTO t (a) PARTITION (p = 1) SELECT 1",
+            "'PARTITION'",
+            18..27,
+        ),
         ("INSERT INTO t (a, b) BY NAME SELECT 1, 2", "'BY'", 21..23),
-        ("INSERT OVERWRITE t PARTITION (p=1) (a) IF NOT EXISTS SELECT 1", "'IF'", 39..41),
-        ("INSERT INTO t REPLACE WHERE a = 1 BY NAME SELECT 1", "'WHERE'", 22..27),
-        ("INSERT INTO t PARTITION (p=1) REPLACE WHERE a = 1 SELECT 1", "'REPLACE'", 30..37),
-        ("INSERT INTO t (a) REPLACE WHERE a = 1 SELECT 1", "'REPLACE'", 18..25),
+        (
+            "INSERT OVERWRITE t PARTITION (p=1) (a) IF NOT EXISTS SELECT 1",
+            "'IF'",
+            39..41,
+        ),
+        (
+            "INSERT INTO t REPLACE WHERE a = 1 BY NAME SELECT 1",
+            "'WHERE'",
+            22..27,
+        ),
+        (
+            "INSERT INTO t PARTITION (p=1) REPLACE WHERE a = 1 SELECT 1",
+            "'REPLACE'",
+            30..37,
+        ),
+        (
+            "INSERT INTO t (a) REPLACE WHERE a = 1 SELECT 1",
+            "'REPLACE'",
+            18..25,
+        ),
         ("FROM s SELECT * FROM s", "'FROM'", 16..20),
-        ("FROM s INSERT INTO t SELECT a FROM x INSERT INTO u SELECT b", "'FROM'", 30..34),
+        (
+            "FROM s INSERT INTO t SELECT a FROM x INSERT INTO u SELECT b",
+            "'FROM'",
+            30..34,
+        ),
         ("FROM s INSERT INTO t SELECT a FROM x", "'FROM'", 30..34),
         ("FROM s INSERT INTO t SELECT a SELECT b", "'SELECT'", 30..36),
-        ("FROM s INSERT INTO t (SELECT a) INSERT INTO u SELECT b", "'('", 21..22),
+        (
+            "FROM s INSERT INTO t (SELECT a) INSERT INTO u SELECT b",
+            "'('",
+            21..22,
+        ),
     ] {
         let e = err(sql);
         assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError, "{sql}");
@@ -657,17 +746,29 @@ fn insert_errors() {
         e.error.message_parameters(),
         [("operation", "INSERT INTO ... IF NOT EXISTS".to_owned())]
     );
-    assert_eq!(e.span.text(sql), "INSERT INTO t PARTITION (p=1) IF NOT EXISTS (a, b)");
+    assert_eq!(
+        e.span.text(sql),
+        "INSERT INTO t PARTITION (p=1) IF NOT EXISTS (a, b)"
+    );
     let sql = "INSERT INTO t PARTITION (p=1) IF NOT EXISTS SELECT 1";
-    assert_eq!(err(sql).span.text(sql), "INSERT INTO t PARTITION (p=1) IF NOT EXISTS");
+    assert_eq!(
+        err(sql).span.text(sql),
+        "INSERT INTO t PARTITION (p=1) IF NOT EXISTS"
+    );
     let sql = "INSERT OVERWRITE t PARTITION (p) IF NOT EXISTS SELECT 1";
     let e = err(sql);
     assert_eq!(e.error.error_class(), ErrorClass::LegacyErrorTemp0035);
     assert_eq!(
         e.error.message_parameters(),
-        [("message", "IF NOT EXISTS with dynamic partitions: p".to_owned())]
+        [(
+            "message",
+            "IF NOT EXISTS with dynamic partitions: p".to_owned()
+        )]
     );
-    assert_eq!(e.span.text(sql), "INSERT OVERWRITE t PARTITION (p) IF NOT EXISTS");
+    assert_eq!(
+        e.span.text(sql),
+        "INSERT OVERWRITE t PARTITION (p) IF NOT EXISTS"
+    );
     // A computed column is rejected at the inner `(` in the legacy mode,
     // as in Spark (whose `: missing ')'` hint this parser does not
     // reproduce; the class and position match).
@@ -731,8 +832,18 @@ fn delete_update_merge_truncate_errors() {
     assert_eq!(e.span.range(), 0..sql.len());
     // Syntax errors at Spark 4.2.0's positions, with its "missing" hints.
     for (sql, near, hint, at) in [
-        ("MERGE INTO t USING s ON true WHEN SOMETIMES THEN DELETE", "'SOMETIMES'", "", 34..43),
-        ("MERGE INTO t USING s ON true WHEN MATCHED THEN UPSERT", "'UPSERT'", "", 47..53),
+        (
+            "MERGE INTO t USING s ON true WHEN SOMETIMES THEN DELETE",
+            "'SOMETIMES'",
+            "",
+            34..43,
+        ),
+        (
+            "MERGE INTO t USING s ON true WHEN MATCHED THEN UPSERT",
+            "'UPSERT'",
+            "",
+            47..53,
+        ),
         // `UPDATE SET *` only after `WHEN MATCHED`, and alone.
         (
             "MERGE INTO t USING s ON t.a = s.a WHEN NOT MATCHED BY SOURCE THEN UPDATE SET *",
@@ -814,7 +925,8 @@ fn merge_action_pairings() {
     let clause = action_of("MERGE INTO t USING s ON true WHEN MATCHED THEN DELETE");
     assert!(matches!(clause.matched, MergeMatched::Matched));
     assert!(matches!(clause.action, MergeAction::Delete));
-    let clause = action_of("MERGE INTO t USING s ON t.a = s.a WHEN MATCHED AND s.b > 1 THEN UPDATE SET *");
+    let clause =
+        action_of("MERGE INTO t USING s ON t.a = s.a WHEN MATCHED AND s.b > 1 THEN UPDATE SET *");
     assert!(matches!(clause.matched, MergeMatched::Matched));
     assert!(matches!(clause.action, MergeAction::UpdateStar));
     assert!(clause.condition.is_some());
@@ -822,13 +934,21 @@ fn merge_action_pairings() {
     let clause = action_of(
         "MERGE INTO t USING s ON t.a = s.a WHEN NOT MATCHED THEN INSERT (t.a, b.c) VALUES (s.a, 1)",
     );
-    let MergeAction::Insert(ast::MergeInsert::Values { columns, values, .. }) = clause.action else {
+    let MergeAction::Insert(ast::MergeInsert::Values {
+        columns, values, ..
+    }) = clause.action
+    else {
         panic!("not an insert")
     };
     assert_eq!(
         columns
             .iter()
-            .map(|c| c.parts.iter().map(|p| p.value.as_str()).collect::<Vec<_>>().join("."))
+            .map(|c| c
+                .parts
+                .iter()
+                .map(|p| p.value.as_str())
+                .collect::<Vec<_>>()
+                .join("."))
             .collect::<Vec<_>>(),
         ["t.a", "b.c"]
     );
@@ -960,7 +1080,11 @@ fn command_expressions_are_checked() {
         "SHOW TABLE EXTENDED LIKE 'x' PARTITION (d = DATE '2020-02-30')",
     ] {
         let e = err(sql);
-        assert_eq!(e.error.error_class(), ErrorClass::InvalidTypedLiteral, "{sql}");
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::InvalidTypedLiteral,
+            "{sql}"
+        );
         assert_eq!(e.span.text(sql), "DATE '2020-02-30'", "{sql}");
     }
 }
@@ -1093,10 +1217,26 @@ fn cache_refresh_analyze_repair_resource_statements() {
     // asserted here rather than re-spaced: split as Spark splits them,
     // quoted (unescaped) or unquoted.
     for (sql, kind, paths) in [
-        ("ADD JAR '/path/to.jar'", ast::ResourceType::Jar, vec!["/path/to.jar"]),
-        ("ADD FILE '/path/to/file'", ast::ResourceType::File, vec!["/path/to/file"]),
-        ("ADD ARCHIVE '/path/to.tgz'", ast::ResourceType::Archive, vec!["/path/to.tgz"]),
-        ("ADD ARCHIVE /a.tgz", ast::ResourceType::Archive, vec!["/a.tgz"]),
+        (
+            "ADD JAR '/path/to.jar'",
+            ast::ResourceType::Jar,
+            vec!["/path/to.jar"],
+        ),
+        (
+            "ADD FILE '/path/to/file'",
+            ast::ResourceType::File,
+            vec!["/path/to/file"],
+        ),
+        (
+            "ADD ARCHIVE '/path/to.tgz'",
+            ast::ResourceType::Archive,
+            vec!["/path/to.tgz"],
+        ),
+        (
+            "ADD ARCHIVE /a.tgz",
+            ast::ResourceType::Archive,
+            vec!["/a.tgz"],
+        ),
         (
             "ADD JARS '/a.jar' \"/b c.jar\" /d.jar",
             ast::ResourceType::Jar,
@@ -1106,7 +1246,11 @@ fn cache_refresh_analyze_repair_resource_statements() {
         let ast::Statement::AddResource(r) = checked(sql) else {
             panic!("{sql} is not ADD")
         };
-        assert_eq!((r.kind, r.paths), (kind, paths.iter().map(|p| (*p).to_owned()).collect()), "{sql}");
+        assert_eq!(
+            (r.kind, r.paths),
+            (kind, paths.iter().map(|p| (*p).to_owned()).collect()),
+            "{sql}"
+        );
     }
     for (sql, paths) in [
         ("ADD JAR /tmp/a.jar", vec!["/tmp/a.jar"]),
@@ -1121,7 +1265,10 @@ fn cache_refresh_analyze_repair_resource_statements() {
         };
         assert_eq!(r.paths, paths, "{sql}");
     }
-    for (sql, paths) in [("LIST JAR a 'b c'", vec!["a", "b c"]), ("LIST JAR '/path'", vec!["/path"])] {
+    for (sql, paths) in [
+        ("LIST JAR a 'b c'", vec!["a", "b c"]),
+        ("LIST JAR '/path'", vec!["/path"]),
+    ] {
         let ast::Statement::ListResource(r) = checked(sql) else {
             panic!("{sql} is not LIST")
         };
@@ -1145,7 +1292,12 @@ fn cache_refresh_analyze_repair_resource_statements() {
         ("CACHE t", "'t'", "", 6..7),
         ("UNCACHE t", "'t'", ": missing 'TABLE'", 8..9),
         ("CLEAR TABLES", "'TABLES'", "", 6..12),
-        ("ANALYZE TABLE t COMPUTE", "end of input", ": missing 'STATISTICS'", 23..23),
+        (
+            "ANALYZE TABLE t COMPUTE",
+            "end of input",
+            ": missing 'STATISTICS'",
+            23..23,
+        ),
         ("REPAIR t", "'t'", ": missing 'TABLE'", 7..8),
     ] {
         let e = err(sql);
@@ -1223,7 +1375,8 @@ fn explained_commands() {
         assert_eq!(e.span.text(sql), sql, "{sql}");
     }
     // A two-table insert explains as one statement.
-    let Statement::Explain(e) = checked("EXPLAIN FROM s INSERT INTO a SELECT * INSERT INTO b SELECT *")
+    let Statement::Explain(e) =
+        checked("EXPLAIN FROM s INSERT INTO a SELECT * INSERT INTO b SELECT *")
     else {
         panic!("not explained")
     };

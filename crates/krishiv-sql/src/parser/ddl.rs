@@ -103,7 +103,12 @@ impl<'s> Parser<'s> {
 
     /// `kw`, or a syntax error here with ANTLR's "missing" hint when the
     /// token here could follow it (`follows`).
-    fn expect_kw_or_missing(&mut self, kw: &'static str, display: &'static str, follows: bool) -> PR<()> {
+    fn expect_kw_or_missing(
+        &mut self,
+        kw: &'static str,
+        display: &'static str,
+        follows: bool,
+    ) -> PR<()> {
         if self.eat_kw(kw) {
             return Ok(());
         }
@@ -116,10 +121,7 @@ impl<'s> Parser<'s> {
     /// Whether a name starts here (the token after a missing keyword that
     /// a name follows).
     fn name_here(&self) -> bool {
-        matches!(
-            self.kind(0),
-            Some(TokenKind::Word | TokenKind::QuotedIdent)
-        )
+        matches!(self.kind(0), Some(TokenKind::Word | TokenKind::QuotedIdent))
     }
 
     /// `[AS] alias`: any identifier but `terminator` (`UPDATE t x SET ...`
@@ -1698,12 +1700,11 @@ impl<'s> Parser<'s> {
                 // rest of the statement as an unquoted path, which must be
                 // non-empty and hold no whitespace (Spark's
                 // `extractUnquotedResourcePath`).
-                let string_alone = matches!(
-                    p.kind(0),
-                    Some(TokenKind::String | TokenKind::DoubleQuoted)
-                ) && (1..)
-                    .map_while(|n| p.kind(n))
-                    .all(|k| k == TokenKind::Sym(Sym::Semi));
+                let string_alone =
+                    matches!(p.kind(0), Some(TokenKind::String | TokenKind::DoubleQuoted))
+                        && (1..)
+                            .map_while(|n| p.kind(n))
+                            .all(|k| k == TokenKind::Sym(Sym::Semi));
                 let path = if string_alone {
                     p.string_after()?
                 } else {
