@@ -163,6 +163,7 @@ fn instantiation_checks_the_tables_still_match_the_plan() {
 fn env_data() -> ExprEnv {
     ExprEnv {
         ansi: true,
+        legacy_statistical_aggregate: false,
         zone: Some(0),
         query_start_micros: 0,
         user: Arc::from("u"),

@@ -114,6 +114,7 @@ pub(super) fn rows() -> Vec<Row> {
         "isnan",
         "isnotnull",
         "isnull",
+        "kurtosis",
         "length",
         "ln",
         "log10",
@@ -143,8 +144,13 @@ pub(super) fn rows() -> Vec<Row> {
         "signum",
         "sin",
         "sinh",
+        "skewness",
         "soundex",
         "sqrt",
+        "std",
+        "stddev",
+        "stddev_pop",
+        "stddev_samp",
         "sum",
         "tan",
         "tanh",
@@ -152,6 +158,9 @@ pub(super) fn rows() -> Vec<Row> {
         "unhex",
         "unix_date",
         "upper",
+        "var_pop",
+        "var_samp",
+        "variance",
         "weekday",
         "weekofyear",
         "year",
@@ -176,7 +185,16 @@ pub(super) fn rows() -> Vec<Row> {
     for name in ["bit_get", "getbit"] {
         rows.push(Row::new(name, "col: ColumnOrName, pos: ColumnOrName"));
     }
-    for name in ["equal_null", "ifnull", "nanvl", "nullif", "nvl"] {
+    for name in [
+        "corr",
+        "covar_pop",
+        "covar_samp",
+        "equal_null",
+        "ifnull",
+        "nanvl",
+        "nullif",
+        "nvl",
+    ] {
         rows.push(Row::new(name, "col1: ColumnOrName, col2: ColumnOrName"));
     }
     for name in ["to_char", "to_number", "to_varchar", "try_to_number"] {
