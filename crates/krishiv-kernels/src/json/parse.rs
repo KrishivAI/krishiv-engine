@@ -239,6 +239,19 @@ impl<'a> Lexer<'a> {
         Ok(hit)
     }
 
+    /// Whether the next non-trivia byte is `b` (consumed when it is). Unlike
+    /// [`Self::eat`], this never lexes a token, so it stays `Ok(false)` when
+    /// an unquoted field name comes next (which is not a token).
+    pub(crate) fn eat_byte(&mut self, b: u8) -> Result<bool, Error> {
+        self.skip_trivia()?;
+        if self.bytes.get(self.pos).copied() == Some(b) {
+            self.pos = self.pos.saturating_add(1);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     /// A `true`/`false`/`null` literal: the keyword must end there.
     fn literal(&mut self, word: &str, token: Token<'a>) -> Result<Token<'a>, Error> {
         let end = self.pos.saturating_add(word.len());

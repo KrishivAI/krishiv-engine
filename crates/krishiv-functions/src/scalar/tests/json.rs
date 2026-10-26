@@ -476,3 +476,262 @@ fn json_names_are_canonical() {
         ErrorClass::KrishivUnsupportedFeature
     );
 }
+
+#[test]
+fn json_bind_rejects_bad_arities_and_types() {
+    let one = ints(&[Some(1)]);
+    let one_col = BindArg::Column(one.data_type().clone());
+    let s = strs(&[Some("x")]);
+    let s_col: BindArg = s.data_type().clone().into();
+    // `json_array_length(json)`.
+    assert!(bind_scalar("json_array_length", &[], &BindOptions::new()).is_err());
+    assert!(
+        bind_scalar(
+            "json_array_length",
+            &[s_col.clone(), s_col.clone()],
+            &BindOptions::new(),
+        )
+        .is_err()
+    );
+    assert!(
+        bind_scalar(
+            "json_array_length",
+            std::slice::from_ref(&one_col),
+            &BindOptions::new()
+        )
+        .is_err()
+    );
+    // `json_object_keys(json)`.
+    assert!(bind_scalar("json_object_keys", &[], &BindOptions::new()).is_err());
+    assert!(
+        bind_scalar(
+            "json_object_keys",
+            &[s_col.clone(), s_col.clone()],
+            &BindOptions::new(),
+        )
+        .is_err()
+    );
+    assert!(
+        bind_scalar(
+            "json_object_keys",
+            std::slice::from_ref(&one_col),
+            &BindOptions::new()
+        )
+        .is_err()
+    );
+    // `get_json_object(json, path)`.
+    assert!(bind_scalar("get_json_object", &[], &BindOptions::new()).is_err());
+    assert!(
+        bind_scalar(
+            "get_json_object",
+            std::slice::from_ref(&s_col),
+            &BindOptions::new()
+        )
+        .is_err()
+    );
+    assert!(
+        bind_scalar(
+            "get_json_object",
+            &[s_col.clone(), s_col.clone(), s_col.clone()],
+            &BindOptions::new(),
+        )
+        .is_err()
+    );
+    assert!(
+        bind_scalar(
+            "get_json_object",
+            &[one_col.clone(), s_col.clone()],
+            &BindOptions::new(),
+        )
+        .is_err()
+    );
+    assert!(
+        bind_scalar(
+            "get_json_object",
+            &[s_col.clone(), one_col.clone()],
+            &BindOptions::new(),
+        )
+        .is_err()
+    );
+    // `schema_of_json(json[, options])`.
+    assert!(bind_scalar("schema_of_json", &[], &BindOptions::new()).is_err());
+    assert!(
+        bind_scalar(
+            "schema_of_json",
+            &[s_col.clone(), s_col.clone(), s_col.clone()],
+            &BindOptions::new(),
+        )
+        .is_err()
+    );
+    assert!(
+        bind_scalar(
+            "schema_of_json",
+            std::slice::from_ref(&one_col),
+            &BindOptions::new()
+        )
+        .is_err()
+    );
+    // `from_json(json, schema[, options])`.
+    assert!(
+        bind_scalar(
+            "from_json",
+            std::slice::from_ref(&s_col),
+            &BindOptions::new()
+        )
+        .is_err()
+    );
+    assert!(
+        bind_scalar(
+            "from_json",
+            &[one_col.clone(), schema_arg("a INT")],
+            &BindOptions::new(),
+        )
+        .is_err()
+    );
+    assert!(
+        bind_scalar(
+            "from_json",
+            &[
+                s_col.clone(),
+                schema_arg("a INT"),
+                options(&[("mode", "PERMISSIVE")]),
+                s_col.clone(),
+            ],
+            &BindOptions::new(),
+        )
+        .is_err()
+    );
+    // `to_json(value[, options])`.
+    assert!(bind_scalar("to_json", &[], &BindOptions::new()).is_err());
+    assert!(
+        bind_scalar(
+            "to_json",
+            std::slice::from_ref(&one_col),
+            &BindOptions::new()
+        )
+        .is_err()
+    );
+    let three = [s_col.clone(), s_col.clone(), s_col];
+    assert!(bind_scalar("to_json", &three, &BindOptions::new()).is_err());
+}
+
+#[test]
+fn json_schema_argument_errors() {
+    let s = strs(&[Some("x")]);
+    let s_col: BindArg = s.data_type().clone().into();
+    // A column schema is not a literal.
+    assert_eq!(
+        class(
+            &bind_scalar(
+                "from_json",
+                &[s_col.clone(), s_col.clone()],
+                &BindOptions::new()
+            )
+            .unwrap_err()
+        ),
+        ErrorClass::KrishivUnsupportedFeature
+    );
+    // A null literal schema is an internal error.
+    assert_eq!(
+        class(
+            &bind_scalar(
+                "from_json",
+                &[s_col.clone(), BindArg::Literal(strs(&[None]))],
+                &BindOptions::new(),
+            )
+            .unwrap_err()
+        ),
+        ErrorClass::InternalError
+    );
+    // A schema the analyzer would reject is an internal error at bind time.
+    assert_eq!(
+        class(
+            &bind_scalar(
+                "from_json",
+                &[s_col, schema_arg("{{{")],
+                &BindOptions::new(),
+            )
+            .unwrap_err()
+        ),
+        ErrorClass::InternalError
+    );
+}
+
+#[test]
+fn json_options_argument_errors() {
+    use arrow_array::StringArray;
+    let s = strs(&[Some("x")]);
+    let s_col: BindArg = s.data_type().clone().into();
+    let schema = schema_arg("a INT");
+    // Options that are not a map literal are an internal error.
+    assert_eq!(
+        class(
+            &bind_scalar(
+                "from_json",
+                &[
+                    s_col.clone(),
+                    schema.clone(),
+                    BindArg::Literal(Arc::clone(&s))
+                ],
+                &BindOptions::new(),
+            )
+            .unwrap_err()
+        ),
+        ErrorClass::InternalError
+    );
+    // A null option value is an internal error (Arrow forbids nullable map
+    // keys, so only values can be null in a valid options map).
+    let keys: ArrayRef = Arc::new(StringArray::from(vec![Some("mode")]));
+    let values: ArrayRef = Arc::new(StringArray::from(vec![None as Option<&str>]));
+    let fields: Vec<Field> = vec![
+        Field::new("key", ArrowDataType::Utf8, false),
+        Field::new("value", ArrowDataType::Utf8, true),
+    ];
+    let entries = StructArray::new(fields.into(), vec![keys, values], None);
+    let map = Arc::new(
+        MapArray::try_new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1])),
+            entries,
+            None,
+            false,
+        )
+        .unwrap(),
+    );
+    let null_value_args = [s_col.clone(), schema.clone(), BindArg::Literal(map)];
+    assert_eq!(
+        class(&bind_scalar("from_json", &null_value_args, &BindOptions::new()).unwrap_err()),
+        ErrorClass::InternalError
+    );
+    // A null map row is skipped, so binding succeeds with the defaults.
+    let keys: ArrayRef = Arc::new(StringArray::from(vec![Some("mode")]));
+    let values: ArrayRef = Arc::new(StringArray::from(vec![Some("PERMISSIVE")]));
+    let fields: Vec<Field> = vec![
+        Field::new("key", ArrowDataType::Utf8, false),
+        Field::new("value", ArrowDataType::Utf8, true),
+    ];
+    let entries = StructArray::new(fields.into(), vec![keys, values], None);
+    let map = Arc::new(
+        MapArray::try_new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 0])),
+            entries,
+            Some(arrow_buffer::NullBuffer::from(vec![false])),
+            false,
+        )
+        .unwrap(),
+    );
+    let null_row_args = [s_col, schema, BindArg::Literal(map)];
+    assert!(bind_scalar("from_json", &null_row_args, &BindOptions::new(),).is_ok());
+}
+
+#[test]
+fn schema_of_json_deep_nesting_is_null() {
+    // Deeper than `DataType::MAX_NESTING_DEPTH` (32): the inferred Arrow
+    // type has no DDL form, so the row renders as NULL instead of failing.
+    let deep = format!("{}1{}", "[".repeat(40), "]".repeat(40));
+    let json = strs(&[Some(deep.as_str())]);
+    let f = bind("schema_of_json", &[&json]);
+    let out = f.invoke(&[col(&json)], json.len()).unwrap();
+    assert_eq!(text(&out), owned(&[None]));
+}

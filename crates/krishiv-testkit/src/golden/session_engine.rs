@@ -969,4 +969,102 @@ mod tests {
         assert!(fixture_batch(&nested).map_err(err)?.is_none());
         Ok(())
     }
+
+    #[test]
+    fn nested_cells_render_lists_maps_and_structs() -> R {
+        use arrow_array::{Int32Array, LargeListArray, ListArray, MapArray, StructArray};
+        use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+        use arrow_schema::Field;
+        use krishiv_types::{ArrayType, MapType, StructField, StructType};
+        // A list of ints: two rows, the second null inside.
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+        let field = Arc::new(Field::new("element", ArrowType::Int32, true));
+        let list = ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1, 2])),
+            Arc::clone(&values),
+            None,
+        );
+        let col: ArrayRef = Arc::new(list);
+        let ty = DataType::Array(ArrayType::new(DataType::Integer, true).into());
+        assert_eq!(
+            arrow_cell(&col, 0, &ty).map_err(err)?,
+            Cell::Array(vec![Cell::Int(1)])
+        );
+        assert_eq!(
+            arrow_cell(&col, 1, &ty).map_err(err)?,
+            Cell::Array(vec![Cell::Null])
+        );
+        // A large list reads through the same renderer.
+        let big = LargeListArray::new(
+            field,
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 2])),
+            values,
+            None,
+        );
+        let col: ArrayRef = Arc::new(big);
+        assert_eq!(
+            arrow_cell(&col, 0, &ty).map_err(err)?,
+            Cell::Array(vec![Cell::Int(1), Cell::Null])
+        );
+        // A list column of the wrong Arrow type is a harness error.
+        let bad: ArrayRef = Arc::new(Int32Array::from(vec![Some(1)]));
+        assert!(list_cells(&bad, 0, &DataType::Integer).is_err());
+        assert!(arrow_cell(&bad, 0, &ty).is_err());
+        // A map of string to int, kept in document order.
+        let keys: ArrayRef = Arc::new(arrow_array::StringArray::from(vec!["b", "a"]));
+        let vals: ArrayRef = Arc::new(Int32Array::from(vec![Some(2), Some(1)]));
+        let entries = StructArray::new(
+            vec![
+                Field::new("key", ArrowType::Utf8, false),
+                Field::new("value", ArrowType::Int32, true),
+            ]
+            .into(),
+            vec![keys, vals],
+            None,
+        );
+        let map_field = Arc::new(Field::new("entries", entries.data_type().clone(), false));
+        let map = MapArray::new(
+            Arc::clone(&map_field),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2])),
+            entries,
+            None,
+            false,
+        );
+        let col: ArrayRef = Arc::new(map);
+        let map_ty = DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into());
+        assert_eq!(
+            arrow_cell(&col, 0, &map_ty).map_err(err)?,
+            Cell::Map(vec![
+                (Cell::Str("b".into()), Cell::Int(2)),
+                (Cell::Str("a".into()), Cell::Int(1)),
+            ])
+        );
+        // A struct of an int and a string.
+        let st = StructArray::new(
+            vec![
+                Field::new("a", ArrowType::Int32, true),
+                Field::new("b", ArrowType::Utf8, true),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![Some(7)])) as ArrayRef,
+                Arc::new(arrow_array::StringArray::from(vec![Some("x")])) as ArrayRef,
+            ],
+            None,
+        );
+        let col: ArrayRef = Arc::new(st);
+        let struct_ty = DataType::Struct(StructType::new(vec![
+            StructField::new("a", DataType::Integer, true),
+            StructField::new("b", DataType::String, true),
+        ]));
+        assert_eq!(
+            arrow_cell(&col, 0, &struct_ty).map_err(err)?,
+            Cell::Struct(vec![
+                ("a".to_owned(), Cell::Int(7)),
+                ("b".to_owned(), Cell::Str("x".into())),
+            ])
+        );
+        Ok(())
+    }
 }

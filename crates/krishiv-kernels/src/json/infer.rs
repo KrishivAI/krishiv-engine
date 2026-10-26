@@ -283,7 +283,7 @@ fn infer_value(lexer: &mut Lexer<'_>, depth: usize) -> Result<Inferred, ParseErr
         }
         Some(Token::OpenBrace) => {
             let mut fields = Vec::new();
-            if lexer.eat(Token::CloseBrace)? {
+            if lexer.eat_byte(b'}')? {
                 return Ok(Inferred::Object(fields));
             }
             loop {

@@ -1694,6 +1694,26 @@ fn json_signatures() {
         .error_class(),
         ErrorClass::InvalidOptionsNonMapFunction
     );
+    // A folded error in the schema position propagates from `from_json`.
+    let err: KrishivError = InvalidOptionsNonMapFunction {}.into();
+    let failed = Some(Constant::Error(err));
+    assert_eq!(
+        result(
+            "from_json",
+            &[s.clone(), s.clone()],
+            &[string_lit("x"), failed]
+        )
+        .unwrap_err()
+        .error_class(),
+        ErrorClass::InvalidOptionsNonMapFunction
+    );
+    // An empty or blank schema reports the direct parse error.
+    for schema in ["", "   "] {
+        assert_eq!(
+            from(string_lit(schema)).unwrap_err().error_class(),
+            ErrorClass::ParseEmptyStatement
+        );
+    }
 }
 
 mod text;

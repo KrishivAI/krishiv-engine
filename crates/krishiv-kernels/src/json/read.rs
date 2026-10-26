@@ -223,8 +223,7 @@ fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
     // duplicate key.
     let mut spans: Vec<(String, usize, usize)> = Vec::new();
     loop {
-        lexer.skip_trivia()?;
-        if lexer.eat(Token::CloseBrace)? {
+        if lexer.eat_byte(b'}')? {
             break;
         }
         let key = match lexer.raw_key()? {
@@ -418,7 +417,7 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
     };
     lexer.next()?;
     let mut ok = true;
-    if lexer.eat(Token::CloseBrace)? {
+    if lexer.eat_byte(b'}')? {
         offsets.push(base);
         out.set_valid(true);
         return Ok(());
@@ -595,7 +594,7 @@ fn render_compact_value(
         }
         Some(Token::OpenBrace) => {
             text.push('{');
-            if lexer.eat(Token::CloseBrace)? {
+            if lexer.eat_byte(b'}')? {
                 text.push('}');
                 return Ok(());
             }
@@ -679,7 +678,7 @@ fn read_scalar_token(lexer: &mut Lexer<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> 
                 return Err(internal("a string builder for a JSON object".to_owned()));
             };
             let mut text = String::from("{");
-            if lexer.eat(Token::CloseBrace)? {
+            if lexer.eat_byte(b'}')? {
                 text.push('}');
                 b.append_value(&text);
                 return Ok(());
