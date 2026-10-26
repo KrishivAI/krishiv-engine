@@ -131,7 +131,10 @@ impl Sink for SubquerySink {
                     producer: self.producer,
                     payload: values::Value::Subquery(value),
                 })
-                .map(drop)
+                .and_then(|p| match p {
+                    values::Publication::Ignored => Err(internal("a subquery ran twice")),
+                    values::Publication::Waiting | values::Publication::Complete => Ok(()),
+                })
         })
     }
 }

@@ -21,6 +21,7 @@ use crate::pipeline::{ExecNode, PipelineBuilder};
 
 const SUBQUERY: ValueId = ValueId::Subquery(SubqueryId(1));
 const FILTER: ValueId = ValueId::Filter(FilterId(1));
+const BROADCAST: ValueId = ValueId::Broadcast(ExchangeId(3));
 
 fn array(v: i64) -> ArrayRef {
     Arc::new(Int64Array::from(vec![v]))
@@ -58,23 +59,45 @@ fn keys(keys: &[i64]) -> FilterSnapshot {
     FilterSnapshot::Final(Arc::new(b.finish()))
 }
 
+/// Broadcast inputs, told apart by pointer.
+fn inputs<const N: usize>() -> [Arc<dyn ExecNode>; N] {
+    std::array::from_fn(|_| Arc::new(Input) as Arc<dyn ExecNode>)
+}
+
+fn build(input: &Arc<dyn ExecNode>) -> Value {
+    Value::Broadcast(BroadcastBuild::new(input))
+}
+
+/// Whether the value `id` is `expected`'s inputs, in that order.
+fn is_broadcast_of(values: &LocalValues, id: ValueId, expected: &[&Arc<dyn ExecNode>]) -> bool {
+    let Some((_, v)) = values.subscribe(id).unwrap().current() else {
+        return false;
+    };
+    let Value::Broadcast(b) = v.as_ref() else {
+        panic!("{v:?}")
+    };
+    assert_eq!(format!("{b:?}"), "BroadcastBuild");
+    let got = b.inputs().unwrap();
+    got.len() == expected.len() && got.iter().zip(expected).all(|(g, e)| Arc::ptr_eq(g, e))
+}
+
 #[test]
 fn a_value_is_invisible_until_every_producer_partition_published() {
-    let values = of(&[(SUBQUERY, 2)]);
-    let read = values.subscribe(SUBQUERY).unwrap();
+    let [i0, i1] = inputs();
+    let values = of(&[(BROADCAST, 2)]);
+    let read = values.subscribe(BROADCAST).unwrap();
     assert!(read.current().is_none());
     let p = values
-        .publish(partial(SUBQUERY, 1, 0, Value::Subquery(array(20))))
+        .publish(partial(BROADCAST, 1, 0, build(&i1)))
         .unwrap();
     assert_eq!(p, Publication::Waiting);
     assert!(read.current().is_none());
-    assert_eq!(subquery(&values), None);
     let p = values
-        .publish(partial(SUBQUERY, 0, 0, Value::Subquery(array(10))))
+        .publish(partial(BROADCAST, 0, 0, build(&i0)))
         .unwrap();
     assert_eq!(p, Publication::Complete);
     // Merged in partition order, whatever the order of arrival.
-    assert_eq!(subquery(&values), Some(vec![10, 20]));
+    assert!(is_broadcast_of(&values, BROADCAST, &[&i0, &i1]));
     assert!(read.current().is_some());
 }
 
@@ -89,21 +112,36 @@ fn one_producer_partition_by_default() {
 }
 
 #[test]
+fn a_subquery_has_one_producer() {
+    let e = LocalValues::with_producers(BTreeMap::from([(SUBQUERY, 2)])).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+    assert!(e.to_string().contains("a subquery has one"), "{e}");
+    // A second publication of a subquery is ignored (its sink reports it).
+    let values = LocalValues::new();
+    let first = partial(SUBQUERY, 0, 0, Value::Subquery(array(1)));
+    assert_eq!(values.publish(first).unwrap(), Publication::Complete);
+    let again = partial(SUBQUERY, 0, 0, Value::Subquery(array(2)));
+    assert_eq!(values.publish(again).unwrap(), Publication::Ignored);
+    assert_eq!(subquery(&values), Some(vec![1]));
+}
+
+#[test]
 fn a_retried_partial_is_ignored() {
-    let values = of(&[(SUBQUERY, 2)]);
-    let first = partial(SUBQUERY, 0, 0, Value::Subquery(array(10)));
+    let [i0, i1, retry] = inputs();
+    let values = of(&[(BROADCAST, 2)]);
+    let first = partial(BROADCAST, 0, 0, build(&i0));
     assert_eq!(values.publish(first).unwrap(), Publication::Waiting);
     // Partition 0 again, from attempt 1: ignored, the value still waits.
-    let retry = partial(SUBQUERY, 0, 1, Value::Subquery(array(99)));
-    assert_eq!(values.publish(retry).unwrap(), Publication::Ignored);
-    assert_eq!(subquery(&values), None);
-    let other = partial(SUBQUERY, 1, 0, Value::Subquery(array(20)));
+    let again = partial(BROADCAST, 0, 1, build(&retry));
+    assert_eq!(values.publish(again).unwrap(), Publication::Ignored);
+    assert!(!is_broadcast_of(&values, BROADCAST, &[]));
+    let other = partial(BROADCAST, 1, 0, build(&i1));
     assert_eq!(values.publish(other).unwrap(), Publication::Complete);
-    assert_eq!(subquery(&values), Some(vec![10, 20]));
+    assert!(is_broadcast_of(&values, BROADCAST, &[&i0, &i1]));
     // After completion as well.
-    let late = partial(SUBQUERY, 1, 1, Value::Subquery(array(99)));
+    let late = partial(BROADCAST, 1, 1, build(&retry));
     assert_eq!(values.publish(late).unwrap(), Publication::Ignored);
-    assert_eq!(subquery(&values), Some(vec![10, 20]));
+    assert!(is_broadcast_of(&values, BROADCAST, &[&i0, &i1]));
 }
 
 #[test]
@@ -215,43 +253,27 @@ impl ExecNode for Input {
     }
 }
 
-fn broadcast(values: &LocalValues, id: ValueId) -> Arc<dyn ExecNode> {
-    let (_, v) = values.subscribe(id).unwrap().current().unwrap();
+#[test]
+fn a_broadcast_value_does_not_own_its_inputs() {
+    let [input] = inputs();
+    let values = LocalValues::new();
+    values
+        .publish(partial(BROADCAST, 0, 0, build(&input)))
+        .unwrap();
+    assert!(is_broadcast_of(&values, BROADCAST, &[&input]));
+    // The input may hold the service: owning it here would be a cycle.
+    drop(input);
+    let (_, v) = values.subscribe(BROADCAST).unwrap().current().unwrap();
     let Value::Broadcast(b) = v.as_ref() else {
         panic!("{v:?}")
     };
-    assert_eq!(format!("{b:?}"), "BroadcastBuild");
-    Arc::clone(&b.0)
-}
-
-#[test]
-fn broadcast_partials_are_one_input() {
-    let id = ValueId::Broadcast(ExchangeId(3));
-    let inputs: [Arc<dyn ExecNode>; 2] = [Arc::new(Input), Arc::new(Input)];
-    let input = |i: usize| Value::Broadcast(BroadcastBuild(Arc::clone(&inputs[i])));
-    // One producer partition: its input is the value.
-    let one = LocalValues::new();
-    one.publish(partial(id, 0, 0, input(0))).unwrap();
-    assert!(Arc::ptr_eq(&broadcast(&one, id), &inputs[0]));
-    // Two: the union of their inputs.
-    let two = of(&[(id, 2)]);
-    assert_eq!(
-        two.publish(partial(id, 1, 0, input(1))).unwrap(),
-        Publication::Waiting
-    );
-    assert_eq!(
-        two.publish(partial(id, 0, 0, input(0))).unwrap(),
-        Publication::Complete
-    );
-    let both = broadcast(&two, id);
-    assert!(!Arc::ptr_eq(&both, &inputs[0]) && !Arc::ptr_eq(&both, &inputs[1]));
-    let mut b = PipelineBuilder::new(Arc::new(crate::testing::Count::default()));
-    both.build_pipelines(&mut b).unwrap();
+    assert!(b.inputs().is_none());
 }
 
 #[test]
 fn malformed_partials_are_internal_errors() {
-    let values = of(&[(SUBQUERY, 2)]);
+    let [input] = inputs();
+    let values = of(&[(BROADCAST, 2)]);
     values
         .declare_filter(FilterId(1), ColumnPath::new("k"), DataType::Int64)
         .unwrap();
@@ -278,16 +300,16 @@ fn malformed_partials_are_internal_errors() {
         "has no scan",
     );
     check(
-        partial(SUBQUERY, 2, 0, Value::Subquery(array(1))),
+        partial(BROADCAST, 2, 0, build(&input)),
         "producer partition 2",
     );
     values
-        .publish(partial(SUBQUERY, 0, 0, Value::Subquery(array(1))))
+        .publish(partial(BROADCAST, 0, 0, build(&input)))
         .unwrap();
     check(
         Partial {
             version: Version { epoch: 1 },
-            ..partial(SUBQUERY, 1, 0, Value::Subquery(array(1)))
+            ..partial(BROADCAST, 1, 0, build(&input))
         },
         "epochs 0 and 1",
     );

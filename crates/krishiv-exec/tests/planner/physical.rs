@@ -431,3 +431,36 @@ fn a_filter_of_an_incomplete_value_applies_nothing() {
         );
     }
 }
+
+/// A broadcast build that is itself a join publishing a runtime filter:
+/// its operators hold the instantiation's value service.
+const NESTED: &str = "SELECT x.a FROM t AS x JOIN (SELECT y.a FROM t AS y JOIN \
+                      (SELECT a FROM t WHERE b < 30) AS z ON y.a = z.a) AS w ON x.a = w.a";
+
+#[test]
+fn a_dropped_instantiation_frees_its_operators_and_values() {
+    use krishiv_exec::physical::Partitioning;
+    let env = env();
+    let plan = env.plan(NESTED).unwrap();
+    let broadcast_over_join = nodes(plan.root()).into_iter().any(|n| match n {
+        PhysNode::Exchange(e) => {
+            matches!(e.partitioning, Partitioning::Broadcast)
+                && nodes(&e.input)
+                    .into_iter()
+                    .any(|n| matches!(n, PhysNode::HashJoin(_)))
+        }
+        _ => false,
+    });
+    assert!(broadcast_over_join, "{plan}");
+    let values = Arc::new(LocalValues::new());
+    let worker =
+        WorkerContext::new(Arc::clone(&env.tables) as _).with_values(Arc::clone(&values) as _);
+    let root = instantiate(&plan, &worker).unwrap();
+    drop(worker);
+    let (root_weak, values_weak) = (Arc::downgrade(&root), Arc::downgrade(&values));
+    drop((root, values));
+    // The service names the broadcast input without owning it: no cycle
+    // through the join that publishes into it.
+    assert!(root_weak.upgrade().is_none());
+    assert!(values_weak.upgrade().is_none());
+}

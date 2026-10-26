@@ -132,8 +132,9 @@ impl WorkerContext {
     }
 
     /// The same context publishing and reading the plan's values through
-    /// `values`. A service serves one instantiation: a second one through
-    /// the same service fails to declare its runtime filters.
+    /// `values`. A service serves one instantiation; reusing it is
+    /// unsupported: a second plan with runtime filters fails to declare
+    /// them, and a subquery-only plan silently reads the first one's values.
     #[must_use]
     pub fn with_values(mut self, values: Arc<dyn ValueService>) -> Self {
         self.values = Some(values);
@@ -567,8 +568,8 @@ impl Instantiation<'_> {
     }
 
     /// The input of the broadcast exchange `id`, published as this
-    /// producer's partial of its value and read back as the value: on one
-    /// worker the join over it shares one build among its drivers.
+    /// producer's partial of its value: on one worker the join over it
+    /// shares one build among its drivers.
     fn broadcast(&mut self, id: super::ExchangeId, input: &PhysNode) -> Result<Built> {
         let input = self.node(input)?;
         let value = ValueId::Broadcast(id);
@@ -576,7 +577,7 @@ impl Instantiation<'_> {
             value,
             version: Version::BATCH,
             producer: self.worker.producer,
-            payload: Value::Broadcast(BroadcastBuild(input.node)),
+            payload: Value::Broadcast(BroadcastBuild::new(&input.node)),
         })?;
         if published != Publication::Complete {
             // In one process every producer partition is this one: another
@@ -586,16 +587,9 @@ impl Instantiation<'_> {
                 "{value} is {published:?} in this instantiation"
             )));
         }
-        match self.values.subscribe(value)?.current() {
-            Some((_, v)) => match v.as_ref() {
-                Value::Broadcast(b) => Ok(Built {
-                    node: Arc::clone(&b.0),
-                    schema: input.schema,
-                }),
-                _ => Err(internal(format!("{value} of another kind"))),
-            },
-            None => Err(internal(format!("{value} is not complete"))),
-        }
+        // The value names this input without owning it (see
+        // `BroadcastBuild`): the plan holds it.
+        Ok(input)
     }
 
     fn hash_join(&mut self, j: &HashJoinPlan) -> Result<Built> {

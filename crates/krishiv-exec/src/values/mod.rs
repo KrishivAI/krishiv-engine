@@ -29,16 +29,15 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use arrow_array::{Array, ArrayRef};
+use arrow_array::ArrayRef;
 use arrow_schema::DataType;
 use krishiv_io::{ColumnPath, DisabledReason, FilterId, FilterSnapshot, RuntimeFilter};
 
 use crate::error::{Result, internal};
 pub use crate::physical::{ValueId, Version};
 use crate::pipeline::ExecNode;
-use crate::planner::nodes::FanInNode;
 
 /// One task's place among the producers of a value: its partition and
 /// attempt. Only the partition enters a value (I10).
@@ -74,11 +73,34 @@ impl Value {
     }
 }
 
-/// The input of a broadcast exchange as an operator graph of this process:
-/// the hash join over it builds its table once and shares it among its
-/// drivers. It does not leave the process.
-#[derive(Clone)]
-pub struct BroadcastBuild(pub Arc<dyn ExecNode>);
+/// The input of a broadcast exchange as operator graphs of this process,
+/// one per producer partition: the hash join over it builds its table once
+/// and shares it among its drivers. It does not leave the process.
+///
+/// It names the inputs without owning them: an input can hold the service
+/// it is published to (a join's filter publisher, a subquery's sink), and
+/// owning it here would be a reference cycle that never frees the plan.
+/// The instantiation that lowered an input owns it.
+#[derive(Clone, Default)]
+pub struct BroadcastBuild {
+    inputs: Vec<Weak<dyn ExecNode>>,
+}
+
+impl BroadcastBuild {
+    /// The build of one producer partition's `input`.
+    #[must_use]
+    pub fn new(input: &Arc<dyn ExecNode>) -> Self {
+        Self {
+            inputs: vec![Arc::downgrade(input)],
+        }
+    }
+
+    /// The inputs in producer partition order; `None` once one was freed.
+    #[must_use]
+    pub fn inputs(&self) -> Option<Vec<Arc<dyn ExecNode>>> {
+        self.inputs.iter().map(Weak::upgrade).collect()
+    }
+}
 
 impl fmt::Debug for BroadcastBuild {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -189,10 +211,19 @@ impl LocalValues {
     /// value not listed).
     ///
     /// # Errors
-    /// `INTERNAL_ERROR` for a value of no producer.
+    /// `INTERNAL_ERROR` for a value of no producer, or a subquery of more
+    /// than one (a subquery's rows are gathered to one producer).
     pub fn with_producers(producers: BTreeMap<ValueId, u32>) -> Result<Self> {
         if let Some((id, _)) = producers.iter().find(|(_, n)| **n == 0) {
             return Err(internal(format!("{id} has no producer")));
+        }
+        if let Some((id, n)) = producers
+            .iter()
+            .find(|(id, n)| matches!(id, ValueId::Subquery(_)) && **n > 1)
+        {
+            return Err(internal(format!(
+                "{id} has {n} producers; a subquery has one"
+            )));
         }
         Ok(Self {
             producers,
@@ -326,28 +357,16 @@ fn merge(id: ValueId, mut parts: Vec<Value>) -> Result<Value> {
                 })
                 .unwrap_or(DisabledReason::Off),
         ))),
-        // The partitions' rows in partition order.
-        ValueId::Subquery(_) => {
-            let arrays: Vec<&dyn Array> = parts
-                .iter()
-                .filter_map(|p| match p {
-                    Value::Subquery(a) => Some(a.as_ref()),
-                    _ => None,
-                })
-                .collect();
-            arrow_select::concat::concat(&arrays)
-                .map(Value::Subquery)
-                .map_err(|e| internal(format!("{id}: {e}")))
-        }
-        ValueId::Broadcast(_) => Ok(Value::Broadcast(BroadcastBuild(Arc::new(FanInNode {
+        ValueId::Subquery(_) => Err(internal(format!("{id}: a subquery has one producer"))),
+        ValueId::Broadcast(_) => Ok(Value::Broadcast(BroadcastBuild {
             inputs: parts
                 .into_iter()
-                .filter_map(|p| match p {
-                    Value::Broadcast(b) => Some(b.0),
-                    _ => None,
+                .flat_map(|p| match p {
+                    Value::Broadcast(b) => b.inputs,
+                    _ => Vec::new(),
                 })
                 .collect(),
-        })))),
+        })),
     }
 }
 
