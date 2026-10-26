@@ -276,6 +276,240 @@ fn datetime_signatures() {
 }
 
 #[test]
+fn calendar_signatures() {
+    let date = ty(DataType::Date);
+    let maybe = |t: DataType| ArgType::new(t, true);
+    let inputs = |name: &str, args: &[ArgType]| {
+        def(name)
+            .inputs
+            .expected(&CallTypes::new(args, &[]))
+            .unwrap()
+    };
+    // The accessors read a date and give an `int`, as nullable as the date.
+    for name in ["dayofweek", "dayofyear", "weekofyear", "weekday", "quarter"] {
+        assert_eq!(
+            result(name, std::slice::from_ref(&date), &[]).unwrap(),
+            ty(DataType::Integer)
+        );
+        assert_eq!(
+            result(name, &[maybe(DataType::Date)], &[]).unwrap(),
+            maybe(DataType::Integer)
+        );
+        assert_eq!(
+            inputs(name, std::slice::from_ref(&date)),
+            [InputType::Exact(DataType::Date)]
+        );
+    }
+    // The time fields read either timestamp; a date is cast to the first.
+    let any_ts = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    for name in ["hour", "minute", "second"] {
+        assert_eq!(
+            inputs(name, std::slice::from_ref(&date)),
+            std::slice::from_ref(&any_ts)
+        );
+        assert_eq!(
+            result(name, &[ty(DataType::TimestampNtz)], &[]).unwrap(),
+            ty(DataType::Integer)
+        );
+    }
+    for name in ["monthname", "dayname"] {
+        assert_eq!(
+            result(name, std::slice::from_ref(&date), &[]).unwrap(),
+            ty(DataType::String)
+        );
+        assert_eq!(
+            result(name, &[maybe(DataType::Date)], &[]).unwrap(),
+            maybe(DataType::String)
+        );
+    }
+    // `unix_date` casts nothing to a date.
+    assert_eq!(
+        inputs("unix_date", std::slice::from_ref(&date)),
+        [InputType::Strict(DataType::Date)]
+    );
+    assert_eq!(
+        result("unix_date", std::slice::from_ref(&date), &[]).unwrap(),
+        ty(DataType::Integer)
+    );
+    assert_eq!(
+        inputs("add_months", &[date.clone(), ty(DataType::Integer)]),
+        [
+            InputType::Exact(DataType::Date),
+            InputType::Exact(DataType::Integer)
+        ]
+    );
+    assert_eq!(
+        result("add_months", &[date.clone(), ty(DataType::Integer)], &[]).unwrap(),
+        date
+    );
+    assert_eq!(
+        result("last_day", std::slice::from_ref(&date), &[]).unwrap(),
+        date
+    );
+    // An unknown weekday or unit is NULL, so these are nullable whatever
+    // their arguments.
+    let text = ty(DataType::String);
+    for name in ["next_day", "trunc"] {
+        assert_eq!(
+            result(name, &[date.clone(), text.clone()], &[]).unwrap(),
+            maybe(DataType::Date)
+        );
+    }
+    assert_eq!(
+        result("date_trunc", &[text.clone(), ty(DataType::Timestamp)], &[]).unwrap(),
+        maybe(DataType::Timestamp)
+    );
+    // `date_trunc` and `months_between` keep a `TIMESTAMP_NTZ`; every other
+    // type is cast to (or refused as) `TIMESTAMP`.
+    let ntz = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    let ts = InputType::Exact(DataType::Timestamp);
+    assert_eq!(
+        inputs("date_trunc", &[text.clone(), ty(DataType::TimestampNtz)])[1],
+        ntz
+    );
+    assert_eq!(
+        inputs("date_trunc", &[text.clone(), ty(DataType::Date)])[1],
+        ts
+    );
+    let three = inputs(
+        "months_between",
+        &[ty(DataType::TimestampNtz), ty(DataType::Date)],
+    );
+    assert_eq!(
+        three,
+        [ntz.clone(), ts, InputType::Exact(DataType::Boolean)]
+    );
+    assert_eq!(
+        result(
+            "months_between",
+            &[ty(DataType::Timestamp), ty(DataType::Timestamp)],
+            &[]
+        )
+        .unwrap(),
+        ty(DataType::Double)
+    );
+    assert_eq!(
+        result(
+            "months_between",
+            &[ty(DataType::Timestamp), maybe(DataType::Timestamp)],
+            &[]
+        )
+        .unwrap(),
+        maybe(DataType::Double)
+    );
+    // `make_date` is NULL for an invalid date unless ANSI raises.
+    let ints = [
+        ty(DataType::Integer),
+        ty(DataType::Integer),
+        ty(DataType::Integer),
+    ];
+    let types = |ansi: bool| {
+        (def("make_date").result)(&CallTypes::new(&ints, &[]).with_ansi(ansi)).unwrap()
+    };
+    assert_eq!(types(true), date);
+    assert_eq!(types(false), maybe(DataType::Date));
+    assert_eq!(
+        inputs("make_date", &ints),
+        [InputType::Exact(DataType::Integer)]
+    );
+    // Zone conversions.
+    assert_eq!(
+        result(
+            "from_utc_timestamp",
+            &[ty(DataType::Timestamp), text.clone()],
+            &[]
+        )
+        .unwrap(),
+        ty(DataType::Timestamp)
+    );
+    assert_eq!(
+        inputs(
+            "to_utc_timestamp",
+            &[ty(DataType::TimestampNtz), text.clone()]
+        ),
+        [ntz, InputType::Exact(DataType::String)]
+    );
+    let wall = ty(DataType::TimestampNtz);
+    assert_eq!(
+        result(
+            "convert_timezone",
+            &[text.clone(), text.clone(), wall.clone()],
+            &[]
+        )
+        .unwrap(),
+        ty(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        inputs("convert_timezone", &[text.clone(), wall]),
+        [
+            InputType::Exact(DataType::String),
+            InputType::Exact(DataType::TimestampNtz)
+        ]
+    );
+    assert_eq!(
+        inputs(
+            "convert_timezone",
+            &[text.clone(), text, ty(DataType::Timestamp)]
+        )[2],
+        InputType::OneOf(vec![DataType::TimestampNtz, DataType::Timestamp])
+    );
+    // Availability and determinism come from Spark: `monthname` and `dayname`
+    // arrived in 4.0.
+    for name in ["monthname", "dayname"] {
+        assert!(matches!(
+            builtins().lookup(name, SparkProfile::V3_5),
+            Lookup::NotFound
+        ));
+        assert!(matches!(
+            builtins().lookup(name, SparkProfile::V4_0),
+            Lookup::Found(_)
+        ));
+    }
+    for name in [
+        "hour",
+        "minute",
+        "second",
+        "dayofweek",
+        "dayofyear",
+        "weekofyear",
+        "weekday",
+        "quarter",
+        "monthname",
+        "dayname",
+        "unix_date",
+        "add_months",
+        "last_day",
+        "next_day",
+        "trunc",
+        "date_trunc",
+        "months_between",
+        "make_date",
+        "from_utc_timestamp",
+        "to_utc_timestamp",
+        "convert_timezone",
+    ] {
+        assert!(def(name).deterministic, "{name}");
+        assert_eq!(def(name).execution, Execution::Scalar, "{name}");
+    }
+    // What stays unregistered is known to Spark, so it is not "not found".
+    for name in [
+        "make_timestamp",
+        "try_make_timestamp",
+        "make_timestamp_ltz",
+        "make_timestamp_ntz",
+        "make_interval",
+    ] {
+        assert!(
+            matches!(
+                builtins().lookup(name, SparkProfile::V4_2),
+                Lookup::KnownUnsupported
+            ),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn aggregate_result_types() {
     let null = |t: DataType| ArgType::new(t, true);
     assert_eq!(
@@ -1284,3 +1518,5 @@ fn regex_signatures() {
     let r = result("regexp_count", &[s, null_ty()], &[]).unwrap();
     assert_eq!(r, ArgType::new(DataType::Integer, true));
 }
+
+mod text;

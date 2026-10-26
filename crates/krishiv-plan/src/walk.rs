@@ -137,11 +137,13 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Pivot { .. }
+                | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
                 | PlanNode::Distinct { .. } => false,
                 PlanNode::Union { by_name, .. } => !by_name,
                 PlanNode::Join { condition, .. } => match condition {
-                    JoinCondition::Using(_) => false,
+                    JoinCondition::Natural | JoinCondition::Using(_) => false,
                     JoinCondition::None | JoinCondition::On(_) => true,
                 },
                 PlanNode::Scan(_)
@@ -275,6 +277,25 @@ impl Teardown {
                 self.plans.push(input);
                 self.exprs.extend(projections.into_iter().flatten());
             }
+            PlanNode::Pivot {
+                input,
+                pivot_columns,
+                values,
+                aggregates,
+            } => {
+                self.plans.push(input);
+                self.exprs.extend(pivot_columns);
+                self.exprs
+                    .extend(values.into_iter().flat_map(|v| v.exprs.into_iter()));
+                self.exprs.extend(aggregates);
+            }
+            PlanNode::Unpivot {
+                input, column_sets, ..
+            } => {
+                self.plans.push(input);
+                self.exprs
+                    .extend(column_sets.into_iter().flat_map(|s| s.columns.into_iter()));
+            }
             PlanNode::InlineTable { rows, .. } => {
                 self.exprs.extend(rows.into_iter().flatten());
             }
@@ -304,7 +325,7 @@ impl Teardown {
                 self.plans.extend([left, right]);
                 match condition {
                     JoinCondition::On(e) => self.exprs.push(e),
-                    JoinCondition::None | JoinCondition::Using(_) => {}
+                    JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
                 }
             }
             PlanNode::Sort { input, order, .. } => {

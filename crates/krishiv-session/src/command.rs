@@ -1166,6 +1166,7 @@ mod tests {
                 filter: None,
                 null_treatment: None,
                 over: Some(window),
+                dynamic_name: None,
                 span: Span::default(),
             })),
             span: Span::default(),

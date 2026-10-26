@@ -43,6 +43,8 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
         PlanNode::Expand { .. } => "PlanNode::Expand",
+        PlanNode::Pivot { .. } => "PlanNode::Pivot",
+        PlanNode::Unpivot { .. } => "PlanNode::Unpivot",
         PlanNode::InlineTable { .. } => "PlanNode::InlineTable",
         PlanNode::Window { .. } => "PlanNode::Window",
     });
@@ -137,6 +139,7 @@ fn df(id: i64) -> LogicalPlan {
 fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     let star = Expr::new(ExprNode::Star(Star {
         qualifier: Vec::new(),
+        except: Vec::new(),
         plan_id: None,
     }));
     let df_col = Expr::new(ExprNode::Column(ColumnRef {

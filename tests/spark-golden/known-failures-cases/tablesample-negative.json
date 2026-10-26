@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "sql-commands": [
+      0,
+      1,
+      2,
+      5
+    ]
+  },
+  "file": "tablesample-negative",
+  "format_version": 1
+}

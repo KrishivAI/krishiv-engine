@@ -1580,6 +1580,7 @@ dependencies = [
  "krishiv-sql",
  "libmimalloc-sys",
  "mimalloc",
+ "serde_json",
  "tempfile",
 ]
 
@@ -1746,9 +1747,11 @@ dependencies = [
  "krishiv-types",
  "loom",
  "proptest",
+ "rustix",
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1818,6 +1821,7 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-session",
+ "krishiv-sql",
  "krishiv-types",
  "mimalloc",
  "pyo3",
@@ -1841,6 +1845,7 @@ name = "krishiv-session"
 version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "arrow-select",
  "futures",

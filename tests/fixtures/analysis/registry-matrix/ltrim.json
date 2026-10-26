@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "ltrim#1619a3484678/ansi_on",
+      "reason": "SELECT ltrim(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ltrim#1619a3484678/ansi_off",
+      "reason": "SELECT ltrim(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ltrim#6225b3289404/ansi_on",
+      "reason": "SELECT ltrim(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "ltrim#6225b3289404/ansi_off",
+      "reason": "SELECT ltrim(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "ltrim#866327adf4da/ansi_on",
+      "reason": "SELECT ltrim(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "ltrim#866327adf4da/ansi_off",
+      "reason": "SELECT ltrim(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "ltrim#a24ec608e9eb/ansi_on",
+      "reason": "SELECT ltrim(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ltrim#a24ec608e9eb/ansi_off",
+      "reason": "SELECT ltrim(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ltrim#bf0dac2666b9/ansi_on",
+      "reason": "SELECT ltrim(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ltrim#bf0dac2666b9/ansi_off",
+      "reason": "SELECT ltrim(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "ltrim"
+}

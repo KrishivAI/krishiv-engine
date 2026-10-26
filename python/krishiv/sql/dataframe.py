@@ -32,6 +32,7 @@ from krishiv.sql.stat import DataFrameStatFunctions
 from krishiv.sql.types import StructType, _struct_from_columns
 
 if TYPE_CHECKING:
+    from krishiv.sql.readwriter import DataFrameWriter
     from krishiv.sql.session import SparkSession
 
 _HOW = {
@@ -1809,3 +1810,10 @@ class DataFrame:
         if not isinstance(name, str):
             raise not_expected_type("name", "str", name)
         self._df.create_or_replace_temp_view(name)
+
+    @property
+    def write(self) -> DataFrameWriter:
+        """Writes this :class:`DataFrame`'s rows to files, as ``pyspark.sql.DataFrame.write``."""
+        from krishiv.sql.readwriter import DataFrameWriter
+
+        return DataFrameWriter(self)

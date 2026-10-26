@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "depends-on-command": [
+      9,
+      10
+    ],
+    "fn-string": [
+      12
+    ]
+  },
+  "file": "postgreSQL/limit",
+  "format_version": 1
+}

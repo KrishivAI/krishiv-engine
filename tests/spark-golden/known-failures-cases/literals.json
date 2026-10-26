@@ -1,0 +1,27 @@
+{
+  "cases": {
+    "datetime": [
+      36,
+      45,
+      52
+    ],
+    "fn-array": [
+      48
+    ],
+    "fn-map": [
+      47
+    ],
+    "fn-struct": [
+      49
+    ],
+    "legacy-configs": [
+      59,
+      60
+    ],
+    "nested-interval-types": [
+      46
+    ]
+  },
+  "file": "literals",
+  "format_version": 1
+}

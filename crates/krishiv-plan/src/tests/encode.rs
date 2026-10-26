@@ -289,8 +289,8 @@ fn keys_are_stable() {
         ))
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
-    assert_eq!(encoding.len(), 461, "{encoding:?}");
-    assert_eq!(hash.to_string(), "c8beb826b28467220b04a0c87ce3719b");
+    assert_eq!(encoding.len(), 493, "{encoding:?}");
+    assert_eq!(hash.to_string(), "c52735ab283b4cec155d3ea789487c38");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -302,7 +302,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "ba4505febd5716e05d133affe7ea86c9");
+    assert_eq!(hash.to_string(), "062cd8e7cfaceee9a9e908d776219685");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in
@@ -346,6 +346,8 @@ fn shared_expressions_are_encoded_once() {
     let e = (0..30).fold(Arc::new(Expr::column(["a"])), |e, _| {
         Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
             name: Builtin::And.name().to_owned(),
+            qualifier: Vec::new(),
+            arg_names: Vec::new(),
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,
@@ -359,4 +361,46 @@ fn shared_expressions_are_encoded_once() {
         "{:?}",
         start.elapsed()
     );
+}
+
+/// A qualifier and argument names enter the key: qualified and named calls
+/// encode apart from their bare positional twins.
+#[test]
+fn qualifier_and_arg_names_enter_the_key() {
+    let arg = || Arc::new(Expr::column(["a"]));
+    let named = |qualifier: &[&str], names: Vec<Option<&str>>| {
+        Plan::try_new(
+            LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Function(
+                crate::FunctionCall {
+                    name: "mask".to_owned(),
+                    qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
+                    args: vec![arg(), arg()],
+                    arg_names: names.into_iter().map(|n| n.map(str::to_owned)).collect(),
+                    distinct: false,
+                    filter: None,
+                },
+            ))]),
+        )
+        .unwrap()
+    };
+    let (bare, qualified, upper, lower) = (
+        named(&[], vec![None, None]),
+        named(&["builtin"], vec![None, None]),
+        named(&[], vec![None, Some("upperChar")]),
+        named(&[], vec![None, Some("lowerChar")]),
+    );
+    assert!(bare.structurally_eq(&named(&[], vec![None, None])));
+    assert_eq!(
+        bare.structural_hash(),
+        named(&[], vec![None, None]).structural_hash()
+    );
+    for (l, r) in [
+        (&bare, &qualified),
+        (&bare, &upper),
+        (&upper, &lower),
+        (&qualified, &upper),
+    ] {
+        assert!(!l.structurally_eq(r));
+        assert_ne!(l.structural_hash(), r.structural_hash());
+    }
 }

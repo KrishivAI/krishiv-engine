@@ -33,6 +33,7 @@ pub mod csv;
 mod error;
 mod format;
 pub mod io;
+pub mod json;
 mod options;
 pub mod parquet;
 mod request;
@@ -43,6 +44,7 @@ mod schema_map;
 pub mod split;
 mod stats;
 pub mod text;
+pub mod text_format;
 mod write;
 
 pub use avro::AvroFormat;
@@ -57,6 +59,7 @@ pub use io::{
     ByteRange, FileRef, Held, IoConfig, IoContext, IoCounters, IoScheduler, SecretResolver,
     StoreId, StorePolicy, Tail, VersionToken,
 };
+pub use json::JsonFormat;
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,
@@ -74,6 +77,7 @@ pub use scan::{ScanOptions, ScanStream};
 pub use scan_gate::ScanGate;
 pub use schema_map::{FIELD_ID_KEY, SchemaMapper};
 pub use stats::{ColumnStatistics, FileStatistics, Precision, TriState, prune};
+pub use text_format::TextFormat;
 pub use write::{FileWriter, WriteOptions, WrittenFileInfo, spark_file_name};
 
 #[cfg(test)]

@@ -1,0 +1,22 @@
+{
+  "cases": {
+    "legacy-configs": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      12,
+      13,
+      14,
+      15,
+      17,
+      18,
+      19,
+      21
+    ]
+  },
+  "file": "cte-legacy",
+  "format_version": 1
+}
