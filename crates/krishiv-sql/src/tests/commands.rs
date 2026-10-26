@@ -826,8 +826,7 @@ fn insert_errors() {
     assert!(i.clauses[0].replace_where.is_some() && i.clauses[0].by_name);
     // `REPLACE ON`, `REPLACE USING`, `WITH SCHEMA EVOLUTION`, aliases and
     // target options parse, keeping `WHERE` apart from `ON`.
-    let ast::Statement::Insert(i) = checked("INSERT WITH SCHEMA EVOLUTION INTO t SELECT 1")
-    else {
+    let ast::Statement::Insert(i) = checked("INSERT WITH SCHEMA EVOLUTION INTO t SELECT 1") else {
         panic!("not an insert")
     };
     assert!(i.clauses[0].with_schema_evolution);
