@@ -1,7 +1,6 @@
 {
   "cases": {
     "depends-on-command": [
-      7,
       21,
       22
     ],

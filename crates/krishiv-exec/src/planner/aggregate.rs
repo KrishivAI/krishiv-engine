@@ -19,7 +19,7 @@ use krishiv_plan::{
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
 use super::properties::Distribution;
-use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
+use crate::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput, arity};
 use crate::error::Result;
 use crate::physical::{AggregatePlan, PhysNode, aggregate_node, aggregate_spec};
 
@@ -97,7 +97,7 @@ impl Planner<'_> {
         };
         // Validates the aggregate (over an input that is never run) and
         // gives its schema.
-        let spec = aggregate_spec(&input.schema, &plan, self.env.ansi, None);
+        let spec = aggregate_spec(&input.schema, &plan, &self.env, None);
         let schema = spec.output_schema()?;
         aggregate_node(Arc::new(crate::physical::Unbuilt), spec, &plan.distinct)?;
         let mut layout: Vec<AttrId> = columns[..k].iter().map(|c| input.layout[*c]).collect();
@@ -259,6 +259,19 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "any_value" => (AggregateFunction::AnyValue { ignore_nulls }, value),
         "max_by" if f.args.len() == 2 => (AggregateFunction::MaxBy, f.args.clone()),
         "min_by" if f.args.len() == 2 => (AggregateFunction::MinBy, f.args.clone()),
+        "stddev" | "std" | "stddev_samp" if f.args.len() == 1 => {
+            (AggregateFunction::StddevSamp, f.args.clone())
+        }
+        "stddev_pop" if f.args.len() == 1 => (AggregateFunction::StddevPop, f.args.clone()),
+        "variance" | "var_samp" if f.args.len() == 1 => {
+            (AggregateFunction::VarSamp, f.args.clone())
+        }
+        "var_pop" if f.args.len() == 1 => (AggregateFunction::VarPop, f.args.clone()),
+        "skewness" if f.args.len() == 1 => (AggregateFunction::Skewness, f.args.clone()),
+        "kurtosis" if f.args.len() == 1 => (AggregateFunction::Kurtosis, f.args.clone()),
+        "corr" if f.args.len() == 2 => (AggregateFunction::Corr, f.args.clone()),
+        "covar_samp" if f.args.len() == 2 => (AggregateFunction::CovarSamp, f.args.clone()),
+        "covar_pop" if f.args.len() == 2 => (AggregateFunction::CovarPop, f.args.clone()),
         _ => return None,
     };
     Some(Lowered { function, args })
@@ -323,8 +336,8 @@ pub(super) fn aggregate_expr(
             name,
         ));
     }
-    if function != AggregateFunction::Count && args.len() != 1 {
-        return Err(internal("an aggregate of several arguments"));
+    if function != AggregateFunction::Count && args.len() != arity(function) {
+        return Err(internal("an aggregate with the wrong number of arguments"));
     }
     let arg_type = args.first().map_or(arrow_schema::DataType::Null, typed);
     Ok(AggregateExpr {

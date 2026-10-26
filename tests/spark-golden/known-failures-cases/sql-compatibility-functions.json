@@ -11,9 +11,6 @@
     ],
     "query-features": [
       14
-    ],
-    "sql-commands": [
-      12
     ]
   },
   "file": "sql-compatibility-functions",

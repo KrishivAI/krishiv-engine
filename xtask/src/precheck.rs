@@ -49,9 +49,14 @@ pub const REQUIRED_CI_CHECKS: &[&str] = &[
 /// App, or a reusable workflow under another name).
 pub const EXTERNAL_CI_CHECKS: &[&str] = &["CodSpeed Performance Analysis", "scan-pr / osv-scan"];
 
+/// Steps that back no required check: local proxies for checks that only run
+/// in CI (CodeQL), or guards against testing a different tree than CI does.
+pub const ADVISORY_STEPS: &[&str] = &["codeql-proxy"];
+
 /// Every step id [`plan`] reports, in run order.
 pub const STEP_IDS: &[&str] = &[
     "changes",
+    "base-fresh",
     "fmt",
     "policy",
     "pr-size",
@@ -66,6 +71,8 @@ pub const STEP_IDS: &[&str] = &[
     "nextest",
     "python-quality",
     "python-tests",
+    "python-wheel-tests",
+    "codeql-proxy",
     "diff-coverage",
     "diff-coverage-python",
     "budgets",
@@ -85,7 +92,7 @@ pub enum Mapping {
 #[must_use]
 pub fn mapping(check: &str) -> Option<Mapping> {
     Some(match check {
-        "changes" => Mapping::Local(&["changes"]),
+        "changes" => Mapping::Local(&["changes", "base-fresh"]),
         "policy" => Mapping::Local(&["policy", "pr-size", "workflow-lint"]),
         "text-lint" => Mapping::Local(&["text-lint"]),
         "fmt" => Mapping::Local(&["fmt"]),
@@ -95,7 +102,9 @@ pub fn mapping(check: &str) -> Option<Mapping> {
         "machete" => Mapping::Local(&["machete"]),
         "layering" => Mapping::Local(&["layering"]),
         "docs" => Mapping::Local(&["doc"]),
-        "python-quality" => Mapping::Local(&["python-quality", "python-tests"]),
+        "python-quality" => {
+            Mapping::Local(&["python-quality", "python-tests", "python-wheel-tests"])
+        }
         "diff-coverage" => Mapping::Local(&["diff-coverage", "diff-coverage-python"]),
         "zizmor" => Mapping::Local(&["zizmor"]),
         "budgets" => Mapping::Local(&["budgets"]),
@@ -305,12 +314,18 @@ pub struct Opts {
     pub fast: bool,
     /// Run budgets even without a manifest change.
     pub full: bool,
+    /// Do not require the branch to contain `base` (CI tests the merge with it).
+    pub allow_stale: bool,
+    /// Coverage runs the tests of dependent crates too (CI does; slower, fewer false reds).
+    pub coverage_dependents: bool,
+    /// Dedicated target directory of the coverage run; deleted afterwards.
+    pub cov_dir: String,
     /// Run heavy steps under a `systemd-run` memory cap (e.g. `12G`).
     pub memory_cap: Option<String>,
 }
 
 impl Opts {
-    /// Parses `[--base REF] [--fast] [--full] [--memory-cap SIZE]`.
+    /// Parses `[--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE]`.
     ///
     /// # Errors
     /// Returns a usage error for unknown flags, missing values or a bad size.
@@ -319,6 +334,9 @@ impl Opts {
             base: "origin/main".to_owned(),
             fast: false,
             full: false,
+            allow_stale: false,
+            coverage_dependents: false,
+            cov_dir: "target/precheck-cov".to_owned(),
             memory_cap: None,
         };
         let mut it = flags.iter();
@@ -326,6 +344,8 @@ impl Opts {
             match *f {
                 "--fast" => o.fast = true,
                 "--full" => o.full = true,
+                "--allow-stale" => o.allow_stale = true,
+                "--coverage-dependents" => o.coverage_dependents = true,
                 "--base" => {
                     let v = it.next().ok_or("--base needs a ref")?;
                     if v.is_empty() || v.starts_with('-') {
@@ -545,6 +565,25 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
         notes: Vec::new(),
     });
 
+    steps.push(if o.allow_stale {
+        skip("base-fresh", "--allow-stale")
+    } else {
+        // CI tests the merge of the PR with its base, so a branch that lacks the base's
+        // newest commits can pass here and fail there (registry-coverage, python, ty).
+        run(
+            "base-fresh",
+            vec![Cmd::new(
+                "bash",
+                &[
+                    "-c",
+                    r#"git merge-base --is-ancestor "$1" HEAD || { echo "HEAD does not contain $1 ($(git rev-list --count HEAD.."$1") new commit(s)): CI tests the merge with it. Run: git merge $1 (or --allow-stale)" >&2; exit 1; }"#,
+                    "base-fresh",
+                    base,
+                ],
+            )],
+        )
+    });
+
     steps.push(if rust {
         run(
             "fmt",
@@ -563,17 +602,18 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
             x(&["dco", "--base", base]),
             Cmd::new(
                 "bash",
+                &[".github/scripts/check-ai-attribution.sh", base, "HEAD"],
+            ),
+            Cmd::new(
+                "bash",
                 &[".github/scripts/check-large-files.sh", base, "HEAD"],
             ),
         ],
     ));
     steps.push(run("pr-size", vec![x(&["pr-size", "--base", base])]));
 
-    steps.push(if ch.github {
-        run("workflow-lint", vec![x(&["workflow-lint"])])
-    } else {
-        skip("workflow-lint", "no .github change")
-    });
+    // CI's policy job runs workflow-lint on every PR.
+    steps.push(run("workflow-lint", vec![x(&["workflow-lint"])]));
     steps.push(if ch.github {
         needs(
             "zizmor",
@@ -661,6 +701,12 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
 
     steps.push(python_quality(ch, has));
     steps.push(python_tests(ch, has));
+    steps.push(python_wheel_tests(ch, o, has));
+    steps.push(if rust {
+        run("codeql-proxy", vec![x(&["codeql-proxy", "--base", base])])
+    } else {
+        skip("codeql-proxy", NO_RUST)
+    });
 
     steps.push(if o.fast {
         skip("diff-coverage", "--fast")
@@ -674,8 +720,9 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
         run(
             "diff-coverage",
             vec![
-                x(&["coverage", "--no-branch"]).heavy(),
-                x(&["diff-coverage", "--base", base, "--fail-under", "90"]),
+                coverage_cmd(x(&["coverage", "--no-branch"]), ch, o),
+                x(&["diff-coverage", "--base", base, "--fail-under", "90"])
+                    .env("CARGO_TARGET_DIR", &o.cov_dir),
             ],
         )
     });
@@ -715,6 +762,63 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
         run("budgets", vec![x(&["budgets"]).heavy()])
     });
     steps
+}
+
+/// The coverage run: the touched crates only (plus dependents with `--coverage-dependents`),
+/// in the dedicated target directory that [`run_precheck`] deletes afterwards. A full-workspace
+/// coverage build once filled 95 GB of disk.
+fn coverage_cmd(cmd: Cmd, ch: &Changes, o: &Opts) -> Cmd {
+    let c = cmd.env("CARGO_TARGET_DIR", &o.cov_dir).heavy();
+    match &ch.scope {
+        Scope::Packages {
+            touched,
+            with_dependents,
+        } => {
+            let names = if o.coverage_dependents {
+                with_dependents
+            } else {
+                touched
+            };
+            c.args_owned(names.iter().flat_map(|n| ["-p".to_owned(), n.clone()]))
+        }
+        Scope::Workspace | Scope::None => c,
+    }
+}
+
+/// Builds the Python extension into a throwaway venv and runs `python/tests`, as CI's wheel
+/// jobs do (a dev-profile build; the venv is removed afterwards).
+fn python_wheel_tests(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool) -> Step {
+    let bindings = match &ch.scope {
+        Scope::Workspace => true,
+        Scope::Packages {
+            with_dependents, ..
+        } => with_dependents.iter().any(|n| n == "krishiv-python"),
+        Scope::None => false,
+    };
+    if o.fast {
+        return skip("python-wheel-tests", "--fast");
+    }
+    if !(ch.python || bindings) {
+        return skip(
+            "python-wheel-tests",
+            "no python/ change and krishiv-python is not affected",
+        );
+    }
+    // A fresh virtual environment per run (`mktemp -d` beside the base path), so two prechecks at
+    // once never remove each other's environment; only this run's directory is removed on exit.
+    const SCRIPT: &str = r#"set -e; B=$(realpath -m "$1"); mkdir -p "$(dirname "$B")"; V=$(mktemp -d "$B.XXXXXX"); trap 'rm -rf "$V"' EXIT; uv venv -q "$V"; uv pip install -q --python "$V/bin/python" maturin pytest; cd python; VIRTUAL_ENV="$V" PATH="$V/bin:$PATH" maturin develop -q; "$V/bin/pytest" tests -q"#;
+    needs(
+        "python-wheel-tests",
+        "uv",
+        has,
+        vec![
+            Cmd::new(
+                "bash",
+                &["-c", SCRIPT, "python-wheel-tests", "target/precheck/pyvenv"],
+            )
+            .heavy(),
+        ],
+    )
 }
 
 /// A command that runs `tool args... <files>` over the git-tracked files matching `pathspec`
@@ -1145,12 +1249,32 @@ pub fn verdict(outcomes: &[Outcome]) -> Result<(), String> {
     }
 }
 
-/// `cargo xtask precheck [--base REF] [--fast] [--full] [--memory-cap SIZE]`.
+/// The dedicated coverage target directory: a sibling of `CARGO_TARGET_DIR` when it is set
+/// (so a per-unit build directory keeps its own), else under the workspace `target/`.
+#[must_use]
+pub fn cov_dir_for(root: &Path, cargo_target_dir: Option<&str>) -> String {
+    match cargo_target_dir {
+        Some(t) => format!("{}-precheck-cov", t.trim_end_matches('/')),
+        None => root
+            .join("target/precheck-cov")
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+/// `cargo xtask precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE]`.
 ///
 /// # Errors
 /// Returns the usage or environment error, or the failed-check summary.
 pub fn run_precheck(root: &Path, flags: &[&str]) -> Result<(), String> {
-    let o = Opts::parse(flags)?;
+    let mut o = Opts::parse(flags)?;
+    // An absolute path: the coverage commands run from the workspace root, but so may others.
+    o.cov_dir = cov_dir_for(
+        root,
+        std::env::var_os("CARGO_TARGET_DIR")
+            .as_deref()
+            .and_then(std::ffi::OsStr::to_str),
+    );
     if o.memory_cap.is_some() && !on_path("systemd-run") {
         return Err(memory_cap_error());
     }
@@ -1163,6 +1287,8 @@ pub fn run_precheck(root: &Path, flags: &[&str]) -> Result<(), String> {
         o.memory_cap.as_deref(),
         &root.join("target/precheck"),
     )?;
+    // Coverage builds are large: always remove them, pass or fail.
+    let _ = std::fs::remove_dir_all(&o.cov_dir);
     println!("\n{}", render_table(&outcomes));
     verdict(&outcomes)?;
     println!("precheck: OK");

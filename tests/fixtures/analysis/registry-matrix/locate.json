@@ -17,60 +17,12 @@
       "reason": "SELECT locate('bar', 'foobarbar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "locate#12a673982c42/ansi_on",
-      "reason": "SELECT locate('bar', array(1, 2), 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#12a673982c42/ansi_off",
-      "reason": "SELECT locate('bar', array(1, 2), 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#17ea48769b02/ansi_on",
-      "reason": "SELECT locate(array(1, 2), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#17ea48769b02/ansi_off",
-      "reason": "SELECT locate(array(1, 2), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "locate#2aaf54a57aca/ansi_on",
       "reason": "SELECT locate('bar', 'foobarbar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "locate#2aaf54a57aca/ansi_off",
       "reason": "SELECT locate('bar', 'foobarbar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#2b821839d84e/ansi_on",
-      "reason": "SELECT locate('bar', named_struct('a', 1, 'b', 'x'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#2b821839d84e/ansi_off",
-      "reason": "SELECT locate('bar', named_struct('a', 1, 'b', 'x'), 5) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#2bc65bf2f540/ansi_on",
-      "reason": "SELECT locate(named_struct('a', 1, 'b', 'x'), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#2bc65bf2f540/ansi_off",
-      "reason": "SELECT locate(named_struct('a', 1, 'b', 'x'), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#3ee05c32e8ab/ansi_on",
-      "reason": "SELECT locate(named_struct('a', 1, 'b', 'x'), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#3ee05c32e8ab/ansi_off",
-      "reason": "SELECT locate(named_struct('a', 1, 'b', 'x'), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#4fa9f9124d9a/ansi_on",
-      "reason": "SELECT locate('bar', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#4fa9f9124d9a/ansi_off",
-      "reason": "SELECT locate('bar', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "locate#5f5842f91add/ansi_on",
@@ -89,36 +41,12 @@
       "reason": "SELECT locate('bar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "locate#6821c56d7e91/ansi_on",
-      "reason": "SELECT locate('bar', 'foobarbar', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#6821c56d7e91/ansi_off",
-      "reason": "SELECT locate('bar', 'foobarbar', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "locate#7e29689f2553/ansi_on",
       "reason": "SELECT locate(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "locate#7e29689f2553/ansi_off",
       "reason": "SELECT locate(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "locate#821a274cebaa/ansi_on",
-      "reason": "SELECT locate('bar', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#821a274cebaa/ansi_off",
-      "reason": "SELECT locate('bar', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#8ac13eee16f4/ansi_on",
-      "reason": "SELECT locate('bar', 'foobarbar', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#8ac13eee16f4/ansi_off",
-      "reason": "SELECT locate('bar', 'foobarbar', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "locate#908e65ca359a/ansi_on",
@@ -183,14 +111,6 @@
     {
       "id": "locate#f4332c0ebfcb/ansi_off",
       "reason": "SELECT locate('bar', map('a', 1), 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#fb53f0a3db5f/ansi_on",
-      "reason": "SELECT locate(array(1, 2), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#fb53f0a3db5f/ansi_off",
-      "reason": "SELECT locate(array(1, 2), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "locate#ffc3f838bcdf/ansi_on",

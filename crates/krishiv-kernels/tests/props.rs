@@ -1000,3 +1000,44 @@ fn check_bool(rows: &[(Option<bool>, Option<bool>)], scalar: Option<bool>) {
         assert_eq!(sca, flipped);
     }
 }
+
+proptest! {
+    #![proptest_config(config())]
+
+    /// `list::create` interleaves one list per row: the fast path equals
+    /// the row-at-a-time oracle, over sliced arguments with NULLs.
+    #[test]
+    fn list_create_matches_reference(
+        rows in 0..=200_usize,
+        nargs in 0..=3_usize,
+        contains_null in any::<bool>(),
+    ) {
+        use arrow_array::{ArrayRef, Int32Array};
+        use std::sync::Arc;
+        let mut args: Vec<ArrayRef> = Vec::new();
+        for c in 0..nargs {
+            let off = (c * 3 + rows) % 5;
+            let mut vals: Vec<Option<i32>> = (0..rows + off)
+                .map(|i| {
+                    let v = i32::try_from(i)
+                        .unwrap_or(i32::MAX)
+                        .wrapping_mul(7919 + i32::try_from(c).unwrap_or(i32::MAX))
+                        .wrapping_add(i32::try_from(rows).unwrap_or(i32::MAX));
+                    if (i + c) % 7 == 0 { None } else { Some(v) }
+                })
+                .collect();
+            if !contains_null {
+                for v in vals.iter_mut() {
+                    if v.is_none() {
+                        *v = Some(0);
+                    }
+                }
+            }
+            let full = Int32Array::from(vals);
+            args.push(Arc::new(full.slice(off, rows)) as ArrayRef);
+        }
+        let fast = krishiv_kernels::list::create(&args, rows, contains_null).unwrap();
+        let slow = reference::list_create(&args, rows, contains_null).unwrap();
+        assert_eq!(fast, slow);
+    }
+}

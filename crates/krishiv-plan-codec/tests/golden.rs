@@ -188,7 +188,15 @@ fn the_registry_is_sorted_and_every_feature_has_goldens() {
         assert!(!f.meaning().is_empty(), "{id}: no meaning");
         let dir = root().join(id);
         let files = std::fs::read_dir(&dir).map_or(0, Iterator::count);
-        assert!(files > 0, "{id}: no golden files in {}", dir.display());
+        // `legacy_statistical_aggregate` fires only around a moment
+        // aggregate, and the encoder refuses every moment aggregate (pinned
+        // by the TPC-DS ratchet), so no encodable plan can carry it yet: it
+        // has no golden files until one can.
+        assert!(
+            files > 0 || *f == Feature::LegacyStatisticalAggregate,
+            "{id}: no golden files in {}",
+            dir.display()
+        );
     }
     // `goldens` panics on a directory that is none of the three kinds.
     assert!(!goldens().is_empty());

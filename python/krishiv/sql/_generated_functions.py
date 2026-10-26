@@ -29,6 +29,7 @@ __all__ = [
     "acos",
     "acosh",
     "add_months",
+    "array",
     "ascii",
     "asin",
     "asinh",
@@ -56,14 +57,20 @@ __all__ = [
     "concat_ws",
     "contains",
     "conv",
+    "corr",
     "cos",
     "cosh",
     "cot",
+    "covar_pop",
+    "covar_samp",
     "crc32",
     "csc",
     "cume_dist",
     "curdate",
+    "current_catalog",
+    "current_database",
     "current_date",
+    "current_schema",
     "current_timestamp",
     "current_user",
     "date_add",
@@ -103,11 +110,15 @@ __all__ = [
     "hypot",
     "ifnull",
     "initcap",
+    "input_file_block_length",
+    "input_file_block_start",
+    "input_file_name",
     "instr",
     "is_valid_utf8",
     "isnan",
     "isnotnull",
     "isnull",
+    "kurtosis",
     "lag",
     "last",
     "last_day",
@@ -135,9 +146,11 @@ __all__ = [
     "mean",
     "min",
     "minute",
+    "monotonically_increasing_id",
     "month",
     "monthname",
     "months_between",
+    "named_struct",
     "nanvl",
     "negative",
     "next_day",
@@ -150,6 +163,7 @@ __all__ = [
     "nvl2",
     "octet_length",
     "overlay",
+    "parse_url",
     "percent_rank",
     "pi",
     "pmod",
@@ -160,6 +174,9 @@ __all__ = [
     "quote",
     "radians",
     "raise_error",
+    "rand",
+    "randn",
+    "randstr",
     "rank",
     "regexp",
     "regexp_count",
@@ -193,10 +210,17 @@ __all__ = [
     "signum",
     "sin",
     "sinh",
+    "skewness",
     "soundex",
+    "spark_partition_id",
     "split_part",
     "sqrt",
     "startswith",
+    "std",
+    "stddev",
+    "stddev_pop",
+    "stddev_samp",
+    "struct",
     "substr",
     "substring",
     "substring_index",
@@ -217,20 +241,28 @@ __all__ = [
     "try_divide",
     "try_mod",
     "try_multiply",
+    "try_parse_url",
     "try_subtract",
     "try_to_binary",
     "try_to_number",
     "try_url_decode",
     "try_validate_utf8",
+    "typeof",
     "ucase",
     "unbase64",
     "unhex",
+    "uniform",
     "unix_date",
     "upper",
     "url_decode",
     "url_encode",
     "user",
+    "uuid",
     "validate_utf8",
+    "var_pop",
+    "var_samp",
+    "variance",
+    "version",
     "weekday",
     "weekofyear",
     "xxhash64",
@@ -257,6 +289,11 @@ def acosh(col: ColumnOrName) -> Column:
 def add_months(start: ColumnOrName, months: ColumnOrName | int) -> Column:
     """Calls the registry function ``add_months``."""
     return _call("add_months", _named(start, "start"), _int_or_col(months, "months"))
+
+
+def array(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``array``."""
+    return _call("array", *_cols(cols))
 
 
 def ascii(col: ColumnOrName) -> Column:
@@ -395,6 +432,11 @@ def conv(col: ColumnOrName, fromBase: int, toBase: int) -> Column:
     return _call("conv", _named(col, "col"), _lit(fromBase, "fromBase"), _lit(toBase, "toBase"))
 
 
+def corr(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``corr``."""
+    return _call("corr", _named(col1, "col1"), _named(col2, "col2"))
+
+
 def cos(col: ColumnOrName) -> Column:
     """Calls the registry function ``cos``."""
     return _call("cos", _named(col, "col"))
@@ -408,6 +450,16 @@ def cosh(col: ColumnOrName) -> Column:
 def cot(col: ColumnOrName) -> Column:
     """Calls the registry function ``cot``."""
     return _call("cot", _named(col, "col"))
+
+
+def covar_pop(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``covar_pop``."""
+    return _call("covar_pop", _named(col1, "col1"), _named(col2, "col2"))
+
+
+def covar_samp(col1: ColumnOrName, col2: ColumnOrName) -> Column:
+    """Calls the registry function ``covar_samp``."""
+    return _call("covar_samp", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def crc32(col: ColumnOrName) -> Column:
@@ -430,9 +482,24 @@ def curdate() -> Column:
     return _call("curdate")
 
 
+def current_catalog() -> Column:
+    """Calls the registry function ``current_catalog``."""
+    return _call("current_catalog")
+
+
+def current_database() -> Column:
+    """Calls the registry function ``current_database``."""
+    return _call("current_database")
+
+
 def current_date() -> Column:
     """Calls the registry function ``current_date``."""
     return _call("current_date")
+
+
+def current_schema() -> Column:
+    """Calls the registry function ``current_schema``."""
+    return _call("current_schema")
 
 
 def current_timestamp() -> Column:
@@ -631,6 +698,21 @@ def initcap(col: ColumnOrName) -> Column:
     return _call("initcap", _named(col, "col"))
 
 
+def input_file_block_length() -> Column:
+    """Calls the registry function ``input_file_block_length``."""
+    return _call("input_file_block_length")
+
+
+def input_file_block_start() -> Column:
+    """Calls the registry function ``input_file_block_start``."""
+    return _call("input_file_block_start")
+
+
+def input_file_name() -> Column:
+    """Calls the registry function ``input_file_name``."""
+    return _call("input_file_name")
+
+
 def instr(str: ColumnOrName, substr: str | Column) -> Column:
     """Calls the registry function ``instr``."""
     return _call("instr", _named(str, "str"), _lit(substr, "substr"))
@@ -654,6 +736,11 @@ def isnotnull(col: ColumnOrName) -> Column:
 def isnull(col: ColumnOrName) -> Column:
     """Calls the registry function ``isnull``."""
     return _call("isnull", _named(col, "col"))
+
+
+def kurtosis(col: ColumnOrName) -> Column:
+    """Calls the registry function ``kurtosis``."""
+    return _call("kurtosis", _named(col, "col"))
 
 
 def lag(col: ColumnOrName, offset: int = 1, default: Any | None = None) -> Column:
@@ -805,6 +892,11 @@ def minute(col: ColumnOrName) -> Column:
     return _call("minute", _named(col, "col"))
 
 
+def monotonically_increasing_id() -> Column:
+    """Calls the registry function ``monotonically_increasing_id``."""
+    return _call("monotonically_increasing_id")
+
+
 def month(col: ColumnOrName) -> Column:
     """Calls the registry function ``month``."""
     return _call("month", _named(col, "col"))
@@ -818,6 +910,11 @@ def monthname(col: ColumnOrName) -> Column:
 def months_between(date1: ColumnOrName, date2: ColumnOrName, roundOff: bool = True) -> Column:
     """Calls the registry function ``months_between``."""
     return _call("months_between", _named(date1, "date1"), _named(date2, "date2"), _lit(roundOff, "roundOff"))
+
+
+def named_struct(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``named_struct``."""
+    return _call("named_struct", *_cols(cols))
 
 
 def nanvl(col1: ColumnOrName, col2: ColumnOrName) -> Column:
@@ -882,6 +979,11 @@ def overlay(src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, l
     )
 
 
+def parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``parse_url``."""
+    return _call("parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
+
+
 def percent_rank() -> Column:
     """Calls the registry function ``percent_rank``."""
     return _call("percent_rank")
@@ -930,6 +1032,21 @@ def radians(col: ColumnOrName) -> Column:
 def raise_error(errMsg: Column | str) -> Column:
     """Calls the registry function ``raise_error``."""
     return _call("raise_error", _lit(errMsg, "errMsg"))
+
+
+def rand(seed: int | None = None) -> Column:
+    """Calls the registry function ``rand``."""
+    return _call("rand", *_opt(_lit, seed, "seed"))
+
+
+def randn(seed: int | None = None) -> Column:
+    """Calls the registry function ``randn``."""
+    return _call("randn", *_opt(_lit, seed, "seed"))
+
+
+def randstr(length: int | Column, seed: int | Column | None = None) -> Column:
+    """Calls the registry function ``randstr``."""
+    return _call("randstr", _lit(length, "length"), *_opt(_lit, seed, "seed"))
 
 
 def rank() -> Column:
@@ -1101,9 +1218,19 @@ def sinh(col: ColumnOrName) -> Column:
     return _call("sinh", _named(col, "col"))
 
 
+def skewness(col: ColumnOrName) -> Column:
+    """Calls the registry function ``skewness``."""
+    return _call("skewness", _named(col, "col"))
+
+
 def soundex(col: ColumnOrName) -> Column:
     """Calls the registry function ``soundex``."""
     return _call("soundex", _named(col, "col"))
+
+
+def spark_partition_id() -> Column:
+    """Calls the registry function ``spark_partition_id``."""
+    return _call("spark_partition_id")
 
 
 def split_part(src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName) -> Column:
@@ -1119,6 +1246,31 @@ def sqrt(col: ColumnOrName) -> Column:
 def startswith(str: ColumnOrName, prefix: ColumnOrName) -> Column:
     """Calls the registry function ``startswith``."""
     return _call("startswith", _named(str, "str"), _named(prefix, "prefix"))
+
+
+def std(col: ColumnOrName) -> Column:
+    """Calls the registry function ``std``."""
+    return _call("std", _named(col, "col"))
+
+
+def stddev(col: ColumnOrName) -> Column:
+    """Calls the registry function ``stddev``."""
+    return _call("stddev", _named(col, "col"))
+
+
+def stddev_pop(col: ColumnOrName) -> Column:
+    """Calls the registry function ``stddev_pop``."""
+    return _call("stddev_pop", _named(col, "col"))
+
+
+def stddev_samp(col: ColumnOrName) -> Column:
+    """Calls the registry function ``stddev_samp``."""
+    return _call("stddev_samp", _named(col, "col"))
+
+
+def struct(*cols: ColumnOrName) -> Column:
+    """Calls the registry function ``struct``."""
+    return _call("struct", *_cols(cols))
 
 
 def substr(str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName | None = None) -> Column:
@@ -1223,6 +1375,11 @@ def try_multiply(left: ColumnOrName, right: ColumnOrName) -> Column:
     return _call("try_multiply", _named(left, "left"), _named(right, "right"))
 
 
+def try_parse_url(url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``try_parse_url``."""
+    return _call("try_parse_url", _named(url, "url"), _named(partToExtract, "partToExtract"), *_opt(_named, key, "key"))
+
+
 def try_subtract(left: ColumnOrName, right: ColumnOrName) -> Column:
     """Calls the registry function ``try_subtract``."""
     return _call("try_subtract", _named(left, "left"), _named(right, "right"))
@@ -1248,6 +1405,11 @@ def try_validate_utf8(str: ColumnOrName) -> Column:
     return _call("try_validate_utf8", _named(str, "str"))
 
 
+def typeof(col: ColumnOrName) -> Column:
+    """Calls the registry function ``typeof``."""
+    return _call("typeof", _named(col, "col"))
+
+
 def ucase(str: ColumnOrName) -> Column:
     """Calls the registry function ``ucase``."""
     return _call("ucase", _named(str, "str"))
@@ -1261,6 +1423,11 @@ def unbase64(col: ColumnOrName) -> Column:
 def unhex(col: ColumnOrName) -> Column:
     """Calls the registry function ``unhex``."""
     return _call("unhex", _named(col, "col"))
+
+
+def uniform(min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column | None = None) -> Column:
+    """Calls the registry function ``uniform``."""
+    return _call("uniform", _num_or_col(min, "min"), _num_or_col(max, "max"), *_opt(_lit, seed, "seed"))
 
 
 def unix_date(col: ColumnOrName) -> Column:
@@ -1288,9 +1455,34 @@ def user() -> Column:
     return _call("user")
 
 
+def uuid(seed: int | Column | None = None) -> Column:
+    """Calls the registry function ``uuid``."""
+    return _call("uuid", *_opt(_lit, seed, "seed"))
+
+
 def validate_utf8(str: ColumnOrName) -> Column:
     """Calls the registry function ``validate_utf8``."""
     return _call("validate_utf8", _named(str, "str"))
+
+
+def var_pop(col: ColumnOrName) -> Column:
+    """Calls the registry function ``var_pop``."""
+    return _call("var_pop", _named(col, "col"))
+
+
+def var_samp(col: ColumnOrName) -> Column:
+    """Calls the registry function ``var_samp``."""
+    return _call("var_samp", _named(col, "col"))
+
+
+def variance(col: ColumnOrName) -> Column:
+    """Calls the registry function ``variance``."""
+    return _call("variance", _named(col, "col"))
+
+
+def version() -> Column:
+    """Calls the registry function ``version``."""
+    return _call("version")
 
 
 def weekday(col: ColumnOrName) -> Column:

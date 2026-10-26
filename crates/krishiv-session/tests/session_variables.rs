@@ -11,7 +11,7 @@
 //! TABLE`, persistent views, `INTERVAL` values, `LATERAL` subqueries or
 //! struct, map and array values), and the comment names it. Statements that
 //! fail deterministically without the feature assert the engine's exact
-//! error instead (the `RAND` declarations, the struct variable). The second
+//! error instead (the struct variable). The second
 //! golden file, `session-variable-precedence.sql`, needs `DECLARE all` (a
 //! reserved word here), `GROUP BY ALL` / `ORDER BY ALL` and `CREATE TABLE`
 //! throughout and is skipped as a whole; precedence without them is covered
@@ -260,16 +260,20 @@ const CASES: &[(&str, Expect)] = &[
         "SET VARIABLE title = 'Dropped struct variable -- field access vs qualified name'",
         E,
     ),
-    // Struct values cannot be built yet (the STRUCT type parses, but no
-    // struct constructor is registered), so the declaration fails; the field
+    // Struct values cannot be held by session variables yet (the STRUCT
+    // type parses and struct constructors resolve, but variable values of
+    // struct type are not supported), so the declaration fails; the field
     // access then has no variable to resolve against, and the drop has
     // nothing to drop. Each asserts the engine's exact error, so adding
-    // struct support must update this case.
+    // struct variable values must update this case.
     (
         "DECLARE OR REPLACE VARIABLE session STRUCT<a INT> = NAMED_STRUCT('a', 1)",
         Err {
             class: ErrorClass::KrishivUnsupportedFeature,
-            params: &[("feature", "function NAMED_STRUCT")],
+            params: &[(
+                "feature",
+                "session variable values of type Struct(\"a\": Int32)",
+            )],
         },
     ),
     (
@@ -388,16 +392,12 @@ const CASES: &[(&str, Expect)] = &[
             rows: &[&["1", "1"]],
         },
     ),
-    // `RAND` is unsupported, so the declaration fails and `var1` keeps its
-    // `INT` value of 1: the `SELECT` below asserts the retained value, and
-    // asserts nothing about the golden `DOUBLE`. Pinning the failure here
-    // means `RAND` support must update this case.
+    // `RAND` is supported, so the declaration replaces `var1` with the
+    // `DOUBLE` value of `1 + RAND(5)`: the `SELECT` below asserts it is at
+    // least 1, as the golden does.
     (
         "DECLARE OR REPLACE VARIABLE var1 DOUBLE DEFAULT 1 + RAND(5)",
-        Err {
-            class: ErrorClass::KrishivUnsupportedFeature,
-            params: &[("feature", "function RAND")],
-        },
+        E,
     ),
     (
         "SELECT true AS Expected, var1 >= 1 AS result",
@@ -612,26 +612,20 @@ const CASES: &[(&str, Expect)] = &[
     ("DECLARE VARIABLE var1, var2, var3 INT", E),
     (
         "DECLARE VARIABLE var4, var5, var6 INT DEFAULT CAST(RAND(0) * 10 AS INT)",
-        Err {
-            class: ErrorClass::KrishivUnsupportedFeature,
-            params: &[("feature", "function RAND")],
-        },
+        E,
     ),
     ("DECLARE VARIABLE var7, var8, var9 DEFAULT 5", E),
     (
         "SELECT var4 = var5, var4 = var6, var5 = var6",
-        Err {
-            class: ErrorClass::UnresolvedColumnWithoutSuggestion,
-            params: &[("objectName", "`var4`")],
+        R {
+            schema: "struct<(var4 = var5):boolean,(var4 = var6):boolean,(var5 = var6):boolean>",
+            rows: &[&["true", "true", "true"]],
         },
     ),
     ("DECLARE OR REPLACE VARIABLE var1, var2, var3 DOUBLE", E),
     (
         "DECLARE OR REPLACE VARIABLE var4, var5, var6 DOUBLE DEFAULT RAND(0)",
-        Err {
-            class: ErrorClass::KrishivUnsupportedFeature,
-            params: &[("feature", "function RAND")],
-        },
+        E,
     ),
     (
         "DECLARE OR REPLACE VARIABLE var7, var8, var9 DEFAULT 1.5",
@@ -639,35 +633,17 @@ const CASES: &[(&str, Expect)] = &[
     ),
     (
         "SELECT var4 = var5, var4 = var6, var5 = var6",
-        Err {
-            class: ErrorClass::UnresolvedColumnWithoutSuggestion,
-            params: &[("objectName", "`var4`")],
+        R {
+            schema: "struct<(var4 = var5):boolean,(var4 = var6):boolean,(var5 = var6):boolean>",
+            rows: &[&["true", "true", "true"]],
         },
     ),
     ("DROP TEMPORARY VARIABLE var1", E),
     ("DROP TEMPORARY VARIABLE var2", E),
     ("DROP TEMPORARY VARIABLE var3", E),
-    (
-        "DROP TEMPORARY VARIABLE var4",
-        Err {
-            class: ErrorClass::VariableNotFound,
-            params: &[("variableName", "`system`.`session`.`var4`")],
-        },
-    ),
-    (
-        "DROP TEMPORARY VARIABLE var5",
-        Err {
-            class: ErrorClass::VariableNotFound,
-            params: &[("variableName", "`system`.`session`.`var5`")],
-        },
-    ),
-    (
-        "DROP TEMPORARY VARIABLE var6",
-        Err {
-            class: ErrorClass::VariableNotFound,
-            params: &[("variableName", "`system`.`session`.`var6`")],
-        },
-    ),
+    ("DROP TEMPORARY VARIABLE var4", E),
+    ("DROP TEMPORARY VARIABLE var5", E),
+    ("DROP TEMPORARY VARIABLE var6", E),
     ("DROP TEMPORARY VARIABLE var7", E),
     ("DROP TEMPORARY VARIABLE var8", E),
     ("DROP TEMPORARY VARIABLE var9", E),

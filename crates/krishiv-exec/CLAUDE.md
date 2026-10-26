@@ -61,7 +61,9 @@ Paths are relative to this crate.
 - `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
 - `src/operators/mod.rs` stateless operators (scan, filter, project, limit, union)
 - `src/aggregate/mod.rs` hash aggregate; `src/join/mod.rs` hash join (build, probe, grace spill)
-- `src/rows/mod.rs` row-table layout and pages shared by aggregate and join
+- `src/rows/mod.rs` row-table layout and pages shared by aggregate and join; the stored row hash `h` is a fast seedless
+  table hash, never the routing hash `H_kg` (kernels `hash::routing`, used only by exchanges and key groups);
+  tables place rows by the seeded `g = finalize(h, seed)`; `rows/flooding_tests.rs` bounds probe runs under crafted and forged `h` collisions
 - `src/window/mod.rs` window operator and plan types; `src/window/eval.rs` frames, ranking and frame aggregates; `src/planner/window.rs` plans it over sorted input
 - `src/operators/file_scan.rs` and `file_write.rs` file scan and write operators over `krishiv-io`
 
@@ -89,4 +91,5 @@ Paths are relative to this crate.
 ## Tests
 `cargo nextest run -p krishiv-exec --no-tests=pass` · `cargo clippy -p krishiv-exec --all-targets -- -D warnings` ·
 loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release loom_model::` (use a separate target dir) ·
-benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators`
+benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators` · `--bench routing_hash` (per-row
+`H_kg` vs the row layout's table hash and seeded foldhash)

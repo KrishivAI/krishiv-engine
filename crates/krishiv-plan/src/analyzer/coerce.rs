@@ -441,6 +441,13 @@ fn any_nullable(args: &[Arg<'_>]) -> bool {
     args.iter().any(|a| a.nullable)
 }
 
+/// Whether a comparison of `args` may be null: an argument may be. A null
+/// struct field never makes the result null (nulls order smallest); only a
+/// null struct operand does, which `nullable` already records.
+fn comparison_nullable(args: &[Arg<'_>]) -> bool {
+    any_nullable(args)
+}
+
 /// Strings meet other types differently with ANSI off.
 fn legacy_strings(args: &[Arg<'_>], ansi: bool) -> Result<(), Mismatch> {
     let strings = args
@@ -508,7 +515,10 @@ fn operator_types(
             if let Some(t) = a.ty.filter(|t| !orderable(t)) {
                 return Err(Mismatch::InvalidOrdering(t.clone()));
             }
-            Ok(boolean(casts, op != B::EqNullSafe && any_nullable(args)))
+            Ok(boolean(
+                casts,
+                op != B::EqNullSafe && comparison_nullable(args),
+            ))
         }
         (B::Add | B::Subtract | B::Multiply | B::Divide | B::Remainder, [a, b]) => {
             arithmetic(op, a, b, ansi, loss)
@@ -565,7 +575,7 @@ fn operator_types(
             if let Some(t) = first.ty.filter(|t| !orderable(t)) {
                 return Err(Mismatch::InvalidOrdering(t.clone()));
             }
-            Ok(boolean(casts, any_nullable(args)))
+            Ok(boolean(casts, comparison_nullable(args)))
         }
         (B::Like | B::ILike | B::RLike, _) => {
             // Only atomic types become a string implicitly.
@@ -1371,6 +1381,51 @@ mod tests {
             nullable: false,
             literal: None,
         }
+    }
+
+    fn nullable_arg(t: Option<&T>) -> Arg<'_> {
+        Arg {
+            ty: t,
+            nullable: true,
+            literal: None,
+        }
+    }
+
+    /// Struct comparisons are NULL only when a whole struct operand is NULL:
+    /// nullable fields never make `=`, `<=>`, `<` and friends nullable.
+    #[test]
+    fn struct_comparison_nullability_ignores_fields() {
+        let struct_ty = T::Struct(StructType::new([
+            StructField::new("a", T::Integer, true),
+            StructField::new("b", T::Integer, true),
+        ]));
+        let non_null = [arg(Some(&struct_ty)), arg(Some(&struct_ty))];
+        for op in [
+            Builtin::Eq,
+            Builtin::Lt,
+            Builtin::LtEq,
+            Builtin::Gt,
+            Builtin::GtEq,
+        ] {
+            let typed = operator(op, &non_null, rules(true), true).expect("struct comparison");
+            assert!(!typed.nullable, "{op:?} with non-null structs");
+        }
+        // `<=>` is never NULL, even for nullable structs.
+        let nullable = [
+            nullable_arg(Some(&struct_ty)),
+            nullable_arg(Some(&struct_ty)),
+        ];
+        let typed = operator(Builtin::EqNullSafe, &nullable, rules(true), true)
+            .expect("null-safe struct comparison");
+        assert!(!typed.nullable);
+        // Other comparisons are NULL when a whole struct operand is.
+        let typed =
+            operator(Builtin::Eq, &nullable, rules(true), true).expect("nullable struct eq");
+        assert!(typed.nullable);
+        // A nullable primitive operand still makes the comparison nullable.
+        let ints = [arg(Some(&T::Integer)), nullable_arg(Some(&T::Integer))];
+        let typed = operator(Builtin::Eq, &ints, rules(true), true).expect("nullable int eq");
+        assert!(typed.nullable);
     }
 
     /// The casts a registry function's `Inputs` ask for.

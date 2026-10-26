@@ -1,28 +1,12 @@
 {
   "entries": [
     {
-      "id": "to_char#0e6f2a6c98ce/ansi_on",
-      "reason": "SELECT to_char(array(1, 2), '999') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#0e6f2a6c98ce/ansi_off",
-      "reason": "SELECT to_char(array(1, 2), '999') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "to_char#18b01e8066ef/ansi_on",
       "reason": "SELECT to_char(454, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
     },
     {
       "id": "to_char#18b01e8066ef/ansi_off",
       "reason": "SELECT to_char(454, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
-    },
-    {
-      "id": "to_char#62ce9da6957b/ansi_on",
-      "reason": "SELECT to_char(454, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#62ce9da6957b/ansi_off",
-      "reason": "SELECT to_char(454, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "to_char#7c77983e5a32/ansi_on",
@@ -55,22 +39,6 @@
     {
       "id": "to_char#c40379bd4176/ansi_off",
       "reason": "SELECT to_char(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#c53227035eb3/ansi_on",
-      "reason": "SELECT to_char(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#c53227035eb3/ansi_off",
-      "reason": "SELECT to_char(named_struct('a', 1, 'b', 'x'), '999') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#c9343242b773/ansi_on",
-      "reason": "SELECT to_char(454, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_char#c9343242b773/ansi_off",
-      "reason": "SELECT to_char(454, named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "to_char#d598432ef0c7/ansi_on",
