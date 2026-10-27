@@ -13,8 +13,8 @@ use std::sync::Arc;
 use krishiv_functions::registry::{Lookup, builtins};
 use krishiv_functions::signature::SparkProfile;
 use krishiv_plan::{
-    AttrId, BoundColumn, Expr, ExprNode, FunctionId, FunctionKind, Grouping, ResolvedExpr,
-    ResolvedFunction,
+    AttrId, BoundColumn, Expr, ExprNode, FunctionId, FunctionKind, Grouping, Literal, NullOrdering,
+    ResolvedExpr, ResolvedFunction, SortDirection,
 };
 
 use super::build::{Planned, Planner, column_of, internal, list, unsupported};
@@ -251,7 +251,9 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
             vec![null_if_false(f.args.first()?)?],
         ),
         "sum" => (AggregateFunction::Sum, f.args.clone()),
+        "try_sum" if f.args.len() == 1 => (AggregateFunction::TrySum, f.args.clone()),
         "avg" | "mean" => (AggregateFunction::Avg, f.args.clone()),
+        "try_avg" if f.args.len() == 1 => (AggregateFunction::TryAvg, f.args.clone()),
         "min" | "bool_and" | "every" => (AggregateFunction::Min, f.args.clone()),
         "max" | "bool_or" | "some" | "any" => (AggregateFunction::Max, f.args.clone()),
         "first" | "first_value" => (AggregateFunction::First { ignore_nulls }, value),
@@ -276,9 +278,80 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "corr" if f.args.len() == 2 => (AggregateFunction::Corr, f.args.clone()),
         "covar_samp" if f.args.len() == 2 => (AggregateFunction::CovarSamp, f.args.clone()),
         "covar_pop" if f.args.len() == 2 => (AggregateFunction::CovarPop, f.args.clone()),
+        "regr_count" if f.args.len() == 2 => (AggregateFunction::RegrCount, f.args.clone()),
+        "regr_avgx" if f.args.len() == 2 => (AggregateFunction::RegrAvgx, f.args.clone()),
+        "regr_avgy" if f.args.len() == 2 => (AggregateFunction::RegrAvgy, f.args.clone()),
+        "regr_sxx" if f.args.len() == 2 => (AggregateFunction::RegrSxx, f.args.clone()),
+        "regr_syy" if f.args.len() == 2 => (AggregateFunction::RegrSyy, f.args.clone()),
+        "regr_sxy" if f.args.len() == 2 => (AggregateFunction::RegrSxy, f.args.clone()),
+        "regr_slope" if f.args.len() == 2 => (AggregateFunction::RegrSlope, f.args.clone()),
+        "regr_intercept" if f.args.len() == 2 => (AggregateFunction::RegrIntercept, f.args.clone()),
+        "regr_r2" if f.args.len() == 2 => (AggregateFunction::RegrR2, f.args.clone()),
+        "bit_and" if f.args.len() == 1 => (AggregateFunction::BitAnd, f.args.clone()),
+        "bit_or" if f.args.len() == 1 => (AggregateFunction::BitOr, f.args.clone()),
+        "bit_xor" if f.args.len() == 1 => (AggregateFunction::BitXor, f.args.clone()),
+        "mode" => mode_lower(f)?,
+        "listagg" => listagg_lower(f)?,
         _ => return None,
     };
     Some(Lowered { function, args })
+}
+
+/// `mode(col[, deterministic])`: the analyzer types the ordered forms
+/// and keeps the value with a folded tie-break flag (largest when true)
+/// as the second argument; the executor reads the value alone.
+fn mode_lower(f: &ResolvedFunction) -> Option<(AggregateFunction, Vec<Arc<Expr>>)> {
+    let value = Arc::clone(f.args.first()?);
+    Some(match f.args.get(1).map(|a| &a.node) {
+        None => (AggregateFunction::Mode, vec![value]),
+        Some(ExprNode::Literal(Literal::Boolean(largest))) => (
+            if *largest {
+                AggregateFunction::ModeMax
+            } else {
+                AggregateFunction::ModeMin
+            },
+            vec![value],
+        ),
+        _ => return None,
+    })
+}
+
+/// `listagg(expr[, delimiter])` with its `WITHIN GROUP` ordering: the
+/// analyzer folds the delimiter to a literal and keeps the value, the
+/// delimiter and the ordering keys as the arguments; the executor reads
+/// the value and the ordering keys, with the fused delimiter.
+fn listagg_lower(f: &ResolvedFunction) -> Option<(AggregateFunction, Vec<Arc<Expr>>)> {
+    let value = Arc::clone(f.args.first()?);
+    // The ordering keys follow the value and the delimiter.
+    let orders = f.within_group.len();
+    if f.args.len() != orders + 2 {
+        return None;
+    }
+    let delimiter = match f.args.get(1).map(|a| &a.node) {
+        Some(ExprNode::Literal(Literal::String(s))) => s.as_bytes().to_vec(),
+        Some(ExprNode::Literal(Literal::Binary(b))) => b.clone(),
+        Some(ExprNode::Literal(Literal::Null(_))) => Vec::new(),
+        _ => return None,
+    };
+    let dirs = f
+        .within_group
+        .iter()
+        .map(|o| {
+            (
+                o.direction == SortDirection::Descending,
+                o.nulls == NullOrdering::NullsFirst,
+            )
+        })
+        .collect();
+    let mut args = vec![value];
+    args.extend(f.args.iter().skip(2).cloned());
+    Some((
+        AggregateFunction::ListAgg {
+            delimiter,
+            orders: dirs,
+        },
+        args,
+    ))
 }
 
 /// `nullif(c, false)`: `c` where it is true, else NULL, so `count` of it
@@ -301,6 +374,7 @@ fn null_if_false(c: &Arc<Expr>) -> Option<Arc<Expr>> {
             ],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type: krishiv_types::DataType::Boolean,
             nullable: true,
             deterministic: true,
@@ -340,7 +414,20 @@ pub(super) fn aggregate_expr(
             name,
         ));
     }
-    if function != AggregateFunction::Count && args.len() != arity(function) {
+    if let AggregateFunction::ListAgg { .. } = function {
+        let [value, orders @ ..] = &args[..] else {
+            return Err(internal("listagg without a value"));
+        };
+        return Ok(AggregateExpr::listagg(
+            function,
+            *value,
+            typed(value),
+            orders.to_vec(),
+            orders.iter().map(&typed).collect(),
+            name,
+        ));
+    }
+    if function != AggregateFunction::Count && args.len() != arity(&function) {
         return Err(internal("an aggregate with the wrong number of arguments"));
     }
     let arg_type = args.first().map_or(arrow_schema::DataType::Null, typed);

@@ -472,6 +472,7 @@ mod tests {
             args,
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type: krishiv_types::DataType::Null,
             nullable: true,
             deterministic: true,

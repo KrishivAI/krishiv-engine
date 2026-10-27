@@ -64,7 +64,7 @@ pub(crate) fn collect_set_supported(t: &DataType) -> bool {
 /// included). Slices count only the span they keep of variable-width
 /// buffers; shared fixed-width buffers count in full (an overestimate, but
 /// never an underestimate: reservations are made against this).
-fn kept_bytes(a: &ArrayRef) -> usize {
+pub(crate) fn kept_bytes(a: &ArrayRef) -> usize {
     use arrow_schema::DataType as T;
     let n = a.len();
     let add = |a: usize, b: usize| a.saturating_add(b);
@@ -179,7 +179,7 @@ fn views_len(a: &ArrayRef) -> usize {
 /// (the planner types arguments as views). Anything else passes through;
 /// a carrier that still disagrees fails when the chunks concatenate, never
 /// silently.
-fn normalize(chunk: ArrayRef, elem: &DataType) -> Result<ArrayRef> {
+pub(crate) fn normalize(chunk: ArrayRef, elem: &DataType) -> Result<ArrayRef> {
     if chunk.data_type() == elem {
         return Ok(chunk);
     }

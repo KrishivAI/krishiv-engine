@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Hash aggregation (ADR 0011): `count`, `sum`, `avg`, `min`, `max`,
-//! `first`, `last`, `any_value`, `max_by`, `min_by` and the moment
-//! aggregates (`stddev`, `variance`, `skewness`, `kurtosis`, `covar_*`,
-//! `corr`) with Spark 4.2 result types, in two phases, with spill and
-//! `DISTINCT`. `count_if` and the boolean aggregates are `count` and
-//! `min`/`max` over a rewritten argument (the physical planner).
+//! `first`, `last`, `any_value`, `max_by`, `min_by`, the moment and
+//! regression aggregates (`stddev`, `variance`, `skewness`, `kurtosis`,
+//! `covar_*`, `corr`, `regr_*`), `bit_and`/`bit_or`/`bit_xor`, `mode`,
+//! `listagg`/`string_agg` and `try_sum`/`try_avg` with Spark 4.2 result
+//! types, in two phases, with spill and `DISTINCT`. `count_if` and the
+//! boolean aggregates are `count` and `min`/`max` over a rewritten
+//! argument (the physical planner).
 //!
 //! # Operators
 //! - [`HashAggregate`] is a pipeline breaker. Each driver aggregates into
@@ -62,6 +64,8 @@
 
 mod accumulator;
 mod collect;
+mod listagg;
+mod mode;
 mod moments;
 mod node;
 mod partial;
@@ -95,14 +99,14 @@ pub use sink::{AggregateMetrics, HashAggregate};
 use crate::error::{Result, internal};
 
 /// Whether `f` is a moment aggregate (`stddev`, `variance`, `skewness`,
-/// `kurtosis`, `covar_*`, `corr`): it reads its arguments as doubles, and
+/// `kurtosis`, `covar_*`, `corr`, `regr_*`): it reads its arguments as doubles, and
 /// the window planner refuses it.
-pub fn is_moment(f: AggregateFunction) -> bool {
+pub fn is_moment(f: &AggregateFunction) -> bool {
     moments::buffer(f).is_some()
 }
 
 /// An aggregate function.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum AggregateFunction {
     /// `count(*)` (no arguments) or `count(a, …)`: rows whose arguments are
     /// all non-NULL. `bigint`, never NULL.
@@ -189,6 +193,66 @@ pub enum AggregateFunction {
     /// `vector_avg(x)`: element-wise means over `ARRAY<FLOAT>` (NULL vectors
     /// skipped); NULL for no non-NULL vector.
     VectorAvg,
+    /// `bit_and(x)`, `bit_or(x)`, `bit_xor(x)`: the bitwise AND, OR, XOR
+    /// of the non-NULL `TINYINT` .. `BIGINT` values; NULL for no
+    /// non-NULL value. The input type.
+    BitAnd,
+    /// `bit_or(x)`, as `bit_and`.
+    BitOr,
+    /// `bit_xor(x)`, as `bit_and`.
+    BitXor,
+    /// `regr_count(y, x)`: the number of rows where both are non-NULL.
+    /// `bigint`, never NULL. Shares the pair-moment buffer with
+    /// [`Corr`](AggregateFunction::Corr) (see `moments`).
+    RegrCount,
+    /// `regr_avgx(y, x)`: the mean of `x` over non-NULL pairs. `double`.
+    RegrAvgx,
+    /// `regr_avgy(y, x)`: the mean of `y` over non-NULL pairs. `double`.
+    RegrAvgy,
+    /// `regr_sxx(y, x)`: the sum of squares of `x` about its mean.
+    /// `double`.
+    RegrSxx,
+    /// `regr_syy(y, x)`: the sum of squares of `y` about its mean.
+    /// `double`.
+    RegrSyy,
+    /// `regr_sxy(y, x)`: the sum of cross-products about the means.
+    /// `double`.
+    RegrSxy,
+    /// `regr_slope(y, x)`: the slope of the regression line; NULL when
+    /// `x` does not vary. `double`.
+    RegrSlope,
+    /// `regr_intercept(y, x)`: the intercept of the regression line.
+    /// `double`.
+    RegrIntercept,
+    /// `regr_r2(y, x)`: the coefficient of determination; NULL when `x`
+    /// does not vary, 1 when only `y` does not. `double`.
+    RegrR2,
+    /// `mode(col)`: the most frequent non-NULL value; ties broken by
+    /// Spark's hash-map order. The input type, NULL for no value.
+    Mode,
+    /// `mode(col, true)` and `mode() WITHIN GROUP (ORDER BY col)` (ASC):
+    /// the smallest value among the most frequent.
+    ModeMin,
+    /// `mode() WITHIN GROUP (ORDER BY col DESC)`: the largest value
+    /// among the most frequent.
+    ModeMax,
+    /// `listagg(expr[, delimiter])` (and `string_agg`): the non-NULL
+    /// values joined by `delimiter` (empty when none or NULL was
+    /// written), in input order within a partition (partitions merged in
+    /// partition-index order) or sorted by the ordering keys. The input
+    /// type (`STRING` or `BINARY`), NULL for no value.
+    ListAgg {
+        /// The delimiter bytes (empty when none or NULL was written).
+        delimiter: Vec<u8>,
+        /// One per ordering key, in order: descending, nulls first.
+        orders: Vec<(bool, bool)>,
+    },
+    /// `try_sum(x)`: `sum` that gives NULL instead of an overflow error,
+    /// ANSI on or off.
+    TrySum,
+    /// `try_avg(x)`: `avg` that gives NULL instead of an overflow error,
+    /// ANSI on or off.
+    TryAvg,
 }
 
 /// Where an aggregate's arguments come from.
@@ -265,6 +329,51 @@ impl AggregateExpr {
         }
     }
 
+    /// `listagg(expr[, delimiter])` of column `value` (of type
+    /// `value_type`) with ordering-key columns `orders` (of types
+    /// `order_types`), of `function` (`ListAgg` with the fused delimiter
+    /// and directions). The argument type is the struct of the value's
+    /// type then the keys' (as [`by`](Self::by) does for `max_by`).
+    pub fn listagg(
+        function: AggregateFunction,
+        value: usize,
+        value_type: DataType,
+        orders: Vec<usize>,
+        order_types: Vec<DataType>,
+        name: impl Into<String>,
+    ) -> Self {
+        let mut fields = Vec::with_capacity(1 + order_types.len());
+        fields.push(Field::new("value", value_type, true));
+        for (i, t) in order_types.into_iter().enumerate() {
+            fields.push(Field::new(format!("key{i}"), t, true));
+        }
+        let mut args = Vec::with_capacity(1 + orders.len());
+        args.push(value);
+        args.extend(orders);
+        Self {
+            function,
+            args,
+            input: AggInput::Raw,
+            arg_type: DataType::Struct(Fields::from(fields)),
+            name: name.into(),
+        }
+    }
+
+    /// The value and ordering-key types of a `listagg`: the struct's
+    /// first field, then the rest.
+    fn listagg_types(&self) -> Option<(&DataType, Vec<&DataType>)> {
+        match &self.arg_type {
+            DataType::Struct(f) if !f.is_empty() => {
+                let mut keys = Vec::with_capacity(f.len() - 1);
+                for field in f.iter().skip(1) {
+                    keys.push(field.data_type());
+                }
+                Some((f[0].data_type(), keys))
+            }
+            _ => None,
+        }
+    }
+
     /// `count(*)`.
     pub fn count_star(name: impl Into<String>) -> Self {
         Self {
@@ -294,17 +403,23 @@ impl AggregateExpr {
     pub fn result_type(&self) -> Result<DataType> {
         use AggregateFunction as F;
         let t = &self.arg_type;
-        Ok(match (self.function, t) {
+        Ok(match (&self.function, t) {
             (F::Count, _) => DataType::Int64,
-            (F::Sum, t) if is_integral(t) => DataType::Int64,
-            (F::Sum | F::Avg, DataType::Float32 | DataType::Float64) => DataType::Float64,
-            (F::Avg, t) if is_integral(t) => DataType::Float64,
+            (F::Sum | F::TrySum, t) if is_integral(t) => DataType::Int64,
+            (F::Sum | F::TrySum | F::Avg | F::TryAvg, DataType::Float32 | DataType::Float64) => {
+                DataType::Float64
+            }
+            (F::Avg | F::TryAvg, t) if is_integral(t) => DataType::Float64,
             // Spark refuses negative decimal scales by default
             // (`spark.sql.legacy.allowNegativeScaleOfDecimal`).
-            (F::Sum, DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) if *s >= 0 => {
+            (F::Sum | F::TrySum, DataType::Decimal64(p, s) | DataType::Decimal128(p, s))
+                if *s >= 0 =>
+            {
                 sum_decimal(t, *p, *s)
             }
-            (F::Avg, DataType::Decimal64(p, s) | DataType::Decimal128(p, s)) if *s >= 0 => {
+            (F::Avg | F::TryAvg, DataType::Decimal64(p, s) | DataType::Decimal128(p, s))
+                if *s >= 0 =>
+            {
                 decimal_on(t, (*p + 4).min(38), s.saturating_add(4).min(38))
             }
             (F::Min | F::Max | F::First { .. } | F::Last { .. } | F::AnyValue { .. }, t)
@@ -312,11 +427,22 @@ impl AggregateExpr {
             {
                 t.clone()
             }
+            // `regr_count` reads its arguments as doubles (like the other
+            // moment aggregates) but counts the non-NULL pairs.
+            (F::RegrCount, t) if moments::reads_as_double(t) => DataType::Int64,
             // The analyzer casts every argument to `double` (decimals
             // included); the executor also reads integers and `float`.
             (f, t) if moments::buffer(f).is_some() && moments::reads_as_double(t) => {
                 DataType::Float64
             }
+            // Bitwise aggregates keep the integral input type.
+            (F::BitAnd | F::BitOr | F::BitXor, t) if is_integral(t) => t.clone(),
+            // `mode`: the most frequent value, of the input type (any
+            // type; the accumulator keeps first-seen samples).
+            (F::Mode | F::ModeMin | F::ModeMax, t) => t.clone(),
+            // `listagg`: the value type; the ordering keys ride in the
+            // struct with it (see [`AggregateExpr::listagg`]).
+            (F::ListAgg { .. }, DataType::Struct(f)) if !f.is_empty() => f[0].data_type().clone(),
             // `collect_list` / `collect_set` keep the input type under an
             // array; the vector aggregates need a list of `float`. The set
             // needs the shared key encoding for its elements.
@@ -352,14 +478,17 @@ impl AggregateExpr {
         use AggregateFunction as F;
         let out = self.result_type()?;
         let n = |suffix: &str| format!("{}#{suffix}", self.name);
-        Ok(match (self.function, &out) {
+        Ok(match (&self.function, &out) {
             (F::Count, _) => vec![Field::new(n("count"), DataType::Int64, false)],
-            (F::Sum, DataType::Decimal64(..) | DataType::Decimal128(..)) => vec![
+            // `try_sum` of integers sticks overflow in its state, like a
+            // decimal `sum` does.
+            (F::Sum | F::TrySum, DataType::Decimal64(..) | DataType::Decimal128(..))
+            | (F::TrySum, DataType::Int64) => vec![
                 Field::new(n("sum"), out.clone(), true),
                 Field::new(n("nonempty"), DataType::Boolean, false),
             ],
-            (F::Sum, _) => vec![Field::new(n("sum"), out.clone(), true)],
-            (F::Avg, _) => vec![
+            (F::Sum | F::TrySum, _) => vec![Field::new(n("sum"), out.clone(), true)],
+            (F::Avg | F::TryAvg, _) => vec![
                 Field::new(n("sum"), self.avg_sum_type(), true),
                 Field::new(n("count"), DataType::Int64, false),
             ],
@@ -378,9 +507,65 @@ impl AggregateExpr {
                 | F::Kurtosis
                 | F::Corr
                 | F::CovarSamp
-                | F::CovarPop,
+                | F::CovarPop
+                | F::RegrCount
+                | F::RegrAvgx
+                | F::RegrAvgy
+                | F::RegrSxx
+                | F::RegrSyy
+                | F::RegrSxy
+                | F::RegrSlope
+                | F::RegrIntercept
+                | F::RegrR2,
                 _,
-            ) => moments::state_fields(self.function, &self.name),
+            ) => moments::state_fields(&self.function, &self.name),
+            // Bitwise aggregates keep one nullable value (NULL until a
+            // non-NULL input arrives).
+            (F::BitAnd | F::BitOr | F::BitXor, _) => {
+                vec![Field::new(n("value"), out, true)]
+            }
+            // `mode`: the distinct first-seen values with their counts.
+            (F::Mode | F::ModeMin | F::ModeMax, _) => {
+                let element = Field::new("key", self.arg_type.clone(), true);
+                vec![
+                    Field::new(n("keys"), DataType::List(Arc::new(element)), false),
+                    Field::new(
+                        n("counts"),
+                        DataType::List(Arc::new(Field::new("count", DataType::Int64, false))),
+                        false,
+                    ),
+                ]
+            }
+            // `listagg`: the non-NULL values with the ordering keys they
+            // were folded with (one list per struct field).
+            (F::ListAgg { .. }, _) => {
+                let fields = match &self.arg_type {
+                    DataType::Struct(f) => f.to_vec(),
+                    _ => {
+                        return Err(unsupported(format!("listagg of {}", self.arg_type)));
+                    }
+                };
+                fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, f)| {
+                        let name = if i == 0 {
+                            n("values")
+                        } else {
+                            n(&format!("key{i}"))
+                        };
+                        Field::new(
+                            name,
+                            DataType::List(Arc::new(Field::new(
+                                "element",
+                                f.data_type().clone(),
+                                true,
+                            ))),
+                            false,
+                        )
+                    })
+                    .collect()
+            }
             // The key is NULL until a row with a key was taken: it says
             // whether the value (which may be NULL) counts.
             (F::MaxBy | F::MinBy, _) => {
@@ -449,11 +634,20 @@ fn vector_sums_type() -> DataType {
 
 /// Whether `f` observes input order: its merges must run in partition-index
 /// order (the sink sorts its tables by driver partition), not biggest-first.
-pub fn is_order_sensitive(f: AggregateFunction) -> bool {
+pub fn is_order_sensitive(f: &AggregateFunction) -> bool {
     use AggregateFunction as F;
     matches!(
         f,
-        F::CollectList | F::CollectSet | F::VectorSum | F::VectorAvg
+        F::CollectList
+            | F::CollectSet
+            | F::VectorSum
+            | F::VectorAvg
+            // `listagg` keeps input order (or sorts once, at evaluation);
+            // `mode` iterates its map in slot order.
+            | F::Mode
+            | F::ModeMin
+            | F::ModeMax
+            | F::ListAgg { .. }
     )
 }
 

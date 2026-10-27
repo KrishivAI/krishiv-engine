@@ -38,6 +38,8 @@ use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
 use super::collect::{CollectAcc, VectorAcc};
+use super::listagg::ListAggAcc;
+use super::mode::ModeAcc;
 use super::moments::Moments;
 use super::{
     AggInput, AggregateExpr, AggregateFunction, decimal_sum_overflow, long_overflow, out_of_range,
@@ -262,6 +264,42 @@ enum Kind {
     /// `vector_sum` / `vector_avg`: running sums with the non-NULL vector
     /// count per group (see `collect`).
     Vector(VectorAcc),
+    /// `try_sum` of integers that gives NULL instead of an overflow
+    /// error: `state`: 0 no value, 1 a value, 2 overflowed (sticky).
+    TrySumInt {
+        sum: Vec<i64>,
+        state: Vec<u8>,
+    },
+    /// `bit_and` / `bit_or` / `bit_xor`: the running value with whether
+    /// a non-NULL input arrived.
+    Bit {
+        op: BitOp,
+        values: Values,
+        set: Vec<bool>,
+    },
+    /// `mode` and its ordered forms: distinct values in first-seen order
+    /// with their counts and samples (see `mode`).
+    Mode(ModeAcc),
+    /// `listagg`: the non-NULL values with their ordering keys (see
+    /// `listagg`).
+    ListAgg(ListAggAcc),
+}
+
+/// A bitwise aggregate operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BitOp {
+    And,
+    Or,
+    Xor,
+}
+
+/// `a` combined with `b` by `op`.
+fn bit(op: BitOp, a: i128, b: i128) -> i128 {
+    match op {
+        BitOp::And => a & b,
+        BitOp::Or => a | b,
+        BitOp::Xor => a ^ b,
+    }
 }
 
 /// One aggregate's state for every group of a table.
@@ -880,35 +918,50 @@ impl Running<'_> {
 
 impl Accumulator {
     /// An accumulator for `expr` (decimal sums are bounded while running,
-    /// see the module docs).
+    /// see the module docs). `try_sum` and `try_avg` always fold as if
+    /// ANSI were off (an overflow gives NULL instead of an error).
     pub(crate) fn new(expr: &AggregateExpr, ansi: bool) -> Result<Self> {
         use AggregateFunction as F;
         let result = expr.result_type()?;
-        let kind = match (expr.function, &result) {
+        let ansi = if matches!(expr.function, F::TrySum | F::TryAvg) {
+            false
+        } else {
+            ansi
+        };
+        let kind = match (&expr.function, &result) {
             (F::Count, _) => Kind::Count(Vec::new()),
-            (F::Sum, DataType::Int64) => Kind::SumInt {
+            (F::Sum | F::TrySum, DataType::Int64) => {
+                if matches!(expr.function, F::TrySum) {
+                    Kind::TrySumInt {
+                        sum: Vec::new(),
+                        state: Vec::new(),
+                    }
+                } else {
+                    Kind::SumInt {
+                        sum: Vec::new(),
+                        seen: Vec::new(),
+                    }
+                }
+            }
+            (F::Sum | F::TrySum, DataType::Float64) => Kind::SumFloat {
                 sum: Vec::new(),
                 seen: Vec::new(),
             },
-            (F::Sum, DataType::Float64) => Kind::SumFloat {
-                sum: Vec::new(),
-                seen: Vec::new(),
-            },
-            (F::Sum, _) => Kind::SumDec {
+            (F::Sum | F::TrySum, _) => Kind::SumDec {
                 sum: Vec::new(),
                 state: Vec::new(),
             },
-            (F::Avg, DataType::Float64) => Kind::AvgFloat {
+            (F::Avg | F::TryAvg, DataType::Float64) => Kind::AvgFloat {
                 sum: Vec::new(),
                 count: Vec::new(),
             },
-            (F::Avg, _) => Kind::AvgDec {
+            (F::Avg | F::TryAvg, _) => Kind::AvgDec {
                 sum: Vec::new(),
                 count: Vec::new(),
                 overflow: Vec::new(),
             },
             (f @ (F::Min | F::Max), t) => Kind::MinMax {
-                max: f == F::Max,
+                max: *f == F::Max,
                 values: Values::empty(t),
                 set: Vec::new(),
                 heap: 0,
@@ -933,7 +986,7 @@ impl Accumulator {
                 t,
             ) => Kind::Pick {
                 last: matches!(f, F::Last { .. }),
-                ignore_nulls,
+                ignore_nulls: *ignore_nulls,
                 values: Values::empty(t),
                 set: Vec::new(),
                 null: Vec::new(),
@@ -948,20 +1001,58 @@ impl Accumulator {
                 | F::Kurtosis
                 | F::Corr
                 | F::CovarSamp
-                | F::CovarPop),
+                | F::CovarPop
+                | F::RegrCount
+                | F::RegrAvgx
+                | F::RegrAvgy
+                | F::RegrSxx
+                | F::RegrSyy
+                | F::RegrSxy
+                | F::RegrSlope
+                | F::RegrIntercept
+                | F::RegrR2),
                 _,
-            ) => Kind::Moments(Moments::new(f, ansi)?),
+            ) => Kind::Moments(Moments::new(f.clone(), ansi)?),
             (F::CollectList, _) => Kind::Collect(CollectAcc::new(expr.arg_type.clone(), false)?),
             // `CollectAcc::new` refuses the element types the shared key
             // encoding does not order, as `result_type` does.
             (F::CollectSet, _) => Kind::Collect(CollectAcc::new(expr.arg_type.clone(), true)?),
             (F::VectorSum, _) => Kind::Vector(VectorAcc::new(false)),
             (F::VectorAvg, _) => Kind::Vector(VectorAcc::new(true)),
-        };
-        let sum_bound = match (expr.function, expr.avg_sum_type()) {
-            (F::Sum | F::Avg, DataType::Decimal64(p, _) | DataType::Decimal128(p, _)) => {
-                Some(pow10(p).unsigned_abs())
+            (f @ (F::BitAnd | F::BitOr | F::BitXor), t) => Kind::Bit {
+                op: if *f == F::BitAnd {
+                    BitOp::And
+                } else if *f == F::BitOr {
+                    BitOp::Or
+                } else {
+                    BitOp::Xor
+                },
+                values: Values::empty(t),
+                set: Vec::new(),
+            },
+            (f @ (F::Mode | F::ModeMin | F::ModeMax), _) => {
+                Kind::Mode(ModeAcc::new(expr.arg_type.clone(), f)?)
             }
+            (F::ListAgg { delimiter, orders }, _) => {
+                let (value, keys) = expr.listagg_types().ok_or_else(|| {
+                    internal(format!(
+                        "listagg of {} without value and keys",
+                        expr.arg_type
+                    ))
+                })?;
+                Kind::ListAgg(ListAggAcc::new(
+                    delimiter.clone(),
+                    orders.clone(),
+                    value.clone(),
+                    keys.into_iter().cloned().collect(),
+                ))
+            }
+        };
+        let sum_bound = match (&expr.function, expr.avg_sum_type()) {
+            (
+                F::Sum | F::Avg | F::TrySum | F::TryAvg,
+                DataType::Decimal64(p, _) | DataType::Decimal128(p, _),
+            ) => Some(pow10(p).unsigned_abs()),
             _ => None,
         };
         Ok(Self {
@@ -1007,7 +1098,9 @@ impl Accumulator {
                 count,
                 overflow,
             } => vec![v(sum), v(count), v(overflow)],
-            Kind::MinMax { values, set, .. } => vec![values.vec(), v(set)],
+            Kind::MinMax { values, set, .. } | Kind::Bit { values, set, .. } => {
+                vec![values.vec(), v(set)]
+            }
             Kind::Pick {
                 values, set, null, ..
             } => vec![values.vec(), v(set), v(null)],
@@ -1021,6 +1114,9 @@ impl Accumulator {
             Kind::Moments(m) => m.vecs(),
             Kind::Collect(c) => c.vecs(),
             Kind::Vector(v) => v.vecs(),
+            Kind::TrySumInt { sum, state } => vec![v(sum), v(state)],
+            Kind::Mode(m) => m.vecs(),
+            Kind::ListAgg(l) => l.vecs(),
         }
     }
 
@@ -1029,6 +1125,8 @@ impl Accumulator {
         match &self.kind {
             Kind::Collect(c) => c.size(),
             Kind::Vector(v) => v.size(),
+            Kind::Mode(m) => m.size(),
+            Kind::ListAgg(l) => l.size(),
             _ => {
                 let heap = match &self.kind {
                     Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } | Kind::By { heap, .. } => {
@@ -1051,13 +1149,20 @@ impl Accumulator {
         arg: Option<&ArrayRef>,
         key: Option<&ArrayRef>,
     ) -> usize {
-        // The collect and vector accumulators account their variable-width
-        // growth themselves (see `collect`).
+        // The collect, vector, mode and listagg accumulators account
+        // their variable-width growth themselves (see `collect`, `mode`
+        // and `listagg`).
         if let Kind::Collect(c) = &self.kind {
             return c.projected(new, arg);
         }
         if let Kind::Vector(v) = &self.kind {
             return v.projected(new, arg);
+        }
+        if let Kind::Mode(m) = &self.kind {
+            return m.projected(new, arg);
+        }
+        if let Kind::ListAgg(l) = &self.kind {
+            return l.projected(new, arg);
         }
         let vecs: usize = self
             .vecs()
@@ -1127,7 +1232,7 @@ impl Accumulator {
                 count.resize(n, 0);
                 overflow.resize(n, false);
             }
-            Kind::MinMax { values, set, .. } => {
+            Kind::MinMax { values, set, .. } | Kind::Bit { values, set, .. } => {
                 set.resize(n, false);
                 values.resize(n);
             }
@@ -1141,6 +1246,12 @@ impl Accumulator {
             Kind::Moments(m) => m.resize(n),
             Kind::Collect(c) => c.resize(n),
             Kind::Vector(v) => v.resize(n),
+            Kind::TrySumInt { sum, state } => {
+                sum.resize(n, 0);
+                state.resize(n, 0);
+            }
+            Kind::Mode(m) => m.resize(n),
+            Kind::ListAgg(l) => l.resize(n),
             Kind::By {
                 values,
                 keys,
@@ -1185,7 +1296,7 @@ impl Accumulator {
                 count.reserve(new);
                 overflow.reserve(new);
             }
-            Kind::MinMax { values, set, .. } => {
+            Kind::MinMax { values, set, .. } | Kind::Bit { values, set, .. } => {
                 set.reserve(new);
                 values.reserve(new);
             }
@@ -1199,6 +1310,12 @@ impl Accumulator {
             Kind::Moments(m) => m.reserve(new),
             Kind::Collect(c) => c.reserve(new),
             Kind::Vector(v) => v.reserve(new),
+            Kind::TrySumInt { sum, state } => {
+                sum.reserve(new);
+                state.reserve(new);
+            }
+            Kind::Mode(m) => m.reserve(new),
+            Kind::ListAgg(l) => l.reserve(new),
             Kind::By {
                 values,
                 keys,
@@ -1297,6 +1414,9 @@ impl Accumulator {
                     | Kind::Moments(_)
                     | Kind::Collect(_)
                     | Kind::Vector(_)
+                    | Kind::Bit { .. }
+                    | Kind::Mode(_)
+                    | Kind::ListAgg(_)
             ))
             && !is_unit(w)
         {
@@ -1417,6 +1537,101 @@ impl Accumulator {
                         seen[g as usize] = true;
                     }
                     snapshot!(i, sum, seen);
+                }
+            }
+            // `try_sum` of integers: an overflow sticks (the value reads
+            // as NULL), ANSI on or off.
+            (Kind::TrySumInt { sum, state: st }, _) => {
+                let a = args[0];
+                let v = ints(a)?;
+                if state {
+                    let nonempty = booleans_of(args[1])?;
+                    for (i, &g) in groups.iter().enumerate() {
+                        let g = g as usize;
+                        if nonempty.value(i) {
+                            // An overflowed partial (sum NULL, nonempty)
+                            // is sticky.
+                            if !valid(i) {
+                                st[g] = 2;
+                            } else if st[g] != 2 {
+                                (sum[g], st[g]) =
+                                    sum[g].checked_add(v[i]).map_or((0, 2), |s| (s, 1));
+                            }
+                        }
+                    }
+                } else {
+                    for (i, &g) in groups.iter().enumerate() {
+                        if valid(i) {
+                            let g = g as usize;
+                            if st[g] != 2 {
+                                let s = v[i]
+                                    .checked_mul(weight(w, i))
+                                    .and_then(|x| sum[g].checked_add(x));
+                                (sum[g], st[g]) = s.map_or((0, 2), |s| (s, 1));
+                            }
+                        }
+                        snapshot!(i, sum, st);
+                    }
+                }
+            }
+            // The bitwise aggregates: NULLs skipped, NULL for no input.
+            // Weights other than 1 need incremental view maintenance,
+            // as for `min`/`max` (see the check above).
+            (Kind::Bit { op, values, set }, false) => {
+                let op = *op;
+                let a = args[0];
+                match values {
+                    Values::Int(vals) => {
+                        let v = ints(a)?;
+                        for (i, &g) in groups.iter().enumerate() {
+                            let g = g as usize;
+                            if valid(i) {
+                                if !set[g] {
+                                    vals[g] = i128::from(v[i]);
+                                    set[g] = true;
+                                } else {
+                                    vals[g] = bit(op, vals[g], i128::from(v[i]));
+                                }
+                            }
+                            snapshot!(i, vals, set);
+                        }
+                    }
+                    _ => {
+                        return Err(internal(
+                            "a bitwise aggregate over non-integral values".to_owned(),
+                        ));
+                    }
+                }
+            }
+            (Kind::Bit { op, values, set }, true) => {
+                let op = *op;
+                match values {
+                    Values::Int(vals) => {
+                        let s = args[0];
+                        if s.len() != groups.len() {
+                            return Err(internal(
+                                "a bitwise state of another length than the group ids".to_owned(),
+                            ));
+                        }
+                        let v = ints(s)?;
+                        let nulls = s.logical_nulls();
+                        for (i, &g) in groups.iter().enumerate() {
+                            let g = g as usize;
+                            if nulls.as_ref().is_none_or(|n| n.is_valid(i)) {
+                                if !set[g] {
+                                    vals[g] = i128::from(v[i]);
+                                    set[g] = true;
+                                } else {
+                                    vals[g] = bit(op, vals[g], i128::from(v[i]));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(internal(
+                            "a bitwise aggregate over non-integral values".to_owned(),
+                        ));
+                    }
                 }
             }
             (Kind::SumDec { sum, state: st }, _) => {
@@ -1654,6 +1869,57 @@ impl Accumulator {
             (Kind::Vector(v), true) => {
                 v.merge(groups, args)?;
             }
+            (Kind::Mode(m), false) => {
+                let a = args[0];
+                if a.len() != groups.len() {
+                    return Err(internal(
+                        "a mode column of another length than the group ids".to_owned(),
+                    ));
+                }
+                if let Some(r) = run {
+                    // A running fold keeps the state after chosen rows:
+                    // fold one row at a time, snapshotting after each row
+                    // the frame keeps.
+                    for (i, &g) in groups.iter().enumerate() {
+                        let col = a.slice(i, 1);
+                        m.fold(&[g], &col, &|_| valid(i))?;
+                        let to = r.snapshots[i];
+                        if to != Running::NONE {
+                            m.snapshot(g as usize, to as usize);
+                        }
+                    }
+                } else {
+                    m.fold(groups, a, &valid)?;
+                }
+            }
+            (Kind::Mode(m), true) => {
+                m.merge(groups, args)?;
+            }
+            (Kind::ListAgg(l), false) => {
+                if args.iter().any(|a| a.len() != groups.len()) {
+                    return Err(internal(
+                        "a listagg column of another length than the group ids".to_owned(),
+                    ));
+                }
+                if let Some(r) = run {
+                    // As for `mode`: fold one row at a time, snapshotting
+                    // after each row the frame keeps.
+                    for (i, &g) in groups.iter().enumerate() {
+                        let row: Vec<ArrayRef> = args.iter().map(|a| a.slice(i, 1)).collect();
+                        let refs: Vec<&ArrayRef> = row.iter().collect();
+                        l.fold(&[g], &refs, &|_| valid(i))?;
+                        let to = r.snapshots[i];
+                        if to != Running::NONE {
+                            l.snapshot(g as usize, to as usize);
+                        }
+                    }
+                } else {
+                    l.fold(groups, args, &valid)?;
+                }
+            }
+            (Kind::ListAgg(l), true) => {
+                l.merge(groups, args)?;
+            }
             (
                 Kind::By {
                     max,
@@ -1718,13 +1984,17 @@ impl Accumulator {
             | Kind::SumInt { .. }
             | Kind::SumFloat { .. }
             | Kind::MinMax { .. }
+            | Kind::Bit { .. }
             | Kind::Collect(_) => 1,
-            Kind::SumDec { .. }
+            Kind::TrySumInt { .. }
+            | Kind::SumDec { .. }
             | Kind::AvgFloat { .. }
             | Kind::AvgDec { .. }
             | Kind::Pick { .. }
             | Kind::By { .. }
-            | Kind::Vector(_) => 2,
+            | Kind::Vector(_)
+            | Kind::Mode(_) => 2,
+            Kind::ListAgg(_) => self.expr.listagg_types().map_or(1, |(_, k)| k.len() + 1),
             Kind::Moments(ref m) => m.width(),
         }
     }
@@ -1788,6 +2058,20 @@ impl Accumulator {
             Kind::Moments(m) => m.state(ids)?,
             Kind::Collect(c) => vec![c.state(ids, &self.result)?],
             Kind::Vector(v) => vec![v.state_sums(ids)?, v.state_count(ids)],
+            Kind::TrySumInt { sum, state } => vec![
+                Arc::new(Int64Array::from_iter(
+                    ids.iter()
+                        .map(|i| (state[pick(i)] == 1).then(|| sum[pick(i)])),
+                )),
+                Arc::new(BooleanArray::from_iter(
+                    ids.iter().map(|i| Some(state[pick(i)] != 0)),
+                )),
+            ],
+            Kind::Bit { values, set, .. } => {
+                vec![self.value_array(values, &self.result, |i| set[i], ids)?]
+            }
+            Kind::Mode(m) => m.state(ids)?,
+            Kind::ListAgg(l) => l.state(ids)?,
             Kind::By {
                 values,
                 keys,
@@ -1933,11 +2217,43 @@ impl Accumulator {
                 }
                 self.decimal(out.into_iter(), &self.result)?
             }
-            Kind::Moments(m) => m.evaluate(ids)?,
+            Kind::Moments(m) => {
+                let array = m.evaluate(ids)?;
+                // `regr_count` counts the pairs: its state is the pair
+                // buffer, its value the count as a `bigint`.
+                if self.expr.function == AggregateFunction::RegrCount {
+                    let doubles = array.as_primitive::<Float64Type>();
+                    Arc::new(
+                        doubles
+                            .iter()
+                            .map(|v| {
+                                v.map(|v| {
+                                    #[expect(
+                                        clippy::cast_possible_truncation,
+                                        reason = "a pair count below 2^53 is whole and exact"
+                                    )]
+                                    let n = v as i64;
+                                    n
+                                })
+                            })
+                            .collect::<Int64Array>(),
+                    )
+                } else {
+                    array
+                }
+            }
             // The collect final values are the state lists; the vector
             // ones the sums (or means) as `float`.
             Kind::Collect(c) => c.state(ids, &self.result)?,
             Kind::Vector(v) => v.evaluate(ids, &self.result)?,
+            Kind::TrySumInt { sum, state } => Arc::new(Int64Array::from_iter(
+                ids.iter().map(|i| (state[at(i)] == 1).then(|| sum[at(i)])),
+            )),
+            Kind::Bit { values, set, .. } => {
+                self.value_array(values, &self.result, |i| set[i], ids)?
+            }
+            Kind::Mode(m) => m.evaluate(ids)?,
+            Kind::ListAgg(l) => l.evaluate(ids)?,
             // Only the value: the ordering key is state, not a result.
             Kind::By {
                 values, set, null, ..
@@ -1999,8 +2315,9 @@ mod proof_tests {
 
     type Row = (u32, i128, bool, i64);
 
-    fn acc(f: AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
-        let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t.clone(), "a"), ansi).unwrap();
+    fn acc(f: &AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
+        let mut a =
+            Accumulator::new(&AggregateExpr::new(f.clone(), 0, t.clone(), "a"), ansi).unwrap();
         a.proofs = proofs;
         a
     }
@@ -2118,7 +2435,7 @@ mod proof_tests {
         #[test]
         fn fold_proof_equals_per_row(((p, s), groups, mode, batches) in input()) {
             let t = DataType::Decimal128(p, s);
-            for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+            for f in [&AggregateFunction::Sum, &AggregateFunction::Avg] {
                 for ansi in [true, false] {
                     let (mut fast, mut slow) = (acc(f, &t, ansi, true), acc(f, &t, ansi, false));
                     for b in &batches {
@@ -2138,7 +2455,7 @@ mod proof_tests {
         #[test]
         fn merge_proof_equals_per_row(((p, s), groups, _mode, batches) in input()) {
             let t = DataType::Decimal128(p, s);
-            for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+            for f in [&AggregateFunction::Sum, &AggregateFunction::Avg] {
                 for ansi in [true, false] {
                     let ids: Vec<u32> = (0..groups).collect();
                     let partials: Vec<Vec<ArrayRef>> = batches
@@ -2247,14 +2564,14 @@ mod proof_tests {
                         }
                     }
                 };
-                let mut a = acc(f, &t, ansi, proofs);
+                let mut a = acc(&f, &t, ansi, proofs);
                 a.resize(groups);
                 if parts == 1 {
                     fold(&rows, &mut a);
                 } else {
                     for k in 0..parts {
                         let part = &rows[k * n / parts..(k + 1) * n / parts];
-                        let mut partial = acc(f, &t, ansi, proofs);
+                        let mut partial = acc(&f, &t, ansi, proofs);
                         partial.resize(groups);
                         fold(part, &mut partial);
                         a.merge(&ids, &partial.state(&ids).unwrap()).unwrap();
@@ -2327,7 +2644,7 @@ mod proof_tests {
     #[test]
     fn overflowed_partial_is_sticky_on_the_proof_path() {
         let t = DataType::Decimal128(38, 0);
-        for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+        for f in [&AggregateFunction::Sum, &AggregateFunction::Avg] {
             let mut part = acc(f, &t, true, true);
             feed(&mut part, 1, &[(0, M, true, 1), (0, 1, true, 1)], &t, 0);
             let st = part.state(&[0]).unwrap();
@@ -2359,7 +2676,7 @@ mod proof_tests {
     #[test]
     fn r6_partials_follow_merge_order() {
         let t = DataType::Decimal128(38, 0);
-        for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+        for f in [&AggregateFunction::Sum, &AggregateFunction::Avg] {
             let partial = |v: i128| {
                 let mut a = acc(f, &t, true, true);
                 feed(&mut a, 1, &[(0, v, true, 1)], &t, 0);
@@ -2378,7 +2695,7 @@ mod proof_tests {
                 let err = merged([&m, &one, &minus5]).unwrap_err();
                 assert!(err.contains("ARITHMETIC_OVERFLOW"), "{err}");
                 let ok = merged([&m, &minus5, &one]);
-                if f == AggregateFunction::Sum {
+                if f == &AggregateFunction::Sum {
                     let v = ok.unwrap();
                     assert_eq!(v.as_primitive::<Decimal128Type>().value(0), M - 4);
                 } else {
@@ -2394,7 +2711,7 @@ mod proof_tests {
     #[test]
     fn transient_overflow_follows_row_order() {
         let t = DataType::Decimal128(38, 0);
-        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        let mut a = acc(&AggregateFunction::Sum, &t, true, true);
         feed(
             &mut a,
             1,
@@ -2405,7 +2722,7 @@ mod proof_tests {
         assert!(a.evaluate(&[0]).is_err());
         // The same across batches: the second batch alone is provable, the
         // running bound is not.
-        for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+        for f in [&AggregateFunction::Sum, &AggregateFunction::Avg] {
             let mut a = acc(f, &t, true, true);
             feed(&mut a, 1, &[(0, M, true, 1)], &t, 0);
             feed(&mut a, 1, &[(0, 1, true, 1)], &t, 0);
@@ -2413,7 +2730,7 @@ mod proof_tests {
             let err = a.evaluate(&[0]).unwrap_err().to_string();
             assert!(err.contains("ARITHMETIC_OVERFLOW"), "{err}");
         }
-        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        let mut a = acc(&AggregateFunction::Sum, &t, true, true);
         feed(
             &mut a,
             1,
@@ -2425,7 +2742,7 @@ mod proof_tests {
         assert_eq!(v.as_primitive::<Decimal128Type>().value(0), M - 4);
         // IVM: a retraction lowers the sum; with no more groups than rows
         // the bound is recomputed and shrinks with it.
-        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        let mut a = acc(&AggregateFunction::Sum, &t, true, true);
         feed(&mut a, 1, &[(0, M, true, 1)], &t, 0);
         assert_eq!(a.max_sum, M.unsigned_abs());
         feed(&mut a, 1, &[(0, M, true, -1)], &t, 2);
@@ -2577,21 +2894,21 @@ mod tests {
         let snapshots: Vec<u32> = (3..3 + 7).collect();
         for (col, t) in [(&ints, DataType::Int64), (&floats, DataType::Float64)] {
             for f in [
-                F::Count,
-                F::Sum,
-                F::Avg,
-                F::Min,
-                F::Max,
-                F::First {
+                &F::Count,
+                &F::Sum,
+                &F::Avg,
+                &F::Min,
+                &F::Max,
+                &F::First {
                     ignore_nulls: false,
                 },
-                F::First { ignore_nulls: true },
-                F::Last {
+                &F::First { ignore_nulls: true },
+                &F::Last {
                     ignore_nulls: false,
                 },
-                F::Last { ignore_nulls: true },
+                &F::Last { ignore_nulls: true },
             ] {
-                let expr = AggregateExpr::new(f, 0, t.clone(), "x");
+                let expr = AggregateExpr::new(f.clone(), 0, t.clone(), "x");
                 let mut fast = Accumulator::new(&expr, true).unwrap();
                 fast.resize(3 + n);
                 // Two calls: a snapshot never needs rows of the same call.
@@ -2645,10 +2962,11 @@ mod tests {
         );
         // Kinds a window evaluates elsewhere, and bad shapes, are errors.
         for (f, t) in [
-            (F::Sum, DataType::Decimal128(10, 2)),
-            (F::Max, DataType::Utf8View),
+            (&F::Sum, DataType::Decimal128(10, 2)),
+            (&F::Max, DataType::Utf8View),
         ] {
-            let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t.clone(), "x"), true).unwrap();
+            let mut a =
+                Accumulator::new(&AggregateExpr::new(f.clone(), 0, t.clone(), "x"), true).unwrap();
             a.resize(2);
             let col: ArrayRef = Arc::new(Int64Array::from(vec![1]));
             let run = Running {

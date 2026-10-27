@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arrow_schema::{DataType as ArrowType, Field, Schema, SchemaRef, TimeUnit};
+use arrow_schema::{DataType as ArrowType, Field, Fields, Schema, SchemaRef, TimeUnit};
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
@@ -67,6 +67,7 @@ pub(crate) fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType) -> Ar
             args,
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type,
             nullable: true,
             deterministic: true,
@@ -248,6 +249,44 @@ pub(crate) fn vector_aggregate_exprs() -> Vec<AggregateExpr> {
     vec![
         a(AggregateFunction::VectorSum, floats()),
         a(AggregateFunction::VectorAvg, floats()),
+    ]
+}
+
+/// One aggregate of each variant of this change (ordered by feature id):
+/// the regression pair reads two columns.
+pub(crate) fn mode_regr_bit_listagg_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+    };
+    let pair = |function| AggregateExpr {
+        function,
+        args: vec![0, 1],
+        input: AggInput::Raw,
+        arg_type: ArrowType::Float64,
+        name: "x".to_owned(),
+    };
+    vec![
+        a(AggregateFunction::BitAnd, ArrowType::Int32),
+        a(AggregateFunction::BitOr, ArrowType::Int64),
+        a(AggregateFunction::BitXor, ArrowType::Int16),
+        pair(AggregateFunction::RegrCount),
+        pair(AggregateFunction::RegrAvgx),
+        pair(AggregateFunction::RegrAvgy),
+        pair(AggregateFunction::RegrSxx),
+        pair(AggregateFunction::RegrSyy),
+        pair(AggregateFunction::RegrSxy),
+        pair(AggregateFunction::RegrSlope),
+        pair(AggregateFunction::RegrIntercept),
+        pair(AggregateFunction::RegrR2),
+        a(AggregateFunction::Mode, ArrowType::Int32),
+        a(AggregateFunction::ModeMin, ArrowType::Int32),
+        a(AggregateFunction::ModeMax, ArrowType::Int32),
+        a(AggregateFunction::TrySum, ArrowType::Int64),
+        a(AggregateFunction::TryAvg, ArrowType::Float64),
     ]
 }
 
@@ -694,6 +733,30 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            "aggregate_mode_regr_bit_listagg",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: mode_regr_bit_listagg_exprs(),
+                    distinct: vec![false; 17],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_listagg",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: listagg_aggregate_exprs(),
+                    distinct: vec![false; 1],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("hash_join", PhysNode::HashJoin(join(JoinType::Inner))),
         (
             "hash_join_anti",
@@ -917,6 +980,7 @@ pub(crate) fn expressions() -> PhysNode {
                 args: vec![Arc::clone(&a)],
                 distinct: true,
                 filter: Some(predicate()),
+                within_group: Vec::new(),
                 data_type: DataType::Long,
                 nullable: false,
                 deterministic: false,
@@ -943,6 +1007,7 @@ pub(crate) fn expressions() -> PhysNode {
                 args: Vec::new(),
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
                 data_type: DataType::TimestampNtz,
                 nullable: true,
                 deterministic: true,
@@ -1004,6 +1069,7 @@ pub(crate) fn lambda_functions() -> PhysNode {
             ],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type: array,
             nullable: true,
             deterministic: true,
@@ -1116,4 +1182,23 @@ pub(crate) fn struct_field() -> PhysNode {
         nullable: None,
         subqueries: Vec::new(),
     }
+}
+
+/// The `listagg` aggregate of this change: it carries its delimiter and
+/// ordering in the struct with its value, so the case uses
+/// `nested_types` too.
+pub(crate) fn listagg_aggregate_exprs() -> Vec<AggregateExpr> {
+    vec![AggregateExpr {
+        function: AggregateFunction::ListAgg {
+            delimiter: b"|".to_vec(),
+            orders: vec![(true, false)],
+        },
+        args: vec![0, 1],
+        input: AggInput::Raw,
+        arg_type: ArrowType::Struct(Fields::from(vec![
+            Field::new("value", ArrowType::Utf8View, true),
+            Field::new("key0", ArrowType::Int32, true),
+        ])),
+        name: "x".to_owned(),
+    }]
 }

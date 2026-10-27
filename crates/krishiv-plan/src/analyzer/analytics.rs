@@ -294,6 +294,7 @@ impl Resolver<'_> {
             args: kids.iter().map(|k| Arc::clone(&k.expr)).collect(),
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         };
         Ok(Bound {
             expr: Arc::new(Expr::new(ExprNode::Function(call)).with_origin(e.origin)),
@@ -683,6 +684,7 @@ impl Resolver<'_> {
                         args: f.args.clone(),
                         distinct: f.distinct,
                         filter: f.filter.clone(),
+                        within_group: f.within_group.clone(),
                     }))
                     .with_origin(origin),
                 );

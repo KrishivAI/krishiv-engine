@@ -533,6 +533,7 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
                 args: vec![Arc::new(c("a"))],
                 distinct: false,
                 filter: Some(Arc::new(eq(c("b"), s("x")))),
+                within_group: Vec::new(),
             }))]),
         ),
         ("SELECT * FROM t JOIN u USING (z)", default, using(&["z"])),
@@ -649,6 +650,7 @@ fn shared_expressions_stay_linear() {
                 args: vec![Arc::clone(&e), e],
                 distinct: false,
                 filter: None,
+                within_group: Vec::new(),
             })))
         })
     };
@@ -1728,6 +1730,7 @@ fn shared_subexpressions_in_rewrites() {
             args: vec![Arc::clone(&x), x],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         }))
     };
     let lateral =
@@ -2219,6 +2222,7 @@ fn conditional_with_filter_names_the_filter_once() {
         args: vec![Arc::new(c("a")), Arc::new(int(1))],
         distinct: false,
         filter: Some(Arc::new(eq(c("b"), s("x")))),
+        within_group: Vec::new(),
     }));
     let a = run(LogicalPlan::table(["t"]).project(vec![call]), &ctx).unwrap();
     assert_eq!(a.output[0].name, "nvl(a, 1) FILTER (WHERE (b = x))");

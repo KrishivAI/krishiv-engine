@@ -84,7 +84,7 @@ SELECT db.f(a) FROM t
 SELECT f(x => 1) FROM t
   => Project [f(x => 1)] | +- Read t | 
 SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature WITHIN GROUP is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..53
+  => Project [percentile_cont(0.5) WITHIN GROUP (ORDER BY a ASC NULLS FIRST)] | +- Read t | 
 SELECT sum(a) IGNORE NULLS FROM t
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature IGNORE NULLS and RESPECT NULLS is not supported by Krishiv yet. SQLSTATE: 0A000 @ 7..26
 SELECT * FROM t WITH (k = x)

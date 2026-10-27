@@ -153,7 +153,7 @@ impl HashAggregate {
                 .spec
                 .aggregates
                 .iter()
-                .any(|a| is_order_sensitive(a.function));
+                .any(|a| is_order_sensitive(&a.function));
             if !ordered && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].1.len()) {
                 tables.swap(0, big);
             }

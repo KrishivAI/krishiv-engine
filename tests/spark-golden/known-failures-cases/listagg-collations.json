@@ -12,12 +12,6 @@
       10,
       12,
       14
-    ],
-    "query-features": [
-      2,
-      9,
-      11,
-      13
     ]
   },
   "file": "listagg-collations",

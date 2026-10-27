@@ -64,14 +64,26 @@ type Row = [f64; WIDTH];
 
 /// The buffer attributes of `f`, in Spark's order; `None` for an aggregate
 /// that is not a moment aggregate.
-pub(super) fn buffer(f: AggregateFunction) -> Option<&'static [&'static str]> {
+pub(super) fn buffer(f: &AggregateFunction) -> Option<&'static [&'static str]> {
     use AggregateFunction as F;
     Some(match f {
         F::StddevSamp | F::StddevPop | F::VarSamp | F::VarPop => &["n", "avg", "m2"],
         F::Skewness => &["n", "avg", "m2", "m3"],
         F::Kurtosis => &["n", "avg", "m2", "m3", "m4"],
         F::CovarSamp | F::CovarPop => &["n", "xAvg", "yAvg", "ck"],
-        F::Corr => &["n", "xAvg", "yAvg", "ck", "xMk", "yMk"],
+        // The regression aggregates share `corr`'s buffer (which holds
+        // the marginal sums of squares too): only rows where both
+        // arguments are non-NULL count, as for `corr` and `covar_*`.
+        F::Corr
+        | F::RegrCount
+        | F::RegrAvgx
+        | F::RegrAvgy
+        | F::RegrSxx
+        | F::RegrSyy
+        | F::RegrSxy
+        | F::RegrSlope
+        | F::RegrIntercept
+        | F::RegrR2 => &["n", "xAvg", "yAvg", "ck", "xMk", "yMk"],
         _ => return None,
     })
 }
@@ -91,7 +103,7 @@ pub(super) fn reads_as_double(t: &DataType) -> bool {
 
 /// The partial-state columns of moment aggregate `f` (names derive from
 /// the aggregate's `name`): Spark's buffer, non-nullable `double`s.
-pub(super) fn state_fields(f: AggregateFunction, name: &str) -> Vec<Field> {
+pub(super) fn state_fields(f: &AggregateFunction, name: &str) -> Vec<Field> {
     buffer(f)
         .unwrap_or_default()
         .iter()
@@ -100,10 +112,21 @@ pub(super) fn state_fields(f: AggregateFunction, name: &str) -> Vec<Field> {
 }
 
 /// The arguments of an aggregate other than `count`: two for the pair
-/// statistics (`corr`, `covar_*`), else one.
-pub(crate) fn arity(f: AggregateFunction) -> usize {
+/// statistics (`corr`, `covar_*`, `regr_*`), else one.
+pub(crate) fn arity(f: &AggregateFunction) -> usize {
     match f {
-        AggregateFunction::CovarSamp | AggregateFunction::CovarPop | AggregateFunction::Corr => 2,
+        AggregateFunction::CovarSamp
+        | AggregateFunction::CovarPop
+        | AggregateFunction::Corr
+        | AggregateFunction::RegrCount
+        | AggregateFunction::RegrAvgx
+        | AggregateFunction::RegrAvgy
+        | AggregateFunction::RegrSxx
+        | AggregateFunction::RegrSyy
+        | AggregateFunction::RegrSxy
+        | AggregateFunction::RegrSlope
+        | AggregateFunction::RegrIntercept
+        | AggregateFunction::RegrR2 => 2,
         _ => 1,
     }
 }
@@ -118,7 +141,7 @@ enum Family {
 }
 
 impl Family {
-    fn of(f: AggregateFunction) -> Option<Self> {
+    fn of(f: &AggregateFunction) -> Option<Self> {
         let width = buffer(f)?.len();
         Some(if arity(f) == 2 {
             Self::Pair {
@@ -242,8 +265,17 @@ fn merge(family: Family, a: &mut Row, b: &Row) {
 /// `corr` of several rows over a constant column is the exception: a
 /// division by zero whatever `legacy` says, `DIVIDE_BY_ZERO` with `ansi` and
 /// NULL without. Spark's `evaluateExpression`.
-fn finish(f: AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Option<f64>> {
+///
+/// The pair buffer's slots hold `x` (the first argument) in `xAvg`/`xMk`
+/// and `y` (the second) in `yAvg`/`yMk`, as `update` folds them; the
+/// regression aggregates read them as `regr_*(y, x)` documents them (so
+/// `regr_avgx` is the `yAvg` slot, the mean of the second argument).
+fn finish(f: &AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Option<f64>> {
     use AggregateFunction as F;
+    // `regr_count` counts the pairs (never NULL, even with none).
+    if f == &F::RegrCount {
+        return Ok(Some(s[0]));
+    }
     let [n, _, m2, _, m4, _] = *s;
     if n == 0.0 {
         return Ok(None);
@@ -271,6 +303,26 @@ fn finish(f: AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Opt
             None
         }
         F::Corr => Some(s[3] / (s[4] * s[5]).sqrt()),
+        // The regression aggregates: `x` is the second argument (the
+        // independent variable, in `yAvg`/`yMk`) and `y` the first (in
+        // `xAvg`/`xMk`); Spark's `regr_*` evaluate expressions.
+        // (`regr_count` returns above: it is never NULL, even with none.)
+        F::RegrAvgx => Some(s[2]),
+        F::RegrAvgy => Some(s[1]),
+        F::RegrSxx => Some(s[5]),
+        F::RegrSyy => Some(s[4]),
+        F::RegrSxy => Some(s[3]),
+        // NULL when `x` does not vary.
+        F::RegrSlope | F::RegrIntercept | F::RegrR2 if s[5] == 0.0 => None,
+        F::RegrSlope => Some(s[3] / s[5]),
+        F::RegrIntercept => Some(s[1] - s[3] / s[5] * s[2]),
+        // `1` when only `y` does not vary, NULL when `x` does not;
+        // otherwise the squared correlation, as Spark squares `corr`.
+        F::RegrR2 if s[4] == 0.0 => Some(1.0),
+        F::RegrR2 => {
+            let corr = s[3] / (s[4] * s[5]).sqrt();
+            Some(corr * corr)
+        }
         _ => None,
     })
 }
@@ -291,7 +343,7 @@ pub(super) struct Moments {
 impl Moments {
     /// No groups yet, for moment aggregate `function`.
     pub(super) fn new(function: AggregateFunction, ansi: bool) -> Result<Self> {
-        let family = Family::of(function)
+        let family = Family::of(&function)
             .ok_or_else(|| internal(format!("{function:?} is not a moment aggregate")))?;
         Ok(Self {
             function,
@@ -361,7 +413,7 @@ impl Moments {
             return Err(internal("a moment aggregate without arguments".to_owned()));
         };
         if x.len() != groups.len()
-            || args.len() != arity(self.function)
+            || args.len() != arity(&self.function)
             || y.is_some_and(|y| y.len() != groups.len())
         {
             return Err(internal(
@@ -417,7 +469,7 @@ impl Moments {
     pub(super) fn evaluate(&self, ids: &[u32]) -> Result<ArrayRef> {
         let v = ids
             .iter()
-            .map(|&g| finish(self.function, &self.load(g)?, self.legacy, self.ansi))
+            .map(|&g| finish(&self.function, &self.load(g)?, self.legacy, self.ansi))
             .collect::<Result<Float64Array>>()?;
         Ok(std::sync::Arc::new(v))
     }

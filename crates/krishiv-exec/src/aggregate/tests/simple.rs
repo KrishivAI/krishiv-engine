@@ -22,9 +22,9 @@ fn f64s(v: &[Option<f64>]) -> ArrayRef {
 }
 
 /// `by(x, y)` over columns 1 and 2 of `s`.
-fn by(f: AggregateFunction, s: &SchemaRef) -> AggregateExpr {
+fn by(f: &AggregateFunction, s: &SchemaRef) -> AggregateExpr {
     AggregateExpr::by(
-        f,
+        f.clone(),
         (1, 2),
         (
             s.field(1).data_type().clone(),
@@ -82,7 +82,7 @@ const BY_MAX: [&str; 5] = ["1|c", "2|NULL", "3|NULL", "4|NULL", "5|m"];
 const BY_MIN: [&str; 5] = ["1|a", "2|NULL", "3|z", "4|NULL", "5|m"];
 
 fn by_aggs(s: &SchemaRef) -> Vec<AggregateExpr> {
-    vec![by(MaxBy, s), by(MinBy, s)]
+    vec![by(&MaxBy, s), by(&MinBy, s)]
 }
 
 /// `1|max|min` rows from the two single-aggregate expectations.
@@ -168,7 +168,7 @@ async fn max_by_and_min_by_merge_partial_states() {
     // hash order of the first phase's groups).
     let (s, b) = by_input(false);
     let mut aggs = by_aggs(&s);
-    aggs.push(agg(Count, 1, &s));
+    aggs.push(agg(&Count, 1, &s));
     let sp = spec(&s, vec![0], aggs);
     let plan = distinct_plan(scan(&s, b), sp, &[false, false, true]).unwrap();
     let want = [
@@ -220,21 +220,21 @@ async fn any_value_is_the_first_value() {
     let (s, b) = picks_input();
     let aggs = vec![
         agg(
-            AnyValue {
+            &AnyValue {
                 ignore_nulls: false,
             },
             1,
             &s,
         ),
-        agg(AnyValue { ignore_nulls: true }, 1, &s),
+        agg(&AnyValue { ignore_nulls: true }, 1, &s),
         agg(
-            AnyValue {
+            &AnyValue {
                 ignore_nulls: false,
             },
             2,
             &s,
         ),
-        agg(AnyValue { ignore_nulls: true }, 2, &s),
+        agg(&AnyValue { ignore_nulls: true }, 2, &s),
     ];
     let expected = ["1|NULL|5|a|a", "2|NULL|NULL|NULL|NULL", "3|9|9|z|z"];
     let single = node(scan(&s, b.clone()), spec(&s, vec![0], aggs.clone()));
@@ -380,7 +380,7 @@ async fn every_value_and_key_type() {
             ]);
             let batch = vec![i64s(&g), typed(&tx, &xs), typed(&ty, &ys)];
             let key = |y: i64| if ty == DataType::Boolean { y % 2 } else { y };
-            for (f, max) in [(MaxBy, true), (MinBy, false)] {
+            for (f, max) in [(&MaxBy, true), (&MinBy, false)] {
                 let want = by_oracle(&rows, max, key);
                 let render = |v: Option<i64>| cell(&typed(&tx, &[v]), 0);
                 let expected: Vec<String> = {
@@ -448,7 +448,7 @@ fn spill_input(n: i64, keys: i64) -> (SchemaRef, Vec<Vec<ArrayRef>>) {
 #[tokio::test]
 async fn by_aggregates_spill_and_merge() {
     let (s, b) = spill_input(60_000, 40_000);
-    let aggs = vec![by(MaxBy, &s), by(MinBy, &s)];
+    let aggs = vec![by(&MaxBy, &s), by(&MinBy, &s)];
     let expected = run_rows(node(scan(&s, b.clone()), spec(&s, vec![0], aggs.clone()))).await;
     // The same answer by a plain loop (ties keep the first row).
     let mut best: BTreeMap<i64, [Option<(String, String)>; 2]> = BTreeMap::new();
@@ -494,7 +494,7 @@ async fn by_aggregates_spill_and_merge() {
         assert_eq!(extra(m, "HashAggregate", "groups"), 40_000);
     }
     // Spilled partial states merged in a second phase.
-    let mut first = spec(&s, vec![0], vec![by(MaxBy, &s), by(MinBy, &s)]);
+    let mut first = spec(&s, vec![0], vec![by(&MaxBy, &s), by(&MinBy, &s)]);
     first.output = AggregateOutput::Partial;
     let second = second_phase(&first, Some(scope));
     let partial = PartialAggregate::new(first, BypassPolicy::default(), Some(7)).unwrap();
@@ -507,7 +507,7 @@ async fn by_aggregates_spill_and_merge() {
 #[tokio::test]
 async fn by_aggregates_without_spill_fail_cleanly() {
     let (s, b) = spill_input(60_000, 60_000);
-    let plan = node(scan(&s, b), spec(&s, vec![0], vec![by(MaxBy, &s)]));
+    let plan = node(scan(&s, b), spec(&s, vec![0], vec![by(&MaxBy, &s)]));
     let o = Opts {
         limit: 1 << 20,
         ..Opts::default()
@@ -523,7 +523,7 @@ fn types_states_and_errors() {
         ("x", DataType::Decimal128(12, 2)),
         ("y", DataType::Date32),
     ]);
-    let a = by(MaxBy, &s);
+    let a = by(&MaxBy, &s);
     assert_eq!(a.result_type().unwrap(), DataType::Decimal128(12, 2));
     let fields = a.state_fields().unwrap();
     let types: Vec<_> = fields.iter().map(|f| f.data_type().clone()).collect();
@@ -578,9 +578,9 @@ fn types_states_and_errors() {
 async fn weights_are_rejected() {
     let (s, b) = by_input(true);
     let aggs = vec![
-        by(MaxBy, &s),
+        by(&MaxBy, &s),
         agg(
-            AnyValue {
+            &AnyValue {
                 ignore_nulls: false,
             },
             1,

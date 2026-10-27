@@ -1,13 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      21,
-      22,
-      23,
-      24,
-      25,
-      26
-    ],
     "nested-interval-types": [
       40,
       41,

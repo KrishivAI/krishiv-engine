@@ -134,8 +134,8 @@ fn arg_type(t: (u8, i8), d64: bool) -> DataType {
     }
 }
 
-fn acc(f: AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
-    let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t.clone(), "a"), ansi).unwrap();
+fn acc(f: &AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
+    let mut a = Accumulator::new(&AggregateExpr::new(f.clone(), 0, t.clone(), "a"), ansi).unwrap();
     a.proofs = proofs;
     a
 }
@@ -195,7 +195,7 @@ proptest! {
     /// Raw rows: proof on == proof off, and `Decimal64` == `Decimal128`.
     #[test]
     fn fold_differential((t, groups, mode, batches) in input()) {
-        for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+        for f in [AggregateFunction::Sum, AggregateFunction::Avg].iter() {
             for ansi in [true, false] {
                 let mut outcomes = Vec::new();
                 for d64 in carriers(t) {
@@ -224,7 +224,7 @@ proptest! {
     #[test]
     fn merge_differential((t, groups, _mode, batches) in input()) {
         let ids: Vec<u32> = (0..groups).collect();
-        for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
+        for f in [AggregateFunction::Sum, AggregateFunction::Avg].iter() {
             for ansi in [true, false] {
                 let mut outcomes = Vec::new();
                 for d64 in carriers(t) {
@@ -318,7 +318,7 @@ fn min_max_on_decimal64() {
         (AggregateFunction::Min, -12_345_i64),
         (AggregateFunction::Max, 99_999),
     ] {
-        let mut a = acc(f, &t, true, true);
+        let mut a = acc(&f, &t, true, true);
         a.resize(1);
         let col: ArrayRef = Arc::new(
             PrimitiveArray::<Decimal64Type>::from(vec![Some(5), None, Some(-12_345), Some(99_999)])
@@ -334,14 +334,14 @@ fn min_max_on_decimal64() {
 /// The moment aggregates: `(group, x, y, x is valid, y is valid)`.
 type MomentRow = (u32, f64, f64, bool, bool);
 
-fn moment_acc(f: AggregateFunction, groups: u32) -> Accumulator {
+fn moment_acc(f: &AggregateFunction, groups: u32) -> Accumulator {
     let args = if crate::aggregate::arity(f) == 2 {
         vec![0, 1]
     } else {
         vec![0]
     };
     let e = AggregateExpr {
-        function: f,
+        function: f.clone(),
         args,
         input: AggInput::Raw,
         arg_type: DataType::Float64,
@@ -453,7 +453,7 @@ proptest! {
     ) {
         let rows: Vec<MomentRow> = rows.into_iter().map(|r| (r.0 % groups, r.1, r.2, r.3, r.4)).collect();
         let ids: Vec<u32> = (0..groups).collect();
-        for f in MOMENT_FUNCTIONS {
+        for f in &MOMENT_FUNCTIONS {
             let mut once = moment_acc(f, groups);
             let g: Vec<u32> = rows.iter().map(|r| r.0).collect();
             once.update(&g, &moment_columns(&rows), &Weights::Const(1)).unwrap();

@@ -27,9 +27,9 @@ use crate::window::{
 use AggregateFunction::{CollectList, CollectSet, VectorAvg, VectorSum};
 
 /// One collect or vector aggregate over column `col` of `s`.
-fn agg(f: AggregateFunction, col: usize, s: &SchemaRef) -> AggregateExpr {
+fn agg(f: &AggregateFunction, col: usize, s: &SchemaRef) -> AggregateExpr {
     let t = s.field(col).data_type().clone();
-    AggregateExpr::new(f, col, t, format!("{f:?}_{col}"))
+    AggregateExpr::new(f.clone(), col, t, format!("{f:?}_{col}"))
 }
 
 /// `(k, x)`: `k` groups (`1`: rows with a NULL and a repeat, `2`: all
@@ -198,7 +198,7 @@ async fn collect_list_keeps_input_order_and_skips_nulls() {
     let single = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![0], vec![agg(CollectList, 1, &s)]),
+            spec(&s, vec![0], vec![agg(&CollectList, 1, &s)]),
         )
     };
     assert_eq!(
@@ -209,13 +209,13 @@ async fn collect_list_keeps_input_order_and_skips_nulls() {
     let global = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![], vec![agg(CollectList, 1, &s)]),
+            spec(&s, vec![], vec![agg(&CollectList, 1, &s)]),
         )
     };
     assert_eq!(run_ordered(global()).await, ["[1, 2, 1, 9]"]);
     let none = node(
         scan(&s, vec![vec![i64s(&[]), i64s(&[])]]),
-        spec(&s, vec![], vec![agg(CollectList, 1, &s)]),
+        spec(&s, vec![], vec![agg(&CollectList, 1, &s)]),
     );
     assert_eq!(run_ordered(none).await, ["[]"]);
 }
@@ -228,14 +228,14 @@ async fn collect_set_dedups_in_first_seen_order() {
     let single = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![0], vec![agg(CollectSet, 1, &s)]),
+            spec(&s, vec![0], vec![agg(&CollectSet, 1, &s)]),
         )
     };
     assert_eq!(run_ordered(single()).await, ["1|[1, 2]", "2|[]", "3|[9]"]);
     let global = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![], vec![agg(CollectSet, 1, &s)]),
+            spec(&s, vec![], vec![agg(&CollectSet, 1, &s)]),
         )
     };
     assert_eq!(run_ordered(global()).await, ["[1, 2, 9]"]);
@@ -259,7 +259,7 @@ async fn collect_set_normalizes_floats_like_grouping_keys() {
     let single = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![0], vec![agg(CollectSet, 1, &s)]),
+            spec(&s, vec![0], vec![agg(&CollectSet, 1, &s)]),
         )
     };
     assert_eq!(
@@ -270,7 +270,7 @@ async fn collect_set_normalizes_floats_like_grouping_keys() {
     let single = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![0], vec![agg(CollectList, 1, &s)]),
+            spec(&s, vec![0], vec![agg(&CollectList, 1, &s)]),
         )
     };
     assert_eq!(
@@ -287,7 +287,7 @@ async fn vector_sum_adds_element_wise() {
     let single = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![0], vec![agg(VectorSum, 1, &s)]),
+            spec(&s, vec![0], vec![agg(&VectorSum, 1, &s)]),
         )
     };
     assert_eq!(
@@ -306,7 +306,7 @@ async fn vector_sum_adds_element_wise() {
     let global = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![], vec![agg(VectorSum, 1, &s)]),
+            spec(&s, vec![], vec![agg(&VectorSum, 1, &s)]),
         )
     };
     assert_eq!(run_ordered_layout(global(), false).await, ["[13.0, 24.0]"]);
@@ -321,7 +321,7 @@ async fn vector_global_mix_of_dimensions_is_an_error() {
     let e = exec(
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![], vec![agg(VectorSum, 1, &s)]),
+            spec(&s, vec![], vec![agg(&VectorSum, 1, &s)]),
         ),
         Opts {
             slots: 1,
@@ -344,7 +344,7 @@ async fn vector_avg_divides_by_non_null_vectors() {
     let single = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![0], vec![agg(VectorAvg, 1, &s)]),
+            spec(&s, vec![0], vec![agg(&VectorAvg, 1, &s)]),
         )
     };
     assert_eq!(
@@ -361,7 +361,7 @@ async fn empty_vectors_give_an_empty_array() {
         i64s(&[Some(1), Some(1)]),
         vectors(&[Some(vec![]), Some(vec![])]),
     ]];
-    for f in [VectorSum, VectorAvg] {
+    for f in [&VectorSum, &VectorAvg] {
         let single = || node(scan(&s, b.clone()), spec(&s, vec![0], vec![agg(f, 1, &s)]));
         assert_eq!(run_ordered(single()).await, ["1|[]"], "{f:?}");
     }
@@ -376,7 +376,7 @@ async fn vector_dimension_mismatch_is_an_error() {
     let three = vectors(&[Some(vec![Some(1.0), Some(2.0), Some(3.0)])]);
     let both = arrow_select::concat::concat(&[&two, &three]).unwrap();
     let b = vec![vec![i64s(&[Some(1), Some(1)]), both]];
-    for f in [VectorSum, VectorAvg] {
+    for f in [&VectorSum, &VectorAvg] {
         let e = exec(
             node(scan(&s, b.clone()), spec(&s, vec![0], vec![agg(f, 1, &s)])),
             Opts {
@@ -393,7 +393,7 @@ async fn vector_dimension_mismatch_is_an_error() {
         assert!(text.contains("`vector_"), "{text}");
     }
     // Through partial states: states of different dimensions do not merge.
-    let mut first = spec(&s, vec![0], vec![agg(VectorSum, 1, &s)]);
+    let mut first = spec(&s, vec![0], vec![agg(&VectorSum, 1, &s)]);
     first.output = AggregateOutput::Partial;
     let second = second_phase(&first, None);
     let partial = PartialAggregate::new(first, BypassPolicy::default(), Some(7)).unwrap();
@@ -421,7 +421,7 @@ async fn one_and_eight_partitions_agree() {
     // morsel: a single batch would run on one driver either way).
     let (s, one) = collect_input();
     let multi: Vec<Vec<ArrayRef>> = (0..4).map(|_| one[0].clone()).collect();
-    for f in [CollectList, CollectSet] {
+    for f in [&CollectList, &CollectSet] {
         let single = || {
             node(
                 scan(&s, multi.clone()),
@@ -448,7 +448,7 @@ async fn one_and_eight_partitions_agree() {
     }
     let (s, one) = vector_input();
     let multi: Vec<Vec<ArrayRef>> = (0..4).map(|_| one[0].clone()).collect();
-    for f in [VectorSum, VectorAvg] {
+    for f in [&VectorSum, &VectorAvg] {
         let single = || {
             node(
                 scan(&s, multi.clone()),
@@ -465,7 +465,7 @@ async fn one_and_eight_partitions_agree() {
     let global = || {
         node(
             scan(&s, multi.clone()),
-            spec(&s, vec![], vec![agg(CollectList, 1, &s)]),
+            spec(&s, vec![], vec![agg(&CollectList, 1, &s)]),
         )
     };
     let one_rows = run_ordered(global()).await;
@@ -564,18 +564,18 @@ async fn collect_merges_follow_partition_index_order() {
 #[tokio::test]
 async fn distinct_collects_skip_nulls_and_repeats() {
     let (s, b) = collect_input();
-    let sp = spec(&s, vec![0], vec![agg(CollectList, 1, &s)]);
+    let sp = spec(&s, vec![0], vec![agg(&CollectList, 1, &s)]);
     let plan = distinct_plan(scan(&s, b.clone()), sp, &[true]).unwrap();
     assert_eq!(sorted_rows(plan).await, ["1|[1, 2]", "2|[]", "3|[9]"]);
     // Global distinct.
-    let sp = spec(&s, vec![], vec![agg(CollectSet, 1, &s)]);
+    let sp = spec(&s, vec![], vec![agg(&CollectSet, 1, &s)]);
     let plan = distinct_plan(scan(&s, b.clone()), sp, &[true]).unwrap();
     assert_eq!(sorted_rows(plan).await, ["[1, 2, 9]"]);
     // Two distinct argument lists: one rewrite handles one list only.
     let sp = spec(
         &s,
         vec![0],
-        vec![agg(CollectList, 0, &s), agg(CollectList, 1, &s)],
+        vec![agg(&CollectList, 0, &s), agg(&CollectList, 1, &s)],
     );
     let e = distinct_plan(scan(&s, b), sp, &[true, true]).err();
     assert_eq!(
@@ -593,7 +593,7 @@ async fn collect_and_vector_reject_non_unit_weights() {
     let s = schema(vec![("k", DataType::Int64), ("x", DataType::Int64)]);
     let cols = vec![i64s(&[Some(1), Some(1)]), i64s(&[Some(10), Some(5)])];
     let data = RecordBatch::try_new(Arc::clone(&s), cols).unwrap();
-    let weighted = |f: AggregateFunction| {
+    let weighted = |f: &AggregateFunction| {
         let b = Batch::with_weights(data.clone(), Weights::Column(Int64Array::from(vec![2, -1])))
             .unwrap();
         node(
@@ -601,7 +601,7 @@ async fn collect_and_vector_reject_non_unit_weights() {
             spec(&s, vec![0], vec![agg(f, 1, &s)]),
         )
     };
-    for f in [CollectList, CollectSet] {
+    for f in [&CollectList, &CollectSet] {
         let e = exec(weighted(f), Opts::default()).await.err();
         assert_eq!(
             e.map(|e| e.error_class()),
@@ -615,7 +615,7 @@ async fn collect_and_vector_reject_non_unit_weights() {
     let b = Batch::with_weights(data, Weights::Column(Int64Array::from(vec![1; 7]))).unwrap();
     let unit = node(
         Arc::new(Scan(Batches::new(Arc::clone(&s), vec![b]))),
-        spec(&s, vec![0], vec![agg(VectorSum, 1, &s)]),
+        spec(&s, vec![0], vec![agg(&VectorSum, 1, &s)]),
     );
     assert!(exec(unit, Opts::default()).await.is_ok());
 }
@@ -644,14 +644,14 @@ async fn nested_element_types_collect() {
     let single = || {
         node(
             scan(&views, b.clone()),
-            spec(&views, vec![0], vec![agg(CollectList, 1, &views)]),
+            spec(&views, vec![0], vec![agg(&CollectList, 1, &views)]),
         )
     };
     assert_eq!(run_ordered(single()).await, ["1|[b, a, b]", "NULL|[z, a]"]);
     let single = || {
         node(
             scan(&views, b.clone()),
-            spec(&views, vec![0], vec![agg(CollectSet, 1, &views)]),
+            spec(&views, vec![0], vec![agg(&CollectSet, 1, &views)]),
         )
     };
     assert_eq!(run_ordered(single()).await, ["1|[b, a]", "NULL|[z, a]"]);
@@ -670,7 +670,7 @@ async fn nested_element_types_collect() {
     let single = || {
         node(
             scan(&raw, b.clone()),
-            spec(&views, vec![0], vec![agg(CollectSet, 1, &views)]),
+            spec(&views, vec![0], vec![agg(&CollectSet, 1, &views)]),
         )
     };
     assert_eq!(run_ordered(single()).await, ["1|[b, a]", "NULL|[z, a]"]);
@@ -690,7 +690,7 @@ async fn nested_element_types_collect() {
     let single = || {
         node(
             scan(&bin, b.clone()),
-            spec(&bin, vec![0], vec![agg(CollectSet, 1, &bin)]),
+            spec(&bin, vec![0], vec![agg(&CollectSet, 1, &bin)]),
         )
     };
     assert_eq!(run_ordered(single()).await, ["1|[b, a]", "NULL|[z, a]"]);
@@ -709,7 +709,7 @@ async fn nested_element_types_collect() {
     let single = || {
         node(
             scan(&large, b.clone()),
-            spec(&large, vec![0], vec![agg(CollectList, 1, &large)]),
+            spec(&large, vec![0], vec![agg(&CollectList, 1, &large)]),
         )
     };
     assert_eq!(
@@ -728,7 +728,7 @@ async fn nested_element_types_collect() {
     let single = || {
         node(
             scan(&ds, b.clone()),
-            spec(&ds, vec![], vec![agg(CollectSet, 1, &ds)]),
+            spec(&ds, vec![], vec![agg(&CollectSet, 1, &ds)]),
         )
     };
     assert_eq!(run_ordered(single()).await, ["[1.50, 2.00, 9.99]"]);
@@ -747,14 +747,14 @@ async fn nested_element_types_collect() {
     let single = || {
         node(
             scan(&arrays, b.clone()),
-            spec(&arrays, vec![], vec![agg(CollectList, 1, &arrays)]),
+            spec(&arrays, vec![], vec![agg(&CollectList, 1, &arrays)]),
         )
     };
     assert_eq!(sorted_rows(single()).await, ["[[1, 2], [3], [1, 2]]"]);
     let single = || {
         node(
             scan(&arrays, b.clone()),
-            spec(&arrays, vec![], vec![agg(CollectSet, 1, &arrays)]),
+            spec(&arrays, vec![], vec![agg(&CollectSet, 1, &arrays)]),
         )
     };
     assert_eq!(sorted_rows(single()).await, ["[[1, 2], [3]]"]);
@@ -777,7 +777,7 @@ async fn nested_element_types_collect() {
     let out = exec(
         node(
             scan(&ts, b.clone()),
-            spec(&ts, vec![], vec![agg(CollectList, 1, &ts)]),
+            spec(&ts, vec![], vec![agg(&CollectList, 1, &ts)]),
         ),
         Opts {
             slots: 1,
@@ -799,7 +799,7 @@ async fn nested_element_types_collect() {
         .unwrap();
     assert_eq!(a.values(), &[1, 2, 1]);
     // A set over floats nested in arrays has no shared encoding: refused,
-    // never silently mis-grouped.
+    // never silently grouped incorrectly.
     let nested = DataType::List(Arc::new(Field::new("element", DataType::Float64, true)));
     let e = AggregateExpr::new(CollectSet, 0, nested, "c").result_type();
     assert_eq!(
@@ -1073,7 +1073,7 @@ async fn collect_list_spills_and_recovers_memory() {
     assert_eq!(expected.len(), n);
     for limit in [2 << 20, 1536 << 10] {
         let (_m, scope) = spill_dir();
-        let mut sp = spec(&s, vec![0], vec![agg(CollectList, 1, &s)]);
+        let mut sp = spec(&s, vec![0], vec![agg(&CollectList, 1, &s)]);
         sp.spill = Some(scope);
         let o = Opts {
             limit,
@@ -1107,7 +1107,7 @@ async fn collect_list_spills_and_recovers_memory() {
 fn single_collect(s: &SchemaRef, b: &[Vec<ArrayRef>]) -> Arc<dyn ExecNode> {
     node(
         scan(s, b.to_vec()),
-        spec(s, vec![0], vec![agg(CollectList, 1, s)]),
+        spec(s, vec![0], vec![agg(&CollectList, 1, s)]),
     )
 }
 
@@ -1119,12 +1119,12 @@ async fn empty_input_collects() {
     let empty: Vec<Vec<ArrayRef>> = vec![];
     let grouped = node(
         scan(&s, empty.clone()),
-        spec(&s, vec![0], vec![agg(CollectSet, 1, &s)]),
+        spec(&s, vec![0], vec![agg(&CollectSet, 1, &s)]),
     );
     assert_eq!(exec(grouped, Opts::default()).await.unwrap().0.len(), 0);
     let global = node(
         scan(&s, empty),
-        spec(&s, vec![], vec![agg(CollectList, 1, &s)]),
+        spec(&s, vec![], vec![agg(&CollectList, 1, &s)]),
     );
     assert_eq!(run_ordered(global).await, ["[]"]);
 }
@@ -1141,7 +1141,7 @@ async fn null_typed_input_collects() {
         Arc::new(NullArray::new(2)) as ArrayRef,
     ]];
     for (f, want) in [(CollectList, "1|[]"), (CollectSet, "1|[]")] {
-        let single = || node(scan(&s, b.clone()), spec(&s, vec![0], vec![agg(f, 1, &s)]));
+        let single = || node(scan(&s, b.clone()), spec(&s, vec![0], vec![agg(&f, 1, &s)]));
         assert_eq!(run_ordered(single()).await, [want], "{f:?}");
     }
     let v = schema(vec![
@@ -1160,7 +1160,7 @@ async fn null_typed_input_collects() {
     let single = || {
         node(
             scan(&s, b.clone()),
-            spec(&s, vec![0], vec![agg(VectorSum, 1, &v)]),
+            spec(&s, vec![0], vec![agg(&VectorSum, 1, &v)]),
         )
     };
     assert_eq!(run_ordered(single()).await, ["1|NULL"]);

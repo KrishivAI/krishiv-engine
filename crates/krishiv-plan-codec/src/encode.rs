@@ -738,18 +738,51 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
 }
 
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
-    let (function, ignore_nulls) = match a.function {
+    let (function, ignore_nulls) = match &a.function {
         AggregateFunction::Count => (pb::AggregateFunction::Count, false),
         AggregateFunction::Sum => (pb::AggregateFunction::Sum, false),
         AggregateFunction::Avg => (pb::AggregateFunction::Avg, false),
         AggregateFunction::Min => (pb::AggregateFunction::Min, false),
         AggregateFunction::Max => (pb::AggregateFunction::Max, false),
-        AggregateFunction::First { ignore_nulls } => (pb::AggregateFunction::First, ignore_nulls),
-        AggregateFunction::Last { ignore_nulls } => (pb::AggregateFunction::Last, ignore_nulls),
+        AggregateFunction::First { ignore_nulls } => (pb::AggregateFunction::First, *ignore_nulls),
+        AggregateFunction::Last { ignore_nulls } => (pb::AggregateFunction::Last, *ignore_nulls),
         AggregateFunction::CollectList => (pb::AggregateFunction::CollectList, false),
         AggregateFunction::CollectSet => (pb::AggregateFunction::CollectSet, false),
         AggregateFunction::VectorSum => (pb::AggregateFunction::VectorSum, false),
         AggregateFunction::VectorAvg => (pb::AggregateFunction::VectorAvg, false),
+        AggregateFunction::BitAnd => (pb::AggregateFunction::BitAnd, false),
+        AggregateFunction::BitOr => (pb::AggregateFunction::BitOr, false),
+        AggregateFunction::BitXor => (pb::AggregateFunction::BitXor, false),
+        AggregateFunction::RegrCount => (pb::AggregateFunction::RegrCount, false),
+        AggregateFunction::RegrAvgx => (pb::AggregateFunction::RegrAvgx, false),
+        AggregateFunction::RegrAvgy => (pb::AggregateFunction::RegrAvgy, false),
+        AggregateFunction::RegrSxx => (pb::AggregateFunction::RegrSxx, false),
+        AggregateFunction::RegrSyy => (pb::AggregateFunction::RegrSyy, false),
+        AggregateFunction::RegrSxy => (pb::AggregateFunction::RegrSxy, false),
+        AggregateFunction::RegrSlope => (pb::AggregateFunction::RegrSlope, false),
+        AggregateFunction::RegrIntercept => (pb::AggregateFunction::RegrIntercept, false),
+        AggregateFunction::RegrR2 => (pb::AggregateFunction::RegrR2, false),
+        AggregateFunction::Mode => (pb::AggregateFunction::Mode, false),
+        AggregateFunction::ModeMin => (pb::AggregateFunction::ModeMin, false),
+        AggregateFunction::ModeMax => (pb::AggregateFunction::ModeMax, false),
+        AggregateFunction::ListAgg { delimiter, orders } => {
+            return Ok(pb::AggregateExpr {
+                function: pb::AggregateFunction::Listagg as i32,
+                ignore_nulls: false,
+                args: indexes(&a.args),
+                input: match a.input {
+                    AggInput::Raw => pb::AggregateInput::Raw,
+                    AggInput::State => pb::AggregateInput::State,
+                } as i32,
+                arg_type: arrow_bytes(&a.arg_type, nested),
+                name: a.name.clone(),
+                listagg_delimiter: delimiter.clone(),
+                listagg_desc: orders.iter().map(|&(desc, _)| desc).collect(),
+                listagg_nulls_first: orders.iter().map(|&(_, nulls)| nulls).collect(),
+            });
+        }
+        AggregateFunction::TrySum => (pb::AggregateFunction::TrySum, false),
+        AggregateFunction::TryAvg => (pb::AggregateFunction::TryAvg, false),
         // The format has no code for these yet.
         f @ (AggregateFunction::StddevSamp
         | AggregateFunction::StddevPop
@@ -778,6 +811,7 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
         } as i32,
         arg_type: arrow_bytes(&a.arg_type, nested),
         name: a.name.clone(),
+        ..Default::default()
     })
 }
 

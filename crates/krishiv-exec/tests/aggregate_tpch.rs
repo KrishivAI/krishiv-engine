@@ -192,9 +192,9 @@ fn spill_scope() -> (TestSpill, SpillScope) {
     )
 }
 
-fn agg(f: AggregateFunction, col: usize, s: &SchemaRef) -> AggregateExpr {
+fn agg(f: &AggregateFunction, col: usize, s: &SchemaRef) -> AggregateExpr {
     let t = s.field(col).data_type().clone();
-    AggregateExpr::new(f, col, t, format!("{f:?}_{col}"))
+    AggregateExpr::new(f.clone(), col, t, format!("{f:?}_{col}"))
 }
 
 fn spec(s: &SchemaRef, group_by: Vec<usize>, aggregates: Vec<AggregateExpr>) -> AggregateSpec {
@@ -225,13 +225,13 @@ fn spilled(m: &QueryMetrics) -> u64 {
 
 fn q1_spec(s: &SchemaRef) -> AggregateSpec {
     let aggs = vec![
-        agg(Sum, 2, s),
-        agg(Sum, 3, s),
-        agg(Sum, 4, s),
-        agg(Sum, 5, s),
-        agg(Avg, 2, s),
-        agg(Avg, 3, s),
-        agg(Avg, 6, s),
+        agg(&Sum, 2, s),
+        agg(&Sum, 3, s),
+        agg(&Sum, 4, s),
+        agg(&Sum, 5, s),
+        agg(&Avg, 2, s),
+        agg(&Avg, 3, s),
+        agg(&Avg, 6, s),
         AggregateExpr::count_star("count_order"),
     ];
     spec(s, vec![0, 1], aggs)
@@ -270,7 +270,7 @@ async fn q1_pricing_summary() {
     // tables' case) under a 1 MiB budget spills, on both layouts.
     let (_m, scope) = spill_scope();
     let (s, lineitem) = input("q18_lineitem");
-    let mut sp = spec(&s, vec![0], vec![agg(Sum, 1, &s)]);
+    let mut sp = spec(&s, vec![0], vec![agg(&Sum, 1, &s)]);
     sp.spill = Some(scope);
     let (out, metrics) = run_each(|| node(Arc::clone(&lineitem), sp.clone()), 4, 1 << 20).await;
     for m in &metrics {
@@ -289,8 +289,8 @@ async fn q1_pricing_summary() {
 #[tokio::test]
 async fn q13_customer_distribution() {
     let (s, scan) = input("q13_input");
-    let inner = node(scan, spec(&s, vec![0], vec![agg(Count, 1, &s)]));
-    let mid = spec(&s, vec![0], vec![agg(Count, 1, &s)])
+    let inner = node(scan, spec(&s, vec![0], vec![agg(&Count, 1, &s)]));
+    let mid = spec(&s, vec![0], vec![agg(&Count, 1, &s)])
         .output_schema()
         .unwrap();
     let plan = node(
@@ -307,7 +307,7 @@ async fn q13_customer_distribution() {
 #[tokio::test]
 async fn q16_distinct_supplier_count() {
     let (s, scan) = input("q16_input");
-    let sp = spec(&s, vec![0, 1, 2], vec![agg(Count, 3, &s)]);
+    let sp = spec(&s, vec![0, 1, 2], vec![agg(&Count, 3, &s)]);
     let plan = distinct_plan(scan, sp, &[true]).unwrap();
     assert_eq!(
         rows(&run(plan, 3, 1 << 30).await.0),
@@ -320,7 +320,7 @@ async fn q16_distinct_supplier_count() {
 #[tokio::test]
 async fn q18_large_volume_customers() {
     let (s, scan) = input("q18_input");
-    let plan = node(scan, spec(&s, vec![0, 1, 2, 3, 4], vec![agg(Sum, 5, &s)]));
+    let plan = node(scan, spec(&s, vec![0, 1, 2, 3, 4], vec![agg(&Sum, 5, &s)]));
     assert_eq!(
         rows(&run(plan, 2, 1 << 30).await.0),
         expected("q18_expected")

@@ -248,6 +248,7 @@ impl Resolver<'_> {
                     )
                 })
                 .collect(),
+            within_group: Vec::new(),
             arg_names: Vec::new(),
             distinct: false,
             filter: None,
@@ -260,6 +261,7 @@ impl Resolver<'_> {
             arg_names: Vec::new(),
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         }))
         .with_origin(p.origin);
         let b = self.bind(&Arc::new(predicate), &filter_cx)?;

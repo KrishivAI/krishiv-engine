@@ -378,6 +378,7 @@ fn count_call(id: FunctionId, args: Vec<Arc<Expr>>) -> Arc<Expr> {
             args,
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
             data_type: DataType::Long,
             nullable: false,
             deterministic: true,

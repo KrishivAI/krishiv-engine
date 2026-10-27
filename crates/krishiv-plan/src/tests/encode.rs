@@ -235,6 +235,7 @@ fn resolved_call(name: &str, id: u32, kind: FunctionKind, arg: &str) -> LogicalP
         args: vec![Arc::new(Expr::column([arg]))],
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
         data_type: DataType::String,
         nullable: true,
         deterministic: true,
@@ -344,8 +345,8 @@ fn keys_are_stable() {
         ))
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
-    assert_eq!(encoding.len(), 493, "{encoding:?}");
-    assert_eq!(hash.to_string(), "eaeeb9e9da010966fde69769c8d36f0f");
+    assert_eq!(encoding.len(), 509, "{encoding:?}");
+    assert_eq!(hash.to_string(), "18fb46a96faba73f2df9c154e49a4f89");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -357,7 +358,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "abc19dd01ab19870f695f43bf481168f");
+    assert_eq!(hash.to_string(), "8b398126fa73d3a01fe43b57c60d0590");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in
@@ -406,6 +407,7 @@ fn shared_expressions_are_encoded_once() {
             args: vec![Arc::clone(&e), e],
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         })))
     });
     let plan = Plan::try_new(LogicalPlan::table(["t"]).filter(e)).unwrap();
@@ -433,6 +435,7 @@ fn qualifier_and_arg_names_enter_the_key() {
                     arg_names: names.into_iter().map(|n| n.map(str::to_owned)).collect(),
                     distinct: false,
                     filter: None,
+                    within_group: Vec::new(),
                 },
             ))]),
         )
