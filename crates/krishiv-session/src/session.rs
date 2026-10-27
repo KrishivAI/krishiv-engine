@@ -224,6 +224,9 @@ impl SessionBuilder {
     /// Configuration errors; `INTERNAL_ERROR` if the executor's runtimes
     /// cannot start.
     pub fn build(self) -> Result<Session, KrishivError> {
+        // Diagnostics first: installs the tokio-console subscriber when the
+        // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
+        krishiv_exec::maybe_init_tokio_console();
         let (config, _) = Config::from_pairs(self.pairs)?;
         let executor: Arc<dyn Executor> = match self.executor {
             Some(e) => e,

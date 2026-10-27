@@ -378,6 +378,27 @@ fn budgets_run_for_manifest_changes_or_full_and_never_with_fast() {
 }
 
 #[test]
+fn tokio_console_check_runs_on_manifest_changes_only() {
+    let manifest = make_plan(&detect(&["crates/exec/Cargo.toml"]), &opts(&[]), true);
+    let Action::Run(cmds) = &step(&manifest, "tokio-console").action else {
+        panic!("tokio-console should run")
+    };
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0].args, ["tokio-console-check"]);
+    assert_eq!(cmds[0].program, "/x/xtask");
+    let code = make_plan(&detect(&["crates/exec/src/lib.rs"]), &opts(&[]), true);
+    assert_eq!(
+        skip_reason(&code, "tokio-console"),
+        Some("no Cargo.toml/Cargo.lock change")
+    );
+    let docs = make_plan(&detect(&["docs/a.md"]), &opts(&[]), true);
+    assert_eq!(
+        skip_reason(&docs, "tokio-console"),
+        Some("no Cargo.toml/Cargo.lock change")
+    );
+}
+
+#[test]
 fn fast_skips_both_coverage_gates() {
     let ch = detect(&["crates/exec/src/lib.rs", "bench/src/krishiv_bench/a.py"]);
     let steps = make_plan(&ch, &opts(&["--fast"]), true);
