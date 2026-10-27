@@ -3,8 +3,9 @@
 //! strings under three session time zones
 //! (`tests/fixtures/spark-4.2.0/cast-timestamp-differential.json`, generated
 //! by `tests/scripts/gen_cast_goldens.py`). Strings that name a time zone
-//! region need the tz database, which kernels do not carry: they must fail
-//! with `KRISHIV_UNSUPPORTED_FEATURE`, never differ.
+//! region resolve against the bundled database and compare as values; an
+//! unresolvable one is malformed input (`CAST_INVALID_INPUT`, NULL without
+//! ANSI).
 #![forbid(unsafe_code)]
 
 use arrow_array::cast::AsArray;
@@ -111,8 +112,10 @@ fn string_to_timestamp_matches_spark() -> R {
         failures.len(),
         &failures[..failures.len().min(30)]
     );
+    // Region strings resolve against the bundled database and compare as
+    // values above; none may need counting out.
     assert!(
-        checked > 5_000 && regions > 0,
+        checked > 5_000 && regions == 0,
         "{checked} checked, {regions} regions"
     );
     Ok(())

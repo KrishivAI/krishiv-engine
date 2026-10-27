@@ -37,22 +37,51 @@ pub(super) fn compile(
     let out = f.data_type.to_arrow();
     // Only an offset zone is known without the tz database (P2-T021b).
     let zoned = |t: &ArrowType| matches!(t, ArrowType::Timestamp(_, Some(_)));
+    // Functions whose result reads the session zone as an instant: with a
+    // region session zone there are no rules to read it with. (`to_date`
+    // over strings and dates, `to_timestamp_ntz` and `date_format` over
+    // dates, strings and zone-less values round-trip through the zone, so
+    // they run on the UTC fallback below.)
+    let reads_zone = matches!(
+        name,
+        "to_timestamp"
+            | "to_timestamp_ltz"
+            | "unix_timestamp"
+            | "to_unix_timestamp"
+            | "from_unixtime"
+            | "current_timezone"
+            | "current_date"
+            | "curdate"
+            | "localtimestamp"
+    );
     let zone = match input.env.zone {
         Some(offset) => FixedOffset(offset),
-        None if zoned(&out)
-            || bind_args.iter().any(|a| zoned(&a.data_type()))
-            || matches!(name, "current_date" | "curdate" | "localtimestamp") =>
-        {
+        None if zoned(&out) || bind_args.iter().any(|a| zoned(&a.data_type())) || reads_zone => {
             return Err(unsupported(
                 "functions of timestamps in a session time zone other than a fixed offset",
             ));
         }
         None => FixedOffset(0),
     };
+    // The zone id Spark normalises the offset to (`UTC`, `+05:30`); a
+    // region session zone reaches here only for functions that do not read
+    // it, which see the UTC fallback.
+    let zone_name: Arc<str> = match input.env.zone {
+        None | Some(0) => Arc::from("UTC"),
+        Some(offset) => {
+            let (sign, abs) = if offset < 0 {
+                ("-", offset.unsigned_abs())
+            } else {
+                ("+", offset.unsigned_abs())
+            };
+            Arc::from(format!("{sign}{:02}:{:02}", abs / 3600, abs / 60 % 60))
+        }
+    };
     let opts = BindOptions::new()
         .with_ansi(input.env.ansi)
         .with_kernel(input.env.kernels)
         .with_time_zone(Arc::new(zone))
+        .with_time_zone_name(zone_name)
         .with_query_start(input.env.query_start_micros)
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));

@@ -116,6 +116,12 @@ pub struct BindOptions {
     pub kernel: KernelCtx,
     /// The session time zone (`spark.sql.session.timeZone`), resolved.
     pub time_zone: Arc<dyn TimeZoneRules>,
+    /// The session time zone id as Spark normalises it (`UTC`, `+05:30`):
+    /// what `VV`/`z` patterns print and `current_timezone` returns. Always
+    /// consistent with [`Self::time_zone`]; a region session zone cannot
+    /// cross the plan boundary yet, so functions that need one fail to
+    /// bind instead.
+    pub time_zone_name: Arc<str>,
     /// The query's start instant, in microseconds since the epoch (UTC):
     /// `current_date` and `current_timestamp` read it, so one query sees one
     /// clock.
@@ -141,6 +147,7 @@ impl BindOptions {
             ansi: true,
             kernel: KernelCtx::new(),
             time_zone: Arc::new(FixedOffset(0)),
+            time_zone_name: Arc::from("UTC"),
             query_start_micros: 0,
             decimal_precision_loss: true,
             user: Arc::from("unknown"),
@@ -166,6 +173,13 @@ impl BindOptions {
     #[must_use]
     pub fn with_time_zone(mut self, zone: Arc<dyn TimeZoneRules>) -> Self {
         self.time_zone = zone;
+        self
+    }
+
+    /// With this session time zone id (see [`Self::time_zone_name`]).
+    #[must_use]
+    pub fn with_time_zone_name(mut self, name: impl Into<Arc<str>>) -> Self {
+        self.time_zone_name = name.into();
         self
     }
 

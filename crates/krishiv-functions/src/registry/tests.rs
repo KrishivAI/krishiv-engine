@@ -301,6 +301,115 @@ fn datetime_signatures() {
 }
 
 #[test]
+fn pattern_signatures() {
+    // Pinned against Spark 4.2 runs (the function matrix): the result
+    // types and nullability of the pattern-driven datetime functions.
+    let maybe = |t: DataType| ArgType::new(t, true);
+    let inputs = |name: &str, args: &[ArgType]| {
+        def(name)
+            .inputs
+            .expected(&CallTypes::new(args, &[]))
+            .unwrap()
+    };
+    let string = || ty(DataType::String);
+    let date = || ty(DataType::Date);
+    let collection = || {
+        InputType::OneOf(vec![
+            DataType::String,
+            DataType::Date,
+            DataType::Timestamp,
+            DataType::TimestampNtz,
+        ])
+    };
+    // `date_format` reads a date-like value and a pattern.
+    assert_eq!(
+        inputs("date_format", &[string(), string()]),
+        [
+            InputType::StrictOneOf(vec![
+                DataType::String,
+                DataType::Date,
+                DataType::Timestamp,
+                DataType::TimestampNtz,
+            ]),
+            InputType::Exact(DataType::String)
+        ]
+    );
+    assert_eq!(
+        result("date_format", &[string(), string()], &[]).unwrap(),
+        maybe(DataType::String)
+    );
+    assert_eq!(
+        result("date_format", &[date(), string()], &[]).unwrap(),
+        ty(DataType::String)
+    );
+    // `to_date`: one argument casts (nullable where the cast may yield
+    // NULL); two are `failOnError`-nullable.
+    assert_eq!(inputs("to_date", &[string()]), [collection()]);
+    assert_eq!(
+        result("to_date", &[string()], &[]).unwrap(),
+        maybe(DataType::Date)
+    );
+    assert_eq!(
+        result("to_date", &[date()], &[]).unwrap(),
+        ty(DataType::Date)
+    );
+    assert_eq!(
+        result("to_date", &[string(), string()], &[]).unwrap(),
+        ty(DataType::Date)
+    );
+    assert_eq!(
+        result("try_to_date", &[date()], &[]).unwrap(),
+        ty(DataType::Date)
+    );
+    assert_eq!(
+        result("try_to_date", &[string()], &[]).unwrap(),
+        maybe(DataType::Date)
+    );
+    // `to_timestamp`: numerics stay numeric (seconds since the epoch);
+    // anything else takes the collection.
+    assert_eq!(
+        inputs("to_timestamp", &[ty(DataType::Long)]),
+        [InputType::Numeric { intervals: false }]
+    );
+    assert_eq!(inputs("to_timestamp", &[string()]), [collection()]);
+    assert_eq!(
+        result("to_timestamp", &[ty(DataType::Long)], &[]).unwrap(),
+        ty(DataType::Timestamp)
+    );
+    assert_eq!(
+        result("to_timestamp", &[string()], &[]).unwrap(),
+        maybe(DataType::Timestamp)
+    );
+    assert_eq!(
+        result("try_to_timestamp", &[ty(DataType::Long)], &[]).unwrap(),
+        ty(DataType::Timestamp)
+    );
+    // `unix_timestamp` takes no numbers and no numeric patterns (the
+    // matrix pins the `DATATYPE_MISMATCH` against Spark 4.2 runs).
+    assert_eq!(
+        inputs("unix_timestamp", &[string(), string()]),
+        [
+            InputType::StrictOneOf(vec![
+                DataType::String,
+                DataType::Date,
+                DataType::Timestamp,
+                DataType::TimestampNtz,
+            ]),
+            InputType::Strict(DataType::String)
+        ]
+    );
+    // `from_unixtime` reads seconds; `current_timezone` reads nothing.
+    assert_eq!(
+        result("from_unixtime", &[ty(DataType::Long)], &[]).unwrap(),
+        maybe(DataType::String)
+    );
+    assert_eq!(
+        result("current_timezone", &[], &[]).unwrap(),
+        ty(DataType::String)
+    );
+}
+
+#[test]
 fn calendar_signatures() {
     let date = ty(DataType::Date);
     let maybe = |t: DataType| ArgType::new(t, true);

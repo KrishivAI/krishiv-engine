@@ -208,8 +208,8 @@ fn failures(root: &Path) -> (BTreeMap<(String, String), String>, usize) {
 fn type_coercion_goldens_analyze_as_spark_does() {
     let root = krishiv_testkit::tests_dir();
     let (failures, queries) = failures(&root);
-    // Of 2,858 query statements, 2,651 resolve as Spark resolves them.
-    assert_eq!((queries, queries - failures.len()), (2858, 2651));
+    // Of 2,858 query statements, 2,659 resolve as Spark resolves them.
+    assert_eq!((queries, queries - failures.len()), (2858, 2659));
     let dir = root.join(MANIFEST_DIR);
     if std::env::var_os("KRISHIV_UPDATE_MANIFEST").is_some() {
         let mut by_file: BTreeMap<&str, Vec<(&String, &String)>> = BTreeMap::new();

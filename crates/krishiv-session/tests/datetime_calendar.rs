@@ -290,21 +290,21 @@ fn matrix_cells_match_spark() {
     // `unsupported` (or any new skip) changes these counts and fails here
     // instead of passing silently.
     assert_eq!(tally.not_run, expected_not_run(), "{report}");
-    assert_eq!(tally.normalized_cast_invalid_input, 96, "{report}");
+    assert_eq!(tally.normalized_cast_invalid_input, 108, "{report}");
     assert_eq!(tally.normalized_months_between, 48, "{report}");
 }
 
-/// The exact cells the engine does not run: region time zones (no tz
-/// database), `TIME` and `INTERVAL` literals, nested values, invalid UTF-8
-/// bytes, the rewritten `convert_timezone` analysis errors, session-conf
-/// overrides and cases with no recorded rows.
+/// The exact cells the engine does not run: `TIME` and `INTERVAL`
+/// literals, nested values, invalid UTF-8 bytes, the rewritten
+/// `convert_timezone` analysis errors, session-conf overrides and cases
+/// with no recorded rows.
 fn expected_not_run() -> BTreeMap<String, usize> {
     BTreeMap::from([
         (
             "analysis errors of the rewritten convert_timezone".to_owned(),
             28,
         ),
-        ("cast of invalid UTF-8 bytes to a string".to_owned(), 23),
+        ("cast of invalid UTF-8 bytes to a string".to_owned(), 27),
         ("no recorded rows".to_owned(), 62),
         ("session conf override".to_owned(), 4),
         ("unsupported: CAST from STRING to BOOLEAN".to_owned(), 4),
@@ -312,21 +312,6 @@ fn expected_not_run() -> BTreeMap<String, usize> {
         ("unsupported: TIME literals".to_owned(), 6),
         ("unsupported: function DATE".to_owned(), 4),
         ("unsupported: function map".to_owned(), 74),
-        (
-            "unsupported: the function convert_timezone (it has no binding for these arguments: a region time zone)"
-                .to_owned(),
-            68,
-        ),
-        (
-            "unsupported: the function from_utc_timestamp (it has no binding for these arguments: a region time zone)"
-                .to_owned(),
-            24,
-        ),
-        (
-            "unsupported: the function to_utc_timestamp (it has no binding for these arguments: a region time zone)"
-                .to_owned(),
-            24,
-        ),
         ("unsupported: the time data type (\"TIME\")".to_owned(), 6),
     ])
 }

@@ -1,0 +1,78 @@
+{
+  "entries": [
+    {
+      "id": "to_timestamp#232260f3c5a5/ansi_on",
+      "reason": "SELECT to_timestamp(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#232260f3c5a5/ansi_off",
+      "reason": "SELECT to_timestamp(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#33c7fd56f566/ansi_on",
+      "reason": "SELECT to_timestamp(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp#33c7fd56f566/ansi_off",
+      "reason": "SELECT to_timestamp(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp#3a7f4c95956e/ansi_on",
+      "reason": "SELECT to_timestamp(map('a', 1), 'yyyy-MM-dd') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp#3a7f4c95956e/ansi_off",
+      "reason": "SELECT to_timestamp(map('a', 1), 'yyyy-MM-dd') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp#4c3470d9ce82/ansi_on",
+      "reason": "SELECT to_timestamp(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#4c3470d9ce82/ansi_off",
+      "reason": "SELECT to_timestamp(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#5b5f2f686363/ansi_on",
+      "reason": "SELECT to_timestamp('2016-12-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#5b5f2f686363/ansi_off",
+      "reason": "SELECT to_timestamp('2016-12-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#6eee1eae81fd/ansi_on",
+      "reason": "SELECT to_timestamp('2016-12-31', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp#6eee1eae81fd/ansi_off",
+      "reason": "SELECT to_timestamp('2016-12-31', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp#8bf39ba50d63/ansi_on",
+      "reason": "SELECT to_timestamp(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#8bf39ba50d63/ansi_off",
+      "reason": "SELECT to_timestamp(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#a0bc07609e8b/ansi_on",
+      "reason": "SELECT to_timestamp(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#a0bc07609e8b/ansi_off",
+      "reason": "SELECT to_timestamp(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#e594b19a9c17/ansi_on",
+      "reason": "SELECT to_timestamp('2016-12-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp#e594b19a9c17/ansi_off",
+      "reason": "SELECT to_timestamp('2016-12-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_timestamp"
+}

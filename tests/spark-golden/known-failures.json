@@ -90,6 +90,11 @@
       "owner": "config map follow-up of P2-T004",
       "summary": "legacy behaviour flags the session ignores instead of rejecting (ctePrecedencePolicy, consecutiveStringLiterals, allowStarWithSingleTableIdentifierInCount, allowParameterlessCount)"
     },
+    "legacy-time-parser": {
+      "kind": "unsupported",
+      "summary": "the SimpleDateFormat legacy time parser (spark.sql.legacy.timeParserPolicy=LEGACY)",
+      "task": "P2-T025"
+    },
     "nested-interval-types": {
       "kind": "unsupported",
       "summary": "nested types, intervals, CHAR/VARCHAR, struct constructors, subscripts and field access",
@@ -161,6 +166,10 @@
     {
       "category": "legacy-configs",
       "file": "^cte-(legacy|nonlegacy)$"
+    },
+    {
+      "category": "legacy-time-parser",
+      "file": "^datetime-(parsing|formatting)-legacy$|^datetime-legacy$"
     },
     {
       "category": "legacy-configs",

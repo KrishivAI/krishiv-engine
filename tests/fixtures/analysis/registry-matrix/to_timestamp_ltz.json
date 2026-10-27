@@ -1,0 +1,78 @@
+{
+  "entries": [
+    {
+      "id": "to_timestamp_ltz#004ec2cf1558/ansi_on",
+      "reason": "SELECT to_timestamp_ltz(map('a', 1), 'yyyy-MM-dd') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp_ltz#004ec2cf1558/ansi_off",
+      "reason": "SELECT to_timestamp_ltz(map('a', 1), 'yyyy-MM-dd') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp_ltz#2b611c187462/ansi_on",
+      "reason": "SELECT to_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#2b611c187462/ansi_off",
+      "reason": "SELECT to_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#8e899e70d2f5/ansi_on",
+      "reason": "SELECT to_timestamp_ltz('2016-12-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#8e899e70d2f5/ansi_off",
+      "reason": "SELECT to_timestamp_ltz('2016-12-31', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#94e1be10e3e4/ansi_on",
+      "reason": "SELECT to_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#94e1be10e3e4/ansi_off",
+      "reason": "SELECT to_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#9d191c9604fe/ansi_on",
+      "reason": "SELECT to_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#9d191c9604fe/ansi_off",
+      "reason": "SELECT to_timestamp_ltz(INTERVAL '1-2' YEAR TO MONTH, 'yyyy-MM-dd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#b189156a98a7/ansi_on",
+      "reason": "SELECT to_timestamp_ltz(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp_ltz#b189156a98a7/ansi_off",
+      "reason": "SELECT to_timestamp_ltz(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp_ltz#c1e2defc604d/ansi_on",
+      "reason": "SELECT to_timestamp_ltz('2016-12-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#c1e2defc604d/ansi_off",
+      "reason": "SELECT to_timestamp_ltz('2016-12-31', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#de18266bc191/ansi_on",
+      "reason": "SELECT to_timestamp_ltz('2016-12-31', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp_ltz#de18266bc191/ansi_off",
+      "reason": "SELECT to_timestamp_ltz('2016-12-31', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "to_timestamp_ltz#efba7560a89f/ansi_on",
+      "reason": "SELECT to_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_timestamp_ltz#efba7560a89f/ansi_off",
+      "reason": "SELECT to_timestamp_ltz(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_timestamp_ltz"
+}

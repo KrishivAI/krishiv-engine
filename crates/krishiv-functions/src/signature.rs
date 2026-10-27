@@ -296,6 +296,12 @@ pub enum InputType {
     /// type is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (Spark's `if`
     /// checks its condition's type instead of casting it).
     Strict(DataType),
+    /// One of these types, as it is: an untyped `NULL` becomes the first,
+    /// any other type is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (no
+    /// implicit casts, as Spark's `ExpectsInputTypes` types a
+    /// `TypeCollection`: `unix_timestamp` takes a string, date or
+    /// timestamp, never a number).
+    StrictOneOf(Vec<DataType>),
     /// Any numeric type; a string or untyped `NULL` becomes `DOUBLE`.
     /// `intervals`: Spark also takes ANSI intervals (it names them in the
     /// error; Krishiv has no interval values yet).
@@ -327,7 +333,7 @@ impl InputType {
             {
                 "\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\"".to_owned()
             }
-            Self::OneOf(types) => {
+            Self::OneOf(types) | Self::StrictOneOf(types) => {
                 let names: Vec<String> = types.iter().map(|t| format!("\"{}\"", t.sql())).collect();
                 format!("({})", names.join(" or "))
             }

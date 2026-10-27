@@ -1023,6 +1023,11 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
             }
             implicit(from, &InputType::Exact(t.clone()))
         }),
+        // A member of the strict collection stays, as does an untyped
+        // `NULL` (which becomes the first member); anything else is
+        // refused without implicit casts.
+        (Some(f), InputType::StrictOneOf(types)) if types.contains(f) => Some(Some(f.clone())),
+        (None, InputType::StrictOneOf(types)) => types.first().map(|t| Some(t.clone())),
         (None, InputType::Exact(t) | InputType::Strict(t)) => Some(Some(t.clone())),
         (Some(f), InputType::Strict(t)) => (f == t).then(|| Some(t.clone())),
         (Some(f), InputType::Exact(t)) => {
