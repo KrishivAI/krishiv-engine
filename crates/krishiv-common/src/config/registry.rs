@@ -44,6 +44,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
     &IO_COALESCE_BYTES,
+    &IO_COALESCE_WASTE_BYTES,
+    &IO_COALESCE_WASTE_DIVISOR,
     &IO_MAX_REQUEST_BYTES,
     &IO_PREFETCH_BYTES,
     &IO_LATE_MATERIALIZATION,
@@ -97,11 +99,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
+    ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    (
+        "krishiv.io.coalesceWasteDivisor",
+        &IO_COALESCE_WASTE_DIVISOR,
+    ),
     (
         "krishiv.memory.spillWaitTimeout",
         &MEMORY_SPILL_WAIT_TIMEOUT,
@@ -650,7 +657,35 @@ pub static IO_COALESCE_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.io.coalesceBytes",
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(MIB)),
-    doc: "Byte ranges of one file closer than this are fetched with one request.",
+    doc: "Byte ranges of one file closer than this are fetched with one request, as long as \
+          the request reads few enough bytes outside the ranges \
+          (`krishiv.io.coalesceWasteBytes`, `krishiv.io.coalesceWasteDivisor`).",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Gap bytes any coalesced request may read.
+pub static IO_COALESCE_WASTE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.coalesceWasteBytes",
+    value_type: ValueType::Size,
+    default: None,
+    doc: "Bytes outside the requested ranges that any coalesced read may fetch (besides \
+          `krishiv.io.coalesceWasteDivisor`'s share). A read's whole span is reserved while it is \
+          in flight, so this trades bytes read for fewer requests. When unset: 64 KiB for local \
+          files, 1 MiB for object stores and HTTP, where a request costs latency.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// A coalesced request's share of gap bytes.
+pub static IO_COALESCE_WASTE_DIVISOR: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.coalesceWasteDivisor",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(16)),
+    doc: "A coalesced read may fetch up to 1/this of its bytes outside the requested ranges \
+          (or `krishiv.io.coalesceWasteBytes`, whichever is larger).",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
