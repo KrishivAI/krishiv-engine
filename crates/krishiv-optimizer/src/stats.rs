@@ -19,8 +19,71 @@ use krishiv_plan::{
     PlanNode, ResolvedExpr, Scan,
 };
 
-use crate::expr::{builtin, output_of, strip_alias};
+use crate::expr::{builtin, output_of, strip_alias, substitute};
 use crate::limit::limit_value;
+
+/// Whether `e` reads a common-subexpression column (an alias named `cse_*`,
+/// see `crate::cse`).
+pub(crate) fn reads_cse(e: &Expr) -> bool {
+    let mut found = false;
+    let mut stack = vec![e];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(x) = stack.pop() {
+        if !seen.insert(std::ptr::from_ref(x)) {
+            continue;
+        }
+        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
+            && c.name.starts_with("cse_")
+        {
+            found = true;
+            break;
+        }
+        x.for_each_child(&mut |c| stack.push(c));
+    }
+    found
+}
+
+/// The definitions of the common-subexpression columns computed anywhere
+/// below `p` (subquery plans excluded), by attribute id. Each holds exactly
+/// its definition's values, so estimates read the definition instead of
+/// the column: the same rows are estimated before and after the
+/// common-subexpression pass runs.
+pub(crate) fn cse_definitions(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
+    let mut defs = HashMap::new();
+    let mut plans = vec![p];
+    let mut seen_plans = std::collections::HashSet::new();
+    while let Some(q) = plans.pop() {
+        if !seen_plans.insert(std::ptr::from_ref(q)) {
+            continue;
+        }
+        let mut stack: Vec<&Expr> = Vec::new();
+        q.for_each_expr(&mut |e| stack.push(e));
+        let mut seen = std::collections::HashSet::new();
+        while let Some(e) = stack.pop() {
+            if !seen.insert(std::ptr::from_ref(e)) {
+                continue;
+            }
+            if let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &e.node
+                && output.name.starts_with("cse_")
+            {
+                defs.insert(output.id, Arc::clone(expr));
+            }
+            e.for_each_child(&mut |c| stack.push(c));
+        }
+        q.for_each_child(&mut |c| plans.push(c));
+    }
+    defs
+}
+
+/// `e` with every common-subexpression column replaced by its definition
+/// (see [`cse_definitions`]); `e` itself when there is nothing to replace.
+/// Definitions hold no `cse_*` references themselves, so one pass suffices.
+pub(crate) fn resolve_cse(e: &Arc<Expr>, defs: &HashMap<AttrId, Arc<Expr>>) -> Arc<Expr> {
+    if defs.is_empty() || !reads_cse(e) {
+        return Arc::clone(e);
+    }
+    substitute(e, defs)
+}
 
 /// The rows of a table without statistics.
 pub const DEFAULT_ROWS: f64 = 1_000_000.0;
@@ -209,7 +272,14 @@ impl<'a> Estimator<'a> {
             PlanNode::Scan(scan) => self.scan(scan),
             PlanNode::Filter { input, predicate } => {
                 let est = Est::clone(&self.plan(input));
-                let rows = est.rows * selectivity(predicate, &est);
+                // Estimates see through common-subexpression projections:
+                // the column holds its definition's values.
+                let rows = if reads_cse(predicate) {
+                    let defs = cse_definitions(input);
+                    est.rows * selectivity(&resolve_cse(predicate, &defs), &est)
+                } else {
+                    est.rows * selectivity(predicate, &est)
+                };
                 est.with_rows(rows)
             }
             PlanNode::Project { input, exprs } => {
@@ -246,6 +316,10 @@ impl<'a> Estimator<'a> {
                 both.cols
                     .extend(r.cols.iter().map(|(k, v)| (*k, v.clone())));
                 let inner = match condition {
+                    JoinCondition::On(c) if reads_cse(c) => {
+                        let defs = cse_definitions(p);
+                        both.rows * selectivity(&resolve_cse(c, &defs), &both)
+                    }
                     JoinCondition::On(c) => both.rows * selectivity(c, &both),
                     _ => both.rows,
                 };

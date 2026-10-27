@@ -185,20 +185,29 @@ pub(crate) fn disjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     out
 }
 
+/// A resolved scalar call of a builtin, without a filter.
+pub(crate) fn call_builtin(
+    op: Builtin,
+    args: Vec<Arc<Expr>>,
+    data_type: DataType,
+) -> ResolvedFunction {
+    let nullable = args.iter().any(|a| nullable(a));
+    ResolvedFunction {
+        id: FunctionId::Builtin(op),
+        kind: FunctionKind::Scalar,
+        args,
+        distinct: false,
+        filter: None,
+        data_type,
+        nullable,
+        deterministic: true,
+    }
+}
+
 /// A resolved scalar call of a builtin.
 pub(crate) fn call(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType) -> Arc<Expr> {
-    let nullable = args.iter().any(|a| nullable(a));
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-        ResolvedFunction {
-            id: FunctionId::Builtin(op),
-            kind: FunctionKind::Scalar,
-            args,
-            distinct: false,
-            filter: None,
-            data_type,
-            nullable,
-            deterministic: true,
-        },
+        call_builtin(op, args, data_type),
     ))))
 }
 

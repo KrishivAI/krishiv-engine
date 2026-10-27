@@ -1,0 +1,31 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+WithCte [customer_total_return]
+:- Aggregate [cr_returning_customer_sk#7, ca_state#63], [cr_returning_customer_sk#7 AS ctr_customer_sk#68, ca_state#63 AS ctr_state#69, sum(cr_return_amt_inc_tax#20) AS ctr_total_return#70]
+:  +- Project [ca_state#63, cr_returning_customer_sk#7, cr_return_amt_inc_tax#20]
+:     +- Join Inner, (cr_returning_addr_sk#10 == ca_address_sk#55)
+:        :- Scan spark_catalog.default.customer_address [ca_address_sk#55, ca_state#63]
+:        +- Project [cr_returning_customer_sk#7, cr_returning_addr_sk#10, cr_return_amt_inc_tax#20]
+:           +- Join Inner, (cr_returned_date_sk#0 == d_date_sk#27)
+:              :- Scan spark_catalog.default.catalog_returns [cr_returned_date_sk#0, cr_returning_customer_sk#7, cr_returning_addr_sk#10, cr_return_amt_inc_tax#20]
+:              +- Project [d_date_sk#27]
+:                 +- Filter (d_year#33 == 2000)
+:                    +- Scan spark_catalog.default.date_dim [d_date_sk#27, d_year#33]
++- Limit 100
+   +- Sort [c_customer_id#88 ASC NULLS FIRST, c_salutation#94 ASC NULLS FIRST, c_first_name#95 ASC NULLS FIRST, c_last_name#96 ASC NULLS FIRST, ca_street_number#76 ASC NULLS FIRST, ca_street_name#77 ASC NULLS FIRST, ca_street_type#78 ASC NULLS FIRST, ca_suite_number#79 ASC NULLS FIRST, ca_city#80 ASC NULLS FIRST, ca_county#81 ASC NULLS FIRST, ca_state#82 ASC NULLS FIRST, ca_zip#83 ASC NULLS FIRST, ca_country#84 ASC NULLS FIRST, ca_gmt_offset#85 ASC NULLS FIRST, ca_location_type#86 ASC NULLS FIRST, ctr_total_return#73 ASC NULLS FIRST], true
+      +- Project [c_customer_id#88, c_salutation#94, c_first_name#95, c_last_name#96, ca_street_number#76, ca_street_name#77, ca_street_type#78, ca_suite_number#79, ca_city#80, ca_county#81, ca_state#82, ca_zip#83, ca_country#84, ca_gmt_offset#85, ca_location_type#86, ctr_total_return#73]
+         +- Join Inner, ((ctr_state#72 == ctr_state#106) and (CAST(ctr_total_return#73 AS DECIMAL(24,7)) > (avg(ctr_total_return) * 1.2)#108))
+            :- Aggregate [ctr_state#106], [(avg(ctr_total_return#107) * 1.2) AS (avg(ctr_total_return) * 1.2)#108, ctr_state#106]
+            :  +- Project [ctr_state#106, ctr_total_return#107]
+            :     +- Shift +34
+            :        +- CteRef customer_total_return [ctr_customer_sk#71, ctr_state#72, ctr_total_return#73] (shared #1)
+            +- Project [ctr_state#72, ctr_total_return#73, c_customer_id#88, c_salutation#94, c_first_name#95, c_last_name#96, ca_street_number#76, ca_street_name#77, ca_street_type#78, ca_suite_number#79, ca_city#80, ca_county#81, ca_state#82, ca_zip#83, ca_country#84, ca_gmt_offset#85, ca_location_type#86]
+               +- Join Inner, (ctr_customer_sk#71 == c_customer_sk#87)
+                  :- Shared #1, printed above
+                  +- Project [c_customer_sk#87, c_customer_id#88, c_salutation#94, c_first_name#95, c_last_name#96, ca_street_number#76, ca_street_name#77, ca_street_type#78, ca_suite_number#79, ca_city#80, ca_county#81, ca_state#82, ca_zip#83, ca_country#84, ca_gmt_offset#85, ca_location_type#86]
+                     +- Join Inner, (ca_address_sk#74 == c_current_addr_sk#91)
+                        :- Scan spark_catalog.default.customer [c_customer_sk#87, c_customer_id#88, c_current_addr_sk#91, c_salutation#94, c_first_name#95, c_last_name#96]
+                        +- Filter (ca_state#82 == 'GA')
+                           +- Scan spark_catalog.default.customer_address [ca_address_sk#74, ca_street_number#76, ca_street_name#77, ca_street_type#78, ca_suite_number#79, ca_city#80, ca_county#81, ca_state#82, ca_zip#83, ca_country#84, ca_gmt_offset#85, ca_location_type#86]

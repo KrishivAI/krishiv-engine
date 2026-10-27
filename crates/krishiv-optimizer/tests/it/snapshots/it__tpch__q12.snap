@@ -3,8 +3,8 @@ source: crates/krishiv-optimizer/tests/it/tpch.rs
 expression: optimized.root().to_string()
 ---
 Sort [l_shipmode#23 ASC NULLS FIRST], true
-+- Aggregate [l_shipmode#23], [l_shipmode#23, sum(CASE WHEN ((o_orderpriority#5 == '1-URGENT') or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END) AS high_line_count#25, sum(CASE WHEN ((NOT (o_orderpriority#5 == '1-URGENT')) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END) AS low_line_count#26]
-   +- Project [o_orderpriority#5, l_shipmode#23]
++- Aggregate [l_shipmode#23], [l_shipmode#23, sum(CASE WHEN (cse_27#27 or (o_orderpriority#5 == '2-HIGH')) THEN 1 ELSE 0 END) AS high_line_count#25, sum(CASE WHEN ((NOT cse_27#27) and (NOT (o_orderpriority#5 == '2-HIGH'))) THEN 1 ELSE 0 END) AS low_line_count#26]
+   +- Project [o_orderpriority#5, l_shipmode#23, (o_orderpriority#5 == '1-URGENT') AS cse_27#27]
       +- Join Inner, (o_orderkey#0 == l_orderkey#9)
          :- Scan spark_catalog.default.orders [o_orderkey#0, o_orderpriority#5]
          +- Project [l_orderkey#9, l_shipmode#23]

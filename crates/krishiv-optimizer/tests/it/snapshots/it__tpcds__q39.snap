@@ -1,0 +1,31 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+WithCte [inv]
+:- Project [w_warehouse_name#28, w_warehouse_sk#26, i_item_sk#4, d_moy#48, stdev#68, mean#69, CASE WHEN (mean#69 == 0.0D) THEN CAST(NULL AS DOUBLE) ELSE (stdev#68 / mean#69) END AS cov#70]
+:  +- Filter (CASE WHEN (mean#69 == 0.0D) THEN 0.0D ELSE (stdev#68 / mean#69) END > 1.0D)
+:     +- Aggregate [w_warehouse_name#28, w_warehouse_sk#26, i_item_sk#4, d_moy#48], [w_warehouse_name#28, w_warehouse_sk#26, i_item_sk#4, d_moy#48, (stddev_samp(CAST(inv_quantity_on_hand#3 AS DOUBLE)) * 1.0D) AS stdev#68, avg(inv_quantity_on_hand#3) AS mean#69]
+:        +- Project [i_item_sk#4, w_warehouse_sk#26, w_warehouse_name#28, inv_quantity_on_hand#3, d_moy#48]
+:           +- Join Inner, (inv_item_sk#1 == i_item_sk#4)
+:              :- Scan spark_catalog.default.item [i_item_sk#4]
+:              +- Project [w_warehouse_sk#26, w_warehouse_name#28, inv_item_sk#1, inv_quantity_on_hand#3, d_moy#48]
+:                 +- Join Inner, (inv_warehouse_sk#2 == w_warehouse_sk#26)
+:                    :- Scan spark_catalog.default.warehouse [w_warehouse_sk#26, w_warehouse_name#28]
+:                    +- Project [inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3, d_moy#48]
+:                       +- Join Inner, (inv_date_sk#0 == d_date_sk#40)
+:                          :- Scan spark_catalog.default.inventory [inv_date_sk#0, inv_item_sk#1, inv_warehouse_sk#2, inv_quantity_on_hand#3]
+:                          +- Project [d_date_sk#40, d_moy#48]
+:                             +- Filter (d_year#46 == 2001)
+:                                +- Scan spark_catalog.default.date_dim [d_date_sk#40, d_year#46, d_moy#48]
++- Project [wsk1#85, isk1#86, dmoy1#87, mean1#88, cov1#89, w_warehouse_sk#79, i_item_sk#80, d_moy#81, mean#83, cov#84]
+   +- Sort [w_warehouse_sk#72 ASC NULLS FIRST, i_item_sk#73 ASC NULLS FIRST, d_moy#74 ASC NULLS FIRST, mean#76 ASC NULLS FIRST, cov#77 ASC NULLS FIRST, d_moy#81 ASC NULLS FIRST, mean#83 ASC NULLS FIRST, cov#84 ASC NULLS FIRST], true
+      +- Project [w_warehouse_sk#72 AS wsk1#85, i_item_sk#73 AS isk1#86, d_moy#74 AS dmoy1#87, mean#76 AS mean1#88, cov#77 AS cov1#89, w_warehouse_sk#79, i_item_sk#80, d_moy#81, mean#83, cov#84, w_warehouse_sk#72, i_item_sk#73, d_moy#74, mean#76, cov#77]
+         +- Join Inner, ((i_item_sk#73 == i_item_sk#80) and (w_warehouse_sk#72 == w_warehouse_sk#79))
+            :- Project [w_warehouse_sk#72, i_item_sk#73, d_moy#74, mean#76, cov#77]
+            :  +- Filter (d_moy#74 == 1)
+            :     +- CteRef inv [w_warehouse_name#71, w_warehouse_sk#72, i_item_sk#73, d_moy#74, stdev#75, mean#76, cov#77] (shared #1)
+            +- Project [w_warehouse_sk#79, i_item_sk#80, d_moy#81, mean#83, cov#84]
+               +- Shift +7
+                  +- Filter (d_moy#74 == 2)
+                     +- Shared #1, printed above

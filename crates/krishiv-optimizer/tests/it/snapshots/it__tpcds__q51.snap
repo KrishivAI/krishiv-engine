@@ -1,0 +1,34 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+WithCte [web_v1, store_v1]
+:- Project [item_sk#62, d_date#36, _we0#65 AS cume_sales#63]
+:  +- Window [sum(sum(ws_sales_price)#64) OVER (PARTITION BY item_sk#62 ORDER BY d_date#36 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#65], [item_sk#62], [d_date#36 ASC NULLS FIRST]
+:     +- Aggregate [ws_item_sk#3, d_date#36], [ws_item_sk#3 AS item_sk#62, d_date#36, sum(ws_sales_price#21) AS sum(ws_sales_price)#64]
+:        +- Project [ws_item_sk#3, ws_sales_price#21, d_date#36]
+:           +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#34)
+:              :- Filter isnotnull(ws_item_sk#3)
+:              :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_sales_price#21]
+:              +- Project [d_date_sk#34, d_date#36]
+:                 +- Filter ((d_month_seq#37 >= 1200) and (d_month_seq#37 <= 1211))
+:                    +- Scan spark_catalog.default.date_dim [d_date_sk#34, d_date#36, d_month_seq#37]
+:- Project [item_sk#117, d_date#91, _we0#120 AS cume_sales#118]
+:  +- Window [sum(sum(ss_sales_price)#119) OVER (PARTITION BY item_sk#117 ORDER BY d_date#91 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#120], [item_sk#117], [d_date#91 ASC NULLS FIRST]
+:     +- Aggregate [ss_item_sk#68, d_date#91], [ss_item_sk#68 AS item_sk#117, d_date#91, sum(ss_sales_price#79) AS sum(ss_sales_price)#119]
+:        +- Project [ss_item_sk#68, ss_sales_price#79, d_date#91]
+:           +- Join Inner, (ss_sold_date_sk#66 == d_date_sk#89)
+:              :- Filter isnotnull(ss_item_sk#68)
+:              :  +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#66, ss_item_sk#68, ss_sales_price#79]
+:              +- Project [d_date_sk#89, d_date#91]
+:                 +- Filter ((d_month_seq#92 >= 1200) and (d_month_seq#92 <= 1211))
+:                    +- Scan spark_catalog.default.date_dim [d_date_sk#89, d_date#91, d_month_seq#92]
++- Limit 100
+   +- Sort [item_sk#127 ASC NULLS FIRST, d_date#128 ASC NULLS FIRST], true
+      +- Project [item_sk#127, d_date#128, web_sales#129, store_sales#130, _we0#133 AS web_cumulative#131, _we1#134 AS store_cumulative#132]
+         +- Filter (_we0#133 > _we1#134)
+            +- Window [max(web_sales#129) OVER (PARTITION BY item_sk#127 ORDER BY d_date#128 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#133, max(store_sales#130) OVER (PARTITION BY item_sk#127 ORDER BY d_date#128 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we1#134], [item_sk#127], [d_date#128 ASC NULLS FIRST]
+               +- Project [CASE WHEN isnotnull(item_sk#121) THEN item_sk#121 ELSE item_sk#124 END AS item_sk#127, CASE WHEN isnotnull(d_date#122) THEN d_date#122 ELSE d_date#125 END AS d_date#128, cume_sales#123 AS web_sales#129, cume_sales#126 AS store_sales#130]
+                  +- Join FullOuter, ((item_sk#121 == item_sk#124) and (d_date#122 == d_date#125))
+                     :- CteRef web_v1 [item_sk#121, d_date#122, cume_sales#123]
+                     +- CteRef store_v1 [item_sk#124, d_date#125, cume_sales#126]

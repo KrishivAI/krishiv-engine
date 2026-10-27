@@ -1,0 +1,16 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+Limit 100
++- Sort [sumsales#47 ASC NULLS FIRST, ss_customer_sk#3 ASC NULLS FIRST], true
+   +- Aggregate [ss_customer_sk#3], [ss_customer_sk#3, sum(act_sales#46) AS sumsales#47]
+      +- Project [ss_customer_sk#3, CASE WHEN isnotnull(sr_return_quantity#33) THEN (CAST((ss_quantity#10 - sr_return_quantity#33) AS DECIMAL(10,0)) * ss_sales_price#13) ELSE (CAST(ss_quantity#10 AS DECIMAL(10,0)) * ss_sales_price#13) END AS act_sales#46]
+         +- Join Inner, (sr_reason_sk#31 == r_reason_sk#43)
+            :- Project [ss_customer_sk#3, ss_quantity#10, ss_sales_price#13, sr_reason_sk#31, sr_return_quantity#33]
+            :  +- Join LeftOuter, ((sr_item_sk#25 == ss_item_sk#2) and (sr_ticket_number#32 == ss_ticket_number#9))
+            :     :- Scan spark_catalog.default.store_sales [ss_item_sk#2, ss_customer_sk#3, ss_ticket_number#9, ss_quantity#10, ss_sales_price#13]
+            :     +- Scan spark_catalog.default.store_returns [sr_item_sk#25, sr_reason_sk#31, sr_ticket_number#32, sr_return_quantity#33]
+            +- Project [r_reason_sk#43]
+               +- Filter (r_reason_desc#45 == 'reason 28')
+                  +- Scan spark_catalog.default.reason [r_reason_sk#43, r_reason_desc#45]

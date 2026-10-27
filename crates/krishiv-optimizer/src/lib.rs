@@ -32,6 +32,8 @@
 //! 5. **Tidy**: the rewrite batch again over the pruned plan; prune and
 //!    tidy repeat until neither changes the plan (folding can leave columns
 //!    unread).
+//! 6. **CSE** (`cse`, once): common-subexpression elimination within one
+//!    operator; disabled by [`Options::cse`].
 //!
 //! Every rule applies inside subquery plans too, and rewrites a subtree
 //! shared through `Arc` once, so the plan stays a DAG. A rule that changes
@@ -44,6 +46,7 @@
 
 #![forbid(unsafe_code)]
 
+mod cse;
 mod dag;
 mod expr;
 mod fold;
@@ -62,7 +65,10 @@ use std::sync::Arc;
 
 use krishiv_common::config::{ANSI_ENABLED, Config, SESSION_TIME_ZONE};
 use krishiv_common::error::{InternalError, KrishivError};
-use krishiv_plan::{Expr, ExprNode, Grouping, LogicalPlan, Plan, PlanNode, ResolvedExpr};
+use krishiv_plan::{
+    AttrId, BoundColumn, Expr, ExprNode, Grouping, LogicalPlan, Origin, Plan, PlanNode,
+    ResolvedExpr,
+};
 use krishiv_udf_sdk::UdfLibrary;
 
 pub use group_limit::{
@@ -96,8 +102,8 @@ const REWRITE: [(&str, Rule); 6] = [
 #[derive(Debug, Clone)]
 pub struct RuleStep {
     /// The batch it ran in: `ImpliedJoinFilters`, `Rewrite`, `Restrict`,
-    /// `JoinOrder` (join ordering alternating with restriction), `Prune` or
-    /// `Tidy`.
+    /// `JoinOrder` (join ordering alternating with restriction), `Prune`,
+    /// `Tidy` or `Cse`.
     pub batch: &'static str,
     /// The round of a fixed-point batch, from 1.
     pub round: usize,
@@ -105,6 +111,21 @@ pub struct RuleStep {
     pub rule: &'static str,
     /// The plan after it.
     pub plan: Arc<LogicalPlan>,
+}
+
+/// A test-only switch per optimizer rule: which rewrites run. All are on
+/// by default; the differential harnesses turn one off at a time and
+/// compare results with it on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// Common-subexpression elimination within one operator (`cse`).
+    pub cse: bool,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self { cse: true }
+    }
 }
 
 /// Optimises a resolved plan without statistics; see [`optimize_with`].
@@ -122,7 +143,19 @@ pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
 /// be started. A rewrite nesting deeper than [`krishiv_plan::MAX_DEPTH`] is
 /// not an error: the input plan is returned unoptimised.
 pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, KrishivError> {
-    Ok(run(plan, Some(stats), false, None)?.0)
+    optimize_with_options(plan, stats, &Options::default())
+}
+
+/// As [`optimize_with`], with per-rule switches.
+///
+/// # Errors
+/// As [`optimize_with`].
+pub fn optimize_with_options(
+    plan: &Plan,
+    stats: &dyn Statistics,
+    options: &Options,
+) -> Result<Plan, KrishivError> {
+    Ok(run(plan, Some(stats), false, None, options)?.0)
 }
 
 /// As [`optimize_with`], also folding deterministic session-UDF calls of
@@ -138,7 +171,14 @@ pub fn optimize_with_udfs(
     udfs: &UdfLibrary,
     config: &Config,
 ) -> Result<Plan, KrishivError> {
-    Ok(run(plan, Some(stats), false, Some((udfs, config)))?.0)
+    Ok(run(
+        plan,
+        Some(stats),
+        false,
+        Some((udfs, config)),
+        &Options::default(),
+    )?
+    .0)
 }
 
 /// As [`optimize_with`], also returning every rule application that
@@ -152,7 +192,19 @@ pub fn optimize_traced(
     plan: &Plan,
     stats: &dyn Statistics,
 ) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
-    run(plan, Some(stats), true, None)
+    run(plan, Some(stats), true, None, &Options::default())
+}
+
+/// As [`optimize_traced`], with per-rule switches.
+///
+/// # Errors
+/// As [`optimize_with`].
+pub fn optimize_traced_with_options(
+    plan: &Plan,
+    stats: &dyn Statistics,
+    options: &Options,
+) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
+    run(plan, Some(stats), true, None, options)
 }
 
 /// As [`optimize_traced`], also folding deterministic session-UDF calls of
@@ -166,7 +218,13 @@ pub fn optimize_traced_with_udfs(
     udfs: &UdfLibrary,
     config: &Config,
 ) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
-    run(plan, Some(stats), true, Some((udfs, config)))
+    run(
+        plan,
+        Some(stats),
+        true,
+        Some((udfs, config)),
+        &Options::default(),
+    )
 }
 
 /// As [`optimize_with`], keeping the joins in the order the query wrote
@@ -175,7 +233,18 @@ pub fn optimize_traced_with_udfs(
 /// # Errors
 /// As [`optimize_with`].
 pub fn optimize_as_written(plan: &Plan) -> Result<Plan, KrishivError> {
-    Ok(run(plan, None, false, None)?.0)
+    Ok(run(plan, None, false, None, &Options::default())?.0)
+}
+
+/// As [`optimize_as_written`], with per-rule switches.
+///
+/// # Errors
+/// As [`optimize_with`].
+pub fn optimize_as_written_with_options(
+    plan: &Plan,
+    options: &Options,
+) -> Result<Plan, KrishivError> {
+    Ok(run(plan, None, false, None, options)?.0)
 }
 
 /// Records the steps that changed the plan, when tracing.
@@ -221,6 +290,7 @@ fn run(
     stats: Option<&dyn Statistics>,
     tracing: bool,
     udfs: Option<(&UdfLibrary, &Config)>,
+    options: &Options,
 ) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
     if !plan.root().is_resolved() {
         return Err(InternalError {
@@ -307,6 +377,20 @@ fn run(
             root = tidied;
             round += 1;
         }
+        // Common-subexpression elimination runs once after the final
+        // rewrite batch: the conjunct order of filters above is then the
+        // order that executes, so "first operand" is execution order.
+        let root = if options.cse {
+            let before = Arc::clone(&root);
+            let origin = before.origin;
+            let output = before.resolved_output();
+            let after = cse::eliminate(root);
+            let after = restore_output(after, &output, origin);
+            t.step("Cse", 1, "CommonSubexpressionElimination", &before, &after);
+            after
+        } else {
+            root
+        };
         Ok((root, t.steps))
     };
     // Passes recurse once per level and nest; rewrites may deepen the plan.
@@ -384,6 +468,49 @@ fn batch(
         }
     }
     Ok(root)
+}
+
+/// The plan with the output attributes `output` (when CSE widened a
+/// pass-through operator below, a filter's output is its input's, now with
+/// the extracted columns): a projection back to them on top, or `root`
+/// itself when they already match, so re-optimising returns the same plan.
+fn restore_output(
+    root: Arc<LogicalPlan>,
+    output: &Option<Vec<BoundColumn>>,
+    origin: Origin,
+) -> Arc<LogicalPlan> {
+    let Some(want) = output else {
+        return root;
+    };
+    if want.is_empty() {
+        return root;
+    }
+    let have: Vec<AttrId> = root
+        .resolved_output()
+        .unwrap_or_default()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    if have.len() == want.len() && have.iter().zip(want).all(|(a, b)| a == &b.id) {
+        return root;
+    }
+    if !want.iter().all(|c| have.contains(&c.id)) {
+        return root;
+    }
+    Arc::new(LogicalPlan {
+        node: PlanNode::Project {
+            input: root,
+            exprs: want
+                .iter()
+                .map(|c| {
+                    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                        c.clone(),
+                    ))))
+                })
+                .collect(),
+        },
+        origin,
+    })
 }
 
 /// Folds the expressions of one relation. An aggregate grouping by

@@ -3,7 +3,7 @@ source: crates/krishiv-optimizer/tests/it/join_order.rs
 expression: optimized.root().to_string()
 ---
 Sort [l_returnflag#8 ASC NULLS FIRST, l_linestatus#9 ASC NULLS FIRST], true
-+- Aggregate [l_returnflag#8, l_linestatus#9], [l_returnflag#8, l_linestatus#9, sum(l_quantity#4) AS sum_qty#16, sum(l_extendedprice#5) AS sum_base_price#17, sum((l_extendedprice#5 * (1 - l_discount#6))) AS sum_disc_price#18, sum(((l_extendedprice#5 * (1 - l_discount#6)) * (1 + l_tax#7))) AS sum_charge#19, avg(l_quantity#4) AS avg_qty#20, avg(l_extendedprice#5) AS avg_price#21, avg(l_discount#6) AS avg_disc#22, count(1) AS count_order#23]
-   +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9]
++- Aggregate [l_returnflag#8, l_linestatus#9], [l_returnflag#8, l_linestatus#9, sum(l_quantity#4) AS sum_qty#16, sum(l_extendedprice#5) AS sum_base_price#17, sum(cse_24#24) AS sum_disc_price#18, sum((cse_24#24 * (1 + l_tax#7))) AS sum_charge#19, avg(l_quantity#4) AS avg_qty#20, avg(l_extendedprice#5) AS avg_price#21, avg(l_discount#6) AS avg_disc#22, count(1) AS count_order#23]
+   +- Project [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, (l_extendedprice#5 * (1 - l_discount#6)) AS cse_24#24]
       +- Filter (l_shipdate#10 <= DATE '1998-09-02')
          +- Scan spark_catalog.default.lineitem [l_quantity#4, l_extendedprice#5, l_discount#6, l_tax#7, l_returnflag#8, l_linestatus#9, l_shipdate#10]

@@ -1,0 +1,25 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+WithCte [ssci, csci]
+:- Aggregate [ss_customer_sk#3, ss_item_sk#2], [ss_customer_sk#3 AS customer_sk#51, ss_item_sk#2 AS item_sk#52]
+:  +- Project [ss_item_sk#2, ss_customer_sk#3]
+:     +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
+:        :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_customer_sk#3]
+:        +- Project [d_date_sk#23]
+:           +- Filter ((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211))
+:              +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_month_seq#26]
+:- Aggregate [cs_bill_customer_sk#56, cs_item_sk#68], [cs_bill_customer_sk#56 AS customer_sk#115, cs_item_sk#68 AS item_sk#116]
+:  +- Project [cs_bill_customer_sk#56, cs_item_sk#68]
+:     +- Join Inner, (cs_sold_date_sk#53 == d_date_sk#87)
+:        :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#53, cs_bill_customer_sk#56, cs_item_sk#68]
+:        +- Project [d_date_sk#87]
+:           +- Filter ((d_month_seq#90 >= 1200) and (d_month_seq#90 <= 1211))
+:              +- Scan spark_catalog.default.date_dim [d_date_sk#87, d_month_seq#90]
++- Limit 100
+   +- Aggregate [], [sum(CASE WHEN (cse_124#124 and isnull(customer_sk#119)) THEN 1 ELSE 0 END) AS store_only#121, sum(CASE WHEN (isnull(customer_sk#117) and isnotnull(customer_sk#119)) THEN 1 ELSE 0 END) AS catalog_only#122, sum(CASE WHEN (cse_124#124 and isnotnull(customer_sk#119)) THEN 1 ELSE 0 END) AS store_and_catalog#123]
+      +- Project [customer_sk#117, customer_sk#119, isnotnull(customer_sk#117) AS cse_124#124]
+         +- Join FullOuter, ((customer_sk#117 == customer_sk#119) and (item_sk#118 == item_sk#120))
+            :- CteRef ssci [customer_sk#117, item_sk#118]
+            +- CteRef csci [customer_sk#119, item_sk#120]

@@ -1,0 +1,36 @@
+---
+source: crates/krishiv-optimizer/tests/it/tpcds.rs
+expression: optimized.root().to_string()
+---
+WithCte [results]
+:- Project [i_item_id#90, s_state#84, 0 AS g_state#111, ss_quantity#10 AS agg1#112, ss_list_price#12 AS agg2#113, ss_coupon_amt#19 AS agg3#114, ss_sales_price#13 AS agg4#115]
+:  +- Join Inner, (ss_item_sk#2 == i_item_sk#89)
+:     :- Scan spark_catalog.default.item [i_item_sk#89, i_item_id#90]
+:     +- Project [s_state#84, ss_item_sk#2, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+:        +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#32)
+:           :- Project [d_date_sk#32]
+:           :  +- Filter (d_year#38 == 2002)
+:           :     +- Scan spark_catalog.default.date_dim [d_date_sk#32, d_year#38]
+:           +- Project [s_state#84, ss_sold_date_sk#0, ss_item_sk#2, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+:              +- Join Inner, (ss_store_sk#7 == s_store_sk#60)
+:                 :- Filter (s_state#84 == 'TN')
+:                 :  +- Scan spark_catalog.default.store [s_store_sk#60, s_state#84]
+:                 +- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_store_sk#7, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+:                    +- Join Inner, (ss_cdemo_sk#4 == cd_demo_sk#23)
+:                       :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_cdemo_sk#4, ss_store_sk#7, ss_quantity#10, ss_list_price#12, ss_sales_price#13, ss_coupon_amt#19]
+:                       +- Project [cd_demo_sk#23]
+:                          +- Filter (((cd_gender#24 == 'M') and (cd_marital_status#25 == 'S')) and (cd_education_status#26 == 'College'))
+:                             +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#23, cd_gender#24, cd_marital_status#25, cd_education_status#26]
++- Limit 100
+   +- Sort [i_item_id#116 ASC NULLS FIRST, s_state#117 ASC NULLS FIRST], true
+      +- Union
+         :- Union
+         :  :- Aggregate [i_item_id#116, s_state#117], [i_item_id#116, s_state#117, 0 AS g_state#123, avg(agg1#119) AS agg1#124, avg(agg2#120) AS agg2#125, avg(agg3#121) AS agg3#126, avg(agg4#122) AS agg4#127]
+         :  :  +- Project [i_item_id#116, s_state#117, agg1#119, agg2#120, agg3#121, agg4#122]
+         :  :     +- CteRef results [i_item_id#116, s_state#117, g_state#118, agg1#119, agg2#120, agg3#121, agg4#122] (shared #1)
+         :  +- Aggregate [i_item_id#116], [i_item_id#116, CAST(NULL AS STRING) AS s_state#134, 1 AS g_state#129, avg(agg1#119) AS agg1#130, avg(agg2#120) AS agg2#131, avg(agg3#121) AS agg3#132, avg(agg4#122) AS agg4#133]
+         :     +- Project [i_item_id#116, agg1#119, agg2#120, agg3#121, agg4#122]
+         :        +- Shared #1, printed above
+         +- Aggregate [], [CAST(NULL AS STRING) AS i_item_id#142, CAST(NULL AS STRING) AS s_state#143, 1 AS g_state#137, avg(agg1#119) AS agg1#138, avg(agg2#120) AS agg2#139, avg(agg3#121) AS agg3#140, avg(agg4#122) AS agg4#141]
+            +- Project [agg1#119, agg2#120, agg3#121, agg4#122]
+               +- Shared #1, printed above
