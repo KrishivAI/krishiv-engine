@@ -188,6 +188,7 @@ impl Gen<'_> {
                 let name = ["+", "sum", "and", "in"][usize::from(self.pick(4))].to_owned();
                 let (args, distinct, filter) = self.args(d);
                 ExprNode::Function(FunctionCall {
+                    within_group: Vec::new(),
                     name,
                     qualifier: Vec::new(),
                     args,
@@ -743,6 +744,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             qualifier, except, ..
         }) => m_strings(qualifier, w) || except.iter_mut().any(|path| m_strings(path, w)),
         ExprNode::Function(FunctionCall {
+            within_group,
             name,
             qualifier,
             args,
@@ -756,6 +758,7 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 || m_arg_names(arg_names, args.len(), w)
                 || m_exprs(args, w)
                 || m_filter(filter, w)
+                || within_group.iter_mut().any(|o| m_expr(&mut o.expr, w))
         }
         ExprNode::Cast { expr, to, mode } => {
             site!(w, flip(mode, CastMode::Try, CastMode::Ansi));

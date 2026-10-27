@@ -625,6 +625,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
             arg_names,
             distinct,
             filter,
+            within_group,
         }) => {
             let qualified = if qualifier.is_empty() {
                 name.clone()
@@ -638,6 +639,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 arg_names,
                 *distinct,
                 filter.as_deref(),
+                within_group,
                 out,
             );
         }
@@ -652,7 +654,16 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 FunctionId::Builtin(b) => Some(*b),
                 FunctionId::Registry { .. } => None,
             };
-            call(id.name(), op, args, &[], *distinct, filter.as_deref(), out);
+            call(
+                id.name(),
+                op,
+                args,
+                &[],
+                *distinct,
+                filter.as_deref(),
+                &[],
+                out,
+            );
         }
         ExprNode::Cast { expr, to, mode } => {
             out.push(Piece::Str(match mode {
@@ -792,6 +803,10 @@ const fn order_suffix(o: &SortOrder) -> &'static str {
 /// Appends a call: operators infix or in their SQL form, others as
 /// `name(args)`. A named argument prints as `name => value`; a quantified
 /// `LIKE`/`ILIKE` prints in its SQL form (`a LIKE ANY (p, ...)`).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site, every field of the call"
+)]
 fn call<'a>(
     name: &str,
     op: Option<Builtin>,
@@ -799,6 +814,7 @@ fn call<'a>(
     arg_names: &'a [Option<String>],
     distinct: bool,
     filter: Option<&'a Expr>,
+    within_group: &'a [SortOrder],
     out: &mut Vec<Piece<'a>>,
 ) {
     let arg = |i: usize| Piece::Expr(&args[i]);
@@ -888,6 +904,19 @@ fn call<'a>(
             named_list(args, arg_names, out);
             out.push(Piece::Str(")"));
         }
+    }
+    if !within_group.is_empty() {
+        out.push(Piece::Str(" WITHIN GROUP (ORDER BY "));
+        for (i, o) in within_group.iter().enumerate() {
+            if i > 0 {
+                out.push(Piece::Str(", "));
+            }
+            out.push(Piece::Expr(&o.expr));
+            if o.direction == SortDirection::Descending {
+                out.push(Piece::Str(" DESC"));
+            }
+        }
+        out.push(Piece::Str(")"));
     }
     if let Some(e) = filter {
         out.extend([

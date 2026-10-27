@@ -61,9 +61,11 @@
 //! once it received a row.
 
 mod accumulator;
+mod hll;
 mod moments;
 mod node;
 mod partial;
+mod quantile;
 mod rowtable;
 mod sink;
 mod table;
@@ -83,9 +85,11 @@ use krishiv_memory::SpillScope;
 #[cfg(all(test, not(loom)))]
 pub(crate) use accumulator::plain;
 pub(crate) use accumulator::{Accumulator, Running, avg_decimal_wide, wide_sum_value};
+pub(crate) use hll::precision_for;
 pub(crate) use moments::arity;
 pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
 pub use partial::{BypassPolicy, PartialAggregate};
+pub(crate) use quantile::decimal_to_double;
 #[cfg(test)]
 use sink::row_merge_running;
 pub use sink::{AggregateMetrics, HashAggregate};
@@ -95,12 +99,12 @@ use crate::error::{Result, internal};
 /// Whether `f` is a moment aggregate (`stddev`, `variance`, `skewness`,
 /// `kurtosis`, `covar_*`, `corr`): it reads its arguments as doubles, and
 /// the window planner refuses it.
-pub fn is_moment(f: AggregateFunction) -> bool {
+pub fn is_moment(f: &AggregateFunction) -> bool {
     moments::buffer(f).is_some()
 }
 
 /// An aggregate function.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AggregateFunction {
     /// `count(*)` (no arguments) or `count(a, …)`: rows whose arguments are
     /// all non-NULL. `bigint`, never NULL.
@@ -171,6 +175,53 @@ pub enum AggregateFunction {
     MaxBy,
     /// `min_by(x, y)`, as `max_by` for the smallest `y` (same tie caveat).
     MinBy,
+    /// `percentile(x, percentage[, frequency])`: the exact percentiles, in
+    /// ascending order unless `reverse`. The analyzer folds every percentage
+    /// into `percentages` (each in `[0.0, 1.0]`); `frequency` stays a
+    /// per-row weight argument (the default `1`). An empty group is NULL.
+    Percentile {
+        /// The percentages, in order.
+        percentages: Vec<f64>,
+        /// Whether the percentage was an array (the result is an array).
+        array: bool,
+        /// Descending order (`ORDER BY ... DESC` of `percentile_cont`).
+        reverse: bool,
+    },
+    /// `percentile_approx(x, percentage[, accuracy])` /
+    /// `approx_percentile`: Spark's Greenwald-Khanna `QuantileSummaries`
+    /// over the values as doubles, with the analyzer-folded `accuracy`
+    /// (default 10000). An empty group is NULL.
+    PercentileApprox {
+        /// The percentages, in order.
+        percentages: Vec<f64>,
+        /// Whether the percentage was an array (the result is an array).
+        array: bool,
+        /// The accuracy (a positive `int`).
+        accuracy: i64,
+    },
+    /// `percentile_disc(percentage) WITHIN GROUP (ORDER BY x)`: the
+    /// discrete percentile. The analyzer lowers the ordering key to the
+    /// argument and folds the percentage (an array stays an array);
+    /// `reverse` is its direction, `legacy` is
+    /// `spark.sql.legacy.percentileDiscCalculation`. An empty group is
+    /// NULL.
+    PercentileDisc {
+        /// The percentages, in order.
+        percentages: Vec<f64>,
+        /// Whether the percentage was an array (the result is an array).
+        array: bool,
+        /// Descending order.
+        reverse: bool,
+        /// The legacy calculation (the continuous lower bound).
+        legacy: bool,
+    },
+    /// `approx_count_distinct(x[, relativeSD])`: HyperLogLog++ as Spark's
+    /// `HyperLogLogPlusPlusHelper`, with the analyzer-folded addressing
+    /// bits `p` (at least 4). An empty group is 0, never NULL.
+    ApproxCountDistinct {
+        /// The addressing bits `p`.
+        p: u32,
+    },
 }
 
 /// Where an aggregate's arguments come from.
@@ -276,7 +327,7 @@ impl AggregateExpr {
     pub fn result_type(&self) -> Result<DataType> {
         use AggregateFunction as F;
         let t = &self.arg_type;
-        Ok(match (self.function, t) {
+        Ok(match (&self.function, t) {
             (F::Count, _) => DataType::Int64,
             (F::Sum, t) if is_integral(t) => DataType::Int64,
             (F::Sum | F::Avg, DataType::Float32 | DataType::Float64) => DataType::Float64,
@@ -299,6 +350,26 @@ impl AggregateExpr {
             (f, t) if moments::buffer(f).is_some() && moments::reads_as_double(t) => {
                 DataType::Float64
             }
+            // The exact percentiles (`percentile`, `median`,
+            // `percentile_cont`) and `percentile_disc` are `double`
+            // (or `array<double>` for an array percentage) over
+            // Spark's numeric input.
+            (F::Percentile { array, .. } | F::PercentileDisc { array, .. }, t)
+                if accumulator::quantile_supported(t, false) =>
+            {
+                if *array {
+                    quantile_array_of()
+                } else {
+                    DataType::Float64
+                }
+            }
+            // `percentile_approx` keeps the child's type (or an array of
+            // it); dates and timestamps read as doubles.
+            (F::PercentileApprox { array, .. }, t) if accumulator::quantile_supported(t, true) => {
+                quantile_approx_result(t, *array)?
+            }
+            // `approx_count_distinct` is `bigint`.
+            (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
             (F::MaxBy | F::MinBy, _) => match self.by_types() {
                 Some((v, k))
                     if accumulator::min_max_supported(v) && accumulator::min_max_supported(k) =>
@@ -324,7 +395,7 @@ impl AggregateExpr {
         use AggregateFunction as F;
         let out = self.result_type()?;
         let n = |suffix: &str| format!("{}#{suffix}", self.name);
-        Ok(match (self.function, &out) {
+        Ok(match (&self.function, &out) {
             (F::Count, _) => vec![Field::new(n("count"), DataType::Int64, false)],
             (F::Sum, DataType::Decimal64(..) | DataType::Decimal128(..)) => vec![
                 Field::new(n("sum"), out.clone(), true),
@@ -352,7 +423,7 @@ impl AggregateExpr {
                 | F::CovarSamp
                 | F::CovarPop,
                 _,
-            ) => moments::state_fields(self.function, &self.name),
+            ) => moments::state_fields(&self.function, &self.name),
             // The key is NULL until a row with a key was taken: it says
             // whether the value (which may be NULL) counts.
             (F::MaxBy | F::MinBy, _) => {
@@ -361,6 +432,19 @@ impl AggregateExpr {
                     Field::new(n("value"), out, true),
                     Field::new(n("key"), key, true),
                 ]
+            }
+            // The exact percentiles keep the distinct values and their
+            // counts; the approximate one its compressed Greenwald-Khanna
+            // summary bytes; HyperLogLog++ its register bytes.
+            (F::Percentile { .. } | F::PercentileDisc { .. }, _) => vec![
+                Field::new(n("values"), quantile_values_type(), true),
+                Field::new(n("counts"), quantile_counts_type(), true),
+            ],
+            (F::PercentileApprox { .. }, _) => {
+                vec![Field::new(n("summary"), DataType::Binary, true)]
+            }
+            (F::ApproxCountDistinct { .. }, _) => {
+                vec![Field::new(n("registers"), DataType::Binary, true)]
             }
         })
     }
@@ -405,6 +489,39 @@ fn is_integral(t: &DataType) -> bool {
         t,
         DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64
     )
+}
+
+/// `array<double>` with non-nullable elements, laid out exactly as the
+/// analyzer's `array<double>` (`to_arrow`), so the planner's check of the
+/// executor's result type against the analyzer's holds.
+fn quantile_array_of() -> DataType {
+    use krishiv_types::{ArrayType, DataType as PlanDataType};
+    PlanDataType::Array(ArrayType::new(PlanDataType::Double, false).into()).to_arrow()
+}
+
+/// The partial-state values of an exact percentile: one list of the
+/// distinct `double` values per group (as [`quantile::values_list_field`]
+/// lays it out, so `state` and `state_fields` agree).
+fn quantile_values_type() -> DataType {
+    DataType::List(quantile::values_list_field())
+}
+
+/// The partial-state counts of an exact percentile: one list of the
+/// values' counts per group, parallel to [`quantile_values_type`].
+fn quantile_counts_type() -> DataType {
+    DataType::List(quantile::counts_list_field())
+}
+
+/// Spark's `ApproximatePercentile.dataType` for an Arrow child type `t`:
+/// `t` itself, or an array of it for an array percentage.
+fn quantile_approx_result(t: &DataType, array: bool) -> Result<DataType> {
+    use krishiv_types::{ArrayType, DataType as PlanDataType};
+    if !array {
+        return Ok(t.clone());
+    }
+    let child = PlanDataType::from_arrow(t)
+        .map_err(|e| internal(format!("an approximate percentile of {e}")))?;
+    Ok(PlanDataType::Array(ArrayType::new(child, false).into()).to_arrow())
 }
 
 /// A hash aggregation: grouping columns, aggregates and the output kind.

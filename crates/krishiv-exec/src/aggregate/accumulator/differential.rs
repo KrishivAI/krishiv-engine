@@ -134,8 +134,8 @@ fn arg_type(t: (u8, i8), d64: bool) -> DataType {
     }
 }
 
-fn acc(f: AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
-    let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t.clone(), "a"), ansi).unwrap();
+fn acc(f: &AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
+    let mut a = Accumulator::new(&AggregateExpr::new(f.clone(), 0, t.clone(), "a"), ansi).unwrap();
     a.proofs = proofs;
     a
 }
@@ -201,7 +201,7 @@ proptest! {
                 for d64 in carriers(t) {
                     let at = arg_type(t, d64);
                     for proofs in [true, false] {
-                        let mut a = acc(f, &at, ansi, proofs);
+                        let mut a = acc(&f, &at, ansi, proofs);
                         a.resize(groups as usize);
                         for b in &batches {
                             let g: Vec<u32> = b.0.iter().map(|r| r.0).collect();
@@ -232,7 +232,7 @@ proptest! {
                     let partials: Vec<Vec<ArrayRef>> = batches
                         .iter()
                         .map(|b| {
-                            let mut a = acc(f, &at, ansi, false);
+                            let mut a = acc(&f, &at, ansi, false);
                             a.resize(groups as usize);
                             let g: Vec<u32> = b.0.iter().map(|r| r.0).collect();
                             a.update(&g, &[column(b, t, d64)], &Weights::Const(1)).unwrap();
@@ -248,10 +248,10 @@ proptest! {
                             }
                             // Two levels: halves merged apart, then together.
                             let half = list.len() / 2;
-                            let mut top = acc(f, &at, ansi, proofs);
+                            let mut top = acc(&f, &at, ansi, proofs);
                             top.resize(groups as usize);
                             for part in [&list[..half], &list[half..]] {
-                                let mut mid = acc(f, &at, ansi, proofs);
+                                let mut mid = acc(&f, &at, ansi, proofs);
                                 mid.resize(groups as usize);
                                 for st in part {
                                     mid.merge(&ids, st).unwrap();
@@ -318,7 +318,7 @@ fn min_max_on_decimal64() {
         (AggregateFunction::Min, -12_345_i64),
         (AggregateFunction::Max, 99_999),
     ] {
-        let mut a = acc(f, &t, true, true);
+        let mut a = acc(&f, &t, true, true);
         a.resize(1);
         let col: ArrayRef = Arc::new(
             PrimitiveArray::<Decimal64Type>::from(vec![Some(5), None, Some(-12_345), Some(99_999)])
@@ -334,14 +334,14 @@ fn min_max_on_decimal64() {
 /// The moment aggregates: `(group, x, y, x is valid, y is valid)`.
 type MomentRow = (u32, f64, f64, bool, bool);
 
-fn moment_acc(f: AggregateFunction, groups: u32) -> Accumulator {
+fn moment_acc(f: &AggregateFunction, groups: u32) -> Accumulator {
     let args = if crate::aggregate::arity(f) == 2 {
         vec![0, 1]
     } else {
         vec![0]
     };
     let e = AggregateExpr {
-        function: f,
+        function: f.clone(),
         args,
         input: AggInput::Raw,
         arg_type: DataType::Float64,
@@ -454,13 +454,13 @@ proptest! {
         let rows: Vec<MomentRow> = rows.into_iter().map(|r| (r.0 % groups, r.1, r.2, r.3, r.4)).collect();
         let ids: Vec<u32> = (0..groups).collect();
         for f in MOMENT_FUNCTIONS {
-            let mut once = moment_acc(f, groups);
+            let mut once = moment_acc(&f, groups);
             let g: Vec<u32> = rows.iter().map(|r| r.0).collect();
             once.update(&g, &moment_columns(&rows), &Weights::Const(1)).unwrap();
             let mut states: Vec<Vec<ArrayRef>> = rows
                 .chunks(rows.len().div_ceil(parts).max(1))
                 .map(|chunk| {
-                    let mut a = moment_acc(f, groups);
+                    let mut a = moment_acc(&f, groups);
                     let g: Vec<u32> = chunk.iter().map(|r| r.0).collect();
                     a.update(&g, &moment_columns(chunk), &Weights::Const(1)).unwrap();
                     a.state(&ids).unwrap()
@@ -473,9 +473,9 @@ proptest! {
             }
             // Two levels: halves merged apart, then together.
             let (lo, hi) = states.split_at(states.len() / 2);
-            let mut top = moment_acc(f, groups);
+            let mut top = moment_acc(&f, groups);
             for half in [lo, hi] {
-                let mut mid = moment_acc(f, groups);
+                let mut mid = moment_acc(&f, groups);
                 for st in half {
                     mid.merge(&ids, st).unwrap();
                 }

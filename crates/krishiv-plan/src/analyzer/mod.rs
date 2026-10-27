@@ -131,6 +131,9 @@ pub struct ResolutionConf {
     pub decimal_precision_loss: bool,
     /// `spark.sql.runSQLOnFiles`: `` format.`path` `` reads files.
     pub run_sql_on_files: bool,
+    /// `spark.sql.legacy.percentileDiscCalculation`: `percentile_disc`
+    /// returns the continuous lower bound instead of the discrete value.
+    pub legacy_percentile_disc: bool,
     /// `spark.sql.timestampType = TIMESTAMP_NTZ`: plain `TIMESTAMP '...'`
     /// without a zone is a `TIMESTAMP_NTZ`.
     pub timestamp_ntz: bool,
@@ -154,6 +157,7 @@ impl Default for ResolutionConf {
             lateral_column_alias: true,
             decimal_precision_loss: true,
             run_sql_on_files: true,
+            legacy_percentile_disc: false,
             timestamp_ntz: false,
             session_zone: Some(0),
         }
@@ -162,7 +166,7 @@ impl Default for ResolutionConf {
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 10] = [
+    pub const KEYS: [&'static str; 11] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -171,6 +175,7 @@ impl ResolutionConf {
         "spark.sql.lateralColumnAlias.enableImplicitResolution",
         "spark.sql.decimalOperations.allowPrecisionLoss",
         "spark.sql.runSQLOnFiles",
+        "spark.sql.legacy.percentileDiscCalculation",
         "spark.sql.timestampType",
         "spark.sql.session.timeZone",
     ];
@@ -188,9 +193,10 @@ impl ResolutionConf {
             d.lateral_column_alias,
             d.decimal_precision_loss,
             d.run_sql_on_files,
+            d.legacy_percentile_disc,
         ];
-        let mut v = [false; 8];
-        for ((slot, key), default) in v.iter_mut().zip(Self::KEYS[..8].iter()).zip(defaults) {
+        let mut v = [false; 9];
+        for ((slot, key), default) in v.iter_mut().zip(Self::KEYS[..9].iter()).zip(defaults) {
             *slot = conf(key).map_or(default, |s| s.trim().eq_ignore_ascii_case("true"));
         }
         Self {
@@ -202,9 +208,10 @@ impl ResolutionConf {
             lateral_column_alias: v[5],
             decimal_precision_loss: v[6],
             run_sql_on_files: v[7],
-            timestamp_ntz: conf(Self::KEYS[8])
+            legacy_percentile_disc: v[8],
+            timestamp_ntz: conf(Self::KEYS[9])
                 .is_some_and(|s| s.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
-            session_zone: match conf(Self::KEYS[9]) {
+            session_zone: match conf(Self::KEYS[10]) {
                 None => Some(0),
                 Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
             },

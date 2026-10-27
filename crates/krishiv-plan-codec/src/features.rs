@@ -126,6 +126,7 @@ registry! {
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (percentile_aggregates, PercentileAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The percentile family and `approx_count_distinct` aggregates (`percentile`, `percentile_approx`, `percentile_disc`, `approx_count_distinct` with their folded parameters)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
@@ -167,7 +168,7 @@ pub enum Construct<'a> {
     /// A window function's frame.
     Frame(&'a WindowFrame),
     /// An aggregate function (of an aggregate or a window).
-    Aggregate(AggregateFunction),
+    Aggregate(&'a AggregateFunction),
     /// A resolved expression (a struct field access needs its feature).
     Expr(&'a Expr),
     /// A Spark type in an expression or a column.
@@ -315,6 +316,12 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::AnyValue { .. }
             | AggregateFunction::MaxBy
             | AggregateFunction::MinBy => None,
+            AggregateFunction::Percentile { .. }
+            | AggregateFunction::PercentileApprox { .. }
+            | AggregateFunction::PercentileDisc { .. }
+            | AggregateFunction::ApproxCountDistinct { .. } => {
+                Some(Feature::PercentileAggregates)
+            }
         },
     }
 }
@@ -333,14 +340,14 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 f(Construct::Window(&function.function));
                 f(Construct::Frame(&function.frame));
                 if let WindowFunction::Aggregate(a) = &function.function {
-                    f(Construct::Aggregate(a.function));
+                    f(Construct::Aggregate(&a.function));
                 }
             }
         }
         PhysNode::Aggregate { aggregate, .. } => aggregate
             .aggregates
             .iter()
-            .for_each(|a| f(Construct::Aggregate(a.function))),
+            .for_each(|a| f(Construct::Aggregate(&a.function))),
         PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),

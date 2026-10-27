@@ -10,7 +10,7 @@ use krishiv_common::error::{
     SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{ArrayType, DataType, DecimalType};
 
 use super::{Aggregate, Execution};
 use crate::signature::{
@@ -638,6 +638,73 @@ fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     min_max(c)
 }
 
+/// Spark's `PercentileBase.dataType` over the types this engine
+/// represents: `double`, or `array<double>` for an array percentage.
+/// (Spark keeps an ANSI interval child as an interval; this engine has
+/// no interval type, so an interval never reaches typing.)
+pub fn exact_percentile_result(array: bool) -> DataType {
+    if array {
+        DataType::Array(ArrayType::new(DataType::Double, false).into())
+    } else {
+        DataType::Double
+    }
+}
+
+/// Spark's `ApproximatePercentile.dataType`: the child's type, or an
+/// array of it for an array percentage.
+pub fn approx_percentile_result(child: &DataType, array: bool) -> DataType {
+    if array {
+        DataType::Array(ArrayType::new(child.clone(), false).into())
+    } else {
+        child.clone()
+    }
+}
+
+/// Whether the percentage argument at `i` selects an array of
+/// percentiles (Spark's `returnPercentileArray`).
+fn array_percentage(c: &CallTypes<'_>, i: usize) -> bool {
+    matches!(c.data_type(i), Some(DataType::Array(_)))
+}
+
+/// `percentile`, `percentile_cont`, `percentile_disc` and `median` (which
+/// is `percentile(child, 0.5)`): [`exact_percentile_result`].
+fn percentile(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        exact_percentile_result(array_percentage(c, 1)),
+        true,
+    ))
+}
+
+/// Spark's `Median`: `percentile(child, 0.5)`.
+fn median(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Double, true))
+}
+
+/// Spark's `ApproximatePercentile.dataType`: the child's type, or an
+/// array of it for an array percentage.
+fn percentile_approx(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let child = c.data_type(0).cloned().unwrap_or(DataType::Null);
+    Ok(ArgType::new(
+        approx_percentile_result(&child, array_percentage(c, 1)),
+        true,
+    ))
+}
+
+/// Spark's `PercentileCont` / `PercentileDisc` result over the user
+/// form (the percentage is the only argument): `double`, or
+/// `array<double>` for an array percentage.
+fn percentile_ordered(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
+        exact_percentile_result(array_percentage(c, 0)),
+        true,
+    ))
+}
+
+/// `approx_count_distinct`: `bigint`, never NULL (an empty group is 0).
+fn approx_count_distinct(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, false))
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
@@ -675,6 +742,42 @@ fn aggregates() -> Vec<Spec> {
         aggregate("any", boolean_arg(), nullable_boolean, Aggregate::Max),
         aggregate("max_by", Inputs::Any, by, Aggregate::MaxBy),
         aggregate("min_by", Inputs::Any, by, Aggregate::MinBy),
+        // The ordered-set and quantile aggregates: the analyzer checks the
+        // percentage, accuracy and frequency itself (they must be foldable
+        // and in range, and `WITHIN GROUP` lowers to the ordering key), so
+        // no implicit casts are declared here.
+        aggregate("percentile", Inputs::Any, percentile, Aggregate::Percentile),
+        aggregate(
+            "percentile_approx",
+            Inputs::Any,
+            percentile_approx,
+            Aggregate::PercentileApprox,
+        ),
+        aggregate(
+            "approx_percentile",
+            Inputs::Any,
+            percentile_approx,
+            Aggregate::PercentileApprox,
+        ),
+        aggregate("median", Inputs::Any, median, Aggregate::Median),
+        aggregate(
+            "percentile_cont",
+            Inputs::Any,
+            percentile_ordered,
+            Aggregate::PercentileCont,
+        ),
+        aggregate(
+            "percentile_disc",
+            Inputs::Any,
+            percentile_ordered,
+            Aggregate::PercentileDisc,
+        ),
+        aggregate(
+            "approx_count_distinct",
+            Inputs::Any,
+            approx_count_distinct,
+            Aggregate::ApproxCountDistinct,
+        ),
     ]
 }
 

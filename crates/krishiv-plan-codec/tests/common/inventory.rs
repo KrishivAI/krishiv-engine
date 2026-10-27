@@ -183,6 +183,50 @@ pub(crate) fn subquery() -> SubqueryPlan {
     }
 }
 
+/// One aggregate of each new variant of this change: the exact and
+/// approximate percentiles, the discrete percentile and
+/// `approx_count_distinct`, with their folded parameters.
+pub(crate) fn percentile_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+    };
+    vec![
+        a(
+            AggregateFunction::Percentile {
+                percentages: vec![0.25, 0.5],
+                array: false,
+                reverse: false,
+            },
+            ArrowType::Int32,
+        ),
+        a(
+            AggregateFunction::PercentileApprox {
+                percentages: vec![0.9],
+                array: true,
+                accuracy: 10_000,
+            },
+            ArrowType::Float64,
+        ),
+        a(
+            AggregateFunction::PercentileDisc {
+                percentages: vec![0.5],
+                array: false,
+                reverse: true,
+                legacy: false,
+            },
+            ArrowType::Int32,
+        ),
+        a(
+            AggregateFunction::ApproxCountDistinct { p: 14 },
+            ArrowType::Utf8View,
+        ),
+    ]
+}
+
 pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
     let a = |function, arg_type| AggregateExpr {
         function,
@@ -633,6 +677,18 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     group_by: Vec::new(),
                     aggregates: vec![AggregateExpr::count_star("n")],
                     distinct: vec![true],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_percentiles",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: percentile_aggregate_exprs(),
+                    distinct: vec![false; 4],
                     output: AggregateOutput::Final,
                 },
             },

@@ -380,8 +380,17 @@ impl Teardown {
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
-            ExprNode::Function(FunctionCall { args, filter, .. })
-            | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+            ExprNode::Function(FunctionCall {
+                args,
+                filter,
+                within_group,
+                ..
+            }) => {
+                self.exprs.extend(args);
+                self.exprs.extend(filter);
+                self.exprs.extend(within_group.into_iter().map(|o| o.expr));
+            }
+            ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
             })) => {
                 self.exprs.extend(args);

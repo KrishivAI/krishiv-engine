@@ -738,14 +738,79 @@ fn frame_bound(b: FrameBound) -> Result<pb::FrameBound> {
 }
 
 fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::AggregateExpr> {
-    let (function, ignore_nulls) = match a.function {
+    let (function, ignore_nulls) = match &a.function {
         AggregateFunction::Count => (pb::AggregateFunction::Count, false),
         AggregateFunction::Sum => (pb::AggregateFunction::Sum, false),
         AggregateFunction::Avg => (pb::AggregateFunction::Avg, false),
         AggregateFunction::Min => (pb::AggregateFunction::Min, false),
         AggregateFunction::Max => (pb::AggregateFunction::Max, false),
-        AggregateFunction::First { ignore_nulls } => (pb::AggregateFunction::First, ignore_nulls),
-        AggregateFunction::Last { ignore_nulls } => (pb::AggregateFunction::Last, ignore_nulls),
+        AggregateFunction::First { ignore_nulls } => (pb::AggregateFunction::First, *ignore_nulls),
+        AggregateFunction::Last { ignore_nulls } => (pb::AggregateFunction::Last, *ignore_nulls),
+        AggregateFunction::Percentile {
+            percentages,
+            array,
+            reverse,
+        } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::Percentile,
+                percentages,
+                *array,
+                *reverse,
+                0,
+                false,
+                0,
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::PercentileApprox {
+            percentages,
+            array,
+            accuracy,
+        } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::PercentileApprox,
+                percentages,
+                *array,
+                false,
+                *accuracy,
+                false,
+                0,
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::PercentileDisc {
+            percentages,
+            array,
+            reverse,
+            legacy,
+        } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::PercentileDisc,
+                percentages,
+                *array,
+                *reverse,
+                0,
+                *legacy,
+                0,
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ApproxCountDistinct { p } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ApproxCountDistinct,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                *p,
+                a,
+                nested,
+            ));
+        }
         // The format has no code for these yet.
         f @ (AggregateFunction::StddevSamp
         | AggregateFunction::StddevPop
@@ -774,7 +839,49 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
         } as i32,
         arg_type: arrow_bytes(&a.arg_type, nested),
         name: a.name.clone(),
+        percentages: Vec::new(),
+        percentile_array: false,
+        percentile_reverse: false,
+        percentile_accuracy: 0,
+        percentile_legacy: false,
+        hll_precision: 0,
     })
+}
+
+/// An [`AggregateExpr`] of the percentile family or `approx_count_distinct`,
+/// with its folded parameters.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site, every folded parameter"
+)]
+fn percentile_expr(
+    function: pb::AggregateFunction,
+    percentages: &[f64],
+    array: bool,
+    reverse: bool,
+    accuracy: i64,
+    legacy: bool,
+    precision: u32,
+    a: &AggregateExpr,
+    nested: &Cell<bool>,
+) -> pb::AggregateExpr {
+    pb::AggregateExpr {
+        function: function as i32,
+        ignore_nulls: false,
+        args: indexes(&a.args),
+        input: match a.input {
+            AggInput::Raw => pb::AggregateInput::Raw,
+            AggInput::State => pb::AggregateInput::State,
+        } as i32,
+        arg_type: arrow_bytes(&a.arg_type, nested),
+        name: a.name.clone(),
+        percentages: percentages.to_vec(),
+        percentile_array: array,
+        percentile_reverse: reverse,
+        percentile_accuracy: accuracy,
+        percentile_legacy: legacy,
+        hll_precision: precision,
+    }
 }
 
 fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {

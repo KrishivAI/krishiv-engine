@@ -76,7 +76,7 @@ impl Fold {
         }
         if picks_bytes(a) {
             return Ok(Self::Bytes {
-                function: a.function,
+                function: a.function.clone(),
                 view: view_type(&a.arg_type),
                 picked: None,
                 buf: Vec::new(),
@@ -181,7 +181,7 @@ impl Fold {
                     if passes(mask, i) {
                         let valid = col.is_valid(i);
                         let old = (*picked).map(|v| v.then_some(buf.as_slice()));
-                        if replaces(*function, old, valid, || value(i))? {
+                        if replaces(function, old, valid, || value(i))? {
                             if valid {
                                 buf.clear();
                                 buf.extend_from_slice(value(i));

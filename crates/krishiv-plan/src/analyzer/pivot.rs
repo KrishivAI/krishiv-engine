@@ -284,6 +284,7 @@ impl Resolver<'_> {
                             arg_names: Vec::new(),
                             distinct: f.distinct,
                             filter: f.filter.clone(),
+                            within_group: f.within_group.clone(),
                         }))
                         .with_origin(x.origin),
                     ));
@@ -336,6 +337,7 @@ impl Resolver<'_> {
                         arg_names,
                         distinct: f.distinct,
                         filter: f.filter.clone(),
+                        within_group: f.within_group.clone(),
                     }))
                     .with_origin(x.origin),
                 ))
@@ -379,6 +381,7 @@ fn if_expr(cond: &Cond, then: Arc<Expr>, origin: Origin) -> Arc<Expr> {
         arg_names: Vec::new(),
         distinct: false,
         filter: None,
+        within_group: Vec::new(),
     }))
     .with_origin(origin);
     Arc::new(
@@ -393,6 +396,7 @@ fn if_expr(cond: &Cond, then: Arc<Expr>, origin: Origin) -> Arc<Expr> {
             arg_names: Vec::new(),
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         }))
         .with_origin(origin),
     )

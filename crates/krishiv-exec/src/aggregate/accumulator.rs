@@ -23,26 +23,34 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use arrow_array::builder::ArrayBuilder;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
     Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float64Array,
-    Int64Array, PrimitiveArray, StringArray, StringViewArray,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float32Array,
+    Float64Array, Int64Array, ListArray, PrimitiveArray, StringArray, StringViewArray,
 };
 use arrow_buffer::{NullBuffer, i256};
-use arrow_schema::{DataType, TimeUnit};
+use arrow_schema::{DataType, Field, TimeUnit};
 use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
+use super::hll::{self, HllAcc};
 use super::moments::Moments;
+use super::quantile::{self, ExactAcc, GkAcc};
 use super::{
     AggInput, AggregateExpr, AggregateFunction, decimal_sum_overflow, long_overflow, out_of_range,
     unsupported,
 };
+use krishiv_common::error::KrishivError;
+
+pub(crate) use super::hll::hll_supported;
+pub(crate) use super::quantile::quantile_supported;
 use crate::error::{Result, internal};
+use krishiv_common::error::NegativeValuesInFrequencyExpression;
 
 /// Whether `min`/`max` take arguments of type `t`.
 pub(crate) fn min_max_supported(t: &DataType) -> bool {
@@ -255,6 +263,12 @@ enum Kind {
     },
     /// The moment aggregates: Spark's buffers of doubles (see `moments`).
     Moments(Moments),
+    /// The exact percentiles: value-count maps (see `quantile`).
+    Exact(ExactAcc),
+    /// `percentile_approx`: Greenwald-Khanna summaries (see `quantile`).
+    Approx(GkAcc),
+    /// `approx_count_distinct`: HyperLogLog++ registers (see `hll`).
+    Hll(HllAcc),
 }
 
 /// One aggregate's state for every group of a table.
@@ -877,7 +891,7 @@ impl Accumulator {
     pub(crate) fn new(expr: &AggregateExpr, ansi: bool) -> Result<Self> {
         use AggregateFunction as F;
         let result = expr.result_type()?;
-        let kind = match (expr.function, &result) {
+        let kind = match (expr.function.clone(), &result) {
             (F::Count, _) => Kind::Count(Vec::new()),
             (F::Sum, DataType::Int64) => Kind::SumInt {
                 sum: Vec::new(),
@@ -944,8 +958,13 @@ impl Accumulator {
                 | F::CovarPop),
                 _,
             ) => Kind::Moments(Moments::new(f, ansi)?),
+            (F::Percentile { .. } | F::PercentileDisc { .. }, _) => {
+                Kind::Exact(ExactAcc::default())
+            }
+            (F::PercentileApprox { .. }, _) => Kind::Approx(GkAcc::default()),
+            (F::ApproxCountDistinct { p }, _) => Kind::Hll(HllAcc::new(p)),
         };
-        let sum_bound = match (expr.function, expr.avg_sum_type()) {
+        let sum_bound = match (expr.function.clone(), expr.avg_sum_type()) {
             (F::Sum | F::Avg, DataType::Decimal64(p, _) | DataType::Decimal128(p, _)) => {
                 Some(pow10(p).unsigned_abs())
             }
@@ -1006,6 +1025,9 @@ impl Accumulator {
                 ..
             } => vec![values.vec(), keys.vec(), v(set), v(null)],
             Kind::Moments(m) => m.vecs(),
+            // The quantile and HLL states are maps and buffers, not
+            // plain vectors; `size` counts them exactly.
+            Kind::Exact(_) | Kind::Approx(_) | Kind::Hll(_) => Vec::new(),
         }
     }
 
@@ -1013,6 +1035,9 @@ impl Accumulator {
     pub(crate) fn size(&self) -> usize {
         let heap = match &self.kind {
             Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } | Kind::By { heap, .. } => *heap,
+            Kind::Exact(e) => e.size(),
+            Kind::Approx(g) => g.size(),
+            Kind::Hll(h) => h.size(),
             _ => 0,
         };
         heap + self.vecs().iter().map(|(_, c, e)| c * e).sum::<usize>()
@@ -1062,6 +1087,9 @@ impl Accumulator {
                 heap + bytes(values, arg) + bytes(keys, key)
             }
             Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } => *heap,
+            Kind::Exact(e) => e.projected(new),
+            Kind::Approx(g) => g.size() + new.saturating_mul(64),
+            Kind::Hll(h) => h.projected(new),
             _ => 0,
         };
         vecs + heap
@@ -1108,6 +1136,9 @@ impl Accumulator {
                 values.resize(n);
             }
             Kind::Moments(m) => m.resize(n),
+            Kind::Exact(e) => e.resize(n),
+            Kind::Approx(g) => g.resize(n),
+            Kind::Hll(h) => h.resize(n),
             Kind::By {
                 values,
                 keys,
@@ -1164,6 +1195,9 @@ impl Accumulator {
                 values.reserve(new);
             }
             Kind::Moments(m) => m.reserve(new),
+            Kind::Exact(e) => e.reserve(new),
+            Kind::Approx(g) => g.reserve(new),
+            Kind::Hll(h) => h.reserve(new),
             Kind::By {
                 values,
                 keys,
@@ -1256,7 +1290,13 @@ impl Accumulator {
         if (state
             || matches!(
                 self.kind,
-                Kind::MinMax { .. } | Kind::Pick { .. } | Kind::By { .. } | Kind::Moments(_)
+                Kind::MinMax { .. }
+                    | Kind::Pick { .. }
+                    | Kind::By { .. }
+                    | Kind::Moments(_)
+                    | Kind::Exact(_)
+                    | Kind::Approx(_)
+                    | Kind::Hll(_)
             ))
             && !is_unit(w)
         {
@@ -1293,6 +1333,9 @@ impl Accumulator {
                 Kind::SumDec { .. }
                     | Kind::AvgDec { .. }
                     | Kind::Moments(_)
+                    | Kind::Exact(_)
+                    | Kind::Approx(_)
+                    | Kind::Hll(_)
                     | Kind::MinMax {
                         values: Values::Bytes(_),
                         ..
@@ -1585,6 +1628,137 @@ impl Accumulator {
                     .collect::<Result<Vec<_>>>()?;
                 m.merge(groups, &cols)?;
             }
+            (Kind::Exact(acc), false) => {
+                if !matches!(
+                    self.expr.function,
+                    AggregateFunction::Percentile { .. } | AggregateFunction::PercentileDisc { .. }
+                ) {
+                    return Err(internal(
+                        "an exact percentile over another aggregate".to_owned(),
+                    ));
+                }
+                let a = args[0];
+                if a.len() != groups.len() {
+                    return Err(internal(
+                        "a quantile value column of another length than the group ids".to_owned(),
+                    ));
+                }
+                let freq = match args.get(1) {
+                    None => None,
+                    Some(f) => {
+                        if f.len() != groups.len() {
+                            return Err(internal(
+                                "a quantile frequency column of another length than the group ids"
+                                    .to_owned(),
+                            ));
+                        }
+                        Some(ints(f)?)
+                    }
+                };
+                let freq_nulls = args.get(1).and_then(Array::logical_nulls);
+                for (i, &g) in groups.iter().enumerate() {
+                    if !valid(i) {
+                        continue;
+                    }
+                    let wv = match (&freq, &freq_nulls) {
+                        (None, _) => 1,
+                        (Some(_), Some(n)) if !n.is_valid(i) => continue,
+                        (Some(f), _) => f[i],
+                    };
+                    if wv < 0 {
+                        return Err(negative_frequency(wv));
+                    }
+                    if let Some(v) = quantile::double_of(a, i)? {
+                        acc.add(g as usize, v, wv);
+                    }
+                }
+            }
+            (Kind::Exact(acc), true) => {
+                let [values, counts] = args else {
+                    return Err(internal(
+                        "an exact percentile state of other columns than (values, counts)"
+                            .to_owned(),
+                    ));
+                };
+                let (Some(values), Some(counts)) = (
+                    values.as_any().downcast_ref::<ListArray>(),
+                    counts.as_any().downcast_ref::<ListArray>(),
+                ) else {
+                    return Err(internal(
+                        "an exact percentile state of other lists than (values, counts)".to_owned(),
+                    ));
+                };
+                acc.merge(groups, values, counts)?;
+            }
+            (Kind::Approx(gk), false) => {
+                let AggregateFunction::PercentileApprox { accuracy, .. } = &self.expr.function
+                else {
+                    return Err(internal(
+                        "an approximate percentile over another aggregate".to_owned(),
+                    ));
+                };
+                let relative_error = 1.0 / *accuracy as f64;
+                let a = args[0];
+                if a.len() != groups.len() {
+                    return Err(internal(
+                        "a quantile value column of another length than the group ids".to_owned(),
+                    ));
+                }
+                for (i, &g) in groups.iter().enumerate() {
+                    if let Some(v) = quantile::double_of(a, i)?
+                        && valid(i)
+                    {
+                        gk.insert(g as usize, v, relative_error);
+                    }
+                }
+            }
+            (Kind::Approx(gk), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "an approximate percentile state of another column than its summary"
+                            .to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "an approximate percentile state of another type than binary".to_owned(),
+                    ));
+                };
+                let AggregateFunction::PercentileApprox { accuracy, .. } = &self.expr.function
+                else {
+                    return Err(internal(
+                        "an approximate percentile over another aggregate".to_owned(),
+                    ));
+                };
+                gk.merge(groups, states, 1.0 / *accuracy as f64)?;
+            }
+            (Kind::Hll(h), false) => {
+                let a = args[0];
+                if a.len() != groups.len() {
+                    return Err(internal(
+                        "a HyperLogLog value column of another length than the group ids"
+                            .to_owned(),
+                    ));
+                }
+                for (i, &g) in groups.iter().enumerate() {
+                    if let Some(x) = hll::hash_of(a, i)? {
+                        h.add(g as usize, x);
+                    }
+                }
+            }
+            (Kind::Hll(h), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "a HyperLogLog state of another column than its registers".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "a HyperLogLog state of another type than binary".to_owned(),
+                    ));
+                };
+                h.merge(groups, states)?;
+            }
             (
                 Kind::By {
                     max,
@@ -1645,12 +1819,18 @@ impl Accumulator {
     /// Number of state columns.
     pub(crate) fn state_len(&self) -> usize {
         match self.kind {
-            Kind::Count(_) | Kind::SumInt { .. } | Kind::SumFloat { .. } | Kind::MinMax { .. } => 1,
+            Kind::Count(_)
+            | Kind::SumInt { .. }
+            | Kind::SumFloat { .. }
+            | Kind::MinMax { .. }
+            | Kind::Approx(_)
+            | Kind::Hll(_) => 1,
             Kind::SumDec { .. }
             | Kind::AvgFloat { .. }
             | Kind::AvgDec { .. }
             | Kind::Pick { .. }
-            | Kind::By { .. } => 2,
+            | Kind::By { .. }
+            | Kind::Exact(_) => 2,
             Kind::Moments(ref m) => m.width(),
         }
     }
@@ -1712,6 +1892,17 @@ impl Accumulator {
                 )),
             ],
             Kind::Moments(m) => m.state(ids)?,
+            Kind::Exact(acc) => acc.state(ids)?,
+            Kind::Approx(gk) => {
+                let AggregateFunction::PercentileApprox { accuracy, .. } = &self.expr.function
+                else {
+                    return Err(internal(
+                        "an approximate percentile over another aggregate".to_owned(),
+                    ));
+                };
+                gk.state(ids, 1.0 / *accuracy as f64)
+            }
+            Kind::Hll(h) => h.state(ids),
             Kind::By {
                 values,
                 keys,
@@ -1858,6 +2049,61 @@ impl Accumulator {
                 self.decimal(out.into_iter(), &self.result)?
             }
             Kind::Moments(m) => m.evaluate(ids)?,
+            Kind::Exact(acc) => {
+                use AggregateFunction as F;
+                let (percentages, reverse, cont, legacy, array) = match &self.expr.function {
+                    F::Percentile {
+                        percentages,
+                        array,
+                        reverse,
+                    } => (percentages.clone(), *reverse, true, false, *array),
+                    F::PercentileDisc {
+                        percentages,
+                        array,
+                        reverse,
+                        legacy,
+                    } => (percentages.clone(), *reverse, false, *legacy, *array),
+                    _ => {
+                        return Err(internal(
+                            "an exact percentile over another aggregate".to_owned(),
+                        ));
+                    }
+                };
+                let field = if array {
+                    match &self.result {
+                        DataType::List(field) => Some(Arc::clone(field)),
+                        _ => {
+                            return Err(internal(
+                                "an exact percentile array of another type than a list".to_owned(),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                exact_results(
+                    acc,
+                    ids,
+                    &percentages,
+                    reverse,
+                    cont,
+                    legacy,
+                    array,
+                    field.as_ref(),
+                )?
+            }
+            Kind::Approx(gk) => {
+                let AggregateFunction::PercentileApprox { accuracy, .. } = &self.expr.function
+                else {
+                    return Err(internal(
+                        "an approximate percentile over another aggregate".to_owned(),
+                    ));
+                };
+                approx_results(gk, ids, &self.expr, 1.0 / *accuracy as f64, &self.result)?
+            }
+            Kind::Hll(h) => Arc::new(Int64Array::from_iter_values(
+                ids.iter().map(|i| h.estimate(at(i))),
+            )) as ArrayRef,
             // Only the value: the ordering key is state, not a result.
             Kind::By {
                 values, set, null, ..
@@ -1872,6 +2118,170 @@ impl Accumulator {
             }
         })
     }
+}
+
+/// Spark's `NEGATIVE_VALUES_IN_FREQUENCY_EXPRESSION` for a negative
+/// per-row frequency of an exact percentile.
+fn negative_frequency(value: i64) -> KrishivError {
+    NegativeValuesInFrequencyExpression {
+        frequency_expression: "the frequency argument".to_owned(),
+        negative_value: value.to_string(),
+    }
+    .into()
+}
+
+/// The final exact percentiles of groups `ids`: `evaluate` of each
+/// group, as a `double` column or an array of it (with the result's
+/// element field, so the planner's type check holds).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one call site, every flag of the query"
+)]
+fn exact_results(
+    acc: &ExactAcc,
+    ids: &[u32],
+    percentages: &[f64],
+    reverse: bool,
+    cont: bool,
+    legacy_disc: bool,
+    array: bool,
+    field: Option<&Arc<Field>>,
+) -> Result<ArrayRef> {
+    use arrow_array::builder::Float64Builder;
+    if !array {
+        return Ok(Arc::new(Float64Array::from_iter(ids.iter().map(|&i| {
+            acc.evaluate(i as usize, percentages, reverse, cont, legacy_disc)
+                .and_then(|mut v| v.pop())
+        }))));
+    }
+    let mut values = Float64Builder::new();
+    let mut offsets = Vec::with_capacity(ids.len() + 1);
+    offsets.push(0);
+    for &i in ids {
+        if let Some(vs) = acc.evaluate(i as usize, percentages, reverse, cont, legacy_disc) {
+            for v in vs {
+                values.append_value(v);
+            }
+        }
+        offsets.push(
+            i32::try_from(values.len())
+                .map_err(|_| internal("a percentile of too many values".to_owned()))?,
+        );
+    }
+    // A group with no values still yields its (empty) list: every group
+    // has one.
+    let Some(field) = field else {
+        return Err(internal(
+            "an exact percentile array without its element field".to_owned(),
+        ));
+    };
+    Ok(quantile::finish_lists(
+        Arc::new(values.finish()),
+        offsets,
+        Arc::clone(field),
+    ))
+}
+
+/// The final approximate percentiles of groups `ids`: the Greenwald-Khanna
+/// query of each group, converted back to the child's Arrow type `t`
+/// (as Spark's `ApproximatePercentile.eval` converts its doubles), or an
+/// array of it (with the result's element field).
+fn approx_results(
+    gk: &GkAcc,
+    ids: &[u32],
+    expr: &AggregateExpr,
+    relative_error: f64,
+    t: &DataType,
+) -> Result<ArrayRef> {
+    use AggregateFunction as F;
+    let (percentages, array) = match &expr.function {
+        F::PercentileApprox {
+            percentages, array, ..
+        } => (percentages, *array),
+        _ => {
+            return Err(internal(
+                "an approximate percentile over another aggregate".to_owned(),
+            ));
+        }
+    };
+    let values: Vec<Option<Vec<f64>>> = ids
+        .iter()
+        .map(|&i| gk.evaluate(i as usize, percentages, relative_error))
+        .collect();
+    if !array {
+        let it = values.into_iter().map(|v| v.and_then(|mut v| v.pop()));
+        return approx_column(it, t);
+    }
+    let DataType::List(field) = t else {
+        return Err(internal(
+            "an approximate percentile array of another type than a list".to_owned(),
+        ));
+    };
+    let mut offsets = Vec::with_capacity(ids.len() + 1);
+    offsets.push(0);
+    let mut flat: Vec<Option<f64>> = Vec::new();
+    for v in values {
+        if let Some(vs) = v {
+            flat.extend(vs.into_iter().map(Some));
+        }
+        offsets.push(
+            i32::try_from(flat.len())
+                .map_err(|_| internal("a percentile of too many values".to_owned()))?,
+        );
+    }
+    // A group with no values still yields its (empty) list: every group
+    // has one.
+    let flat = approx_column(flat.into_iter(), field.data_type())?;
+    Ok(quantile::finish_lists(flat, offsets, Arc::clone(field)))
+}
+
+/// Approximate values as a column of type `t`: integers, dates and
+/// timestamps truncate (as Spark's `toByte`/`toShort`/`toInt`/`toLong`
+/// do), decimals truncate at their scale, floats convert.
+fn approx_column(it: impl Iterator<Item = Option<f64>>, t: &DataType) -> Result<ArrayRef> {
+    Ok(match t {
+        DataType::Float32 => {
+            // `as` truncates like Spark's `toFloat`.
+            #[expect(clippy::cast_possible_truncation, reason = "Spark toFloat parity")]
+            let out = it.map(|v| v.map(|x| x as f32)).collect::<Float32Array>();
+            Arc::new(out) as ArrayRef
+        }
+        DataType::Float64 => Arc::new(it.collect::<Float64Array>()) as ArrayRef,
+        DataType::Decimal64(_, s) | DataType::Decimal128(_, s) => {
+            let scale = *s;
+            approx_ints(it.map(|v| v.map(|x| decimal_unscaled(x, scale))), t)?
+        }
+        _ => {
+            // `as` saturates like Java narrowing; out-of-range values fail in `narrow`.
+            #[expect(clippy::cast_possible_truncation, reason = "Java narrowing parity")]
+            let out = approx_ints(it.map(|v| v.map(|x| x as i128)), t)?;
+            out
+        }
+    })
+}
+
+/// Approximate values as the `i128`s of an integral, date, timestamp or
+/// decimal type `t` (inverse of `int_like`, as [`narrow`] builds them).
+fn approx_ints(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Result<ArrayRef> {
+    narrow(it, t)
+}
+
+/// The unscaled value of the decimal `v` at `scale`, truncated (as
+/// Spark's conversions truncate; the quantile of fitting inputs fits).
+fn decimal_unscaled(v: f64, scale: i8) -> i128 {
+    let scale = u32::try_from(scale).unwrap_or(0);
+    let factor = 10_f64.powi(scale as i32);
+    if !v.is_finite() {
+        return if v.is_sign_negative() {
+            i128::MIN
+        } else {
+            i128::MAX
+        };
+    }
+    // `as` saturates like Java narrowing (inputs that fit the decimal fit).
+    #[expect(clippy::cast_possible_truncation, reason = "Java narrowing parity")]
+    let unscaled = (v * factor) as i128;
+    unscaled
 }
 
 /// Builds an array of type `t` from `i128` values (inverse of `int_like`).
@@ -1919,8 +2329,9 @@ mod proof_tests {
 
     type Row = (u32, i128, bool, i64);
 
-    fn acc(f: AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
-        let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t.clone(), "a"), ansi).unwrap();
+    fn acc(f: &AggregateFunction, t: &DataType, ansi: bool, proofs: bool) -> Accumulator {
+        let mut a =
+            Accumulator::new(&AggregateExpr::new(f.clone(), 0, t.clone(), "a"), ansi).unwrap();
         a.proofs = proofs;
         a
     }
@@ -2040,7 +2451,7 @@ mod proof_tests {
             let t = DataType::Decimal128(p, s);
             for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
                 for ansi in [true, false] {
-                    let (mut fast, mut slow) = (acc(f, &t, ansi, true), acc(f, &t, ansi, false));
+                    let (mut fast, mut slow) = (acc(&f, &t, ansi, true), acc(&f, &t, ansi, false));
                     for b in &batches {
                         feed(&mut fast, groups, b, &t, mode);
                         feed(&mut slow, groups, b, &t, mode);
@@ -2064,14 +2475,14 @@ mod proof_tests {
                     let partials: Vec<Vec<ArrayRef>> = batches
                         .iter()
                         .map(|b| {
-                            let mut a = acc(f, &t, ansi, false);
+                            let mut a = acc(&f, &t, ansi, false);
                             feed(&mut a, groups, b, &t, 0);
                             a.state(&ids).unwrap()
                         })
                         .collect();
                     for order in [false, true] {
                         let (mut fast, mut slow) =
-                            (acc(f, &t, ansi, true), acc(f, &t, ansi, false));
+                            (acc(&f, &t, ansi, true), acc(&f, &t, ansi, false));
                         fast.resize(groups as usize);
                         slow.resize(groups as usize);
                         let mut list: Vec<&Vec<ArrayRef>> = partials.iter().collect();
@@ -2167,14 +2578,14 @@ mod proof_tests {
                         }
                     }
                 };
-                let mut a = acc(f, &t, ansi, proofs);
+                let mut a = acc(&f, &t, ansi, proofs);
                 a.resize(groups);
                 if parts == 1 {
                     fold(&rows, &mut a);
                 } else {
                     for k in 0..parts {
                         let part = &rows[k * n / parts..(k + 1) * n / parts];
-                        let mut partial = acc(f, &t, ansi, proofs);
+                        let mut partial = acc(&f, &t, ansi, proofs);
                         partial.resize(groups);
                         fold(part, &mut partial);
                         a.merge(&ids, &partial.state(&ids).unwrap()).unwrap();
@@ -2248,22 +2659,22 @@ mod proof_tests {
     fn overflowed_partial_is_sticky_on_the_proof_path() {
         let t = DataType::Decimal128(38, 0);
         for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
-            let mut part = acc(f, &t, true, true);
+            let mut part = acc(&f, &t, true, true);
             feed(&mut part, 1, &[(0, M, true, 1), (0, 1, true, 1)], &t, 0);
             let st = part.state(&[0]).unwrap();
             assert!(st[0].is_null(0), "{f:?} partial overflowed");
-            let mut small = acc(f, &t, true, true);
+            let mut small = acc(&f, &t, true, true);
             feed(&mut small, 1, &[(0, -5, true, 1)], &t, 0);
             let small = small.state(&[0]).unwrap();
             for order in [[&st, &small], [&small, &st]] {
-                let mut m = acc(f, &t, true, true);
+                let mut m = acc(&f, &t, true, true);
                 m.resize(1);
                 for s in order {
                     m.merge(&[0], s).unwrap();
                 }
                 let err = m.evaluate(&[0]).unwrap_err().to_string();
                 assert!(err.contains("ARITHMETIC_OVERFLOW"), "{err}");
-                let mut legacy = acc(f, &t, false, true);
+                let mut legacy = acc(&f, &t, false, true);
                 legacy.resize(1);
                 for s in order {
                     legacy.merge(&[0], s).unwrap();
@@ -2281,14 +2692,14 @@ mod proof_tests {
         let t = DataType::Decimal128(38, 0);
         for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
             let partial = |v: i128| {
-                let mut a = acc(f, &t, true, true);
+                let mut a = acc(&f, &t, true, true);
                 feed(&mut a, 1, &[(0, v, true, 1)], &t, 0);
                 a.state(&[0]).unwrap()
             };
             let (m, one, minus5) = (partial(M), partial(1), partial(-5));
             for proofs in [true, false] {
                 let merged = |order: [&Vec<ArrayRef>; 3]| {
-                    let mut a = acc(f, &t, true, proofs);
+                    let mut a = acc(&f, &t, true, proofs);
                     a.resize(1);
                     for st in order {
                         a.merge(&[0], st).unwrap();
@@ -2314,7 +2725,7 @@ mod proof_tests {
     #[test]
     fn transient_overflow_follows_row_order() {
         let t = DataType::Decimal128(38, 0);
-        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        let mut a = acc(&AggregateFunction::Sum, &t, true, true);
         feed(
             &mut a,
             1,
@@ -2326,14 +2737,14 @@ mod proof_tests {
         // The same across batches: the second batch alone is provable, the
         // running bound is not.
         for f in [AggregateFunction::Sum, AggregateFunction::Avg] {
-            let mut a = acc(f, &t, true, true);
+            let mut a = acc(&f, &t, true, true);
             feed(&mut a, 1, &[(0, M, true, 1)], &t, 0);
             feed(&mut a, 1, &[(0, 1, true, 1)], &t, 0);
             feed(&mut a, 1, &[(0, -5, true, 1)], &t, 0);
             let err = a.evaluate(&[0]).unwrap_err().to_string();
             assert!(err.contains("ARITHMETIC_OVERFLOW"), "{err}");
         }
-        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        let mut a = acc(&AggregateFunction::Sum, &t, true, true);
         feed(
             &mut a,
             1,
@@ -2345,7 +2756,7 @@ mod proof_tests {
         assert_eq!(v.as_primitive::<Decimal128Type>().value(0), M - 4);
         // IVM: a retraction lowers the sum; with no more groups than rows
         // the bound is recomputed and shrinks with it.
-        let mut a = acc(AggregateFunction::Sum, &t, true, true);
+        let mut a = acc(&AggregateFunction::Sum, &t, true, true);
         feed(&mut a, 1, &[(0, M, true, 1)], &t, 0);
         assert_eq!(a.max_sum, M.unsigned_abs());
         feed(&mut a, 1, &[(0, M, true, -1)], &t, 2);
@@ -2511,7 +2922,7 @@ mod tests {
                 },
                 F::Last { ignore_nulls: true },
             ] {
-                let expr = AggregateExpr::new(f, 0, t.clone(), "x");
+                let expr = AggregateExpr::new(f.clone(), 0, t.clone(), "x");
                 let mut fast = Accumulator::new(&expr, true).unwrap();
                 fast.resize(3 + n);
                 // Two calls: a snapshot never needs rows of the same call.
@@ -2568,7 +2979,8 @@ mod tests {
             (F::Sum, DataType::Decimal128(10, 2)),
             (F::Max, DataType::Utf8View),
         ] {
-            let mut a = Accumulator::new(&AggregateExpr::new(f, 0, t.clone(), "x"), true).unwrap();
+            let mut a =
+                Accumulator::new(&AggregateExpr::new(f.clone(), 0, t.clone(), "x"), true).unwrap();
             a.resize(2);
             let col: ArrayRef = Arc::new(Int64Array::from(vec![1]));
             let run = Running {

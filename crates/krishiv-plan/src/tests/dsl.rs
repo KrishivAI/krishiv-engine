@@ -50,6 +50,7 @@ pub(super) fn f(name: &str, args: Vec<Expr>) -> Expr {
 /// `name(args)`, each with its `name => ` prefix when one is given.
 pub(super) fn named_call(name: &str, args: &[(Option<&str>, Expr)]) -> Expr {
     Expr::new(ExprNode::Function(FunctionCall {
+        within_group: Vec::new(),
         name: name.to_owned(),
         qualifier: Vec::new(),
         args: args.iter().map(|(_, e)| Arc::new(e.clone())).collect(),
@@ -62,6 +63,7 @@ pub(super) fn named_call(name: &str, args: &[(Option<&str>, Expr)]) -> Expr {
 /// `qualifier.name(args)`.
 pub(super) fn qualified_call(qualifier: &[&str], name: &str, args: Vec<Expr>) -> Expr {
     Expr::new(ExprNode::Function(FunctionCall {
+        within_group: Vec::new(),
         name: name.to_owned(),
         qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
         args: args.into_iter().map(Arc::new).collect(),

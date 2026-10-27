@@ -325,6 +325,7 @@ impl Column {
             args: args.into_iter().map(|c| Arc::new(c.expr)).collect(),
             distinct,
             filter: None,
+            within_group: Vec::new(),
         })))
     }
 }

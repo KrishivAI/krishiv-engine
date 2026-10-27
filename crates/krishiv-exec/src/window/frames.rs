@@ -170,7 +170,7 @@ pub(super) fn aggregate(
 ) -> Result<ArrayRef> {
     let method = method(a, ansi)?;
     if method == Method::Bytes {
-        return bytes(a.function, a, f, slices, frames);
+        return bytes(&a.function, a, f, slices, frames);
     }
     let (args, mask) = unit_inputs(a, f, slices)?;
     match method {
@@ -351,7 +351,7 @@ fn decimal(
 /// each frame picks, gathered as views of the input's buffers (see the
 /// module docs).
 fn bytes(
-    function: AggregateFunction,
+    function: &AggregateFunction,
     a: &AggregateExpr,
     f: &WindowFunctionPlan,
     slices: &[Slice<'_>],
@@ -392,7 +392,7 @@ fn bytes(
             // The first row at or after each row that counts.
             let mut next = vec![u32::MAX; n + 1];
             for j in (0..n).rev() {
-                next[j] = if counts(j, ignore_nulls) {
+                next[j] = if counts(j, *ignore_nulls) {
                     id(j)?
                 } else {
                     next[j + 1]
@@ -407,7 +407,7 @@ fn bytes(
             // `prev[j]`: the last row before `j` that counts.
             let mut prev = vec![None; n + 1];
             for j in 0..n {
-                prev[j + 1] = if counts(j, ignore_nulls) {
+                prev[j + 1] = if counts(j, *ignore_nulls) {
                     Some(id(j)?)
                 } else {
                     prev[j]

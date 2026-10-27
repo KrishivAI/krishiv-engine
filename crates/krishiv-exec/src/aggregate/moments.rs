@@ -64,7 +64,7 @@ type Row = [f64; WIDTH];
 
 /// The buffer attributes of `f`, in Spark's order; `None` for an aggregate
 /// that is not a moment aggregate.
-pub(super) fn buffer(f: AggregateFunction) -> Option<&'static [&'static str]> {
+pub(super) fn buffer(f: &AggregateFunction) -> Option<&'static [&'static str]> {
     use AggregateFunction as F;
     Some(match f {
         F::StddevSamp | F::StddevPop | F::VarSamp | F::VarPop => &["n", "avg", "m2"],
@@ -91,7 +91,7 @@ pub(super) fn reads_as_double(t: &DataType) -> bool {
 
 /// The partial-state columns of moment aggregate `f` (names derive from
 /// the aggregate's `name`): Spark's buffer, non-nullable `double`s.
-pub(super) fn state_fields(f: AggregateFunction, name: &str) -> Vec<Field> {
+pub(super) fn state_fields(f: &AggregateFunction, name: &str) -> Vec<Field> {
     buffer(f)
         .unwrap_or_default()
         .iter()
@@ -100,10 +100,14 @@ pub(super) fn state_fields(f: AggregateFunction, name: &str) -> Vec<Field> {
 }
 
 /// The arguments of an aggregate other than `count`: two for the pair
-/// statistics (`corr`, `covar_*`), else one.
-pub(crate) fn arity(f: AggregateFunction) -> usize {
+/// statistics (`corr`, `covar_*`) and the exact percentiles (the value
+/// and its per-row frequency), else one.
+pub(crate) fn arity(f: &AggregateFunction) -> usize {
     match f {
-        AggregateFunction::CovarSamp | AggregateFunction::CovarPop | AggregateFunction::Corr => 2,
+        AggregateFunction::CovarSamp
+        | AggregateFunction::CovarPop
+        | AggregateFunction::Corr
+        | AggregateFunction::Percentile { .. } => 2,
         _ => 1,
     }
 }
@@ -118,7 +122,7 @@ enum Family {
 }
 
 impl Family {
-    fn of(f: AggregateFunction) -> Option<Self> {
+    fn of(f: &AggregateFunction) -> Option<Self> {
         let width = buffer(f)?.len();
         Some(if arity(f) == 2 {
             Self::Pair {
@@ -242,7 +246,7 @@ fn merge(family: Family, a: &mut Row, b: &Row) {
 /// `corr` of several rows over a constant column is the exception: a
 /// division by zero whatever `legacy` says, `DIVIDE_BY_ZERO` with `ansi` and
 /// NULL without. Spark's `evaluateExpression`.
-fn finish(f: AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Option<f64>> {
+fn finish(f: &AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Option<f64>> {
     use AggregateFunction as F;
     let [n, _, m2, _, m4, _] = *s;
     if n == 0.0 {
@@ -291,7 +295,7 @@ pub(super) struct Moments {
 impl Moments {
     /// No groups yet, for moment aggregate `function`.
     pub(super) fn new(function: AggregateFunction, ansi: bool) -> Result<Self> {
-        let family = Family::of(function)
+        let family = Family::of(&function)
             .ok_or_else(|| internal(format!("{function:?} is not a moment aggregate")))?;
         Ok(Self {
             function,
@@ -361,7 +365,7 @@ impl Moments {
             return Err(internal("a moment aggregate without arguments".to_owned()));
         };
         if x.len() != groups.len()
-            || args.len() != arity(self.function)
+            || args.len() != arity(&self.function)
             || y.is_some_and(|y| y.len() != groups.len())
         {
             return Err(internal(
@@ -417,7 +421,7 @@ impl Moments {
     pub(super) fn evaluate(&self, ids: &[u32]) -> Result<ArrayRef> {
         let v = ids
             .iter()
-            .map(|&g| finish(self.function, &self.load(g)?, self.legacy, self.ansi))
+            .map(|&g| finish(&self.function, &self.load(g)?, self.legacy, self.ansi))
             .collect::<Result<Float64Array>>()?;
         Ok(std::sync::Arc::new(v))
     }

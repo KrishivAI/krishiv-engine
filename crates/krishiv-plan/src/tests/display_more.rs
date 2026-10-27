@@ -198,6 +198,7 @@ fn every_expression_form_prints() {
         ),
         (
             Expr::new(ExprNode::Function(FunctionCall {
+                within_group: Vec::new(),
                 name: "sum".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
@@ -266,6 +267,7 @@ fn shared_subqueries_print_once() {
         LogicalPlan::table(["u"]),
     ));
     let both = Expr::new(ExprNode::Function(FunctionCall {
+        within_group: Vec::new(),
         name: Builtin::And.name().to_owned(),
         qualifier: Vec::new(),
         arg_names: Vec::new(),

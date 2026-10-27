@@ -194,7 +194,8 @@ fn spill_scope() -> (TestSpill, SpillScope) {
 
 fn agg(f: AggregateFunction, col: usize, s: &SchemaRef) -> AggregateExpr {
     let t = s.field(col).data_type().clone();
-    AggregateExpr::new(f, col, t, format!("{f:?}_{col}"))
+    let name = format!("{f:?}_{col}");
+    AggregateExpr::new(f, col, t, name)
 }
 
 fn spec(s: &SchemaRef, group_by: Vec<usize>, aggregates: Vec<AggregateExpr>) -> AggregateSpec {

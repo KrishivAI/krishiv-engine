@@ -32,7 +32,7 @@
     },
     "fn-aggregate": {
       "kind": "unsupported",
-      "summary": "aggregate and sketch functions beyond P2a, WITHIN GROUP",
+      "summary": "aggregate functions beyond P2a, WITHIN GROUP",
       "task": "P2-T032"
     },
     "fn-array": {
@@ -59,6 +59,11 @@
       "kind": "unsupported",
       "summary": "regular-expression functions and operators",
       "task": "P2-T024"
+    },
+    "fn-sketch": {
+      "kind": "unsupported",
+      "summary": "DataSketches formats (hll_*, kll_*, theta_*, tuple_*), not in this change",
+      "task": "P2-T032"
     },
     "fn-string": {
       "kind": "unsupported",
@@ -348,7 +353,12 @@
     {
       "category": "fn-aggregate",
       "family": [
-        "agg",
+        "agg"
+      ]
+    },
+    {
+      "category": "fn-sketch",
+      "family": [
         "sketch"
       ]
     },

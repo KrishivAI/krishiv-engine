@@ -344,8 +344,8 @@ fn keys_are_stable() {
         ))
         .project(vec![Expr::column(["a"]).alias("b")]);
     let (hash, encoding) = key(plan);
-    assert_eq!(encoding.len(), 493, "{encoding:?}");
-    assert_eq!(hash.to_string(), "eaeeb9e9da010966fde69769c8d36f0f");
+    assert_eq!(encoding.len(), 509, "{encoding:?}");
+    assert_eq!(hash.to_string(), "18fb46a96faba73f2df9c154e49a4f89");
     // Options other than inline secrets, whose keys are per process.
     let options = [
         ("header", OptionValue::Plain("true".to_owned())),
@@ -357,7 +357,7 @@ fn keys_are_stable() {
     }));
     let (hash, encoding) = key(read);
     assert_eq!(encoding.len(), 124, "{encoding:?}");
-    assert_eq!(hash.to_string(), "abc19dd01ab19870f695f43bf481168f");
+    assert_eq!(hash.to_string(), "8b398126fa73d3a01fe43b57c60d0590");
 }
 
 /// A plan whose subtrees are shared (`p = p.join(p)` 30 times) is keyed in
@@ -400,6 +400,7 @@ fn shared_expressions_are_encoded_once() {
     let start = Instant::now();
     let e = (0..30).fold(Arc::new(Expr::column(["a"])), |e, _| {
         Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+            within_group: Vec::new(),
             name: Builtin::And.name().to_owned(),
             qualifier: Vec::new(),
             arg_names: Vec::new(),
@@ -427,6 +428,7 @@ fn qualifier_and_arg_names_enter_the_key() {
         Plan::try_new(
             LogicalPlan::table(["t"]).project(vec![Expr::new(ExprNode::Function(
                 crate::FunctionCall {
+                    within_group: Vec::new(),
                     name: "mask".to_owned(),
                     qualifier: qualifier.iter().map(|q| (*q).to_owned()).collect(),
                     args: vec![arg(), arg()],

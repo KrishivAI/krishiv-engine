@@ -272,9 +272,130 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "corr" if f.args.len() == 2 => (AggregateFunction::Corr, f.args.clone()),
         "covar_samp" if f.args.len() == 2 => (AggregateFunction::CovarSamp, f.args.clone()),
         "covar_pop" if f.args.len() == 2 => (AggregateFunction::CovarPop, f.args.clone()),
+        "percentile" if f.args.len() == 3 => {
+            let (percentages, array) = doubles_arg(&f.args[1])?;
+            (
+                AggregateFunction::Percentile {
+                    percentages,
+                    array,
+                    reverse: false,
+                },
+                vec![Arc::clone(&f.args[0]), Arc::clone(&f.args[2])],
+            )
+        }
+        "median" if f.args.len() == 1 => (
+            AggregateFunction::Percentile {
+                percentages: vec![0.5],
+                array: false,
+                reverse: false,
+            },
+            vec![Arc::clone(&f.args[0]), long_lit(1)],
+        ),
+        "percentile_approx" | "approx_percentile" if f.args.len() == 3 => {
+            let (percentages, array) = doubles_arg(&f.args[1])?;
+            let ExprNode::Literal(krishiv_plan::Literal::Long(accuracy)) = &f.args[2].node else {
+                return None;
+            };
+            (
+                AggregateFunction::PercentileApprox {
+                    percentages,
+                    array,
+                    accuracy: *accuracy,
+                },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
+        "percentile_cont" if f.args.len() == 4 => {
+            let (percentages, array) = doubles_arg(&f.args[1])?;
+            let ExprNode::Literal(krishiv_plan::Literal::Boolean(reverse)) = &f.args[2].node else {
+                return None;
+            };
+            (
+                AggregateFunction::Percentile {
+                    percentages,
+                    array,
+                    reverse: *reverse,
+                },
+                vec![Arc::clone(&f.args[0]), long_lit(1)],
+            )
+        }
+        "percentile_disc" if f.args.len() == 4 => {
+            let (percentages, array) = doubles_arg(&f.args[1])?;
+            let ExprNode::Literal(krishiv_plan::Literal::Boolean(reverse)) = &f.args[2].node else {
+                return None;
+            };
+            let ExprNode::Literal(krishiv_plan::Literal::Boolean(legacy)) = &f.args[3].node else {
+                return None;
+            };
+            (
+                AggregateFunction::PercentileDisc {
+                    percentages,
+                    array,
+                    reverse: *reverse,
+                    legacy: *legacy,
+                },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
+        "approx_count_distinct" if f.args.len() == 2 => {
+            let rsd = double_arg(&f.args[1])?;
+            let p = crate::aggregate::precision_for(rsd)?;
+            (
+                AggregateFunction::ApproxCountDistinct { p },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
         _ => return None,
     };
     Some(Lowered { function, args })
+}
+
+/// A folded percentage list: `Literal::Double(v)` is one percentage, the
+/// analyzer-built array of doubles is several (in order); anything else is
+/// not an analyzer-lowered call.
+fn doubles_arg(e: &Arc<Expr>) -> Option<(Vec<f64>, bool)> {
+    match &e.node {
+        ExprNode::Literal(krishiv_plan::Literal::Double(v)) => Some((vec![*v], false)),
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.id.name() == "array"
+                && f.args.iter().all(|a| {
+                    matches!(&a.node, ExprNode::Literal(krishiv_plan::Literal::Double(_)))
+                }) =>
+        {
+            Some((
+                f.args
+                    .iter()
+                    .map(|a| match &a.node {
+                        ExprNode::Literal(krishiv_plan::Literal::Double(v)) => *v,
+                        _ => f64::NAN,
+                    })
+                    .collect(),
+                true,
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// A folded double: `Literal::Double`, or a decimal literal read as
+/// correctly rounded (as Spark's `Decimal.toDouble` reads it).
+fn double_arg(e: &Arc<Expr>) -> Option<f64> {
+    match &e.node {
+        ExprNode::Literal(krishiv_plan::Literal::Double(v)) => Some(*v),
+        ExprNode::Literal(krishiv_plan::Literal::Decimal {
+            unscaled,
+            data_type,
+        }) => Some(crate::aggregate::decimal_to_double(
+            *unscaled,
+            i8::try_from(data_type.scale()).unwrap_or(i8::MAX),
+        )),
+        _ => None,
+    }
+}
+
+/// `Literal::Long(v)`, for a synthesized frequency of one.
+fn long_lit(v: i64) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Literal(krishiv_plan::Literal::Long(v))))
 }
 
 /// `nullif(c, false)`: `c` where it is true, else NULL, so `count` of it
@@ -336,7 +457,7 @@ pub(super) fn aggregate_expr(
             name,
         ));
     }
-    if function != AggregateFunction::Count && args.len() != arity(function) {
+    if function != AggregateFunction::Count && args.len() != arity(&function) {
         return Err(internal("an aggregate with the wrong number of arguments"));
     }
     let arg_type = args.first().map_or(arrow_schema::DataType::Null, typed);

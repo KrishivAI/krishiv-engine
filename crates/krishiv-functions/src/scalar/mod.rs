@@ -424,7 +424,7 @@ pub fn scalar_names() -> Vec<&'static str> {
 
 /// Whether the result of the scalar function `name` depends only on its
 /// arguments and `spark.sql.ansi.enabled`: the string (with its character and
-/// encoding families), math, arithmetic and struct families. The datetime, session and
+/// encoding families), math, arithmetic, array and struct families. The datetime, session and
 /// hash families read the session time zone, the user or the query start, so a
 /// caller that evaluates a call before execution (constant folding) must not
 /// evaluate those.
@@ -437,6 +437,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         codec::NAMES,
         math::NAMES,
         arith::NAMES,
+        array::NAMES,
         r#struct::NAMES,
     ]
     .iter()

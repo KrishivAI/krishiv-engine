@@ -426,7 +426,7 @@ fn reference(
                     // The string column: by bytes; first/last by row.
                     let texts: Vec<Option<String>> = frame_rows.iter().map(|x| text(x.3)).collect();
                     let set: Vec<&String> = texts.iter().flatten().collect();
-                    let v = match a.function {
+                    let v = match &a.function {
                         AggregateFunction::Min => set.iter().min().map(|s| (*s).clone()),
                         AggregateFunction::Max => set.iter().max().map(|s| (*s).clone()),
                         AggregateFunction::First { ignore_nulls: true } => {
@@ -488,7 +488,11 @@ fn reference(
                         | AggregateFunction::Kurtosis
                         | AggregateFunction::Corr
                         | AggregateFunction::CovarSamp
-                        | AggregateFunction::CovarPop => {
+                        | AggregateFunction::CovarPop
+                        | AggregateFunction::Percentile { .. }
+                        | AggregateFunction::PercentileApprox { .. }
+                        | AggregateFunction::PercentileDisc { .. }
+                        | AggregateFunction::ApproxCountDistinct { .. } => {
                             unreachable!("no window test aggregates with this function")
                         }
                     }
@@ -1522,6 +1526,7 @@ async fn exact_and_string_frames_from_disk() {
     let mut functions = Vec::new();
     for (k, frame) in frames.iter().enumerate() {
         for function in [Sum, Avg, Min, Max] {
+            let name = format!("d{k}{function:?}");
             functions.push(WindowFunctionPlan {
                 function: WindowFunction::Aggregate(AggregateExpr {
                     function,
@@ -1532,7 +1537,7 @@ async fn exact_and_string_frames_from_disk() {
                 }),
                 frame: *frame,
                 filter: None,
-                name: format!("d{k}{function:?}"),
+                name,
             });
         }
     }

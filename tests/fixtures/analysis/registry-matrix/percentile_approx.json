@@ -1,0 +1,90 @@
+{
+  "entries": [
+    {
+      "id": "percentile_approx#164d68d0de76/ansi_on",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.4, 0.1), INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (0), (1), (2), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#164d68d0de76/ansi_off",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.4, 0.1), INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (0), (1), (2), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#1e2a57db5bc8/ansi_on",
+      "reason": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile_approx#1e2a57db5bc8/ansi_off",
+      "reason": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile_approx#65b2e3cebfe8/ansi_on",
+      "reason": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile_approx#65b2e3cebfe8/ansi_off",
+      "reason": "SELECT percentile_approx(col, 0.5, 100) FROM VALUES (CAST(NULL AS interval month)), (CAST(NULL AS interval month)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile_approx#6a4ae3eab29d/ansi_on",
+      "reason": "SELECT percentile_approx(col, map('a', 1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#6a4ae3eab29d/ansi_off",
+      "reason": "SELECT percentile_approx(col, map('a', 1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#96af61639132/ansi_on",
+      "reason": "SELECT percentile_approx(col, 'abc', 100) FROM VALUES (0), (1), (2), (10) AS tab(col) | CAST_INVALID_INPUT"
+    },
+    {
+      "id": "percentile_approx#c1377e51970e/ansi_on",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.4, 0.1), INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (0), (1), (2), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#c1377e51970e/ansi_off",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.4, 0.1), INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (0), (1), (2), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#d0b6a4f17650/ansi_on",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile_approx#d0b6a4f17650/ansi_off",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (CAST(NULL AS interval second)), (CAST(NULL AS interval second)) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "percentile_approx#d2e654f0109f/ansi_on",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.4, 0.1), map('a', 1)) FROM VALUES (0), (1), (2), (10) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#d2e654f0109f/ansi_off",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.4, 0.1), map('a', 1)) FROM VALUES (0), (1), (2), (10) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#f30f6aaed73d/ansi_on",
+      "reason": "SELECT percentile_approx(col, INTERVAL '1-2' YEAR TO MONTH, 100) FROM VALUES (0), (1), (2), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#f30f6aaed73d/ansi_off",
+      "reason": "SELECT percentile_approx(col, INTERVAL '1-2' YEAR TO MONTH, 100) FROM VALUES (0), (1), (2), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#fa6cb3163b41/ansi_on",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile_approx#fa6cb3163b41/ansi_off",
+      "reason": "SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "percentile_approx#fe8402fb9337/ansi_on",
+      "reason": "SELECT percentile_approx(col, INTERVAL '1 02:03:04' DAY TO SECOND, 100) FROM VALUES (0), (1), (2), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "percentile_approx#fe8402fb9337/ansi_off",
+      "reason": "SELECT percentile_approx(col, INTERVAL '1 02:03:04' DAY TO SECOND, 100) FROM VALUES (0), (1), (2), (10) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "percentile_approx"
+}

@@ -30,9 +30,9 @@ const ALL: [AggregateFunction; 9] = [
 /// The functions NULL (or NaN, with the legacy flag) for one row.
 const SINGLE_ROW_DIVIDES: [AggregateFunction; 4] = [StddevSamp, VarSamp, CovarSamp, Corr];
 
-fn expr(f: AggregateFunction) -> AggregateExpr {
+fn expr(f: &AggregateFunction) -> AggregateExpr {
     AggregateExpr {
-        function: f,
+        function: f.clone(),
         args: (0..arity(f)).collect(),
         input: AggInput::Raw,
         arg_type: DataType::Float64,
@@ -49,11 +49,11 @@ fn some(v: &[f64]) -> Vec<Option<f64>> {
 }
 
 /// An accumulator over `groups` groups, without ANSI.
-fn acc(f: AggregateFunction, legacy: bool, groups: usize) -> Accumulator {
+fn acc(f: &AggregateFunction, legacy: bool, groups: usize) -> Accumulator {
     acc_ansi(f, legacy, false, groups)
 }
 
-fn acc_ansi(f: AggregateFunction, legacy: bool, ansi: bool, groups: usize) -> Accumulator {
+fn acc_ansi(f: &AggregateFunction, legacy: bool, ansi: bool, groups: usize) -> Accumulator {
     let mut a = Accumulator::new(&expr(f), ansi)
         .unwrap()
         .legacy_statistical(legacy);
@@ -62,7 +62,7 @@ fn acc_ansi(f: AggregateFunction, legacy: bool, ansi: bool, groups: usize) -> Ac
 }
 
 /// The columns an aggregate reads: `xs`, and `ys` for the pair statistics.
-fn columns(f: AggregateFunction, xs: &[Option<f64>], ys: &[Option<f64>]) -> Vec<ArrayRef> {
+fn columns(f: &AggregateFunction, xs: &[Option<f64>], ys: &[Option<f64>]) -> Vec<ArrayRef> {
     let mut cols = vec![doubles(xs)];
     if arity(f) == 2 {
         cols.push(doubles(ys));
@@ -72,7 +72,7 @@ fn columns(f: AggregateFunction, xs: &[Option<f64>], ys: &[Option<f64>]) -> Vec<
 
 /// One global group over rows `xs` (and `ys`), in one pass.
 fn global(
-    f: AggregateFunction,
+    f: &AggregateFunction,
     legacy: bool,
     xs: &[Option<f64>],
     ys: &[Option<f64>],
@@ -127,10 +127,10 @@ fn sequence(n: usize, seed: u64) -> Vec<f64> {
 fn no_rows_is_null() {
     for f in ALL {
         for legacy in [false, true] {
-            assert_eq!(global(f, legacy, &[], &[]), None, "{f:?} legacy={legacy}");
+            assert_eq!(global(&f, legacy, &[], &[]), None, "{f:?} legacy={legacy}");
             // A group that only saw NULLs has no rows either.
             let nulls = [None, None];
-            assert_eq!(global(f, legacy, &nulls, &nulls), None, "{f:?}");
+            assert_eq!(global(&f, legacy, &nulls, &nulls), None, "{f:?}");
         }
     }
 }
@@ -139,8 +139,8 @@ fn no_rows_is_null() {
 fn one_row_divides_by_zero_where_spark_does() {
     let (x, y) = (some(&[5.0]), some(&[7.0]));
     for f in ALL {
-        let strict = global(f, false, &x, &y);
-        let legacy = global(f, true, &x, &y);
+        let strict = global(&f, false, &x, &y);
+        let legacy = global(&f, true, &x, &y);
         if [Skewness, Kurtosis].contains(&f) || SINGLE_ROW_DIVIDES.contains(&f) {
             assert_eq!(strict, None, "{f:?}");
             assert!(is_nan(legacy), "{f:?}: {legacy:?}");
@@ -156,8 +156,8 @@ fn one_row_divides_by_zero_where_spark_does() {
 fn constant_values_have_no_variance() {
     let (x, y) = (some(&[3.0; 4]), some(&[2.0; 4]));
     for f in ALL {
-        let strict = global(f, false, &x, &y);
-        let legacy = global(f, true, &x, &y);
+        let strict = global(&f, false, &x, &y);
+        let legacy = global(&f, true, &x, &y);
         match f {
             Skewness | Kurtosis => {
                 assert_eq!(strict, None, "{f:?}");
@@ -187,23 +187,23 @@ fn corr_of_a_constant_column_is_a_division_by_zero_under_ansi() {
         (&constant, &constant),
     ] {
         for legacy in [false, true] {
-            let mut a = acc_ansi(Corr, legacy, true, 1);
-            a.update(&[0; 3], &columns(Corr, xs, ys), &Weights::Const(1))
+            let mut a = acc_ansi(&Corr, legacy, true, 1);
+            a.update(&[0; 3], &columns(&Corr, xs, ys), &Weights::Const(1))
                 .unwrap();
             let e = a.evaluate(&[0]).unwrap_err();
             assert_eq!(e.error_class(), ErrorClass::DivideByZero, "legacy={legacy}");
             // Without ANSI the same buffer is NULL.
-            assert_eq!(global(Corr, legacy, xs, ys), None);
+            assert_eq!(global(&Corr, legacy, xs, ys), None);
         }
     }
     // Rows with variance in both columns, and a single row, never raise
     // (the single row is NULL, or NaN with the legacy flag).
     for legacy in [false, true] {
-        let mut a = acc_ansi(Corr, legacy, true, 2);
+        let mut a = acc_ansi(&Corr, legacy, true, 2);
         a.update(
             &[0, 0, 0, 1],
             &columns(
-                Corr,
+                &Corr,
                 &some(&[1.0, 2.0, 4.0, 5.0]),
                 &some(&[2.0, 1.0, 7.0, 5.0]),
             ),
@@ -215,11 +215,11 @@ fn corr_of_a_constant_column_is_a_division_by_zero_under_ansi() {
     }
     // A group that raises does not stop the evaluation of the others when
     // they are evaluated apart: only the selected groups are read.
-    let mut a = acc_ansi(Corr, false, true, 2);
+    let mut a = acc_ansi(&Corr, false, true, 2);
     a.update(
         &[0, 0, 1, 1],
         &columns(
-            Corr,
+            &Corr,
             &some(&[1.0, 2.0, 3.0, 3.0]),
             &some(&[1.0, 2.0, 1.0, 2.0]),
         ),
@@ -236,12 +236,12 @@ fn rows_with_a_null_argument_are_skipped() {
     let ys = [Some(2.0), Some(9.0), None, Some(10.0), Some(1.5), None];
     for f in ALL {
         let complete: Vec<usize> = (0..xs.len())
-            .filter(|&i| xs[i].is_some() && (arity(f) == 1 || ys[i].is_some()))
+            .filter(|&i| xs[i].is_some() && (arity(&f) == 1 || ys[i].is_some()))
             .collect();
         let pick = |v: &[Option<f64>]| complete.iter().map(|&i| v[i]).collect::<Vec<_>>();
         for legacy in [false, true] {
-            let got = global(f, legacy, &xs, &ys);
-            let want = global(f, legacy, &pick(&xs), &pick(&ys));
+            let got = global(&f, legacy, &xs, &ys);
+            let want = global(&f, legacy, &pick(&xs), &pick(&ys));
             assert!(same(got, want), "{f:?}: {got:?} vs {want:?}");
             assert!(got.is_some(), "{f:?}");
         }
@@ -259,15 +259,15 @@ fn values_under_null_slots_never_count() {
     ));
     let y: ArrayRef = Arc::new(Float64Array::new(values.into(), Some(valid)));
     for f in ALL {
-        let mut a = acc(f, false, 1);
-        let cols = if arity(f) == 2 {
+        let mut a = acc(&f, false, 1);
+        let cols = if arity(&f) == 2 {
             vec![Arc::clone(&x), Arc::clone(&y)]
         } else {
             vec![Arc::clone(&x)]
         };
         a.update(&[0; 6], &cols, &Weights::Const(1)).unwrap();
         let (clean_x, clean_y) = (some(&[1.0, 3.0, 5.0]), some(&[1.0, 3.0, 5.0]));
-        let want = global(f, false, &clean_x, &clean_y);
+        let want = global(&f, false, &clean_x, &clean_y);
         assert!(same(value(&a, 0), want), "{f:?}");
     }
 }
@@ -279,22 +279,22 @@ fn nan_and_infinity_propagate() {
         let xs = some(&[1.0, bad, 3.0]);
         for f in ALL {
             for legacy in [false, true] {
-                let v = global(f, legacy, &xs, &ys);
+                let v = global(&f, legacy, &xs, &ys);
                 assert!(is_nan(v), "{f:?}({bad}): {v:?}");
             }
         }
     }
     // The pair statistics see a NaN in either argument.
     for f in [Corr, CovarPop, CovarSamp] {
-        let v = global(f, false, &ys, &some(&[1.0, f64::NAN, 3.0]));
+        let v = global(&f, false, &ys, &some(&[1.0, f64::NAN, 3.0]));
         assert!(is_nan(v), "{f:?}");
     }
     // A NaN is a value, not a NULL: it counts as a row. One row still
     // divides by zero first (Spark checks the count before the value).
     let nan = some(&[f64::NAN]);
-    assert!(is_nan(global(StddevPop, false, &nan, &[])));
-    assert_eq!(global(StddevSamp, false, &nan, &[]), None);
-    assert!(is_nan(global(StddevSamp, true, &nan, &[])));
+    assert!(is_nan(global(&StddevPop, false, &nan, &[])));
+    assert_eq!(global(&StddevSamp, false, &nan, &[]), None);
+    assert!(is_nan(global(&StddevSamp, true, &nan, &[])));
 }
 
 /// A two-pass reference: the central moments and co-moments of `xs`, `ys`.
@@ -341,11 +341,11 @@ fn matches_the_textbook_definitions() {
         _ => f64::NAN,
     };
     for f in ALL {
-        let got = global(f, false, &x, &y);
+        let got = global(&f, false, &x, &y);
         assert!(
-            close(got, Some(want(f)), 1e-9),
+            close(got, Some(want(f.clone())), 1e-9),
             "{f:?}: {got:?} vs {}",
-            want(f)
+            want(f.clone())
         );
     }
 }
@@ -366,10 +366,10 @@ fn values_far_from_zero_keep_their_precision() {
     assert!((naive - 2.0).abs() > 1.0, "{naive}");
     // The values 0..=4 equally often have variance 2.
     let within = |v, want| close(v, Some(want), 1e-6);
-    assert!(within(global(VarPop, false, &x, &[]), 2.0));
-    assert!(within(global(StddevPop, false, &x, &[]), 2.0_f64.sqrt()));
-    assert!(within(global(CovarPop, false, &x, &y), -4.0));
-    assert!(within(global(Corr, false, &x, &y), -1.0));
+    assert!(within(global(&VarPop, false, &x, &[]), 2.0));
+    assert!(within(global(&StddevPop, false, &x, &[]), 2.0_f64.sqrt()));
+    assert!(within(global(&CovarPop, false, &x, &y), -4.0));
+    assert!(within(global(&Corr, false, &x, &y), -1.0));
 }
 
 /// A recorded result: the function, its arguments and Spark's value.
@@ -387,7 +387,7 @@ fn spark_slices(rows: usize, p: usize) -> Vec<Range<usize>> {
 /// Spark's evaluation: each partition folds its rows into a partial buffer;
 /// the final stage merges the partials, in order, into an empty buffer.
 fn spark_style(
-    f: AggregateFunction,
+    f: &AggregateFunction,
     legacy: bool,
     xs: &[Option<f64>],
     ys: &[Option<f64>],
@@ -433,13 +433,13 @@ fn recorded_spark_results_are_reproduced_to_the_bit() {
         (VarSamp, 0.809_523_809_523_809_4),
         (StddevSamp, 0.899_735_410_842_437_2),
     ] {
-        let got = spark_style(f, false, &a, &none, 2);
+        let got = spark_style(&f, false, &a, &none, 2);
         assert!(same(got, Some(want)), "{f:?}: {got:?} vs {want:?}");
     }
     // linear-regression.sql: `SELECT k, corr(y, x) ... GROUP BY k`, group
     // k = 2 of the six-row table cut in two partitions: its rows
     // (y, x) = (10, 11), (20, 22) | (25, NULL), (30, 35), (NULL, 40).
-    let mut last = acc(Corr, false, 1);
+    let mut last = acc(&Corr, false, 1);
     for (ys, xs) in [
         (vec![Some(10.0), Some(20.0)], vec![Some(11.0), Some(22.0)]),
         (
@@ -447,11 +447,11 @@ fn recorded_spark_results_are_reproduced_to_the_bit() {
             vec![None, Some(35.0), Some(40.0)],
         ),
     ] {
-        let mut partial = acc(Corr, false, 1);
+        let mut partial = acc(&Corr, false, 1);
         partial
             .update(
                 &[0; 3][..ys.len()],
-                &columns(Corr, &ys, &xs),
+                &columns(&Corr, &ys, &xs),
                 &Weights::Const(1),
             )
             .unwrap();
@@ -487,14 +487,14 @@ fn recorded_spark_results_are_reproduced_to_the_bit() {
         (Corr, &pairs_x, &pairs_y, 0.866_025_403_784_438_7),
     ];
     for (f, x, y, want) in cases {
-        let got = spark_style(f, false, x, y, x.len());
+        let got = spark_style(&f, false, x, y, x.len());
         assert!(
             same(got, Some(want)),
             "{f:?} over {x:?}: {got:?} vs {want:?}"
         );
     }
     // A pass over one partition is another rounding of the same value.
-    let one_pass = global(Skewness, false, &m10, &none);
+    let one_pass = global(&Skewness, false, &m10, &none);
     assert!(close(one_pass, Some(1.113_565_746_902_201_3), 1e-14));
     assert!(!same(one_pass, Some(1.113_565_746_902_201_3)));
 }
@@ -502,7 +502,7 @@ fn recorded_spark_results_are_reproduced_to_the_bit() {
 /// `values` in `parts` contiguous pieces, each folded on its own and the
 /// partial states merged into a fresh accumulator in `order`.
 fn split_merge(
-    f: AggregateFunction,
+    f: &AggregateFunction,
     xs: &[Option<f64>],
     ys: &[Option<f64>],
     parts: usize,
@@ -538,7 +538,7 @@ fn any_split_merged_in_any_order_agrees_with_one_pass() {
         ys[i] = None;
     }
     for f in ALL {
-        let once = global(f, false, &xs, &ys);
+        let once = global(&f, false, &xs, &ys);
         for parts in 1..=9 {
             let orders: [(&str, Order); 3] = [
                 ("forward", Box::new(|i| i)),
@@ -546,13 +546,13 @@ fn any_split_merged_in_any_order_agrees_with_one_pass() {
                 ("rotated", Box::new(move |i| (i + 2) % parts)),
             ];
             for (name, order) in orders {
-                let got = split_merge(f, &xs, &ys, parts, &order);
+                let got = split_merge(&f, &xs, &ys, parts, &order);
                 assert!(
                     close(got, once, 1e-9),
                     "{f:?} {parts} {name}: {got:?} vs {once:?}"
                 );
                 // The same split in the same order is deterministic.
-                assert!(same(got, split_merge(f, &xs, &ys, parts, &order)));
+                assert!(same(got, split_merge(&f, &xs, &ys, parts, &order)));
             }
         }
     }
@@ -562,17 +562,17 @@ fn any_split_merged_in_any_order_agrees_with_one_pass() {
 fn empty_partial_states_merge_to_the_same_value() {
     let (xs, ys) = (some(&sequence(31, 5)), some(&sequence(31, 6)));
     for f in ALL {
-        let want = global(f, false, &xs, &ys);
-        let mut full = acc(f, false, 1);
-        full.update(&[0; 31], &columns(f, &xs, &ys), &Weights::Const(1))
+        let want = global(&f, false, &xs, &ys);
+        let mut full = acc(&f, false, 1);
+        full.update(&[0; 31], &columns(&f, &xs, &ys), &Weights::Const(1))
             .unwrap();
-        let empty = acc(f, false, 1).state(&[0]).unwrap();
+        let empty = acc(&f, false, 1).state(&[0]).unwrap();
         let state = full.state(&[0]).unwrap();
         // Spark's final stage merges every partial into an empty buffer;
         // an empty partial merged last changes nothing.
-        let mut first = acc(f, false, 1);
+        let mut first = acc(&f, false, 1);
         first.merge(&[0], &state).unwrap();
-        let mut last = acc(f, false, 1);
+        let mut last = acc(&f, false, 1);
         last.merge(&[0], &state).unwrap();
         last.merge(&[0], &empty).unwrap();
         for a in [&first, &last] {
@@ -583,7 +583,7 @@ fn empty_partial_states_merge_to_the_same_value() {
             );
         }
         // Only empty partials: no rows.
-        let mut none = acc(f, false, 1);
+        let mut none = acc(&f, false, 1);
         none.merge(&[0], &empty).unwrap();
         none.merge(&[0], &empty).unwrap();
         assert_eq!(value(&none, 0), None, "{f:?}");
@@ -596,8 +596,8 @@ fn groups_are_independent() {
     let ys = some(&[2.0, 5.0, 4.0, 4.0, 7.0, 3.0, 1.0]);
     let groups = [0_u32, 1, 0, 1, 0, 1, 2];
     for f in ALL {
-        let mut a = acc(f, false, 3);
-        a.update(&groups, &columns(f, &xs, &ys), &Weights::Const(1))
+        let mut a = acc(&f, false, 3);
+        a.update(&groups, &columns(&f, &xs, &ys), &Weights::Const(1))
             .unwrap();
         let pick = |v: &[Option<f64>], g: u32| {
             groups
@@ -608,7 +608,7 @@ fn groups_are_independent() {
                 .collect::<Vec<_>>()
         };
         for g in 0..3 {
-            let want = global(f, false, &pick(&xs, g), &pick(&ys, g));
+            let want = global(&f, false, &pick(&xs, g), &pick(&ys, g));
             assert!(same(value(&a, g), want), "{f:?} group {g}");
         }
         // Several ids at once, in any order.
@@ -630,11 +630,11 @@ fn integer_and_float_inputs_are_read_as_doubles() {
         Some(2.0),
         Some(4.0),
     ]));
-    let want = global(VarSamp, false, &some(&[1.0, 2.0, 4.0]), &[]);
+    let want = global(&VarSamp, false, &some(&[1.0, 2.0, 4.0]), &[]);
     for (col, t) in [(ints, DataType::Int32), (floats, DataType::Float32)] {
         let e = AggregateExpr {
             arg_type: t,
-            ..expr(VarSamp)
+            ..expr(&VarSamp)
         };
         assert_eq!(e.result_type().unwrap(), DataType::Float64);
         let mut a = Accumulator::new(&e, true).unwrap();
@@ -646,7 +646,7 @@ fn integer_and_float_inputs_are_read_as_doubles() {
 
 #[test]
 fn state_columns_are_sparks_buffers() {
-    let names = |f| -> Vec<String> {
+    let names = |f: &AggregateFunction| -> Vec<String> {
         expr(f)
             .state_fields()
             .unwrap()
@@ -658,23 +658,23 @@ fn state_columns_are_sparks_buffers() {
             })
             .collect()
     };
-    assert_eq!(names(StddevSamp), ["m#n", "m#avg", "m#m2"]);
-    assert_eq!(names(VarPop), ["m#n", "m#avg", "m#m2"]);
-    assert_eq!(names(Skewness), ["m#n", "m#avg", "m#m2", "m#m3"]);
-    assert_eq!(names(Kurtosis), ["m#n", "m#avg", "m#m2", "m#m3", "m#m4"]);
-    assert_eq!(names(CovarPop), ["m#n", "m#xAvg", "m#yAvg", "m#ck"]);
+    assert_eq!(names(&StddevSamp), ["m#n", "m#avg", "m#m2"]);
+    assert_eq!(names(&VarPop), ["m#n", "m#avg", "m#m2"]);
+    assert_eq!(names(&Skewness), ["m#n", "m#avg", "m#m2", "m#m3"]);
+    assert_eq!(names(&Kurtosis), ["m#n", "m#avg", "m#m2", "m#m3", "m#m4"]);
+    assert_eq!(names(&CovarPop), ["m#n", "m#xAvg", "m#yAvg", "m#ck"]);
     assert_eq!(
-        names(Corr),
+        names(&Corr),
         ["m#n", "m#xAvg", "m#yAvg", "m#ck", "m#xMk", "m#yMk"]
     );
     for f in ALL {
-        let a = acc(f, false, 2);
+        let a = acc(&f, false, 2);
         let state = a.state(&[0, 1]).unwrap();
-        assert_eq!(state.len(), names(f).len(), "{f:?}");
+        assert_eq!(state.len(), names(&f).len(), "{f:?}");
         assert!(state.iter().all(|c| c.len() == 2 && c.null_count() == 0));
         assert_eq!(a.state_len(), state.len());
         // The merging form reads those columns, wherever they sit.
-        let merging = expr(f).merging(4);
+        let merging = expr(&f).merging(4);
         assert_eq!(merging.input, AggInput::State);
         assert_eq!(merging.args, (4..4 + state.len()).collect::<Vec<_>>());
     }
@@ -691,7 +691,7 @@ fn only_numbers_are_read_and_the_result_is_double() {
         ] {
             let e = AggregateExpr {
                 arg_type: t,
-                ..expr(f)
+                ..expr(&f)
             };
             assert_eq!(e.result_type().unwrap(), DataType::Float64, "{f:?}");
         }
@@ -703,7 +703,7 @@ fn only_numbers_are_read_and_the_result_is_double() {
         ] {
             let e = AggregateExpr {
                 arg_type: t,
-                ..expr(f)
+                ..expr(&f)
             };
             let err = e.result_type().unwrap_err();
             assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
@@ -715,8 +715,8 @@ fn only_numbers_are_read_and_the_result_is_double() {
 #[test]
 fn row_weights_other_than_one_are_refused() {
     for f in ALL {
-        let mut a = acc(f, false, 1);
-        let cols = columns(f, &some(&[1.0, 2.0]), &some(&[3.0, 4.0]));
+        let mut a = acc(&f, false, 1);
+        let cols = columns(&f, &some(&[1.0, 2.0]), &some(&[3.0, 4.0]));
         let err = a.update(&[0, 0], &cols, &Weights::Const(2)).unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
         let column = Weights::Column(arrow_array::Int64Array::from(vec![1, -1]));
@@ -735,8 +735,8 @@ fn row_weights_other_than_one_are_refused() {
 #[test]
 fn malformed_inputs_are_errors_not_panics() {
     for f in ALL {
-        let mut a = acc(f, false, 1);
-        let cols = columns(f, &some(&[1.0, 2.0]), &some(&[1.0, 2.0]));
+        let mut a = acc(&f, false, 1);
+        let cols = columns(&f, &some(&[1.0, 2.0]), &some(&[1.0, 2.0]));
         // A group that does not exist.
         let err = a.update(&[0, 5], &cols, &Weights::Const(1)).unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::InternalError, "{f:?}");
@@ -751,7 +751,7 @@ fn malformed_inputs_are_errors_not_panics() {
         };
         assert!(a.update_running(&[0, 0], &cols, &run).is_err());
         // States: too few columns, NULLs, another type, another length.
-        let good = acc(f, false, 1).state(&[0]).unwrap();
+        let good = acc(&f, false, 1).state(&[0]).unwrap();
         assert!(a.merge(&[0], &good[..good.len() - 1]).is_err());
         let mut nulled = good.clone();
         nulled[0] = doubles(&[None]);

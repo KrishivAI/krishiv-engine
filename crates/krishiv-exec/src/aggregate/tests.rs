@@ -225,7 +225,8 @@ fn scan(s: &SchemaRef, batches: Vec<Vec<ArrayRef>>) -> Arc<dyn ExecNode> {
 
 fn agg(f: AggregateFunction, col: usize, s: &SchemaRef) -> AggregateExpr {
     let t = s.field(col).data_type().clone();
-    AggregateExpr::new(f, col, t, format!("{f:?}_{col}"))
+    let name = format!("{f:?}_{col}");
+    AggregateExpr::new(f, col, t, name)
 }
 
 fn spec(s: &SchemaRef, group_by: Vec<usize>, aggregates: Vec<AggregateExpr>) -> AggregateSpec {
@@ -476,7 +477,7 @@ async fn decimals_and_overflow() {
     };
     let up = [nines.as_str(), "1", "-5"];
     for (f, hint) in [(Sum, "try_sum"), (Avg, "try_avg")] {
-        let r = err_text(exec(grouped(&up, f, true), o).await);
+        let r = err_text(exec(grouped(&up, f.clone(), true), o).await);
         assert!(
             r.starts_with(&format!(
                 "[ARITHMETIC_OVERFLOW] Overflow in sum of decimals. Use '{hint}'"
@@ -491,7 +492,7 @@ async fn decimals_and_overflow() {
     // Past i128: "Overflow in sum of decimals" (sum and avg).
     let huge = || dec(&[nines.as_str(); 4], 38, 0);
     for (f, hint) in [(Sum, "try_sum"), (Avg, "try_avg")] {
-        let r = exec(one(d(38, 0), huge(), f, true), o).await;
+        let r = exec(one(d(38, 0), huge(), f.clone(), true), o).await;
         assert_eq!(
             err_text(r),
             format!(
@@ -2612,8 +2613,8 @@ const MOMENTS: [AggregateFunction; 9] = [
 fn moment_aggs() -> Vec<AggregateExpr> {
     MOMENTS
         .iter()
-        .map(|&f| AggregateExpr {
-            function: f,
+        .map(|f| AggregateExpr {
+            function: f.clone(),
             args: if super::arity(f) == 2 {
                 vec![1, 2]
             } else {

@@ -527,6 +527,7 @@ fn corpus() -> Vec<(&'static str, ResolutionConf, LogicalPlan)> {
             "SELECT count(a) FILTER (WHERE b = 'x') FROM t",
             default,
             t().project(vec![Expr::new(ExprNode::Function(crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "count".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
@@ -643,6 +644,7 @@ fn shared_expressions_stay_linear() {
     let doubled = || {
         (0..30).fold(Arc::new(c("a")), |e, _| {
             Arc::new(Expr::new(ExprNode::Function(crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "+".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
@@ -1722,6 +1724,7 @@ fn shared_subexpressions_in_rewrites() {
     let twice = |name: &str| {
         let x = Arc::new(c(name));
         Expr::new(ExprNode::Function(crate::FunctionCall {
+            within_group: Vec::new(),
             name: "+".to_owned(),
             qualifier: Vec::new(),
             arg_names: Vec::new(),
@@ -2213,6 +2216,7 @@ fn typed_literals_resolve_with_the_session_zone() {
 fn conditional_with_filter_names_the_filter_once() {
     let ctx = ctx();
     let call = Expr::new(ExprNode::Function(crate::FunctionCall {
+        within_group: Vec::new(),
         name: "nvl".to_owned(),
         qualifier: Vec::new(),
         arg_names: Vec::new(),

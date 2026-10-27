@@ -173,6 +173,12 @@ pub struct FunctionCall {
     pub distinct: bool,
     /// `f(...) FILTER (WHERE filter)`.
     pub filter: Option<Arc<Expr>>,
+    /// `f(...) WITHIN GROUP (ORDER BY ...)` (ordered-set aggregates:
+    /// `percentile_cont`, `percentile_disc`); empty for other calls. The
+    /// analyzer lowers a valid one into the aggregate's arguments and keeps
+    /// this form only for naming (Spark's `toPrettySQL` renders the call as
+    /// written).
+    pub within_group: Vec<SortOrder>,
 }
 
 /// How a cast handles invalid input.
@@ -478,6 +484,7 @@ impl Expr {
             arg_names: Vec::new(),
             distinct: false,
             filter: None,
+            within_group: Vec::new(),
         }))
     }
 
@@ -552,8 +559,19 @@ impl Expr {
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
-            ExprNode::Function(FunctionCall { args, filter, .. })
-            | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+            ExprNode::Function(FunctionCall {
+                args,
+                filter,
+                within_group,
+                ..
+            }) => {
+                args.iter().for_each(&mut *f);
+                if let Some(filter) = filter {
+                    f(filter);
+                }
+                within_group.iter().for_each(|o| f(&o.expr));
+            }
+            ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
             })) => {
                 args.iter().for_each(&mut *f);
@@ -598,8 +616,19 @@ impl Expr {
             | ExprNode::Resolved(
                 ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
             ) => {}
-            ExprNode::Function(FunctionCall { args, filter, .. })
-            | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+            ExprNode::Function(FunctionCall {
+                args,
+                filter,
+                within_group,
+                ..
+            }) => {
+                args.iter_mut().for_each(&mut *f);
+                if let Some(filter) = filter {
+                    f(filter);
+                }
+                within_group.iter_mut().for_each(|o| f(&mut o.expr));
+            }
+            ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
             })) => {
                 args.iter_mut().for_each(&mut *f);

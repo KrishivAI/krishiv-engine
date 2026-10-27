@@ -443,6 +443,7 @@ fn q16() -> LogicalPlan {
         .filter(like(c("s_comment"), "%Customer%Complaints%"))
         .project(cols(&["s_suppkey"]));
     let supplier_cnt = Expr::new(ExprNode::Function(FunctionCall {
+        within_group: Vec::new(),
         name: "count".to_owned(),
         qualifier: Vec::new(),
         arg_names: Vec::new(),

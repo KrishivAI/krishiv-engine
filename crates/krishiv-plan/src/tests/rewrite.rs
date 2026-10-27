@@ -251,6 +251,7 @@ fn exprs() -> Vec<(Expr, usize)> {
         ),
         (
             Expr::new(ExprNode::Function(crate::FunctionCall {
+                within_group: Vec::new(),
                 name: "f".to_owned(),
                 qualifier: Vec::new(),
                 arg_names: Vec::new(),
