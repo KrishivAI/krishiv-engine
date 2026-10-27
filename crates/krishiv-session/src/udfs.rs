@@ -404,7 +404,7 @@ mod tests {
         let found = f.lookup(&["upper".to_owned()], SparkProfile::V4_2);
         assert!(matches!(found, FunctionLookup::Found(_)));
         // Registering `upper` does not shadow it.
-        f.library().register(Arc::new(UpperShadow));
+        f.library().register(Arc::new(UpperShadow)).unwrap();
         let found = f.lookup(&["upper".to_owned()], SparkProfile::V4_2);
         assert!(matches!(
             found,
@@ -466,7 +466,9 @@ mod tests {
             f.lookup(&["doubles".to_owned()], SparkProfile::V4_2),
             FunctionLookup::NotFound
         ));
-        f.library().register(Arc::new(Doubles { version: 2 }));
+        f.library()
+            .register(Arc::new(Doubles { version: 2 }))
+            .unwrap();
         let FunctionLookup::Found(entry) = f.lookup(&["DOUBLES".to_owned()], SparkProfile::V4_2)
         else {
             panic!("a registered UDF resolves");
@@ -485,7 +487,9 @@ mod tests {
         assert!(f.resolve_udf("doubles", 1).is_none());
         // Re-registering replaces and bumps the registry version.
         let before = f.version();
-        f.library().register(Arc::new(Doubles { version: 3 }));
+        f.library()
+            .register(Arc::new(Doubles { version: 3 }))
+            .unwrap();
         assert!(f.version() != before);
         let FunctionLookup::Found(entry) = f.lookup(&["doubles".to_owned()], SparkProfile::V4_2)
         else {

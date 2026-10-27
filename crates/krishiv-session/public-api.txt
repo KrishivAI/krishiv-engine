@@ -277,7 +277,7 @@ pub fn krishiv_session::Session::memory_reserved(&self) -> usize
 pub fn krishiv_session::Session::new() -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader
 pub fn krishiv_session::Session::register_batches(&self, &str, arrow_schema::schema::SchemaRef, alloc::vec::Vec<arrow_array::record_batch::RecordBatch>) -> core::result::Result<(), krishiv_common::error::KrishivError>
-pub fn krishiv_session::Session::register_udf(&self, impl krishiv_udf_sdk::udf::ScalarUdf)
+pub fn krishiv_session::Session::register_udf(&self, impl krishiv_udf_sdk::udf::ScalarUdf) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::Session::sql(&self, &str) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::table(&self, &str) -> krishiv_session::DataFrame
 pub fn krishiv_session::Session::temp_table_names(&self) -> alloc::vec::Vec<alloc::string::String>

@@ -15,6 +15,7 @@ arrow-schema.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
+krishiv-functions = { path = "../krishiv-functions" }
 krishiv-io = { path = "../krishiv-io" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }

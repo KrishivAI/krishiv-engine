@@ -141,7 +141,7 @@ impl ScalarUdf for AddOne {
 #[test]
 fn a_registered_udf_runs_in_sql() {
     let s = session();
-    s.register_udf(AddOne);
+    s.register_udf(AddOne).unwrap();
     let rows = collect(&s, "SELECT add_one(id) FROM people ORDER BY id");
     assert_eq!(ints(&rows), [Some(2), Some(3), Some(4)]);
 }
@@ -149,7 +149,7 @@ fn a_registered_udf_runs_in_sql() {
 #[test]
 fn a_udf_runs_through_the_dataframe_api_identically() {
     let s = session();
-    s.register_udf(AddOne);
+    s.register_udf(AddOne).unwrap();
     let via_sql = collect(&s, "SELECT add_one(id) AS x FROM people ORDER BY id");
     let df = s
         .table("people")
@@ -222,7 +222,7 @@ fn one_string(s: &Session, query: &str) -> String {
 #[test]
 fn builtins_win_over_a_same_name_udf() {
     let s = Session::new().unwrap();
-    s.register_udf(UpperUdf);
+    s.register_udf(UpperUdf).unwrap();
     // The bare name is the built-in, as in Spark 4.2.
     assert_eq!(one_string(&s, "SELECT upper('a')"), "A");
     // `system.builtin` reaches built-ins only.
@@ -242,7 +242,7 @@ fn qualified_shadowing_udf_survives_grouping_rewrites() {
     // silently run the built-in over a same-name session UDF, so a UDF
     // call rebinds qualified (`system.session.upper`).
     let s = Session::new().unwrap();
-    s.register_udf(UpperUdf);
+    s.register_udf(UpperUdf).unwrap();
     let schema = Arc::new(Schema::new(vec![Field::new("s", ArrowType::Utf8, true)]));
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -329,14 +329,16 @@ fn re_registering_a_name_replaces_it() {
     s.register_udf(Versioned {
         version: 1,
         calls: Arc::clone(&calls),
-    });
+    })
+    .unwrap();
     let rows = collect(&s, "SELECT versioned()");
     assert_eq!(ints(&rows), [Some(1)]);
     // Re-registering replaces the implementation (and its version).
     s.register_udf(Versioned {
         version: 2,
         calls: Arc::clone(&calls),
-    });
+    })
+    .unwrap();
     let rows = collect(&s, "SELECT versioned()");
     assert_eq!(ints(&rows), [Some(2)]);
 }
@@ -426,12 +428,14 @@ fn strict_never_sees_nulls_custom_does() {
         strict: true,
         invocations: Arc::clone(&strict_calls),
         nulls_seen: Arc::clone(&strict_nulls),
-    });
+    })
+    .unwrap();
     s.register_udf(NullProbe {
         strict: false,
         invocations: Arc::clone(&custom_calls),
         nulls_seen: Arc::clone(&custom_nulls),
-    });
+    })
+    .unwrap();
     // `a` is `[1, NULL, 3]`.
     let rows = collect(
         &s,
@@ -516,7 +520,8 @@ fn all_literal_calls_invoke_once_and_broadcast() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     s.register_udf(RowRecorder {
         rows: Arc::clone(&seen),
-    });
+    })
+    .unwrap();
     // Two literal arguments over three rows: computed once, broadcast.
     let rows = collect(&s, "SELECT recorder(1, 2) FROM people");
     assert_eq!(ints(&rows), [Some(1), Some(1), Some(1)]);
@@ -578,7 +583,7 @@ impl ScalarUdf for EchoString {
 #[test]
 fn implicit_casts_match_a_builtin_with_the_same_inputs() {
     let s = Session::new().unwrap();
-    s.register_udf(EchoString);
+    s.register_udf(EchoString).unwrap();
     // `INT` implicitly casts to `STRING`, exactly as for the built-in
     // `upper` with the same declared input.
     assert_eq!(one_string(&s, "SELECT echo_str(1)"), "1");
@@ -637,8 +642,8 @@ impl ScalarUdf for StrictInt {
 #[test]
 fn coercible_positions_match_strictly() {
     let s = Session::new().unwrap();
-    s.register_udf(AddOne);
-    s.register_udf(StrictInt);
+    s.register_udf(AddOne).unwrap();
+    s.register_udf(StrictInt).unwrap();
     // `Exact` coerces a `BIGINT` down to `INT`.
     let rows = collect(&s, "SELECT add_one(CAST(5 AS BIGINT))");
     assert_eq!(ints(&rows), [Some(6)]);
@@ -718,9 +723,9 @@ fn explosive_fails(s: &Session, query: &str, reason: &str) {
 fn contract_breaks_user_errors_and_panics_fail_the_query() {
     let s = session();
     for what in ["type", "nullable", "error", "panic"] {
-        s.register_udf(Explosive { what });
+        s.register_udf(Explosive { what }).unwrap();
     }
-    s.register_udf(Explosive { what: "short" });
+    s.register_udf(Explosive { what: "short" }).unwrap();
     // Wrong result type, nullability, user error and panic.
     explosive_fails(&s, "SELECT explosive_type(1)", "explosive_type");
     explosive_fails(&s, "SELECT explosive_nullable(1)", "explosive_nullable");
@@ -812,11 +817,13 @@ fn only_deterministic_calls_fold() {
     s.register_udf(CountingEcho {
         deterministic: true,
         calls: Arc::new(AtomicUsize::new(0)),
-    });
+    })
+    .unwrap();
     s.register_udf(CountingEcho {
         deterministic: false,
         calls: Arc::clone(&nondet_calls),
-    });
+    })
+    .unwrap();
     // The deterministic call folds to a literal: the plan holds `'a'`,
     // not the call (the output name still cites it, as for built-ins).
     let plan = explain(&s, "SELECT det_echo('a')");
@@ -921,7 +928,7 @@ impl ScalarUdf for JoinStrings {
 #[test]
 fn variadic_udfs_take_any_arity_above_the_minimum() {
     let s = Session::new().unwrap();
-    s.register_udf(JoinStrings);
+    s.register_udf(JoinStrings).unwrap();
     assert_eq!(one_string(&s, "SELECT join_strings('a')"), "a");
     assert_eq!(
         one_string(&s, "SELECT join_strings('a', 'b', 'c')"),
@@ -991,7 +998,7 @@ fn strict_non_nullable_declared_udf_widens_over_nullable_args() {
     )
     .unwrap();
     s.register_batches("nums", schema, vec![batch]).unwrap();
-    s.register_udf(StrictNonNull);
+    s.register_udf(StrictNonNull).unwrap();
     // The analyzer widens the result to nullable: the field accepts nulls.
     let df = block_on(s.sql("SELECT strict_nonnull(a) AS x FROM nums")).unwrap();
     let schema = block_on(df.schema()).unwrap();
@@ -1074,7 +1081,7 @@ fn nvl_table() -> Session {
     )
     .unwrap();
     s.register_batches("t", schema, vec![batch]).unwrap();
-    s.register_udf(NvlUdf);
+    s.register_udf(NvlUdf).unwrap();
     s
 }
 
@@ -1183,7 +1190,7 @@ fn bools(batches: &[RecordBatch]) -> Vec<Option<bool>> {
 #[test]
 fn assert_true_builtin_wins_unqualified_but_qualified_reaches_the_udf() {
     let s = Session::new().unwrap();
-    s.register_udf(AssertTrueUdf);
+    s.register_udf(AssertTrueUdf).unwrap();
     // SQL: bare `assert_true(true)` is the built-in (`void`, always NULL);
     // qualified runs the UDF (NOT cond, boolean).
     let rows = collect(&s, "SELECT assert_true(true) AS x");
@@ -1196,7 +1203,7 @@ fn assert_true_builtin_wins_unqualified_but_qualified_reaches_the_udf() {
     assert_eq!(bools(&rows), [Some(true)]);
     // DataFrame API follows the same rule, through a real table.
     let s2 = Session::new().unwrap();
-    s2.register_udf(AssertTrueUdf);
+    s2.register_udf(AssertTrueUdf).unwrap();
     let schema = Arc::new(Schema::new(vec![Field::new(
         "b",
         ArrowType::Boolean,
@@ -1287,7 +1294,7 @@ impl ScalarUdf for NtileUdf {
 #[test]
 fn ntile_qualified_reaches_the_udf_unqualified_stays_the_window() {
     let s = Session::new().unwrap();
-    s.register_udf(NtileUdf);
+    s.register_udf(NtileUdf).unwrap();
     // SQL: qualified calls run the scalar UDF.
     let rows = collect(&s, "SELECT session.ntile(5) AS x");
     assert_eq!(ints(&rows), [Some(105)]);
@@ -1299,7 +1306,7 @@ fn ntile_qualified_reaches_the_udf_unqualified_stays_the_window() {
     assert_ne!(e.error_class(), ErrorClass::FailedExecuteUdf);
     // DataFrame API follows the same rule.
     let s2 = Session::new().unwrap();
-    s2.register_udf(NtileUdf);
+    s2.register_udf(NtileUdf).unwrap();
     let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, false)]));
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -1387,8 +1394,8 @@ impl ScalarUdf for PanicSignature {
 #[test]
 fn panicking_return_field_and_signature_become_failed_execute_udf() {
     let s = Session::new().unwrap();
-    s.register_udf(PanicReturn);
-    s.register_udf(PanicSignature);
+    s.register_udf(PanicReturn).unwrap();
+    s.register_udf(PanicSignature).unwrap();
     for query in ["SELECT panic_return(1)", "SELECT panic_signature(1)"] {
         let e = block_on(s.sql(query)).unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf, "{query}");
@@ -1411,10 +1418,57 @@ fn panicking_return_field_and_signature_become_failed_execute_udf() {
 }
 
 #[test]
-fn udf_not_available_uses_kd003() {
+fn udf_not_available_uses_39000() {
     use krishiv_common::error::ErrorClass;
     assert_eq!(
         ErrorClass::KrishivUdfNotAvailable.sql_state(),
-        Some("KD003")
+        Some("39000")
     );
+}
+
+/// A UDF whose `name` panics: registration fails with
+/// `FAILED_EXECUTE_UDF` instead of appearing to succeed.
+#[test]
+fn panicking_name_fails_registration_as_failed_execute_udf() {
+    use krishiv_common::error::ErrorClass;
+    #[derive(Debug)]
+    struct PanicName;
+
+    impl ScalarUdf for PanicName {
+        fn name(&self) -> &str {
+            panic!("boom")
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            _: &[UdfArg<'_>],
+            rows: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Ok(Arc::new(Int32Array::from(vec![1; rows])))
+        }
+    }
+
+    let s = Session::new().unwrap();
+    let err = s.register_udf(PanicName).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::FailedExecuteUdf);
+    assert_eq!(err.sql_state(), Some("39000"));
+    assert!(err.to_string().contains("boom"), "{err}");
 }

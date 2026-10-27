@@ -1006,11 +1006,13 @@ mod tests {
                 ("test_udf_nondet", 3, false),
                 ("test_udf_failing", 9, true),
             ] {
-                library.register(Arc::new(TestUdf {
-                    name,
-                    version,
-                    deterministic,
-                }));
+                library
+                    .register(Arc::new(TestUdf {
+                        name,
+                        version,
+                        deterministic,
+                    }))
+                    .unwrap();
             }
             Self { library }
         }

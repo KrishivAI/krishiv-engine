@@ -132,7 +132,8 @@ fn a_deterministic_udf_of_literals_folds_to_its_value() {
     lib.register(Arc::new(PlusOne {
         deterministic: true,
         calls: Arc::clone(&calls),
-    }));
+    }))
+    .unwrap();
     let optimized = optimize_with_udfs(&plan(call(true)), &NoStatistics, &lib, &config()).unwrap();
     // Folded (through one invocation), to the UDF's value.
     assert_eq!(calls.load(Ordering::Relaxed), 1);
@@ -149,7 +150,8 @@ fn other_udf_calls_stay_in_the_plan() {
     lib.register(Arc::new(PlusOne {
         deterministic: true,
         calls: Arc::clone(&calls),
-    }));
+    }))
+    .unwrap();
     let config = config();
     // Nondeterministic calls never fold.
     let optimized = optimize_with_udfs(&plan(call(false)), &NoStatistics, &lib, &config).unwrap();

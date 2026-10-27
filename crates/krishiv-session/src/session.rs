@@ -41,7 +41,7 @@ use krishiv_sql::ast::Statement;
 use krishiv_sql::{Frontend, ParserOptions};
 use krishiv_types::DataType;
 use krishiv_types::batch::{Batch, Weights};
-use krishiv_udf_sdk::UdfLibrary;
+use krishiv_udf_sdk::{UdfLibrary, guard_call};
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
@@ -534,14 +534,39 @@ impl Session {
     /// #     }
     /// # }
     /// let session = Session::new()?;
-    /// session.register_udf(One);
+    /// session.register_udf(One)?;
     /// let df = futures::executor::block_on(session.sql("SELECT one()"))?;
     /// let rows = futures::executor::block_on(df.collect())?;
     /// assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
     /// # Ok::<(), krishiv_common::error::KrishivError>(())
     /// ```
-    pub fn register_udf(&self, udf: impl krishiv_udf_sdk::ScalarUdf) {
-        self.state.udfs.register(Arc::new(udf));
+    ///
+    /// # Errors
+    /// `FAILED_EXECUTE_UDF` when the UDF's `name` panics, is empty, or
+    /// contains a `.` or a backtick, since such a UDF can never be called
+    /// by name (the function name is `unknown` when there is none).
+    pub fn register_udf(
+        &self,
+        udf: impl krishiv_udf_sdk::ScalarUdf,
+    ) -> Result<(), krishiv_common::error::KrishivError> {
+        let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(udf);
+        if let Err(e) = self.state.udfs.register(Arc::clone(&udf)) {
+            let name = guard_call("unknown", "name", || udf.name().to_owned())
+                .map(|name| name.to_lowercase())
+                .unwrap_or_else(|_| "unknown".to_owned());
+            let name = if name.is_empty() {
+                "unknown".to_owned()
+            } else {
+                name
+            };
+            return Err(krishiv_functions::scalar::failed_execute(
+                &name,
+                "unknown",
+                "unknown",
+                e.message(),
+            ));
+        }
+        Ok(())
     }
 
     /// The temporary tables and views, by name as registered.

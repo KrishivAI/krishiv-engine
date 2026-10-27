@@ -671,7 +671,7 @@ mod tests {
         // A library holding another version is the same failure: the
         // plan names `my_udf@2`.
         let other = Arc::new(UdfLibrary::new());
-        other.register(Arc::new(Identity(9)));
+        other.register(Arc::new(Identity(9))).unwrap();
         let env = env_with(Some(other));
         let input = Input {
             layout: &[],
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn a_registered_udf_binds_where_the_analyzer_typed_it() {
         let lib = Arc::new(UdfLibrary::new());
-        lib.register(Arc::new(Identity(2)));
+        lib.register(Arc::new(Identity(2))).unwrap();
         let env = env_with(Some(lib));
         let schema = Arc::new(Schema::empty());
         let e = udf_call();

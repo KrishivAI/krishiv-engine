@@ -49,7 +49,7 @@ use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
 
 pub use args::Arg;
 use args::{Inputs, broadcast, internal, unsupported};
-pub use udf::bind_udf;
+pub use udf::{bind_udf, failed_execute};
 
 /// An argument as the planner knows it when binding.
 #[derive(Debug, Clone)]

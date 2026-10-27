@@ -1720,6 +1720,7 @@ dependencies = [
  "insta",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-functions",
  "krishiv-io",
  "krishiv-memory",
  "krishiv-optimizer",

@@ -45,16 +45,31 @@ impl UdfLibrary {
     /// replacing any UDF of that name, and bumps the library version.
     ///
     /// The `name` call goes through [`guard_call`] like every other trait
-    /// call: a panicking `name` leaves the library unchanged instead of
-    /// unwinding (there is no name to register the UDF under).
-    pub fn register(&self, udf: Arc<dyn ScalarUdf>) {
-        let Ok(name) = guard_call("unknown", "name", || udf.name().to_owned()) else {
-            return;
-        };
+    /// call: a panicking `name` is returned as a [`UdfError`] instead of
+    /// unwinding (there is no name to register the UDF under). An empty
+    /// name, or one containing a `.` or a backtick, is also an error,
+    /// since such a UDF can never be called by name.
+    ///
+    /// # Errors
+    /// A [`UdfError`] when `name` panics, is empty, or contains a `.` or
+    /// a backtick.
+    pub fn register(&self, udf: Arc<dyn ScalarUdf>) -> Result<(), super::UdfError> {
+        let name = guard_call("unknown", "name", || udf.name().to_owned())?;
+        if name.is_empty() {
+            return Err(super::UdfError::new(
+                "UDF name is empty: a UDF name must be non-empty and contain no '.' or '`', so the UDF could never be called by name",
+            ));
+        }
+        if name.contains('.') || name.contains('`') {
+            return Err(super::UdfError::new(format!(
+                "UDF {name}.name is invalid: a UDF name must contain no '.' or '`', so the UDF could never be called by name"
+            )));
+        }
         let name = name.to_lowercase();
         let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         inner.udfs.insert(name, udf);
         inner.epoch = inner.epoch.wrapping_add(1);
+        Ok(())
     }
 
     /// The UDF named `name` (case-insensitive), if registered.
@@ -178,12 +193,12 @@ mod tests {
         let lib = UdfLibrary::new();
         assert!(lib.is_empty());
         assert_eq!(lib.version(), 0);
-        lib.register(Arc::new(Identity { version: 1 }));
+        lib.register(Arc::new(Identity { version: 1 })).unwrap();
         assert!(!lib.is_empty());
         assert_eq!(lib.version(), 1);
         assert_eq!(lib.get("MY_IDENTITY").unwrap().version(), 1);
         // Another registration, same or new version: replaced, bumped.
-        lib.register(Arc::new(Identity { version: 2 }));
+        lib.register(Arc::new(Identity { version: 2 })).unwrap();
         assert_eq!(lib.version(), 2);
         assert_eq!(lib.get("my_identity").unwrap().version(), 2);
         assert!(lib.get("nosuch").is_none());
@@ -239,13 +254,59 @@ mod tests {
     fn panicking_name_leaves_the_library_unchanged() {
         let lib = UdfLibrary::new();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            lib.register(Arc::new(PanicName));
+            lib.register(Arc::new(PanicName)).unwrap_err()
         }));
-        assert!(
-            result.is_ok(),
-            "a UDF whose name panics must not unwind registration"
-        );
+        let err = result.expect("a UDF whose name panics must not unwind registration");
+        assert!(err.message().contains("boom"), "{err}");
         assert!(lib.is_empty());
         assert_eq!(lib.version(), 0);
+    }
+
+    /// A UDF with an empty, dotted or backquoted name: registration
+    /// rejects it, since such a UDF can never be called by name.
+    #[derive(Debug)]
+    struct BadName(&'static str);
+
+    impl ScalarUdf for BadName {
+        fn name(&self) -> &str {
+            self.0
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            _: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Err(UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn empty_dotted_or_backquoted_names_are_rejected() {
+        for bad in ["", "a.b", "a`b"] {
+            let lib = UdfLibrary::new();
+            let err = lib.register(Arc::new(BadName(bad))).unwrap_err();
+            assert!(!err.message().is_empty(), "{bad}: {err}");
+            assert!(lib.is_empty(), "{bad}");
+            assert_eq!(lib.version(), 0, "{bad}");
+        }
     }
 }

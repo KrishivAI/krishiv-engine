@@ -99,7 +99,7 @@ pub fn bind_udf(
 }
 
 /// `FAILED_EXECUTE_UDF` for `name` (`signature` => `result`) and `reason`.
-fn failed_execute(name: &str, signature: &str, result: &str, reason: &str) -> KrishivError {
+pub fn failed_execute(name: &str, signature: &str, result: &str, reason: &str) -> KrishivError {
     KrishivError::from(FailedExecuteUdf {
         function_name: name.to_owned(),
         signature: signature.to_owned(),
