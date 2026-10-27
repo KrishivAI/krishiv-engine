@@ -9,14 +9,6 @@
       "reason": "SELECT encode(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "encode#60a23e7ac424/ansi_on",
-      "reason": "SELECT encode('abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "encode#60a23e7ac424/ansi_off",
-      "reason": "SELECT encode('abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "encode#74c48c4e948c/ansi_on",
       "reason": "SELECT encode(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -39,14 +31,6 @@
     {
       "id": "encode#ed99015663e0/ansi_off",
       "reason": "SELECT encode('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "encode#f8cddc0cc0fd/ansi_on",
-      "reason": "SELECT encode(map('a', 1), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "encode#f8cddc0cc0fd/ansi_off",
-      "reason": "SELECT encode(map('a', 1), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

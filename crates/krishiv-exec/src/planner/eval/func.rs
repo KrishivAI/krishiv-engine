@@ -55,6 +55,7 @@ pub(super) fn compile(
         .with_time_zone(Arc::new(zone))
         .with_query_start(input.env.query_start_micros)
         .with_user(Arc::clone(&input.env.user))
+        .with_map_key_dedup_last_win(input.env.map_key_dedup_last_win)
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {
         if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {

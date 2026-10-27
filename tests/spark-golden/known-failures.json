@@ -80,11 +80,6 @@
       "summary": "ROLLUP, CUBE, GROUPING SETS, grouping()/grouping_id()",
       "task": "P2-T053b"
     },
-    "hof": {
-      "kind": "unsupported",
-      "summary": "lambda functions and higher-order functions",
-      "task": "P2-T036"
-    },
     "legacy-configs": {
       "kind": "bug",
       "owner": "config map follow-up of P2-T004",
@@ -315,10 +310,6 @@
       "detail": "The feature (multi-name aliases|LATERAL VIEW)"
     },
     {
-      "category": "hof",
-      "detail": "The feature lambda functions"
-    },
-    {
       "category": "fn-aggregate",
       "detail": "The feature WITHIN GROUP"
     },
@@ -385,12 +376,6 @@
         "vector",
         "hash",
         "conditional"
-      ]
-    },
-    {
-      "category": "hof",
-      "family": [
-        "lambda"
       ]
     },
     {

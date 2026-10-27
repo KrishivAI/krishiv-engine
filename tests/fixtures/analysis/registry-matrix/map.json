@@ -1,0 +1,454 @@
+{
+  "entries": [
+    {
+      "id": "map#04d177cb2546/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#04d177cb2546/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#057ab4fa28ca/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, X'01') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#07552f45b497/ansi_on",
+      "reason": "SELECT map(1.0, 1, 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#07552f45b497/ansi_off",
+      "reason": "SELECT map(1.0, 1, 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#0bcec6052e78/ansi_on",
+      "reason": "SELECT map(1.0, '2', 1L, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#0bcec6052e78/ansi_off",
+      "reason": "SELECT map(1.0, '2', 1L, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#16e25487b9d5/ansi_on",
+      "reason": "SELECT map(1.0, '2', CAST('99999999999999999999.999999999999999999' AS DECIMAL(38,18)), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#16e25487b9d5/ansi_off",
+      "reason": "SELECT map(1.0, '2', CAST('99999999999999999999.999999999999999999' AS DECIMAL(38,18)), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#178823c5c691/ansi_on",
+      "reason": "SELECT map('abc', '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#178823c5c691/ansi_off",
+      "reason": "SELECT map('abc', '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#189175e42292/ansi_on",
+      "reason": "SELECT map(1.0, CAST(1 AS SMALLINT), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#189175e42292/ansi_off",
+      "reason": "SELECT map(1.0, CAST(1 AS SMALLINT), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#18e68e68841d/ansi_on",
+      "reason": "SELECT map(CAST(1.5 AS DECIMAL(38,18)), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#18e68e68841d/ansi_off",
+      "reason": "SELECT map(CAST(1.5 AS DECIMAL(38,18)), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#196c3c9bf765/ansi_on",
+      "reason": "SELECT map(1.0, '2', CAST(1 AS SMALLINT), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#196c3c9bf765/ansi_off",
+      "reason": "SELECT map(1.0, '2', CAST(1 AS SMALLINT), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#1a316eaf4eb2/ansi_on",
+      "reason": "SELECT map(CAST(1.5 AS DECIMAL(10,2)), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#1a316eaf4eb2/ansi_off",
+      "reason": "SELECT map(CAST(1.5 AS DECIMAL(10,2)), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#1bb1231e1797/ansi_on",
+      "reason": "SELECT map(INTERVAL '1 02:03:04' DAY TO SECOND, '2', 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#1bb1231e1797/ansi_off",
+      "reason": "SELECT map(INTERVAL '1 02:03:04' DAY TO SECOND, '2', 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#2241eabf256c/ansi_on",
+      "reason": "SELECT map(1.0, '2', INTERVAL '1 02:03:04' DAY TO SECOND, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#2241eabf256c/ansi_off",
+      "reason": "SELECT map(1.0, '2', INTERVAL '1 02:03:04' DAY TO SECOND, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#304ca4330c39/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#304ca4330c39/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "map#327f7fb9a4aa/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#327f7fb9a4aa/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#33dd028aa5f7/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, 1.5D) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#33dd028aa5f7/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, 1.5D) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#375501e19df5/ansi_on",
+      "reason": "SELECT map(1.0, CAST(1.5 AS DECIMAL(38,18)), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#375501e19df5/ansi_off",
+      "reason": "SELECT map(1.0, CAST(1.5 AS DECIMAL(38,18)), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#5a1340f0508d/ansi_on",
+      "reason": "SELECT map(1.0, '2', '1', '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#5a1340f0508d/ansi_off",
+      "reason": "SELECT map(1.0, '2', '1', '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#697ceccce076/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#697ceccce076/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1 AS TINYINT)) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#6a6378d3805e/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#6a6378d3805e/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#6bcc7cac7d61/ansi_on",
+      "reason": "SELECT map(1.0, DATE'2024-02-29', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#6bcc7cac7d61/ansi_off",
+      "reason": "SELECT map(1.0, DATE'2024-02-29', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#6e531fd37f50/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#6e531fd37f50/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#7154d4b8d187/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#7154d4b8d187/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "map#72d6c1af73b6/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, true) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#74bfc9f9c5c6/ansi_on",
+      "reason": "SELECT map('1', '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#74bfc9f9c5c6/ansi_off",
+      "reason": "SELECT map('1', '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#76143739fcaf/ansi_on",
+      "reason": "SELECT map(1.0, TIMESTAMP'2024-02-29 12:34:56.123456', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#76143739fcaf/ansi_off",
+      "reason": "SELECT map(1.0, TIMESTAMP'2024-02-29 12:34:56.123456', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#818eb4278831/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, 1L) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#818eb4278831/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, 1L) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#88984978eafe/ansi_on",
+      "reason": "SELECT map(1.0, true, 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#8b212623f7b5/ansi_on",
+      "reason": "SELECT map(1.0, '2', CAST(1 AS TINYINT), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#8b212623f7b5/ansi_off",
+      "reason": "SELECT map(1.0, '2', CAST(1 AS TINYINT), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#8fd107918721/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, 1) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#8fd107918721/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, 1) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#94995f6368bc/ansi_on",
+      "reason": "SELECT map(1.0, '2', 'abc', '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#94995f6368bc/ansi_off",
+      "reason": "SELECT map(1.0, '2', 'abc', '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#9a68bef0cdbe/ansi_on",
+      "reason": "SELECT map(CAST('-99999999999999999999999999999999999999' AS DECIMAL(38,0)), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#9a68bef0cdbe/ansi_off",
+      "reason": "SELECT map(CAST('-99999999999999999999999999999999999999' AS DECIMAL(38,0)), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#a00fabc0fd41/ansi_on",
+      "reason": "SELECT map(1.0, 1.5D, 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#a00fabc0fd41/ansi_off",
+      "reason": "SELECT map(1.0, 1.5D, 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#a1ee8cb313ce/ansi_on",
+      "reason": "SELECT map(1.0, CAST(1 AS TINYINT), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#a1ee8cb313ce/ansi_off",
+      "reason": "SELECT map(1.0, CAST(1 AS TINYINT), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#a2e94f046ddf/ansi_on",
+      "reason": "SELECT map(1.0, INTERVAL '1-2' YEAR TO MONTH, 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#a2e94f046ddf/ansi_off",
+      "reason": "SELECT map(1.0, INTERVAL '1-2' YEAR TO MONTH, 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "map#a46eb5e3770b/ansi_on",
+      "reason": "SELECT map(1.0, X'01', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#a5ef682dd3b1/ansi_on",
+      "reason": "SELECT map(1.0, '2', 1.5D, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#a5ef682dd3b1/ansi_off",
+      "reason": "SELECT map(1.0, '2', 1.5D, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#ae86e4c4aece/ansi_on",
+      "reason": "SELECT map(1L, '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#ae86e4c4aece/ansi_off",
+      "reason": "SELECT map(1L, '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#b9240e30707e/ansi_on",
+      "reason": "SELECT map(1.0, 1L, 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#b9240e30707e/ansi_off",
+      "reason": "SELECT map(1.0, 1L, 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#b9b5cab1e003/ansi_on",
+      "reason": "SELECT map(CAST('99999999999999999999.999999999999999999' AS DECIMAL(38,18)), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#b9b5cab1e003/ansi_off",
+      "reason": "SELECT map(CAST('99999999999999999999.999999999999999999' AS DECIMAL(38,18)), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#bee62bdb181c/ansi_on",
+      "reason": "SELECT map(CAST(1 AS SMALLINT), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#bee62bdb181c/ansi_off",
+      "reason": "SELECT map(CAST(1 AS SMALLINT), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#bfb29042c867/ansi_on",
+      "reason": "SELECT map(1.0, '2', INTERVAL '1-2' YEAR TO MONTH, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#bfb29042c867/ansi_off",
+      "reason": "SELECT map(1.0, '2', INTERVAL '1-2' YEAR TO MONTH, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#c4cc3c4961e1/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, DATE'2024-02-29') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#c4cc3c4961e1/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, DATE'2024-02-29') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#c7b0d7018a8c/ansi_on",
+      "reason": "SELECT map(1.5D, '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#c7b0d7018a8c/ansi_off",
+      "reason": "SELECT map(1.5D, '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#c8ea63a9cd87/ansi_on",
+      "reason": "SELECT map(1.0, '2', 1, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#c8ea63a9cd87/ansi_off",
+      "reason": "SELECT map(1.0, '2', 1, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#c96b8f9325c7/ansi_on",
+      "reason": "SELECT map(INTERVAL '1-2' YEAR TO MONTH, '2', 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#c96b8f9325c7/ansi_off",
+      "reason": "SELECT map(INTERVAL '1-2' YEAR TO MONTH, '2', 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#cee489b90ea0/ansi_on",
+      "reason": "SELECT map(1.0, '2', CAST(1.5 AS FLOAT), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#cee489b90ea0/ansi_off",
+      "reason": "SELECT map(1.0, '2', CAST(1.5 AS FLOAT), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#d7ff2e9c524f/ansi_on",
+      "reason": "SELECT map(CAST(1 AS TINYINT), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#d7ff2e9c524f/ansi_off",
+      "reason": "SELECT map(CAST(1 AS TINYINT), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#dadc376c57be/ansi_on",
+      "reason": "SELECT map(1, '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#dadc376c57be/ansi_off",
+      "reason": "SELECT map(1, '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#dc50d5cf383d/ansi_on",
+      "reason": "SELECT map(1.0, '2', CAST(1.5 AS DECIMAL(38,18)), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#dc50d5cf383d/ansi_off",
+      "reason": "SELECT map(1.0, '2', CAST(1.5 AS DECIMAL(38,18)), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#e76c6c5c1e1c/ansi_on",
+      "reason": "SELECT map(1.0, CAST(1.5 AS DECIMAL(10,2)), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#e76c6c5c1e1c/ansi_off",
+      "reason": "SELECT map(1.0, CAST(1.5 AS DECIMAL(10,2)), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#ec90a5e7058d/ansi_on",
+      "reason": "SELECT map(1.0, INTERVAL '1 02:03:04' DAY TO SECOND, 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#ec90a5e7058d/ansi_off",
+      "reason": "SELECT map(1.0, INTERVAL '1 02:03:04' DAY TO SECOND, 3.0, '4') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "map#ed4d0e9fbeea/ansi_on",
+      "reason": "SELECT map(CAST(1.5 AS FLOAT), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#ed4d0e9fbeea/ansi_off",
+      "reason": "SELECT map(CAST(1.5 AS FLOAT), '2', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#edf68b8e08e4/ansi_on",
+      "reason": "SELECT map(1.0, '2', CAST('-99999999999999999999999999999999999999' AS DECIMAL(38,0)), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#edf68b8e08e4/ansi_off",
+      "reason": "SELECT map(1.0, '2', CAST('-99999999999999999999999999999999999999' AS DECIMAL(38,0)), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#ef40a66b9adc/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#ef40a66b9adc/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#f1fb9611874e/ansi_on",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#f1fb9611874e/ansi_off",
+      "reason": "SELECT map(1.0, '2', 3.0, CAST(1 AS SMALLINT)) | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#f5c86245ff61/ansi_on",
+      "reason": "SELECT map(1.0, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#f5c86245ff61/ansi_off",
+      "reason": "SELECT map(1.0, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#f705d00c69d7/ansi_on",
+      "reason": "SELECT map(1.0, CAST(1.5 AS FLOAT), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#f705d00c69d7/ansi_off",
+      "reason": "SELECT map(1.0, CAST(1.5 AS FLOAT), 3.0, '4') | DATATYPE_MISMATCH.CREATE_MAP_VALUE_DIFF_TYPES"
+    },
+    {
+      "id": "map#fc646ac321af/ansi_on",
+      "reason": "SELECT map(1.0, '2', CAST(1.5 AS DECIMAL(10,2)), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    },
+    {
+      "id": "map#fc646ac321af/ansi_off",
+      "reason": "SELECT map(1.0, '2', CAST(1.5 AS DECIMAL(10,2)), '4') | DATATYPE_MISMATCH.CREATE_MAP_KEY_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "map"
+}

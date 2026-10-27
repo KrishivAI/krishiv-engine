@@ -40,7 +40,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
 use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, LEGACY_STATISTICAL_AGGREGATE, SESSION_TIME_ZONE,
+    ANSI_ENABLED, Config, LEGACY_STATISTICAL_AGGREGATE, MAP_KEY_DEDUP_POLICY, SESSION_TIME_ZONE,
 };
 use krishiv_kernels::KernelCtx;
 use krishiv_plan::{
@@ -178,6 +178,9 @@ pub(crate) struct EvalEnv {
     pub(crate) query_start_micros: i64,
     /// The session user (`current_user()`).
     pub(crate) user: Arc<str>,
+    /// Whether duplicate map keys keep the last value (`LAST_WIN`) rather
+    /// than raising `DUPLICATED_MAP_KEY` (`spark.sql.mapKeyDedupPolicy`).
+    pub(crate) map_key_dedup_last_win: bool,
     /// Counts the unseeded random binds of one plan instantiation (see
     /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
     pub(crate) seed_salt: Arc<AtomicU64>,
@@ -197,6 +200,10 @@ impl EvalEnv {
             .get(&SESSION_TIME_ZONE)
             .and_then(|v| v.as_str())
             .and_then(|z| krishiv_kernels::cast::FixedOffset::parse(z).map(|o| o.0));
+        let map_key_dedup_last_win = config
+            .get(&MAP_KEY_DEDUP_POLICY)
+            .and_then(|v| v.as_str())
+            .is_some_and(|p| p.eq_ignore_ascii_case("LAST_WIN"));
         let query_start_micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
@@ -209,6 +216,7 @@ impl EvalEnv {
             kernels: KernelCtx::new(),
             query_start_micros,
             user,
+            map_key_dedup_last_win,
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -224,6 +232,7 @@ impl EvalEnv {
             kernels: KernelCtx::new(),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
+            map_key_dedup_last_win: env.map_key_dedup_last_win,
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -236,6 +245,7 @@ impl EvalEnv {
             zone: self.zone,
             query_start_micros: self.query_start_micros,
             user: Arc::clone(&self.user),
+            map_key_dedup_last_win: self.map_key_dedup_last_win,
         }
     }
 }

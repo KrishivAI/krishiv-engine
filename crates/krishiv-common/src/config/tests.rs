@@ -164,6 +164,25 @@ fn spill_entries_parse_and_default() {
 }
 
 #[test]
+fn map_key_dedup_policy_parses_and_defaults() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&MAP_KEY_DEDUP_POLICY)
+            .and_then(ConfigValue::as_str)
+            .map(str::to_owned),
+        Some("EXCEPTION".to_owned())
+    );
+    c.set("spark.sql.mapKeyDedupPolicy", "last_win").unwrap();
+    assert_eq!(
+        c.get(&MAP_KEY_DEDUP_POLICY)
+            .and_then(ConfigValue::as_str)
+            .map(str::to_owned),
+        Some("LAST_WIN".to_owned())
+    );
+    assert!(c.set("krishiv.sql.mapKeyDedupPolicy", "FIRST_WIN").is_err());
+}
+
+#[test]
 fn invalid_values_are_typed_errors() {
     let mut c = Config::new();
     for (k, v) in [
@@ -197,6 +216,10 @@ fn spark_aliases_map_to_krishiv_keys() {
     assert_eq!(
         lookup("krishiv.sql.ansi.enabled").map(|e| e.key),
         Some(ANSI_ENABLED.key)
+    );
+    assert_eq!(
+        lookup("spark.sql.mapKeyDedupPolicy").map(|e| e.key),
+        Some(MAP_KEY_DEDUP_POLICY.key)
     );
 }
 

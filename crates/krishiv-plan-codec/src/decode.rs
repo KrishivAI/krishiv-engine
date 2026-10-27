@@ -294,6 +294,9 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         // that sets it around a moment aggregate needs a reader with the
         // feature).
         legacy_statistical_aggregate: env.legacy_statistical_aggregate,
+        // As above: absent in older bytes, and only a plan that sets
+        // `LAST_WIN` around a map builder needs a reader with the flag.
+        map_key_dedup_last_win: env.map_key_dedup_last_win,
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),

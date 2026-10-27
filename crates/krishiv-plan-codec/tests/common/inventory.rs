@@ -37,6 +37,7 @@ pub(crate) fn env() -> ExprEnv {
         zone: Some(-28_800),
         query_start_micros: 1_760_000_000_123_456,
         user: Arc::from("analyst"),
+        map_key_dedup_last_win: false,
     }
 }
 
@@ -1026,6 +1027,15 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push((
         "one_row_legacy_statistical_aggregate".to_owned(),
         plan_of_env(PhysNode::OneRow, legacy),
+    ));
+    // The expression environment flag the `map_key_dedup_policy` feature
+    // is about: the same root as `one_row`, under a session with
+    // `spark.sql.mapKeyDedupPolicy` set to `LAST_WIN`.
+    let mut dedup = env();
+    dedup.map_key_dedup_last_win = true;
+    out.push((
+        "one_row_map_key_dedup_last_win".to_owned(),
+        plan_of_env(PhysNode::OneRow, dedup),
     ));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
     out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));

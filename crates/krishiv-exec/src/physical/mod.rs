@@ -204,6 +204,9 @@ pub struct ExprEnv {
     pub query_start_micros: i64,
     /// The session user (`current_user()`).
     pub user: Arc<str>,
+    /// Whether duplicate map keys keep the last value (`LAST_WIN`) rather
+    /// than raising `DUPLICATED_MAP_KEY` (`spark.sql.mapKeyDedupPolicy`).
+    pub map_key_dedup_last_win: bool,
 }
 
 /// A node of a physical plan. Children come first in each variant;
@@ -546,7 +549,7 @@ plan_data!(
         Partitioned,
     }
 );
-plan_data!(struct ExprEnv { ansi, legacy_statistical_aggregate, zone, query_start_micros, user });
+plan_data!(struct ExprEnv { ansi, legacy_statistical_aggregate, zone, query_start_micros, user, map_key_dedup_last_win });
 plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,

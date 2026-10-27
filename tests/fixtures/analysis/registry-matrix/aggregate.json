@@ -1,0 +1,134 @@
+{
+  "entries": [
+    {
+      "id": "aggregate#043b820aaba6/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), 'abc', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#0551a3480e97/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), 'abc', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#0d91ad804b92/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#0d91ad804b92/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#1d5687bc30af/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP'2024-02-29 12:34:56.123456', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#1d5687bc30af/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP'2024-02-29 12:34:56.123456', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#330c02ff2a2d/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), '1', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#3597128c2098/ansi_on",
+      "reason": "SELECT aggregate(INTERVAL '1-2' YEAR TO MONTH, 0, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#3597128c2098/ansi_off",
+      "reason": "SELECT aggregate(INTERVAL '1-2' YEAR TO MONTH, 0, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#3f015024ac5a/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#3f015024ac5a/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#5ed96aff85f5/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP'2024-02-29 12:34:56.123456', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#5ed96aff85f5/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP'2024-02-29 12:34:56.123456', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#789dbb904728/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "aggregate#789dbb904728/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic"
+    },
+    {
+      "id": "aggregate#953e7e66a28f/ansi_on",
+      "reason": "SELECT aggregate(INTERVAL '1 02:03:04' DAY TO SECOND, 0, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#953e7e66a28f/ansi_off",
+      "reason": "SELECT aggregate(INTERVAL '1 02:03:04' DAY TO SECOND, 0, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#997f8d7fd027/ansi_on",
+      "reason": "SELECT aggregate(INTERVAL '1 02:03:04' DAY TO SECOND, 0, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#997f8d7fd027/ansi_off",
+      "reason": "SELECT aggregate(INTERVAL '1 02:03:04' DAY TO SECOND, 0, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#c71b83b621b1/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), '1', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#df03772adf86/ansi_on",
+      "reason": "SELECT aggregate(INTERVAL '1-2' YEAR TO MONTH, 0, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#df03772adf86/ansi_off",
+      "reason": "SELECT aggregate(INTERVAL '1-2' YEAR TO MONTH, 0, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#e2b2204d9129/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#e2b2204d9129/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), DATE'2024-02-29', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#e8f67136464e/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#e8f67136464e/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', (acc, x) -> acc + x, acc -> acc * 10) | KRISHIV_UNSUPPORTED_FEATURE: date and timestamp arithmetic where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#f9caeb9cfdac/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#f9caeb9cfdac/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND, (acc, x) -> acc + x, acc -> acc * 10) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#fa4ec3c0ab41/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#fa4ec3c0ab41/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), INTERVAL '1-2' YEAR TO MONTH, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "aggregate#fb806d971589/ansi_on",
+      "reason": "SELECT aggregate(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "aggregate#fb806d971589/ansi_off",
+      "reason": "SELECT aggregate(array(1, 2, 3), INTERVAL '1 02:03:04' DAY TO SECOND, (acc, x) -> acc + x) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "aggregate"
+}

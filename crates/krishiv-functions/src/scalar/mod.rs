@@ -29,6 +29,7 @@ mod array;
 mod bitwise;
 mod chars;
 mod codec;
+mod collection;
 mod datetime;
 mod hash;
 mod math;
@@ -125,6 +126,9 @@ pub struct BindOptions {
     pub decimal_precision_loss: bool,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
+    /// Whether duplicate map keys keep the last value (`LAST_WIN`) rather
+    /// than raising `DUPLICATED_MAP_KEY` (`spark.sql.mapKeyDedupPolicy`).
+    pub map_key_dedup_last_win: bool,
     /// Counts the unseeded random binds of one plan instantiation, in
     /// compilation order: each draws its own query-seeded stream (Spark's
     /// `ResolveRandomSeed` assigns each its own seed), while one plan
@@ -144,6 +148,7 @@ impl BindOptions {
             query_start_micros: 0,
             decimal_precision_loss: true,
             user: Arc::from("unknown"),
+            map_key_dedup_last_win: false,
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
@@ -188,6 +193,14 @@ impl BindOptions {
     #[must_use]
     pub fn with_seed_salt(mut self, seed_salt: Arc<AtomicU64>) -> Self {
         self.seed_salt = seed_salt;
+        self
+    }
+
+    /// With `spark.sql.mapKeyDedupPolicy = LAST_WIN` (duplicate map
+    /// keys keep the last value); `EXCEPTION` by default.
+    #[must_use]
+    pub fn with_map_key_dedup_last_win(mut self, last_win: bool) -> Self {
+        self.map_key_dedup_last_win = last_win;
         self
     }
 
@@ -390,8 +403,9 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 17] = [
+const FAMILIES: [(&[&str], Binder); 18] = [
     (array::NAMES, array::bind),
+    (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),

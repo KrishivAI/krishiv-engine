@@ -167,6 +167,7 @@ fn env_data() -> ExprEnv {
         zone: Some(0),
         query_start_micros: 0,
         user: Arc::from("u"),
+        map_key_dedup_last_win: false,
     }
 }
 

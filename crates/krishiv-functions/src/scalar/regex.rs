@@ -41,7 +41,7 @@
 
 use std::sync::Arc;
 
-use arrow_array::builder::{GenericStringBuilder, ListBuilder};
+use arrow_array::builder::{GenericStringBuilder, ListBuilder, StringViewBuilder};
 use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, ListArray, StringArray};
 use arrow_schema::{DataType, Field};
@@ -71,6 +71,7 @@ pub(super) const NAMES: &[&str] = &[
     "regexp_instr",
     "regexp_substr",
     "regexp_replace",
+    "split",
 ];
 
 /// Binds the regular-expression function `name`.
@@ -127,6 +128,17 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
                 regexp_replace(x, with_position)
             })
+        }
+        ("split", 3) => {
+            let well_typed = types[..2].iter().all(is_string)
+                && matches!(types[2], DataType::Int8 | DataType::Int16 | DataType::Int32);
+            if !well_typed {
+                return Some((listed, Err(bad_types(listed, args))));
+            }
+            Binding::new(
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8View, false))),
+                split,
+            )
         }
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };
@@ -572,6 +584,41 @@ pub fn split_regex(
         builder.append(true);
     }
     Ok(builder.finish())
+}
+
+/// Spark `split(str, pattern[, limit])` over a batch with a pattern per
+/// row: the pieces of each non-null `str` around the matches of its
+/// pattern, NULL in for NULL out. The list holds non-nullable `Utf8View`
+/// items under the field `element`, as Spark's `array<string>` reads here.
+fn split(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
+    const FUNCTION: &str = "`split`";
+    let strings = x.strings(0)?;
+    let patterns = x.str(1)?;
+    let limits = x.int(2)?;
+    let limit_at = |row: usize| match &limits {
+        Prim::Array(a) => a.is_valid(row).then(|| a.value(row)),
+        Prim::Scalar(v) => *v,
+    };
+    let mut cache = Cache::default();
+    let values = StringViewBuilder::new();
+    let item = Field::new("element", DataType::Utf8View, false);
+    let mut builder = ListBuilder::new(values).with_field(Arc::new(item));
+    for row in 0..x.rows() {
+        let (Some(source), Some(pattern), Some(limit)) = (
+            strings.is_valid(row).then(|| strings.value(row)),
+            operand(&patterns, row),
+            limit_at(row),
+        ) else {
+            builder.append(false);
+            continue;
+        };
+        let compiled = cache.compiled(pattern, FUNCTION)?;
+        for p in split_pieces(source, pattern, compiled, limit)? {
+            builder.values().append_value(p);
+        }
+        builder.append(true);
+    }
+    Ok(Arc::new(builder.finish()) as ArrayRef)
 }
 
 /// `regexp_extract_all(str, regexp[, idx])` over one row: group `idx`

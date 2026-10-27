@@ -1929,17 +1929,239 @@ fn hof_signatures() {
         assert!(err.to_string().contains("\"BOOLEAN\""), "{name}: {err}");
     }
     // Higher-order calls run in the executor, never in a kernel binding.
-    for name in ["transform", "filter", "exists", "forall"] {
+    for name in [
+        "transform",
+        "filter",
+        "exists",
+        "forall",
+        "aggregate",
+        "reduce",
+        "zip_with",
+        "map_filter",
+        "map_zip_with",
+        "transform_keys",
+        "transform_values",
+        "array_sort",
+    ] {
         assert_eq!(def(name).execution, Execution::HigherOrder, "{name}");
         assert_eq!(def(name).kind, FunctionKind::Scalar, "{name}");
     }
     assert_eq!(def("array").execution, Execution::Scalar);
+    assert_eq!(def("map").execution, Execution::Scalar);
+    assert_eq!(def("size").execution, Execution::Scalar);
+    assert_eq!(def("split").execution, Execution::Scalar);
     // The arity check runs before typing, so a call typed without its
     // array argument is an engine bug, never a user error.
     for name in ["transform", "filter", "exists", "forall"] {
         let err = result(name, &[], &[]).unwrap_err();
         assert_eq!(err.error_class(), ErrorClass::InternalError, "{name}");
     }
+}
+
+#[test]
+fn aggregate_types_its_fold() {
+    use DataType::{Array as Arr, Boolean, Integer};
+    let array = |e: DataType, contains_null: bool, nullable: bool| {
+        ArgType::new(Arr(ArrayType::new(e, contains_null).into()), nullable)
+    };
+    let arr = || array(Integer, true, false);
+    let i = || ArgType::new(Integer, false);
+    // The merge body's type is the accumulator's (the zero's) type; the
+    // result is the finish body's, or the accumulator's without one.
+    assert_eq!(
+        result("aggregate", &[arr(), i(), i()], &[]).unwrap(),
+        ArgType::new(Integer, true)
+    );
+    assert_eq!(
+        result("reduce", &[arr(), i(), i()], &[]).unwrap(),
+        ArgType::new(Integer, true)
+    );
+    // A merge of another type is `UNEXPECTED_INPUT_TYPE` on the third
+    // argument, quoting the accumulator's type.
+    for name in ["aggregate", "reduce"] {
+        let err = result(name, &[arr(), i(), ty(Boolean)], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
+            "{name}"
+        );
+        assert!(err.to_string().contains("\"INT\""), "{name}: {err}");
+    }
+    // The finish body's type is the result's.
+    assert_eq!(
+        result("aggregate", &[arr(), i(), i(), ty(Boolean)], &[])
+            .unwrap()
+            .data_type,
+        Some(Boolean)
+    );
+}
+
+#[test]
+fn zip_with_types_its_merged_array() {
+    use DataType::{Array as Arr, Integer, String as Text};
+    let array = |e: DataType| ArgType::new(Arr(ArrayType::new(e, true).into()), false);
+    let r = result("zip_with", &[array(Integer), array(Text), ty(Text)], &[]).unwrap();
+    assert_eq!(
+        r,
+        ArgType::new(Arr(ArrayType::new(Text, false).into()), false)
+    );
+    // Both sides hold arrays.
+    for bad in [
+        result("zip_with", &[ty(Integer), array(Text), ty(Text)], &[]),
+        result("zip_with", &[array(Integer), ty(Integer), ty(Text)], &[]),
+    ] {
+        assert_eq!(
+            bad.unwrap_err().error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType
+        );
+    }
+}
+
+#[test]
+fn map_functions_type_their_maps() {
+    use DataType::{Boolean, Integer, Map as MapTy, String as Text};
+    use krishiv_types::MapType;
+    let map = |k: DataType, v: DataType, nullable: bool| {
+        ArgType::new(MapTy(MapType::new(k, v, true).into()), nullable)
+    };
+    let m = || map(Text, Integer, false);
+    // `map_filter` keeps the map, with a boolean body.
+    assert_eq!(result("map_filter", &[m(), ty(Boolean)], &[]).unwrap(), m());
+    let err = result("map_filter", &[m(), ty(Integer)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // `transform_keys` maps the key type, refusing map keys at analysis.
+    let r = result("transform_keys", &[m(), ty(Integer)], &[]).unwrap();
+    assert_eq!(
+        r.data_type,
+        Some(MapTy(MapType::new(Integer, Integer, true).into()))
+    );
+    let err = result(
+        "transform_keys",
+        &[
+            m(),
+            ArgType::new(MapTy(MapType::new(Text, Text, true).into()), false),
+        ],
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchInvalidMapKeyType
+    );
+    // `transform_values` maps the value type.
+    let r = result("transform_values", &[m(), ty(Text)], &[]).unwrap();
+    assert_eq!(
+        r.data_type,
+        Some(MapTy(MapType::new(Text, Text, false).into()))
+    );
+    // `map_zip_with` unions the key sets; the keys must match.
+    let r = result("map_zip_with", &[m(), m(), ty(Integer)], &[]).unwrap();
+    assert_eq!(
+        r.data_type,
+        Some(MapTy(MapType::new(Text, Integer, false).into()))
+    );
+    let err = result(
+        "map_zip_with",
+        &[m(), map(Integer, Integer, false), ty(Integer)],
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchMapZipWithDiffTypes
+    );
+    // The map comes first and holds a map.
+    let err = result("map_filter", &[ty(Integer), ty(Boolean)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+}
+
+#[test]
+fn array_sort_types_its_array() {
+    use DataType::{Array as Arr, Integer};
+    let array = || ArgType::new(Arr(ArrayType::new(Integer, true).into()), false);
+    // Without a comparator the array sorts as it is.
+    assert_eq!(result("array_sort", &[array()], &[]).unwrap(), array());
+    // The comparator body is `INT`.
+    assert_eq!(
+        result("array_sort", &[array(), ty(Integer)], &[]).unwrap(),
+        array()
+    );
+    let err = result("array_sort", &[array(), ty(DataType::Boolean)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedReturnType
+    );
+}
+
+#[test]
+fn map_size_and_split_type_their_collections() {
+    use DataType::{Array as Arr, Integer, String as Text};
+    use krishiv_types::MapType;
+    // `map(k, v, ...)`: keys and values each share a type.
+    let r = result("map", &[ty(Text), ty(Integer), ty(Text), ty(Integer)], &[]).unwrap();
+    assert_eq!(
+        r.data_type,
+        Some(DataType::Map(MapType::new(Text, Integer, false).into()))
+    );
+    // The empty map is `MAP<VOID, VOID>`.
+    let r = result("map", &[], &[]).unwrap();
+    assert_eq!(
+        r.data_type,
+        Some(DataType::Map(
+            MapType::new(DataType::Null, DataType::Null, false).into()
+        ))
+    );
+    // An odd count is the wrong arity.
+    let err = result("map", &[ty(Text)], &[]).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
+    let err = result(
+        "map",
+        &[ty(Text), ty(Integer), ty(Integer), ty(Integer)],
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchCreateMapKeyDiffTypes
+    );
+    // Values of different types are their own error.
+    let err = result("map", &[ty(Text), ty(Integer), ty(Text), ty(Text)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchCreateMapValueDiffTypes
+    );
+    // `size` counts arrays and maps.
+    assert_eq!(
+        result(
+            "size",
+            &[ArgType::new(
+                Arr(ArrayType::new(Integer, true).into()),
+                true
+            )],
+            &[]
+        )
+        .unwrap()
+        .data_type,
+        Some(Integer)
+    );
+    let err = result("size", &[ty(Integer)], &[]).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    // `split` pieces a string around a pattern.
+    assert_eq!(
+        result("split", &[ty(Text), ty(Text), ty(Integer)], &[])
+            .unwrap()
+            .data_type,
+        Some(Arr(ArrayType::new(Text, false).into()))
+    );
 }
 
 #[test]

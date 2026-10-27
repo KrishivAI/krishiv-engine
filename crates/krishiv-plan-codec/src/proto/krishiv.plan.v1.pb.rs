@@ -72,6 +72,12 @@ pub struct ExprEnv {
     /// give NaN instead of NULL where Spark divides by zero.
     #[prost(bool, tag = "5")]
     pub legacy_statistical_aggregate: bool,
+    /// feature: map_key_dedup_policy
+    /// Whether duplicate map keys keep the last value (`LAST_WIN`) rather
+    /// than raising `DUPLICATED_MAP_KEY` (`spark.sql.mapKeyDedupPolicy`).
+    /// Absent in older bytes, which decodes as false (`EXCEPTION`).
+    #[prost(bool, tag = "6")]
+    pub map_key_dedup_last_win: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {

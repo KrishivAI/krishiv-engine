@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "chr#701f944ff7a9/ansi_on",
-      "reason": "SELECT chr(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "chr#701f944ff7a9/ansi_off",
-      "reason": "SELECT chr(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "chr#986aa06a93b7/ansi_on",
       "reason": "SELECT chr(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
