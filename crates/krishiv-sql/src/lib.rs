@@ -29,6 +29,7 @@
 #![forbid(unsafe_code)]
 
 pub mod ast;
+mod classify;
 mod error;
 mod frontend;
 mod generated {
@@ -42,6 +43,7 @@ mod redact;
 mod types;
 mod validate;
 
+pub use classify::{ExplainKind, StatementClass, classify, explain_kind, statement_queries};
 pub use error::{ParseError, parse_exception_suffix};
 pub use frontend::Frontend;
 pub use lower::{

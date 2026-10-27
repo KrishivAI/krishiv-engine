@@ -1,0 +1,31 @@
+DDL	CREATE TABLE empsalary (
+WRITE	INSERT INTO empsalary VALUES
+READ	SELECT sum(unique1) over (order by four range between 2 preceding and 1 preceding),
+READ	SELECT sum(unique1) over (order by four desc range between 2 preceding and 1 preceding),
+READ	SELECT sum(unique1) over (partition by four order by unique1 range between 5 preceding and 6 following),
+READ	select ss.id, ss.y,
+READ	select ss.id, ss.y,
+READ	select ss.id, ss.y,
+READ	select ss.id, ss.y,
+READ	select x.id, last(x.id) over (order by x.id range between current row and 2147450884 following)
+READ	select x.id, last(x.id) over (order by x.id desc range between current row and 2147450885 following)
+READ	select x.id, last(x.id) over (order by x.id range between current row and 4 following)
+READ	select x.id, last(x.id) over (order by x.id desc range between current row and 5 following)
+READ	select x.id, last(x.id) over (order by x.id range between current row and 4 following)
+READ	select x.id, last(x.id) over (order by x.id desc range between current row and 5 following)
+DDL	create table numerics (
+WRITE	insert into numerics values
+READ	select id, f_float4, first(id) over w, last(id) over w
+READ	select id, f_float4, first(id) over w, last(id) over w
+READ	select id, f_float4, first(id) over w, last(id) over w
+READ	select id, f_float4, first(id) over w, last(id) over w
+READ	select id, f_float8, first(id) over w, last(id) over w
+READ	select id, f_float8, first(id) over w, last(id) over w
+READ	select id, f_float8, first(id) over w, last(id) over w
+READ	select id, f_float8, first(id) over w, last(id) over w
+READ	select id, f_numeric, first(id) over w, last(id) over w
+READ	select id, f_numeric, first(id) over w, last(id) over w
+READ	select id, f_numeric, first(id) over w, last(id) over w
+READ	select id, f_numeric, first(id) over w, last(id) over w
+DDL	drop table empsalary
+DDL	drop table numerics

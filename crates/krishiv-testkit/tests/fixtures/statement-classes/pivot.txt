@@ -1,0 +1,34 @@
+SESSION	create temporary view courseSales as select * from values
+SESSION	create temporary view years as select * from values
+SESSION	create temporary view yearsWithComplexTypes as select * from values
+READ	SELECT * FROM (
+READ	SELECT * FROM courseSales
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT 2012_s, 2013_s, 2012_a, 2013_a, c FROM (
+READ	SELECT firstYear_s, secondYear_s, firstYear_a, secondYear_a, c FROM (
+READ	SELECT * FROM courseSales
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM courseSales
+READ	SELECT * FROM courseSales
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT pv.year, pv.net, pv.jv FROM (
+READ	SELECT pv.year, pv.dotNET, y.s FROM (

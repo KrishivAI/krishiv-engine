@@ -1,0 +1,38 @@
+DDL	CREATE TABLE test_missing_target (a int, b int, c string, d string) using parquet
+WRITE	INSERT INTO test_missing_target VALUES (0, 1, 'XXXX', 'A')
+WRITE	INSERT INTO test_missing_target VALUES (1, 2, 'ABAB', 'b')
+WRITE	INSERT INTO test_missing_target VALUES (2, 2, 'ABAB', 'c')
+WRITE	INSERT INTO test_missing_target VALUES (3, 3, 'BBBB', 'D')
+WRITE	INSERT INTO test_missing_target VALUES (4, 3, 'BBBB', 'e')
+WRITE	INSERT INTO test_missing_target VALUES (5, 3, 'bbbb', 'F')
+WRITE	INSERT INTO test_missing_target VALUES (6, 4, 'cccc', 'g')
+WRITE	INSERT INTO test_missing_target VALUES (7, 4, 'cccc', 'h')
+WRITE	INSERT INTO test_missing_target VALUES (8, 4, 'CCCC', 'I')
+WRITE	INSERT INTO test_missing_target VALUES (9, 4, 'CCCC', 'j')
+READ	SELECT udf(c), udf(count(*)) FROM test_missing_target GROUP BY
+READ	SELECT udf(count(*)) FROM test_missing_target GROUP BY udf(test_missing_target.c)
+READ	SELECT udf(count(*)) FROM test_missing_target GROUP BY udf(a) ORDER BY udf(b)
+READ	SELECT udf(count(*)) FROM test_missing_target GROUP BY udf(b) ORDER BY udf(b)
+READ	SELECT udf(test_missing_target.b), udf(count(*))
+READ	SELECT udf(c) FROM test_missing_target ORDER BY udf(a)
+READ	SELECT udf(count(*)) FROM test_missing_target GROUP BY udf(b) ORDER BY udf(b) desc
+READ	SELECT udf(count(*)) FROM test_missing_target ORDER BY udf(1) desc
+READ	SELECT udf(c), udf(count(*)) FROM test_missing_target GROUP BY 1 ORDER BY 1
+READ	SELECT udf(c), udf(count(*)) FROM test_missing_target GROUP BY 3
+READ	SELECT udf(count(*)) FROM test_missing_target x, test_missing_target y
+READ	SELECT udf(a), udf(a) FROM test_missing_target
+READ	SELECT udf(udf(a)/2), udf(udf(a)/2) FROM test_missing_target
+READ	SELECT udf(a/2), udf(a/2) FROM test_missing_target
+READ	SELECT udf(x.b), udf(count(*)) FROM test_missing_target x, test_missing_target y
+READ	SELECT udf(count(*)) FROM test_missing_target x, test_missing_target y
+READ	SELECT udf(a%2), udf(count(udf(b))) FROM test_missing_target
+READ	SELECT udf(count(c)) FROM test_missing_target
+READ	SELECT udf(count(udf(a))) FROM test_missing_target GROUP BY udf(a) ORDER BY udf(b)
+READ	SELECT udf(count(b)) FROM test_missing_target GROUP BY udf(b/2) ORDER BY udf(b/2)
+READ	SELECT udf(lower(test_missing_target.c)), udf(count(udf(c)))
+READ	SELECT udf(a) FROM test_missing_target ORDER BY udf(upper(udf(d)))
+READ	SELECT udf(count(b)) FROM test_missing_target
+READ	SELECT udf(count(udf(x.a))) FROM test_missing_target x, test_missing_target y
+READ	SELECT udf(x.b/2), udf(count(udf(x.b))) FROM test_missing_target x,
+READ	SELECT udf(count(udf(b))) FROM test_missing_target x, test_missing_target y
+DDL	DROP TABLE test_missing_target

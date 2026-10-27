@@ -1,0 +1,36 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT a from testData GROUP BY A
+READ	SELECT a AS k, COUNT(b) FROM testData GROUP BY k
+READ	SELECT a AS k, COUNT(b) FROM testData GROUP BY k HAVING k > 1
+READ	SELECT col1 AS k, SUM(col2) FROM testData AS t(col1, col2) GROUP BY k
+READ	SELECT a as alias FROM testData GROUP BY ALIAS
+READ	SELECT a AS k FROM testData GROUP BY 'k'
+READ	SELECT 1 AS k FROM testData GROUP BY 'k'
+READ	SELECT concat_ws(' ', a, b) FROM testData GROUP BY `concat_ws( , a, b)`
+READ	SELECT 1 AS a FROM testData GROUP BY a
+READ	SELECT 1 AS a FROM testData GROUP BY `a`
+READ	SELECT 1 GROUP BY `1`
+READ	SELECT (SELECT a FROM testData) + (SELECT b FROM testData) group by `(scalarsubquery() + scalarsubquery())`
+READ	SELECT a, count(*) FROM testData GROUP BY (SELECT b FROM testData)
+READ	SELECT a, count(*) FROM testData GROUP BY a, (SELECT b FROM testData)
+READ	SELECT a, count(*) FROM testData GROUP BY a, (SELECT b FROM testData LIMIT 1)
+READ	SELECT a, count(*) FROM testData GROUP BY a, b IN (SELECT a FROM testData)
+READ	SELECT a, count(*) FROM testData GROUP BY a, a IN (SELECT b FROM testData)
+READ	SELECT a, count(*) FROM testData GROUP BY a, EXISTS(SELECT b FROM testData)
+READ	SELECT a AS k, COUNT(non_existing) FROM testData GROUP BY k
+READ	SELECT COUNT(b) AS k FROM testData GROUP BY k
+READ	SELECT MAX(col1), 3 as abc FROM VALUES(1),(2),(3),(4) GROUP BY col1 % abc
+READ	SELECT 1 AS a FROM testData GROUP BY `a`
+READ	SELECT (
+READ	SELECT (
+READ	SELECT 111 AS abc GROUP BY 'a', abc
+READ	SELECT *, 111 AS abc FROM VALUES ('a', 'b', 'c') GROUP BY col1, col2, col3, abc
+READ	SELECT col1 as a, col2 AS a FROM values('a','b') GROUP BY col2, a
+READ	SELECT 1 AS a, 2 AS a FROM VALUES (1) t (a) GROUP BY a HAVING a > 1 ORDER BY a
+READ	SELECT 1 AS a, 2 AS a FROM VALUES (1) t (col1) GROUP BY a HAVING a > 1 ORDER BY a
+SESSION	set spark.sql.groupByAliases=false
+READ	SELECT a AS k, COUNT(b) FROM testData GROUP BY k
+READ	SELECT 1 GROUP BY `1`
+READ	SELECT 1 AS col FROM testData GROUP BY `col`
+READ	SELECT 1 AS a FROM testData GROUP BY `a`
+READ	SELECT col1 AS a FROM VALUES (NAMED_STRUCT('f1', 1)) GROUP BY a.f1

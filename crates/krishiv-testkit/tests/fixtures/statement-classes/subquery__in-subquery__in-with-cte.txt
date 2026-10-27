@@ -1,0 +1,13 @@
+SESSION	create temporary view t1 as select * from values
+SESSION	create temporary view t2 as select * from values
+SESSION	create temporary view t3 as select * from values
+READ	WITH cte1
+READ	WITH cte1 AS
+READ	WITH cte1 AS
+READ	WITH cte1
+READ	WITH cte1 AS
+READ	WITH cte1 AS
+READ	WITH cte1
+READ	WITH cte1 AS
+READ	WITH cte1
+READ	WITH cte1 AS

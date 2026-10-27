@@ -41,6 +41,7 @@
 
 #![forbid(unsafe_code)]
 
+mod access;
 mod catalog;
 mod column;
 mod command;
@@ -53,6 +54,7 @@ mod profile;
 mod session;
 mod variables;
 
+pub use access::StatementInfo;
 pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
@@ -62,5 +64,7 @@ pub use explain_graph::{
     GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
 };
 pub use krishiv_exec::profile::{QueryProfile, TextOptions};
+pub use krishiv_plan::analyzer::{Privilege, Securable, SecurableUse};
+pub use krishiv_sql::{ExplainKind, StatementClass};
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use session::{RecordBatchStream, Session, SessionBuilder};

@@ -1,0 +1,69 @@
+DDL	create table t1(s string, utf8_binary string collate utf8_binary, utf8_lcase string collate utf8_lcase) using parquet
+WRITE	insert into t1 values ('Spark', 'Spark', 'SQL')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaAAaA')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaaAaA')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaaAaAaaAaaAaAaaAaaAaA')
+WRITE	insert into t1 values ('bbAbaAbA', 'bbAbAAbA', 'a')
+WRITE	insert into t1 values ('İo', 'İo', 'İo')
+WRITE	insert into t1 values ('İo', 'İo', 'İo ')
+WRITE	insert into t1 values ('İo', 'İo ', 'İo')
+WRITE	insert into t1 values ('İo', 'İo', 'i̇o')
+WRITE	insert into t1 values ('efd2', 'efd2', 'efd2')
+WRITE	insert into t1 values ('Hello, world! Nice day.', 'Hello, world! Nice day.', 'Hello, world! Nice day.')
+WRITE	insert into t1 values ('Something else. Nothing here.', 'Something else. Nothing here.', 'Something else. Nothing here.'
+WRITE	insert into t1 values ('kitten', 'kitten', 'sitTing')
+WRITE	insert into t1 values ('abc', 'abc', 'abc')
+WRITE	insert into t1 values ('abcdcba', 'abcdcba', 'aBcDCbA')
+READ	select rpad(utf8_binary, 8, utf8_lcase) from t1
+READ	select rpad(s, 8, utf8_binary) from t1
+READ	select rpad(utf8_binary collate utf8_binary, 8, s collate utf8_lcase) from t1
+READ	select rpad(utf8_binary, 8, utf8_lcase collate utf8_binary) from t1
+READ	select rpad(utf8_binary collate utf8_lcase, 8, utf8_lcase collate utf8_lcase) from t1
+READ	select lpad(utf8_binary collate utf8_binary_rtrim, 8, utf8_lcase collate utf8_binary_rtrim) from t1
+READ	select rpad(utf8_binary, 8, 'a'), rpad(utf8_lcase, 8, 'a') from t1
+READ	select rpad(utf8_binary, 8, 'AaAA' collate utf8_lcase), rpad(utf8_lcase, 8, 'AAa' collate utf8_binary) from t1
+READ	select lpad(utf8_binary, 8, utf8_lcase) from t1
+READ	select lpad(s, 8, utf8_binary) from t1
+READ	select lpad(utf8_binary collate utf8_binary, 8, s collate utf8_lcase) from t1
+READ	select lpad(utf8_binary, 8, utf8_lcase collate utf8_binary) from t1
+READ	select lpad(utf8_binary collate utf8_lcase, 8, utf8_lcase collate utf8_lcase) from t1
+READ	select lpad(utf8_binary collate utf8_binary_rtrim, 8, utf8_lcase collate utf8_binary_rtrim) from t1
+READ	select lpad(utf8_binary, 8, 'a'), lpad(utf8_lcase, 8, 'a') from t1
+READ	select lpad(utf8_binary, 8, 'AaAA' collate utf8_lcase), lpad(utf8_lcase, 8, 'AAa' collate utf8_binary) from t1
+READ	select TRIM(utf8_binary, utf8_lcase) from t1
+READ	select TRIM(s, utf8_binary) from t1
+READ	select TRIM(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select TRIM(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select TRIM(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select TRIM(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai) from t1
+READ	select TRIM(utf8_binary collate utf8_binary_rtrim, utf8_lcase collate utf8_binary_rtrim) from t1
+READ	select TRIM('ABc', utf8_binary), TRIM('ABc', utf8_lcase) from t1
+READ	select TRIM('ABc' collate utf8_lcase, utf8_binary), TRIM('AAa' collate utf8_binary, utf8_lcase) from t1
+READ	select BTRIM(utf8_binary, utf8_lcase) from t1
+READ	select BTRIM(s, utf8_binary) from t1
+READ	select BTRIM(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select BTRIM(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select BTRIM(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select BTRIM(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai) from t1
+READ	select BTRIM(utf8_binary collate utf8_binary_rtrim, utf8_lcase collate utf8_binary_rtrim) from t1
+READ	select BTRIM('ABc', utf8_binary), BTRIM('ABc', utf8_lcase) from t1
+READ	select BTRIM('ABc' collate utf8_lcase, utf8_binary), BTRIM('AAa' collate utf8_binary, utf8_lcase) from t1
+READ	select LTRIM(utf8_binary, utf8_lcase) from t1
+READ	select LTRIM(s, utf8_binary) from t1
+READ	select LTRIM(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select LTRIM(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select LTRIM(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select LTRIM(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai) from t1
+READ	select LTRIM(utf8_binary collate utf8_binary_rtrim, utf8_lcase collate utf8_binary_rtrim) from t1
+READ	select LTRIM('ABc', utf8_binary), LTRIM('ABc', utf8_lcase) from t1
+READ	select LTRIM('ABc' collate utf8_lcase, utf8_binary), LTRIM('AAa' collate utf8_binary, utf8_lcase) from t1
+READ	select RTRIM(utf8_binary, utf8_lcase) from t1
+READ	select RTRIM(s, utf8_binary) from t1
+READ	select RTRIM(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select RTRIM(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select RTRIM(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select RTRIM(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai) from t1
+READ	select RTRIM(utf8_binary collate utf8_binary_rtrim, utf8_lcase collate utf8_binary_rtrim) from t1
+READ	select RTRIM('ABc', utf8_binary), RTRIM('ABc', utf8_lcase) from t1
+READ	select RTRIM('ABc' collate utf8_lcase, utf8_binary), RTRIM('AAa' collate utf8_binary, utf8_lcase) from t1
+DDL	drop table t1

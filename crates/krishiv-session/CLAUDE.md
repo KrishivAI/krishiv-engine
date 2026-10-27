@@ -15,6 +15,7 @@ Paths are relative to this crate.
 - `src/conf.rs` configuration snapshot taken per query
 - `src/catalog.rs` session catalog (temporary tables and views)
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
+- `src/access.rs` `StatementInfo` / `Session::statement_info` (class + read securables with columns)
 - `src/explain.rs` EXPLAIN; `src/profile.rs` profile for EXPLAIN ANALYZE
 - `tests/session.rs`, `tests/explain_analyze.rs`, `tests/spill.rs`, `tests/tpch_q1.rs` and `tests/window_goldens.rs` (window functions against Spark goldens) end-to-end tests
 

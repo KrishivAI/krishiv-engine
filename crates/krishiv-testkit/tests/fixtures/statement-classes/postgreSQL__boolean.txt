@@ -1,0 +1,92 @@
+READ	SELECT 1 AS one
+READ	SELECT true AS true
+READ	SELECT false AS `false`
+READ	SELECT boolean('t') AS true
+READ	SELECT boolean('   f           ') AS `false`
+READ	SELECT boolean('true') AS true
+READ	SELECT boolean('test') AS error
+READ	SELECT boolean('false') AS `false`
+READ	SELECT boolean('foo') AS error
+READ	SELECT boolean('y') AS true
+READ	SELECT boolean('yes') AS true
+READ	SELECT boolean('yeah') AS error
+READ	SELECT boolean('n') AS `false`
+READ	SELECT boolean('no') AS `false`
+READ	SELECT boolean('nay') AS error
+READ	SELECT boolean('on') AS true
+READ	SELECT boolean('off') AS `false`
+READ	SELECT boolean('of') AS `false`
+READ	SELECT boolean('o') AS error
+READ	SELECT boolean('on_') AS error
+READ	SELECT boolean('off_') AS error
+READ	SELECT boolean('1') AS true
+READ	SELECT boolean('11') AS error
+READ	SELECT boolean('0') AS `false`
+READ	SELECT boolean('000') AS error
+READ	SELECT boolean('') AS error
+READ	SELECT boolean('t') or boolean('f') AS true
+READ	SELECT boolean('t') and boolean('f') AS `false`
+READ	SELECT not boolean('f') AS true
+READ	SELECT boolean('t') = boolean('f') AS `false`
+READ	SELECT boolean('t') <> boolean('f') AS true
+READ	SELECT boolean('t') > boolean('f') AS true
+READ	SELECT boolean('t') >= boolean('f') AS true
+READ	SELECT boolean('f') < boolean('t') AS true
+READ	SELECT boolean('f') <= boolean('t') AS true
+READ	SELECT boolean(string('TrUe')) AS true, boolean(string('fAlse')) AS `false`
+READ	SELECT boolean(string('    true   ')) AS true,
+READ	SELECT string(boolean(true)) AS true, string(boolean(false)) AS `false`
+READ	SELECT boolean(string('  tru e ')) AS invalid
+READ	SELECT boolean(string('')) AS invalid
+DDL	CREATE TABLE BOOLTBL1 (f1 boolean) USING parquet
+WRITE	INSERT INTO BOOLTBL1 VALUES (cast('t' as boolean))
+WRITE	INSERT INTO BOOLTBL1 VALUES (cast('True' as boolean))
+WRITE	INSERT INTO BOOLTBL1 VALUES (cast('true' as boolean))
+READ	SELECT '' AS t_3, BOOLTBL1.* FROM BOOLTBL1
+READ	SELECT '' AS t_3, BOOLTBL1.*
+READ	SELECT '' AS t_3, BOOLTBL1.*
+READ	SELECT '' AS zero, BOOLTBL1.*
+WRITE	INSERT INTO BOOLTBL1 VALUES (boolean('f'))
+READ	SELECT '' AS f_1, BOOLTBL1.*
+DDL	CREATE TABLE BOOLTBL2 (f1 boolean) USING parquet
+WRITE	INSERT INTO BOOLTBL2 VALUES (boolean('f'))
+WRITE	INSERT INTO BOOLTBL2 VALUES (boolean('false'))
+WRITE	INSERT INTO BOOLTBL2 VALUES (boolean('False'))
+WRITE	INSERT INTO BOOLTBL2 VALUES (boolean('FALSE'))
+WRITE	INSERT INTO BOOLTBL2
+READ	SELECT '' AS f_4, BOOLTBL2.* FROM BOOLTBL2
+READ	SELECT '' AS tf_12, BOOLTBL1.*, BOOLTBL2.*
+READ	SELECT '' AS tf_12, BOOLTBL1.*, BOOLTBL2.*
+READ	SELECT '' AS ff_4, BOOLTBL1.*, BOOLTBL2.*
+READ	SELECT '' AS tf_12_ff_4, BOOLTBL1.*, BOOLTBL2.*
+READ	SELECT '' AS True, f1
+READ	SELECT '' AS `Not False`, f1
+READ	SELECT '' AS `False`, f1
+READ	SELECT '' AS `Not True`, f1
+READ	SELECT '' AS `True`, f1
+READ	SELECT '' AS `Not False`, f1
+READ	SELECT '' AS `False`, f1
+READ	SELECT '' AS `Not True`, f1
+DDL	CREATE TABLE BOOLTBL3 (d string, b boolean, o int) USING parquet
+WRITE	INSERT INTO BOOLTBL3 VALUES ('true', true, 1)
+WRITE	INSERT INTO BOOLTBL3 VALUES ('false', false, 2)
+WRITE	INSERT INTO BOOLTBL3 VALUES ('null', null, 3)
+READ	SELECT
+DDL	CREATE TABLE booltbl4(isfalse boolean, istrue boolean, isnul boolean) USING parquet
+WRITE	INSERT INTO booltbl4 VALUES (false, true, null)
+READ	SELECT istrue AND isnul AND istrue FROM booltbl4
+READ	SELECT istrue AND istrue AND isnul FROM booltbl4
+READ	SELECT isnul AND istrue AND istrue FROM booltbl4
+READ	SELECT isfalse AND isnul AND istrue FROM booltbl4
+READ	SELECT istrue AND isfalse AND isnul FROM booltbl4
+READ	SELECT isnul AND istrue AND isfalse FROM booltbl4
+READ	SELECT isfalse OR isnul OR isfalse FROM booltbl4
+READ	SELECT isfalse OR isfalse OR isnul FROM booltbl4
+READ	SELECT isnul OR isfalse OR isfalse FROM booltbl4
+READ	SELECT isfalse OR isnul OR istrue FROM booltbl4
+READ	SELECT istrue OR isfalse OR isnul FROM booltbl4
+READ	SELECT isnul OR istrue OR isfalse FROM booltbl4
+DDL	DROP TABLE  BOOLTBL1
+DDL	DROP TABLE  BOOLTBL2
+DDL	DROP TABLE  BOOLTBL3
+DDL	DROP TABLE  BOOLTBL4
