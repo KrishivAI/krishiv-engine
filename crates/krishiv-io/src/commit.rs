@@ -156,8 +156,10 @@ impl DirectoryWrite {
         }
     }
 
-    /// Commits the write of `files` (all of them, from every task): an
-    /// empty file of `schema` if there are none, then the old objects of an
+    /// Commits the write of `files` (all of them, from every committed
+    /// task): an empty file of `schema` if there are none, then every
+    /// object of this write no committed task listed (a failed or late
+    /// attempt's files, or orphans) is deleted, then the old objects of an
     /// overwrite are deleted, then `_SUCCESS` is written. Returns the files
     /// of the output.
     ///
@@ -178,6 +180,7 @@ impl DirectoryWrite {
         }
         // Never a file of this write, even if its job UUID was reused.
         let new: std::collections::HashSet<&Path> = files.iter().map(|f| &f.path).collect();
+        self.delete_orphans(io, &new).await?;
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`
         // for callers that spawn it.
@@ -198,6 +201,39 @@ impl DirectoryWrite {
         )
         .await?;
         Ok(files)
+    }
+
+    /// Deletes every object under the write's directory that looks like a
+    /// file of this job but no committed task listed: the files of a failed
+    /// or late attempt (attempt `k > 0` appends `_<k>` to the job-id
+    /// segment, so they still contain the job UUID), or orphans. Files of
+    /// other writes (other job UUIDs) and `_SUCCESS` are kept.
+    async fn delete_orphans(
+        &self,
+        io: &IoContext,
+        committed: &std::collections::HashSet<&Path>,
+    ) -> Result<()> {
+        let listed = io.list(&self.store, &self.dir).await?;
+        let mut orphans = Vec::new();
+        for meta in &listed {
+            if committed.contains(&meta.location) {
+                continue;
+            }
+            let Some(name) = meta.location.filename() else {
+                continue;
+            };
+            // Data files of this write; `_SUCCESS` and other writes' files
+            // never contain the job UUID.
+            if name.starts_with("part-") && name.contains(self.job_uuid.as_str()) {
+                orphans.push(meta.location.clone());
+            }
+        }
+        let deletes: Vec<_> = orphans.iter().map(|p| io.delete(&self.store, p)).collect();
+        futures::stream::iter(deletes)
+            .buffer_unordered(PARALLEL_DELETES)
+            .try_collect::<Vec<()>>()
+            .await?;
+        Ok(())
     }
 
     /// One file of `schema` without rows: Spark writes it so that the

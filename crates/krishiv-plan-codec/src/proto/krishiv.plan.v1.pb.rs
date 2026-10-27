@@ -522,10 +522,37 @@ pub struct UnionNode {
     #[prost(uint32, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<u32>,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WriteFilesNode {
     #[prost(uint32, tag = "1")]
     pub input: u32,
+    /// feature: write_plan
+    /// What the write writes (format, store, directory, job id, limits).
+    #[prost(message, optional, tag = "2")]
+    pub write: ::core::option::Option<WritePlan>,
+}
+/// feature: write_plan
+/// A file write as plan data: the sink is built at instantiation from this
+/// with the task's partition and attempt.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WritePlan {
+    #[prost(string, tag = "1")]
+    pub format: ::prost::alloc::string::String,
+    #[prost(btree_map = "string, message", tag = "2")]
+    pub options: ::prost::alloc::collections::BTreeMap<
+        ::prost::alloc::string::String,
+        OptionValue,
+    >,
+    #[prost(string, tag = "3")]
+    pub store: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub dir: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub job_uuid: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "6")]
+    pub max_records_per_file: u64,
+    #[prost(uint64, tag = "7")]
+    pub target_file_bytes: u64,
 }
 /// v2: moves rows between partitions.
 #[derive(Clone, PartialEq, ::prost::Message)]

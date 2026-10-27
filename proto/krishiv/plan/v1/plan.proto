@@ -448,6 +448,22 @@ message UnionNode {
 
 message WriteFilesNode {
   uint32 input = 1;
+  // feature: write_plan
+  // What the write writes (format, store, directory, job id, limits).
+  WritePlan write = 2;
+}
+
+// feature: write_plan
+// A file write as plan data: the sink is built at instantiation from this
+// with the task's partition and attempt.
+message WritePlan {
+  string format = 1;
+  map<string, OptionValue> options = 2;
+  string store = 3;
+  string dir = 4;
+  string job_uuid = 5;
+  uint64 max_records_per_file = 6;
+  uint64 target_file_bytes = 7;
 }
 
 // v2: moves rows between partitions.
