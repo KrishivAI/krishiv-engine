@@ -4,7 +4,7 @@
 //! A [`RowTable`] keeps its groups' keys as fixed-stride [`RowLayout`] rows,
 //! one row per group, in up to [`PARTS`] radix partitions chosen by the top
 //! bits of the row hash. Each partition owns its rows and its aggregates'
-//! states (the same [`Accumulator`]s as the default path): a group's id in
+//! states (the same [`Accumulator`]s as the columnar path): a group's id in
 //! its partition's accumulators is its row's position in the partition, so
 //! a row is only its key,
 //!

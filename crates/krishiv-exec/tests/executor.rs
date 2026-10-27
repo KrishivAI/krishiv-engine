@@ -702,25 +702,25 @@ async fn planning_and_setup_errors() {
     assert_released(&root);
 }
 
-/// The row-layout keys reach `ExecConfig`: off and 3 radix bits by default,
+/// The row-layout keys reach `ExecConfig`: on and 3 radix bits by default,
 /// and the radix bits are clamped to 3..=6.
 #[test]
 fn config_join_row_layout_keys() {
     let default = ExecConfig::from_config(&Config::new());
-    assert!(!default.agg_row_layout && !default.join_row_layout);
+    assert!(default.agg_row_layout && default.join_row_layout);
     assert_eq!(default.join_radix_bits, 3);
     let read = |bits: &str| {
         let (config, _) = Config::from_pairs([
-            ("krishiv.exec.agg.rowLayout", "true"),
-            ("krishiv.exec.join.rowLayout", "true"),
+            ("krishiv.exec.agg.rowLayout", "false"),
+            ("krishiv.exec.join.rowLayout", "false"),
             ("krishiv.exec.join.radixBits", bits),
         ])
         .unwrap();
         ExecConfig::from_config(&config)
     };
-    let on = read("5");
-    assert!(on.agg_row_layout && on.join_row_layout);
-    assert_eq!(on.join_radix_bits, 5);
+    let off = read("5");
+    assert!(!off.agg_row_layout && !off.join_row_layout);
+    assert_eq!(off.join_radix_bits, 5);
     assert_eq!(read("1").join_radix_bits, 3);
     assert_eq!(read("9").join_radix_bits, 6);
 }

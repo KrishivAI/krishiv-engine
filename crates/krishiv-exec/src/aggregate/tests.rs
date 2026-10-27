@@ -73,7 +73,7 @@ fn pool(limit: usize) -> Arc<TreePool> {
 /// Runs `plan` on a deterministic executor (seed `o.seed`); checks the pool is
 /// empty afterwards. Unless `o.both_layouts` is off, runs it again with the
 /// row-layout aggregate tables and checks the rows (or the error) are the
-/// same; returns the default layout's outcome.
+/// same; returns the columnar layout's outcome.
 async fn exec(plan: Arc<dyn ExecNode>, o: Opts) -> crate::Result<(Vec<Batch>, QueryMetrics)> {
     let off = exec_with(Arc::clone(&plan), o, false).await;
     if o.both_layouts {
@@ -99,7 +99,7 @@ async fn exec(plan: Arc<dyn ExecNode>, o: Opts) -> crate::Result<(Vec<Batch>, Qu
 
 /// Runs a fresh plan from `make` on each layout (operator counters add up
 /// across runs of one plan) and requires the same rows; returns both
-/// metrics, default first, so tests check each layout's spill counters.
+/// metrics, columnar first, so tests check each layout's spill counters.
 async fn exec_each(
     make: impl Fn() -> Arc<dyn ExecNode>,
     o: Opts,
@@ -1620,7 +1620,7 @@ fn row_mode(kind: u8, limit: usize) -> rowtable::Mode {
 
 proptest! {
     #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
-    /// The row-layout tables return exactly the default tables' rows: one
+    /// The row-layout tables return exactly the columnar tables' rows: one
     /// to three keys (with NULL, `-0.0`, NaN), every accumulator, partial
     /// duplicates from cleared indexes and append-only tables, one and
     /// several drivers, two phases, spilling under a tight memory limit.
@@ -1725,13 +1725,13 @@ fn row_case(
         HashAggregate::new(final_spec.clone()).map_err(|e| fail(&e))?,
         &sp,
     );
-    // Only cases the default tables finish compare; running out of memory
-    // is the one expected default failure.
+    // Only cases the columnar tables finish compare; running out of memory
+    // is the one expected columnar failure.
     let want = match rt.block_on(exec(off, o)) {
         Ok((want, _)) => want,
         Err(e) if e.error_class() == ErrorClass::UnableToAcquireMemory => {
             return Err(TestCaseError::reject(
-                "the default tables ran out of memory",
+                "the columnar tables ran out of memory",
             ));
         }
         Err(e) => return Err(fail(&e)),
@@ -1741,7 +1741,7 @@ fn row_case(
     let got = rt
         .block_on(exec_with(plan(agg, &sp), o, true))
         .map_err(|e| {
-            TestCaseError::fail(format!("row layout failed where the default did not: {e}"))
+            TestCaseError::fail(format!("row layout failed where the columnar did not: {e}"))
         })?;
     prop_assert_eq!(rows(&got.0), rows(&want));
     Ok(())
@@ -1885,7 +1885,7 @@ async fn row_final_phase_parallel_and_spill_fallback() {
 
 /// Every key type with a row encoding through the row tables (fixed
 /// indexes that abandon, several drivers, up to three keys at a time)
-/// returns the default tables' rows, NULL keys included: fixed widths, and
+/// returns the columnar tables' rows, NULL keys included: fixed widths, and
 /// strings and binaries of every carrier, empty, inline, 12 and 13 bytes
 /// and long (heap), binaries that are not UTF-8.
 #[tokio::test]
@@ -2057,7 +2057,7 @@ async fn row_layout_key_types_equal_default() {
                 .await
                 .unwrap();
             assert_eq!(rows(&got), want, "keys {keys:?} {mode:?}");
-            // The row tables ran (no fallback to the default tables).
+            // The row tables ran (no fallback to the columnar tables).
             let layout = m
                 .operators
                 .values()
@@ -2074,7 +2074,7 @@ async fn row_layout_key_types_equal_default() {
 /// (their own schema is nullable): both layouts fail the same way, when
 /// the output batch is checked against the declared schema (the row
 /// tables give every key a validity bit, so they group the NULLs first,
-/// as the default tables do).
+/// as the columnar tables do).
 #[tokio::test]
 async fn row_layout_nullable_batches_under_a_non_nullable_spec() {
     let nullable = schema(vec![("k", DataType::Int64), ("x", DataType::Int64)]);
@@ -2113,7 +2113,7 @@ proptest! {
         rng_seed: proptest::test_runner::RngSeed::Fixed(20_261_020),
         ..ProptestConfig::default()
     })]
-    /// At 768 KiB the row tables finish wherever the default tables do,
+    /// At 768 KiB the row tables finish wherever the columnar tables do,
     /// with partial duplicates from tiny fixed indexes (one row per input
     /// row at `limit` 1): the final phase frees each driver partition once
     /// merged and writes finished partitions to the output file instead of
