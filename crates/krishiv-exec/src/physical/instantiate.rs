@@ -20,13 +20,20 @@
 //! | `Hash` below an aggregate | the aggregate's breaker, whose partitions are the hash's |
 //! | `Hash` below a sort by its keys first (a window's) | the sort's hash buckets, merged and read in parallel |
 //! | `Hash` on both inputs of a join | the build's partitions; the probe needs none, as the build is complete |
-//! | `Broadcast` | the shared, immutable build |
+//! | `Broadcast` | the shared, immutable build, published as a value |
 //! | `Single` | the breaker's combine and merge, or the result stream |
 //! | `Range` | the sort's run merge |
 //! | `RoundRobin` | the drivers' morsels |
 //!
 //! Every one of them is the identity on the rows a worker computes from
 //! the whole input, so an exchange instantiates as its input.
+//!
+//! # Values
+//! Runtime filters, subquery results and broadcast builds go through the
+//! worker's [`ValueService`] (a fresh [`LocalValues`] per instantiation
+//! unless the context sets one): instantiation declares each filter there,
+//! scans read the cells it hands out, and producers publish their partials
+//! to it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -34,8 +41,9 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use krishiv_common::config::Config;
+use krishiv_common::error::KrishivUnsupportedFeature;
 use krishiv_io::{
-    FileFormat, FilterId, IoContext, RuntimeFilter, StoreId, WriteOptions, effective_job_uuid,
+    FormatRegistry, IoContext, StoreId, WriteOptions, effective_job_uuid, is_spark_file_source,
 };
 use krishiv_memory::SpillScope;
 use krishiv_plan::{AttrId, Expr};
@@ -43,8 +51,8 @@ use object_store::path::Path;
 
 use super::{
     AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SubqueryPlan, WritePlan, files_of,
-    partitions_of,
+    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SubqueryPlan, ValueId, Version,
+    WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
 use crate::error::{Result, internal};
@@ -62,7 +70,10 @@ use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
 use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, SourceNode};
-use crate::planner::subquery::{Slot, SubquerySink, SubqueryValue, WithSubqueries};
+use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
+use crate::values::{
+    BroadcastBuild, LocalValues, Partial, Producer, Publication, Value, ValueService,
+};
 use crate::window::{GroupLimitPlan, WindowGroupLimit};
 
 /// Creates the spill scope of one instantiation: the query's own spill
@@ -78,8 +89,9 @@ pub trait SpillScopes: Send + Sync + fmt::Debug {
 
 /// What a worker resolves a plan's references against: the tables its
 /// scans read, the relation store its batch splits resolve through, the
-/// spill scope of the query, and the I/O context, formats and configuration
-/// a write builds its sink from. One per query and worker.
+/// spill scope of the query, the I/O context, formats and configuration a
+/// write builds its sink from, and the values of the plan. One per query
+/// and worker.
 #[derive(Clone)]
 pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
@@ -87,8 +99,12 @@ pub struct WorkerContext {
     spill: Option<SpillScope>,
     scopes: Option<Arc<dyn SpillScopes>>,
     io: Option<IoContext>,
-    formats: Vec<Arc<dyn FileFormat>>,
+    formats: Arc<FormatRegistry>,
     config: Option<Arc<Config>>,
+    /// The plan's values; a fresh [`LocalValues`] per instantiation when
+    /// unset.
+    values: Option<Arc<dyn ValueService>>,
+    producer: Producer,
 }
 
 /// Which task of a stage instantiates a plan fragment: the stage, its
@@ -140,8 +156,10 @@ impl WorkerContext {
             spill: None,
             scopes: None,
             io: None,
-            formats: Vec::new(),
+            formats: Arc::new(FormatRegistry::new()),
             config: None,
+            values: None,
+            producer: Producer::default(),
         }
     }
 
@@ -181,7 +199,7 @@ impl WorkerContext {
 
     /// The same context resolving a write's format name against `formats`.
     #[must_use]
-    pub fn with_formats(mut self, formats: Vec<Arc<dyn FileFormat>>) -> Self {
+    pub fn with_formats(mut self, formats: Arc<FormatRegistry>) -> Self {
         self.formats = formats;
         self
     }
@@ -191,6 +209,24 @@ impl WorkerContext {
     #[must_use]
     pub fn with_config(mut self, config: Arc<Config>) -> Self {
         self.config = Some(config);
+        self
+    }
+
+    /// The same context publishing and reading the plan's values through
+    /// `values`. A service serves one instantiation; reusing it is
+    /// unsupported: a second plan with runtime filters fails to declare
+    /// them, and a subquery-only plan silently reads the first one's values.
+    #[must_use]
+    pub fn with_values(mut self, values: Arc<dyn ValueService>) -> Self {
+        self.values = Some(values);
+        self
+    }
+
+    /// The same context publishing values as `producer` (partition 0,
+    /// attempt 0 by default).
+    #[must_use]
+    pub fn with_producer(mut self, producer: Producer) -> Self {
+        self.producer = producer;
         self
     }
 
@@ -213,17 +249,17 @@ impl fmt::Debug for WorkerContext {
             .field("spill", &self.spill.is_some())
             .field("spill_scopes", &self.scopes.is_some())
             .field("io", &self.io.is_some())
-            .field(
-                "formats",
-                &self.formats.iter().map(|x| x.name()).collect::<Vec<_>>(),
-            )
+            .field("formats", &self.formats.names())
+            .field("config", &self.config.is_some())
+            .field("values", &self.values.is_some())
+            .field("producer", &self.producer)
             .finish_non_exhaustive()
     }
 }
-
 /// The executable graph of `task` of `plan` on the worker `worker`
-/// describes. Each call creates its own operators and cells: a plan can be
-/// instantiated any number of times.
+/// describes. Each call creates its own operators and, unless `worker` sets
+/// a value service, its own values: a plan can be instantiated any number
+/// of times.
 ///
 /// # Errors
 /// The table providers' errors; `INTERNAL_ERROR` when the plan does not
@@ -246,7 +282,10 @@ pub fn instantiate_task(
             task: task.clone(),
             spill,
             env: EvalEnv::from_plan(plan.env()),
-            filters: HashMap::new(),
+            values: worker
+                .values
+                .clone()
+                .unwrap_or_else(|| Arc::new(LocalValues::new())),
             ids: node_ids(plan.root()),
         };
         cx.declare_filters(plan.root())?;
@@ -266,8 +305,9 @@ pub fn instantiate_task(
 }
 
 /// The executable graph of `plan` on the worker `worker` describes, as
-/// partition 0 of 1, attempt 0. Each call creates its own operators and
-/// cells: a plan can be instantiated any number of times.
+/// partition 0 of 1, attempt 0. Each call creates its own operators and,
+/// unless `worker` sets a value service, its own values: a plan can be
+/// instantiated any number of times.
 ///
 /// # Errors
 /// As [`instantiate_task`].
@@ -281,8 +321,8 @@ struct Instantiation<'a> {
     /// The query's spill scope on this worker.
     spill: Option<SpillScope>,
     env: EvalEnv,
-    /// One cell per runtime filter of the plan.
-    filters: HashMap<FilterId, Arc<RuntimeFilter>>,
+    /// The plan's values: runtime filters, subquery results, broadcasts.
+    values: Arc<dyn ValueService>,
     /// Each node's pre-order index, by address (the plan is borrowed for
     /// the whole instantiation, so addresses are stable).
     ids: HashMap<usize, u32>,
@@ -323,32 +363,19 @@ struct Built {
 }
 
 impl Instantiation<'_> {
-    /// Creates the cell of every runtime filter a scan declares.
-    fn declare_filters(&mut self, n: &PhysNode) -> Result<()> {
+    /// Declares every runtime filter a scan declares to the value service.
+    fn declare_filters(&self, n: &PhysNode) -> Result<()> {
         let mut stack = vec![n];
         while let Some(n) = stack.pop() {
             if let PhysNode::Scan(s) = n {
                 for f in &s.runtime_filters {
-                    let cell = Arc::new(RuntimeFilter::new(
-                        f.id,
-                        f.column.clone(),
-                        f.key_type.clone(),
-                    ));
-                    if self.filters.insert(f.id, cell).is_some() {
-                        return Err(internal(format!("runtime filter {} declared twice", f.id)));
-                    }
+                    self.values
+                        .declare_filter(f.id, f.column.clone(), f.key_type.clone())?;
                 }
             }
             stack.extend(n.children());
         }
         Ok(())
-    }
-
-    fn cell(&self, id: FilterId) -> Result<Arc<RuntimeFilter>> {
-        self.filters
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| internal(format!("runtime filter {id} has no scan")))
     }
 
     /// Builds `n`, tagged with its pre-order index so the operators it
@@ -534,6 +561,9 @@ impl Instantiation<'_> {
             PhysNode::WriteFiles { input, write } => self.write_files(input, write),
             // See the module docs: the operators around an exchange
             // implement it on one worker.
+            PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => {
+                self.broadcast(e.id, &e.input)
+            }
             PhysNode::Exchange(e) => self.node(&e.input),
         }
     }
@@ -556,7 +586,7 @@ impl Instantiation<'_> {
         }
         let dynamic = RuntimeFilters::default();
         for f in &s.runtime_filters {
-            dynamic.push(self.cell(f.id)?);
+            dynamic.push(self.values.filter(f.id)?);
         }
         if !s.runtime_filters.is_empty() {
             dynamic.set_settings(s.row_stage);
@@ -616,17 +646,17 @@ impl Instantiation<'_> {
             .io
             .clone()
             .ok_or_else(|| internal("a write without an I/O context".to_owned()))?;
-        let Some(format) = self
-            .worker
-            .formats
-            .iter()
-            .find(|f| f.name().eq_ignore_ascii_case(&write.format))
-            .cloned()
-        else {
-            return Err(internal(format!(
-                "a write of the format `{}` this worker does not have",
-                write.format
-            )));
+        let format = match self.worker.formats.get(&write.format) {
+            Ok(format) => format,
+            Err(e) => {
+                if is_spark_file_source(&write.format) {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!("writing the {} format", write.format),
+                    }
+                    .into());
+                }
+                return Err(e);
+            }
         };
         let Some(config) = self.worker.config.as_deref() else {
             return Err(internal("a write without a configuration".to_owned()));
@@ -669,14 +699,19 @@ impl Instantiation<'_> {
         let mut values = Vec::with_capacity(subqueries.len());
         for s in subqueries {
             let plan = self.node(&s.plan)?;
-            let slot = Arc::new(Slot::default());
-            let sink = SubquerySink::new(s.kind, s.data_type.clone(), Arc::clone(&slot));
+            let sink = SubquerySink::new(
+                s.id,
+                s.kind,
+                s.data_type.clone(),
+                Arc::clone(&self.values),
+                self.worker.producer,
+            );
             plans.push((plan.node, sink));
             values.push((
                 s.id.attr(),
                 Arc::new(SubqueryValue {
                     kind: s.kind,
-                    slot,
+                    value: self.values.subscribe(ValueId::Subquery(s.id))?,
                     data_type: s.data_type.clone(),
                 }) as Arc<dyn PhysExpr>,
             ));
@@ -701,6 +736,31 @@ impl Instantiation<'_> {
         })
     }
 
+    /// The input of the broadcast exchange `id`, published as this
+    /// producer's partial of its value: on one worker the join over it
+    /// shares one build among its drivers.
+    fn broadcast(&mut self, id: super::ExchangeId, input: &PhysNode) -> Result<Built> {
+        let input = self.node(input)?;
+        let value = ValueId::Broadcast(id);
+        let published = self.values.publish(Partial {
+            value,
+            version: Version::BATCH,
+            producer: self.worker.producer,
+            payload: Value::Broadcast(BroadcastBuild::new(&input.node)),
+        })?;
+        if published != Publication::Complete {
+            // In one process every producer partition is this one: another
+            // partial (`Waiting`) or a second exchange of this id
+            // (`Ignored`) cannot be lowered.
+            return Err(internal(format!(
+                "{value} is {published:?} in this instantiation"
+            )));
+        }
+        // The value names this input without owning it (see
+        // `BroadcastBuild`): the plan holds it.
+        Ok(input)
+    }
+
     fn hash_join(&mut self, j: &HashJoinPlan) -> Result<Built> {
         let probe = self.node(&j.probe)?;
         let build = self.node(&j.build)?;
@@ -710,7 +770,8 @@ impl Instantiation<'_> {
             j,
             &self.env,
             self.spill.clone(),
-            &mut |id| self.cell(id),
+            &self.values,
+            self.worker.producer,
         )?;
         Ok(Built {
             schema: join.schema(),
@@ -983,15 +1044,16 @@ fn residual(
     Ok(Some(Arc::new(Compiled(all)) as Arc<dyn Predicate>))
 }
 
-/// The hash join of `j` over inputs of `probe` and `build`; `cell` gives
-/// the runtime filter of an id.
+/// The hash join of `j` over inputs of `probe` and `build`, publishing its
+/// runtime filters to `values` (which declares them) as `producer`.
 pub(crate) fn hash_join(
     probe: &SchemaRef,
     build: &SchemaRef,
     j: &HashJoinPlan,
     env: &EvalEnv,
     spill: Option<SpillScope>,
-    cell: &mut dyn FnMut(FilterId) -> Result<Arc<RuntimeFilter>>,
+    values: &Arc<dyn ValueService>,
+    producer: Producer,
 ) -> Result<HashJoin> {
     if j.distinct_build && !j.distinct_build_allowed() {
         return Err(internal(format!(
@@ -1024,12 +1086,12 @@ pub(crate) fn hash_join(
         .map(|f| {
             Ok(JoinRuntimeFilter {
                 key: f.key,
-                filter: cell(f.id)?,
+                filter: values.filter(f.id)?,
                 options: f.options,
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    join.with_runtime_filters(filters)
+    join.with_filter_values(filters, Arc::clone(values), producer)
 }
 
 pub(crate) fn nested_loop_join(

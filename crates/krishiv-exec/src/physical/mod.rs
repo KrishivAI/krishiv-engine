@@ -13,11 +13,12 @@
 //! 2. **Instantiation** ([`instantiate`]) builds the executable graph of
 //!    operators from a plan on the worker that runs it, with the
 //!    resources of that worker ([`WorkerContext`]): table providers and
-//!    their scan factories, the spill scope, the I/O context and formats
-//!    a write builds its sink from. Expressions
-//!    are compiled for the worker's kernels; runtime-filter cells and
-//!    subquery value cells are created here, one set per instantiation, so
-//!    a plan can be instantiated any number of times.
+//!    their scan factories, the spill scope, the I/O context, formats and
+//!    configuration a write builds its sink from. Expressions
+//!    are compiled for the worker's kernels; runtime filters, subquery
+//!    results and broadcast builds are published and read through the
+//!    worker's [`ValueService`](crate::values::ValueService), one per
+//!    instantiation, so a plan can be instantiated any number of times.
 //!
 //! A [`Scheduler`](crate::Scheduler) takes a [`PhysicalPlan`]; the
 //! in-process [`QueryRunner`](crate::QueryRunner) instantiates it and runs
@@ -28,10 +29,11 @@
 //!   node holding a service handle, a lock, an atomic or a cell does not
 //!   compile.
 //! - Ids are assigned by the planner and are plan data: [`ScanId`],
-//!   [`FilterId`], [`SubqueryId`]. A runtime filter is described twice:
-//!   the scan it filters lists it ([`ScanRuntimeFilter`]: column and key
-//!   type), and the join that produces it lists it ([`JoinFilterPlan`]: key
-//!   and options); instantiation connects the two through one cell per id.
+//!   [`FilterId`], [`SubqueryId`], [`ExchangeId`]; [`ValueId`] names the
+//!   values among them. A runtime filter is described twice: the scan it
+//!   filters lists it ([`ScanRuntimeFilter`]: column and key type), and
+//!   the join that produces it lists it ([`JoinFilterPlan`]: key and
+//!   options); instantiation connects the two through the value service.
 //! - A subquery's value is read by the expressions of the node that lists
 //!   it ([`SubqueryPlan`]) as the column of attribute [`SubqueryId::attr`].
 //! - Data moves between partitions only at [`PhysNode::Exchange`] nodes,
@@ -100,6 +102,44 @@ impl SubqueryId {
 /// by it (with the stage, map partition and attempt; ADR 0013, I10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExchangeId(pub u64);
+
+/// A value computed while a plan runs and read by other operators of the
+/// plan: a runtime filter, a subquery's result or a broadcast exchange's
+/// build (design P2-T171, I3). Its producers publish partials of it, one
+/// per producer partition, and its consumers read it once every producer
+/// partition published ([`crate::values`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ValueId {
+    /// The runtime filter a join's build publishes.
+    Filter(FilterId),
+    /// A subquery's result.
+    Subquery(SubqueryId),
+    /// The rows of a broadcast exchange.
+    Broadcast(ExchangeId),
+}
+
+impl fmt::Display for ValueId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Filter(id) => write!(f, "runtime filter {id}"),
+            Self::Subquery(id) => write!(f, "subquery #{}", id.0),
+            Self::Broadcast(id) => write!(f, "broadcast exchange #{}", id.0),
+        }
+    }
+}
+
+/// The version of a value: the epoch its producers computed it at. A
+/// batch query has one, [`Version::BATCH`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Version {
+    /// The epoch.
+    pub epoch: u64,
+}
+
+impl Version {
+    /// The only version of a batch query's values (epoch 0).
+    pub const BATCH: Self = Self { epoch: 0 };
+}
 
 /// How an [`PhysNode::Exchange`] places its input's rows into partitions.
 /// Columns are indices into the exchange's input (and output: an exchange
@@ -589,6 +629,14 @@ impl WritePlan {
 plan_data!(tuple ScanId(id));
 plan_data!(tuple SubqueryId(id));
 plan_data!(tuple ExchangeId(id));
+plan_data!(
+    enum ValueId {
+        Filter(id),
+        Subquery(id),
+        Broadcast(id),
+    }
+);
+plan_data!(struct Version { epoch });
 plan_data!(
     enum HashScheme {
         Unpinned,

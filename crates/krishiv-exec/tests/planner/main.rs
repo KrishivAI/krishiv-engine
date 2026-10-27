@@ -71,6 +71,12 @@ impl Runnable {
         }
     }
 
+    /// The same plan run with the worker context `f` makes of its own.
+    pub(crate) fn with_worker(mut self, f: impl FnOnce(WorkerContext) -> WorkerContext) -> Self {
+        self.worker = f(self.worker);
+        self
+    }
+
     /// The same plan spilling into `scope`.
     pub(crate) fn with_spill(mut self, scope: krishiv_memory::SpillScope) -> Self {
         self.worker = self.worker.with_spill(scope);
