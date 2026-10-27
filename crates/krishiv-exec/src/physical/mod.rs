@@ -43,6 +43,7 @@
 pub(crate) mod data;
 mod instantiate;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -329,12 +330,38 @@ pub enum PhysNode {
     },
     /// Writes `input`'s rows through the worker's write sink
     /// ([`WorkerContext::with_write_sink`]); one row per file written.
+    /// Partitioned writes sort `input` by the partition columns directly
+    /// below (see [`PhysicalPlan::into_write`]).
     WriteFiles {
         /// The rows to write.
         input: Box<PhysNode>,
+        /// How to lay the files out (pure data; the sink stays a worker
+        /// resource).
+        spec: WriteSpec,
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
+}
+
+/// How [`PhysNode::WriteFiles`] lays its rows out: partition columns in
+/// `partitionBy` order, the overwrite mode, the file rollover and the
+/// format. Pure data; the sink ([`WorkerContext::with_write_sink`]) and
+/// the stores stay worker resources.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct WriteSpec {
+    /// Partition column indices into the writer's input, in `partitionBy`
+    /// order; empty for unpartitioned output.
+    pub partition_by: Vec<usize>,
+    /// `DYNAMIC` (`spark.sql.sources.partitionOverwriteMode`): an
+    /// overwrite replaces only the partition directories the write
+    /// produced.
+    pub dynamic_overwrite: bool,
+    /// `maxRecordsPerFile`; 0 = unlimited.
+    pub max_records_per_file: u64,
+    /// The file format's name (as the sink was built with).
+    pub format: String,
+    /// The write's options (plain values; secrets never reach a plan).
+    pub options: BTreeMap<String, String>,
 }
 
 /// A table scan.
@@ -563,10 +590,11 @@ plan_data!(enum PhysNode {
     HashJoin(join),
     NestedLoopJoin(join),
     Union { inputs },
-    WriteFiles { input },
+    WriteFiles { input, spec },
     Exchange(exchange),
 });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
+plan_data!(struct WriteSpec { partition_by, dynamic_overwrite, max_records_per_file, format, options });
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
 plan_data!(struct JoinFilterPlan { id, key, options });
@@ -613,7 +641,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
-            | Self::WriteFiles { input } => vec![input.as_ref()],
+            | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -645,7 +673,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
-            | Self::WriteFiles { input } => vec![input.as_mut()],
+            | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
@@ -711,22 +739,67 @@ impl PhysicalPlan {
     /// plan's schema. The caller starts the write before
     /// (`DirectoryWrite::begin`, whose write options built `sink` over
     /// [`Self::schema`]) and commits it with [`FileWriteSink::files`] once
-    /// the plan has run.
+    /// the plan has run. `spec` is the write's layout: a partitioned write
+    /// sorts the rows by the partition columns directly below the writer
+    /// (Spark's required ordering, in the existing spillable local sort),
+    /// so each task keeps exactly one open file however many partitions
+    /// it sees.
     ///
     /// # Errors
-    /// `INTERNAL_ERROR` if `sink` writes another schema.
-    pub fn into_write(self, sink: &FileWriteSink) -> Result<Self> {
+    /// `INTERNAL_ERROR` if `sink` writes another schema, or a partition
+    /// column of `spec` is out of range.
+    pub fn into_write(self, sink: &FileWriteSink, spec: WriteSpec) -> Result<Self> {
         if sink.input_schema().fields() != self.schema.fields() {
             return Err(crate::error::internal(
                 "a write sink of another schema than its plan".to_owned(),
             ));
         }
-        let explain = ExplainNode::new("WriteFiles", sink.describe(), vec![self.explain]);
-        let root = Arc::unwrap_or_clone(self.root);
+        for &c in &spec.partition_by {
+            if c >= self.schema.fields().len() {
+                return Err(crate::error::internal(format!(
+                    "partition column {c} is out of range"
+                )));
+            }
+        }
+        let (root, explain) = if spec.partition_by.is_empty() {
+            (
+                Arc::unwrap_or_clone(self.root),
+                ExplainNode::new("WriteFiles", sink.describe(), vec![self.explain]),
+            )
+        } else {
+            let names: Vec<&str> = spec
+                .partition_by
+                .iter()
+                .map(|&c| self.schema.fields()[c].name().as_str())
+                .collect();
+            let keys: Vec<SortKey> = spec.partition_by.iter().map(|&c| SortKey::asc(c)).collect();
+            let detail = format!(
+                "[{}]",
+                names
+                    .iter()
+                    .map(|n| format!("{n} ASC NULLS FIRST"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let sort = ExplainNode::new("Sort", detail, vec![self.explain]);
+            let explain = ExplainNode::new(
+                "WriteFiles",
+                format!("{} partitioned by [{}]", sink.describe(), names.join(", ")),
+                vec![sort],
+            );
+            (
+                PhysNode::Sort {
+                    input: Box::new(Arc::unwrap_or_clone(self.root)),
+                    keys,
+                },
+                explain,
+            )
+        };
         Ok(Self {
             schema: crate::operator::Source::schema(sink),
             root: Arc::new(PhysNode::WriteFiles {
                 input: Box::new(root),
+                spec,
             }),
             explain,
             warnings: self.warnings,

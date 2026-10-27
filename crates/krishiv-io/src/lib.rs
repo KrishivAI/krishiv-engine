@@ -35,6 +35,7 @@ pub mod io;
 pub mod json;
 mod options;
 pub mod parquet;
+pub mod partition;
 mod request;
 pub mod runtime_filter;
 mod scan;
@@ -62,6 +63,10 @@ pub use json::JsonFormat;
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,
+};
+pub use partition::{
+    DEFAULT_PARTITION, check_partition_column, escape_partition_value, partition_dir_name,
+    partition_segments, partition_texts, renders_as_string, spark_partitioned_file_name,
 };
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,

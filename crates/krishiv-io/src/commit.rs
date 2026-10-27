@@ -12,8 +12,10 @@
 //!   file sink deletes the files of a failed or cancelled write.
 //! - **A failed overwrite keeps the old data.** The objects under the path
 //!   are listed when the write begins and deleted only once every new file
-//!   is complete (Spark deletes them before writing). A file at the path
-//!   itself is deleted first, as it would block the directory.
+//!   is complete (Spark deletes them before writing), except with a dynamic
+//!   partition overwrite, which lists only the partition directories the
+//!   write produced at commit time. A file at the path itself is deleted
+//!   first, as it would block the directory.
 //! - **Commit**, as Spark's: an output without any file gets one empty file
 //!   holding the schema, and an empty `_SUCCESS` marker is written last.
 //! - Readers listing the directory during the write can see new files
@@ -79,13 +81,19 @@ pub struct DirectoryWrite {
     store: StoreId,
     dir: Path,
     job_uuid: String,
-    /// The objects an overwrite replaces, listed at the start.
+    /// Whether an overwrite replaces only the partition directories the
+    /// write produced (`DYNAMIC`) rather than the whole directory.
+    dynamic: bool,
+    /// The objects an overwrite replaces, listed at the start (empty for
+    /// a `DYNAMIC` overwrite, which lists what it wrote at commit time).
     replaced: Vec<Path>,
 }
 
 impl DirectoryWrite {
     /// Starts a write of `dir` in `store` with `mode`; `job_uuid` names its
     /// files. `None`: `ignore` found the path, so nothing is to be written.
+    /// With `dynamic_overwrite`, an overwrite lists nothing now: at commit
+    /// it deletes only under the partition directories the write produced.
     ///
     /// # Errors
     /// `PATH_ALREADY_EXISTS` (`error` mode on an existing path); store
@@ -96,11 +104,14 @@ impl DirectoryWrite {
         dir: Path,
         mode: SaveMode,
         job_uuid: impl Into<String>,
+        dynamic_overwrite: bool,
     ) -> Result<Option<Self>> {
         let file = io.head(&store, &dir).await?;
-        // An append needs no listing: only a file at the path blocks it.
+        // An append needs no listing: only a file at the path blocks it. A
+        // dynamic overwrite lists what it wrote at commit time instead.
         let listed = match mode {
             SaveMode::Append => Vec::new(),
+            SaveMode::Overwrite if dynamic_overwrite => Vec::new(),
             _ => io.list(&store, &dir).await?,
         };
         let exists = file.is_some()
@@ -138,12 +149,13 @@ impl DirectoryWrite {
             store,
             dir,
             job_uuid: job_uuid.into(),
+            dynamic: dynamic_overwrite && matches!(mode, SaveMode::Overwrite),
             replaced,
         }))
     }
 
     /// The writer options of task `task` (no `maxRecordsPerFile`, no
-    /// target size: set them on the result).
+    /// target size, unpartitioned: set them on the result).
     #[must_use]
     pub fn write_options(&self, task: u32) -> WriteOptions {
         WriteOptions {
@@ -153,13 +165,16 @@ impl DirectoryWrite {
             job_uuid: self.job_uuid.clone(),
             max_records_per_file: 0,
             target_file_bytes: 0,
+            partition_by: Vec::new(),
+            partition_names: Vec::new(),
         }
     }
 
     /// Commits the write of `files` (all of them, from every task): an
     /// empty file of `schema` if there are none, then the old objects of an
     /// overwrite are deleted, then `_SUCCESS` is written. Returns the files
-    /// of the output.
+    /// of the output. Files listed twice (a retried task attempt rewriting
+    /// the same names) commit once.
     ///
     /// # Errors
     /// Encode and store failures. A failure while deleting the old objects
@@ -176,13 +191,18 @@ impl DirectoryWrite {
         if files.is_empty() {
             files.push(self.empty_file(io, format, schema, o).await?);
         }
+        files = dedupe_by_path(files);
         // Never a file of this write, even if its job UUID was reused.
         let new: std::collections::HashSet<&Path> = files.iter().map(|f| &f.path).collect();
+        let replaced = if self.dynamic {
+            self.dynamic_replaced(io, &files).await?
+        } else {
+            self.replaced.clone()
+        };
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`
         // for callers that spawn it.
-        let deletes: Vec<_> = self
-            .replaced
+        let deletes: Vec<_> = replaced
             .iter()
             .filter(|p| !new.contains(p))
             .map(|p| io.delete(&self.store, p))
@@ -198,6 +218,40 @@ impl DirectoryWrite {
         )
         .await?;
         Ok(files)
+    }
+
+    /// The old objects a dynamic overwrite replaces: everything already
+    /// under the partition directories `files` were written to (never the
+    /// new files themselves). Computed from the task outputs at commit
+    /// time, never by listing before the write.
+    async fn dynamic_replaced(
+        &self,
+        io: &IoContext,
+        files: &[WrittenFileInfo],
+    ) -> Result<Vec<Path>> {
+        use std::collections::BTreeSet;
+        // Every ancestor directory of a new file, strictly below the
+        // write's root (a file at the root has no partition directory).
+        let mut dirs: BTreeSet<Path> = BTreeSet::new();
+        for f in files {
+            let mut dir = f.path.parent();
+            while let Some(d) = dir {
+                if d == self.dir || (!self.dir.as_ref().is_empty() && !d.prefix_matches(&self.dir))
+                {
+                    break;
+                }
+                dir = d.parent();
+                dirs.insert(d);
+            }
+        }
+        let mut out = Vec::new();
+        for dir in &dirs {
+            // A partition directory holds data files only; the write's own
+            // `_SUCCESS` (at the root) is never listed here.
+            let listed = io.list(&self.store, dir).await?;
+            out.extend(listed.into_iter().map(|m| m.location));
+        }
+        Ok(out)
     }
 
     /// One file of `schema` without rows: Spark writes it so that the
@@ -235,3 +289,14 @@ impl DirectoryWrite {
 
 #[cfg(test)]
 mod tests;
+
+/// Files with repeated paths (a retried task attempt rewriting the same
+/// file names) commit once, in first-seen order.
+fn dedupe_by_path(files: Vec<WrittenFileInfo>) -> Vec<WrittenFileInfo> {
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    files
+        .into_iter()
+        .filter(|f| seen.insert(f.path.clone()))
+        .collect()
+}

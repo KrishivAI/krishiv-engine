@@ -12,15 +12,17 @@ use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use krishiv_common::config::Config;
+use krishiv_common::config::{Config, ConfigValue, PARTITION_OVERWRITE_MODE};
 use krishiv_common::error::{
-    ColumnAlreadyExists, ErrorQueryContext, InternalError, KrishivError, KrishivUnsupportedFeature,
+    AllPartitionColumnsNotAllowed, ColumnAlreadyExists, ErrorQueryContext, InternalError,
+    KrishivError, KrishivInvalidFormatOptionValue, KrishivUnsupportedFeature,
+    PartitionColumnNotFoundInSchema,
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
 use krishiv_exec::files::{FileReads, ObjectPaths, PathLocator as _};
-use krishiv_exec::physical::{SpillScopes, WorkerContext};
+use krishiv_exec::physical::{SpillScopes, WorkerContext, WriteSpec};
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
@@ -791,12 +793,6 @@ impl Session {
             partition_by,
         } = target;
         let mode = SaveMode::parse(&mode)?;
-        if !partition_by.is_empty() {
-            return Err(KrishivUnsupportedFeature {
-                feature: "writing partitioned output".to_owned(),
-            }
-            .into());
-        }
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
         let Some(format) = self
             .state
@@ -817,6 +813,14 @@ impl Session {
             }
             .into());
         };
+        let schema = Arc::clone(physical.schema());
+        let partitions =
+            resolve_partitions(&schema, &partition_by, env.analysis.conf.case_sensitive)?;
+        if !partitions.is_empty() && partitions.len() == schema.fields().len() {
+            return Err(AllPartitionColumnsNotAllowed {}.into());
+        }
+        let dynamic = !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config);
+        let max_records = max_records_per_file(&options, format.name())?;
         let stores = Arc::new(StoreRegistry::new(Arc::clone(&env.config)));
         let at = ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
@@ -826,20 +830,31 @@ impl Session {
         )
         .locate_with_options(text, &options)?;
         let io = self.state.io.context();
-        let Some(write) = DirectoryWrite::begin(&io, at.store, at.path, mode, job_uuid()).await?
+        let Some(write) =
+            DirectoryWrite::begin(&io, at.store, at.path, mode, job_uuid(), dynamic).await?
         else {
             // `ignore` found the path: nothing is written.
             return Ok(());
         };
-        let schema = Arc::clone(physical.schema());
+        let mut write_options = write.write_options(0);
+        write_options.max_records_per_file = max_records;
+        write_options.partition_by = partitions.iter().map(|(i, _)| *i).collect();
+        write_options.partition_names = partitions.iter().map(|(_, n)| n.clone()).collect();
+        let spec = WriteSpec {
+            partition_by: write_options.partition_by.clone(),
+            dynamic_overwrite: dynamic,
+            max_records_per_file: max_records,
+            format: format.name().to_owned(),
+            options: plain_options(&options),
+        };
         let sink = Arc::new(FileWriteSink::try_new(
             Arc::clone(&format),
             io.clone(),
             Arc::clone(&schema),
             parsed.clone(),
-            write.write_options(0),
+            write_options,
         )?);
-        let plan = physical.into_write(&sink)?;
+        let plan = physical.into_write(&sink, spec)?;
         let worker = self.worker(env).with_write_sink(Arc::clone(&sink));
         let mut rows = self.run_on(&plan, worker, env).await?;
         while let Some(batch) = rows.next().await {
@@ -851,6 +866,116 @@ impl Session {
             .await?;
         Ok(())
     }
+}
+
+/// Whether `spark.sql.sources.partitionOverwriteMode` is `DYNAMIC`.
+fn partition_overwrite_is_dynamic(config: &Config) -> bool {
+    config
+        .get(&PARTITION_OVERWRITE_MODE)
+        .and_then(ConfigValue::as_str)
+        == Some("DYNAMIC")
+}
+
+/// `maxRecordsPerFile` of the write options (Spark: zero or negative
+/// means no limit).
+///
+/// # Errors
+/// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for a value that is not an
+/// integer.
+fn max_records_per_file(
+    options: &BTreeMap<String, OptionValue>,
+    format: &str,
+) -> Result<u64, KrishivError> {
+    let Some((key, value)) = options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+    else {
+        return Ok(0);
+    };
+    let Some(text) = value.as_plain() else {
+        return Err(KrishivInvalidFormatOptionValue {
+            value: "<secret>".to_owned(),
+            option: "\"maxRecordsPerFile\"".to_owned(),
+            format: format!("\"{format}\""),
+            reason: "expected an integer".to_owned(),
+        }
+        .into());
+    };
+    text.trim().parse::<i64>().map_or_else(
+        |_| {
+            Err(KrishivInvalidFormatOptionValue {
+                value: format!("'{text}'"),
+                option: format!("\"{key}\""),
+                format: format!("\"{format}\""),
+                reason: "expected an integer".to_owned(),
+            }
+            .into())
+        },
+        |v| Ok(u64::try_from(v).unwrap_or(0)),
+    )
+}
+
+/// The plain-text write options (what a plan may carry; secrets never
+/// reach one).
+fn plain_options(options: &BTreeMap<String, OptionValue>) -> BTreeMap<String, String> {
+    options
+        .iter()
+        .filter_map(|(k, v)| v.as_plain().map(|t| (k.clone(), t.to_owned())))
+        .collect()
+}
+
+/// The `partitionBy` columns as `(index, name)` pairs in `partitionBy`
+/// order, deduplicated.
+///
+/// # Errors
+/// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA` for a name the schema has no
+/// column for.
+fn resolve_partitions(
+    schema: &SchemaRef,
+    partition_by: &[String],
+    case_sensitive: bool,
+) -> Result<Vec<(usize, String)>, KrishivError> {
+    let mut out = Vec::new();
+    for name in partition_by {
+        let mut matches = schema.fields().iter().enumerate().filter(|(_, f)| {
+            if case_sensitive {
+                f.name() == name
+            } else {
+                f.name().eq_ignore_ascii_case(name)
+            }
+        });
+        let Some((index, field)) = matches.next() else {
+            return Err(PartitionColumnNotFoundInSchema {
+                column: format!("`{}`", name.replace('`', "``")),
+                schema: schema_simple_string(schema),
+            }
+            .into());
+        };
+        if matches.next().is_some() {
+            return Err(internal(format!(
+                "partition column `{name}` matches several columns"
+            )));
+        }
+        if !out.iter().any(|(i, _)| *i == index) {
+            out.push((index, field.name().clone()));
+        }
+    }
+    Ok(out)
+}
+
+/// `schema` as Spark prints one (`struct<id:int,...>`).
+fn schema_simple_string(schema: &SchemaRef) -> String {
+    let fields: Vec<String> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let ty = DataType::from_arrow(f.data_type())
+                .map(|t| t.simple_string())
+                .unwrap_or_else(|_| f.data_type().to_string());
+            format!("{}:{ty}", f.name())
+        })
+        .collect();
+    format!("struct<{}>", fields.join(","))
 }
 
 impl Session {

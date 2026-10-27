@@ -448,6 +448,23 @@ message UnionNode {
 
 message WriteFilesNode {
   uint32 input = 1;
+  // feature: partitioned_writes
+  repeated uint64 partition_by = 2;
+  // feature: partitioned_writes
+  bool dynamic_overwrite = 3;
+  // feature: partitioned_writes
+  uint64 max_records_per_file = 4;
+  // feature: partitioned_writes
+  string format = 5;
+  // feature: partitioned_writes
+  repeated WriteOption options = 6;
+}
+
+// feature: partitioned_writes
+// One plain-text write option of a `WriteFiles` node.
+message WriteOption {
+  string key = 1;
+  string value = 2;
 }
 
 // v2: moves rows between partitions.

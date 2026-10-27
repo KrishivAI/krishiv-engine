@@ -10,7 +10,7 @@ use krishiv_common::config::Config;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::physical::{
     ExprEnv, HashJoinPlan, JoinDistribution, JoinFilterPlan, PhysNode, PhysicalPlan, ScanId,
-    ScanNode, ScanRuntimeFilter, WorkerContext, assert_plan_data, instantiate,
+    ScanNode, ScanRuntimeFilter, WorkerContext, WriteSpec, assert_plan_data, instantiate,
 };
 use krishiv_exec::planner::{
     DefaultPlanner, ExplainNode, MemoryTable, PhysicalPlanner as _, PlanningContext, TableProvider,
@@ -274,6 +274,7 @@ fn inconsistent_plans_are_internal_errors() {
     // A write on a worker without a write sink.
     let write = PhysNode::WriteFiles {
         input: Box::new(PhysNode::OneRow),
+        spec: WriteSpec::default(),
     };
     check(
         instantiate_err(write, Schema::empty(), &worker),

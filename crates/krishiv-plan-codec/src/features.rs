@@ -126,6 +126,7 @@ registry! {
     (legacy_statistical_aggregate, LegacyStatisticalAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `legacy_statistical_aggregate` expression environment flag (`spark.sql.legacy.statisticalAggregate`): the sample moment aggregates give NaN instead of NULL where Spark divides by zero."),
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (partitioned_writes, PartitionedWrites, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` layout: partition columns, the dynamic overwrite and the file rollover."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
@@ -224,8 +225,11 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::Aggregate { .. }
             | PhysNode::NestedLoopJoin(_)
             | PhysNode::Union { .. }
-            | PhysNode::WriteFiles { .. }
             | PhysNode::Exchange(_) => None,
+            PhysNode::WriteFiles { spec, .. } => (!spec.partition_by.is_empty()
+                || spec.dynamic_overwrite
+                || spec.max_records_per_file != 0)
+                .then_some(Feature::PartitionedWrites),
         },
         Construct::Item(item) => match item {
             ProjectItemPlan::Column { .. } | ProjectItemPlan::Expr { .. } => None,

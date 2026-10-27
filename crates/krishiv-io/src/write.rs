@@ -8,19 +8,27 @@
 //! `Blocked` while the upload window is full. Files land under a staging
 //! prefix; publishing them is the commit protocol's job (P2-T082a/b),
 //! never a rename.
+//!
+//! Partitioned writes (P2-T082b unit 1) keep exactly one file open: the
+//! planner sorts the input by the partition columns, so each partition's
+//! rows arrive in one run and the writer starts a new file when the
+//! partition key changes ([`partition`](crate::partition)).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use arrow_array::RecordBatch;
+use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::SchemaRef;
 use krishiv_memory::Reservation;
 use object_store::path::Path;
 
-use crate::error::{Result, unsupported};
+use crate::error::{Result, internal, unsupported};
 use crate::format::{Encoder, FileFormat};
 use crate::io::{IoContext, StoreId, Upload};
 use crate::options::FormatOptions;
+use crate::partition::{
+    check_partition_column, partition_dir_name, partition_segments, spark_partitioned_file_name,
+};
 use crate::stats::FileStatistics;
 
 /// Rows written between two checks of the target file size.
@@ -48,6 +56,11 @@ pub struct WriteOptions {
     pub max_records_per_file: u64,
     /// Roll over to a new file once this many bytes were produced; 0 = never.
     pub target_file_bytes: u64,
+    /// Partition column indices into the input (in `partitionBy` order);
+    /// empty for unpartitioned output.
+    pub partition_by: Vec<usize>,
+    /// Partition column names (one per [`Self::partition_by`]).
+    pub partition_names: Vec<String>,
 }
 
 /// One file written.
@@ -74,11 +87,20 @@ struct OpenFile {
 pub struct FileWriter {
     io: IoContext,
     format: Arc<dyn FileFormat>,
-    schema: SchemaRef,
+    /// The schema of the data files: the input schema without the
+    /// partition columns (which live in the directory names instead).
+    data_schema: SchemaRef,
+    /// Input columns kept in the data files (every column but the
+    /// partition ones, in input order).
+    data_columns: Vec<usize>,
     format_options: FormatOptions,
     options: WriteOptions,
     suffix: String,
     current: Option<OpenFile>,
+    /// The partition key of the open file, and its directory relative to
+    /// [`WriteOptions::dir`] (`None` for unpartitioned output).
+    current_key: Option<Vec<String>>,
+    current_rel: Option<String>,
     /// The next file number (`c000`, `c001`, ...), shared by every writer
     /// of one task.
     next_file: Arc<AtomicU32>,
@@ -97,14 +119,18 @@ impl std::fmt::Debug for FileWriter {
 
 impl FileWriter {
     /// A writer of `schema` in `format`, holding encoder memory in `mem`.
+    /// Partition columns ([`WriteOptions::partition_by`]) are rendered
+    /// into directory names and dropped from the data files.
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` if the format cannot write; the
-    /// format's [`FileFormat::check_write`] error.
+    /// `KRISHIV_UNSUPPORTED_FEATURE` if the format cannot write, or a
+    /// partition column cannot be rendered as a string; the format's
+    /// [`FileFormat::check_write`] error; `INTERNAL_ERROR` for a partition
+    /// column out of range, a repeated one, or a name missing for it.
     pub fn new(
         io: &IoContext,
         format: Arc<dyn FileFormat>,
-        schema: SchemaRef,
+        schema: &SchemaRef,
         format_options: FormatOptions,
         options: WriteOptions,
         mem: Reservation,
@@ -112,18 +138,44 @@ impl FileWriter {
         if !format.capabilities(&format_options).write {
             return Err(unsupported(format!("writing the {} format", format.name())));
         }
+        let fields = schema.fields();
+        if options.partition_names.len() != options.partition_by.len() {
+            return Err(internal(
+                "partition names do not match the partition columns".to_owned(),
+            ));
+        }
+        let mut partitioned = vec![false; fields.len()];
+        for (i, &c) in options.partition_by.iter().enumerate() {
+            let field = fields
+                .get(c)
+                .ok_or_else(|| internal(format!("partition column {c} is out of range")))?;
+            if partitioned[c] {
+                return Err(internal(format!("partition column {c} is listed twice")));
+            }
+            partitioned[c] = true;
+            check_partition_column(&options.partition_names[i], field.data_type())?;
+        }
+        let data_columns: Vec<usize> = (0..fields.len()).filter(|i| !partitioned[*i]).collect();
+        let data_schema: SchemaRef = Arc::new(
+            schema
+                .project(&data_columns)
+                .map_err(|e| internal(format!("cannot drop the partition columns: {e}")))?,
+        );
         format
-            .check_write(&schema, &format_options)
+            .check_write(&data_schema, &format_options)
             .map_err(|e| e.into_error(&format!("{}/{}", options.store, options.dir)))?;
         let suffix = format.file_suffix(&format_options);
         Ok(Self {
             io: io.clone(),
             format,
-            schema,
+            data_schema,
+            data_columns,
             format_options,
             options,
             suffix,
             current: None,
+            current_key: None,
+            current_rel: None,
             next_file: Arc::new(AtomicU32::new(0)),
             written: Vec::new(),
             mem,
@@ -141,17 +193,36 @@ impl FileWriter {
     }
 
     async fn open_file(&mut self) -> Result<()> {
-        let name = spark_file_name(
-            self.options.task,
-            &self.options.job_uuid,
-            self.next_file.fetch_add(1, Ordering::Relaxed),
-            &self.suffix,
-        );
-        let path = self.options.dir.clone().join(name);
+        let n = self.next_file.fetch_add(1, Ordering::Relaxed);
+        let name = if self.options.partition_by.is_empty() {
+            spark_file_name(self.options.task, &self.options.job_uuid, n, &self.suffix)
+        } else {
+            spark_partitioned_file_name(self.options.task, &self.options.job_uuid, n, &self.suffix)
+        };
+        // Partition directories carry Spark's `%`-escapes literally: they
+        // are parsed as path segments, never joined (which would encode
+        // the `%` again).
+        let path = match &self.current_rel {
+            None => self.options.dir.clone().join(name),
+            Some(rel) => {
+                let base = self.options.dir.as_ref();
+                let full = if base.is_empty() {
+                    format!("{rel}/{name}")
+                } else {
+                    format!("{base}/{rel}/{name}")
+                };
+                Path::parse(full.as_str())
+                    .map_err(|e| internal(format!("invalid partition path {full:?}: {e}")))?
+            }
+        };
         let display = format!("{}/{}", self.options.store, path);
         let encoder = self
             .format
-            .writer(&self.io, Arc::clone(&self.schema), &self.format_options)
+            .writer(
+                &self.io,
+                Arc::clone(&self.data_schema),
+                &self.format_options,
+            )
             .await
             .map_err(|e| e.into_error(&display))?;
         let upload = self.io.upload(&self.options.store, path.clone())?;
@@ -169,6 +240,78 @@ impl FileWriter {
     /// # Errors
     /// Encode, upload and memory errors; the writer should then be aborted.
     pub async fn write(&mut self, batch: &RecordBatch) -> Result<()> {
+        if self.options.partition_by.is_empty() {
+            return self.write_to_current(batch).await;
+        }
+        let keys = self.partition_keys(batch)?;
+        let mut start = 0;
+        while start < batch.num_rows() {
+            let mut end = start + 1;
+            while end < batch.num_rows() && keys[end] == keys[start] {
+                end += 1;
+            }
+            self.write_partition_run(&batch.slice(start, end - start), &keys[start])
+                .await?;
+            start = end;
+        }
+        Ok(())
+    }
+
+    /// The partition key (one escaped segment per partition column) of
+    /// every row of `batch`.
+    fn partition_keys(&self, batch: &RecordBatch) -> Result<Vec<Vec<String>>> {
+        let columns: Vec<ArrayRef> = self
+            .options
+            .partition_by
+            .iter()
+            .map(|&c| {
+                batch
+                    .columns()
+                    .get(c)
+                    .cloned()
+                    .ok_or_else(|| internal(format!("partition column {c} is out of range")))
+            })
+            .collect::<Result<_>>()?;
+        partition_segments(&columns)
+    }
+
+    /// Writes one partition's run: a new file when the key changed, then
+    /// the run's data columns (without the partition columns).
+    async fn write_partition_run(&mut self, slice: &RecordBatch, key: &[String]) -> Result<()> {
+        if self.current_key.as_deref() != Some(key) {
+            self.close_file().await?;
+            let rel = partition_dir_name(&self.options.partition_names, key);
+            self.current_rel = Some(rel);
+            self.open_file().await?;
+            self.current_key = Some(key.to_vec());
+        }
+        let data = self.data_batch(slice)?;
+        self.write_to_current(&data).await
+    }
+
+    /// `batch` without the partition columns.
+    fn data_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        if self.options.partition_by.is_empty() {
+            return Ok(batch.clone());
+        }
+        let columns: Vec<ArrayRef> = self
+            .data_columns
+            .iter()
+            .map(|&c| {
+                batch
+                    .columns()
+                    .get(c)
+                    .cloned()
+                    .ok_or_else(|| internal(format!("column {c} is out of range")))
+            })
+            .collect::<Result<_>>()?;
+        RecordBatch::try_new(Arc::clone(&self.data_schema), columns)
+            .map_err(|e| internal(format!("cannot drop the partition columns: {e}")))
+    }
+
+    /// Writes `batch` to the open file, opening and rolling over files
+    /// in the current partition (or the root) as needed.
+    async fn write_to_current(&mut self, batch: &RecordBatch) -> Result<()> {
         let mut offset = 0;
         while offset < batch.num_rows() {
             if self.current.is_none() {

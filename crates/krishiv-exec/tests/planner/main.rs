@@ -77,9 +77,13 @@ impl Runnable {
     }
 
     /// The plan writing its rows through `sink`.
-    pub(crate) fn into_write(self, sink: Arc<FileWriteSink>) -> Result<Self, KrishivError> {
+    pub(crate) fn into_write(
+        self,
+        sink: Arc<FileWriteSink>,
+        spec: krishiv_exec::physical::WriteSpec,
+    ) -> Result<Self, KrishivError> {
         Ok(Self {
-            plan: self.plan.into_write(&sink)?,
+            plan: self.plan.into_write(&sink, spec)?,
             worker: self.worker.with_write_sink(sink),
         })
     }

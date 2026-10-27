@@ -522,10 +522,34 @@ pub struct UnionNode {
     #[prost(uint32, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<u32>,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WriteFilesNode {
     #[prost(uint32, tag = "1")]
     pub input: u32,
+    /// feature: partitioned_writes
+    #[prost(uint64, repeated, tag = "2")]
+    pub partition_by: ::prost::alloc::vec::Vec<u64>,
+    /// feature: partitioned_writes
+    #[prost(bool, tag = "3")]
+    pub dynamic_overwrite: bool,
+    /// feature: partitioned_writes
+    #[prost(uint64, tag = "4")]
+    pub max_records_per_file: u64,
+    /// feature: partitioned_writes
+    #[prost(string, tag = "5")]
+    pub format: ::prost::alloc::string::String,
+    /// feature: partitioned_writes
+    #[prost(message, repeated, tag = "6")]
+    pub options: ::prost::alloc::vec::Vec<WriteOption>,
+}
+/// feature: partitioned_writes
+/// One plain-text write option of a `WriteFiles` node.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WriteOption {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
 }
 /// v2: moves rows between partitions.
 #[derive(Clone, PartialEq, ::prost::Message)]

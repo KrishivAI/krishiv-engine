@@ -263,8 +263,20 @@ impl Encoder {
                     .map(|i| self.node_index(i))
                     .collect::<Result<_>>()?,
             }),
-            PhysNode::WriteFiles { input } => Kind::WriteFiles(pb::WriteFilesNode {
+            PhysNode::WriteFiles { input, spec } => Kind::WriteFiles(pb::WriteFilesNode {
                 input: self.node_index(input)?,
+                partition_by: indexes(&spec.partition_by),
+                dynamic_overwrite: spec.dynamic_overwrite,
+                max_records_per_file: spec.max_records_per_file,
+                format: spec.format.clone(),
+                options: spec
+                    .options
+                    .iter()
+                    .map(|(key, value)| pb::WriteOption {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
             PhysNode::Expand {

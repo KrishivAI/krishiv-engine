@@ -427,7 +427,7 @@ impl Instantiation<'_> {
                     node: Arc::new(FanInNode { inputs: nodes }),
                 })
             }
-            PhysNode::WriteFiles { input } => {
+            PhysNode::WriteFiles { input, .. } => {
                 let sink = self
                     .worker
                     .write

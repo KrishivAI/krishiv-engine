@@ -38,6 +38,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &FILES_OPEN_COST_IN_BYTES,
     &FILES_MIN_PARTITION_NUM,
     &FILES_MAX_PARTITION_NUM,
+    &PARTITION_OVERWRITE_MODE,
     &BUCKETING_MAX_BUCKETS,
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
@@ -199,8 +200,16 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &BUCKETING_MAX_BUCKETS,
     ),
     (
+        "spark.sql.sources.partitionOverwriteMode",
+        &PARTITION_OVERWRITE_MODE,
+    ),
+    (
         "krishiv.experimental.unalignedCheckpoints",
         &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    ),
+    (
+        "krishiv.sql.sources.partitionOverwriteMode",
+        &PARTITION_OVERWRITE_MODE,
     ),
     (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
@@ -880,4 +889,17 @@ pub static LEGACY_STATISTICAL_AGGREGATE: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.statisticalAggregate"),
+};
+
+/// `spark.sql.sources.partitionOverwriteMode`.
+pub static PARTITION_OVERWRITE_MODE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.sources.partitionOverwriteMode",
+    value_type: ValueType::Enum(&["STATIC", "DYNAMIC"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("STATIC"))),
+    doc: "Which partitions an overwrite of partitioned output replaces: `STATIC` (the default, \
+          as in Spark) replaces the whole output directory once the new files are complete; \
+          `DYNAMIC` replaces only the partition directories the write produced.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.sources.partitionOverwriteMode"),
 };

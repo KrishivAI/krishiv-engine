@@ -138,6 +138,9 @@ impl<T: PlanData> sealed::Sealed for Option<T> {}
 impl<T: PlanData> PlanData for Option<T> {}
 impl<T: PlanData> sealed::Sealed for Box<T> {}
 impl<T: PlanData> PlanData for Box<T> {}
+// A map of plain strings (write options in a plan) is a value.
+impl sealed::Sealed for std::collections::BTreeMap<String, String> {}
+impl PlanData for std::collections::BTreeMap<String, String> {}
 // Shared ownership of an immutable value (`Arc<Expr>`, `SchemaRef`) is
 // still a value; `Arc<dyn Trait>` is not, since no trait object is
 // `PlanData` (only `str` among the unsized types).

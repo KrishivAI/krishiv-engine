@@ -328,6 +328,34 @@ fn session_time_zone_is_validated() {
 }
 
 #[test]
+fn partition_overwrite_mode_defaults_to_static() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&PARTITION_OVERWRITE_MODE)
+            .and_then(ConfigValue::as_str),
+        Some("STATIC")
+    );
+    c.set("spark.sql.sources.partitionOverwriteMode", "dynamic")
+        .unwrap();
+    assert_eq!(
+        c.get(&PARTITION_OVERWRITE_MODE)
+            .and_then(ConfigValue::as_str),
+        Some("DYNAMIC")
+    );
+    c.set("krishiv.sql.sources.partitionOverwriteMode", "STATIC")
+        .unwrap();
+    assert_eq!(
+        c.get(&PARTITION_OVERWRITE_MODE)
+            .and_then(ConfigValue::as_str),
+        Some("STATIC")
+    );
+    let e = c
+        .set("spark.sql.sources.partitionOverwriteMode", "SMART")
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivInvalidConfigValue);
+}
+
+#[test]
 fn spark_shuffle_partitions_maps_to_the_hint() {
     let mut c = Config::new();
     assert_eq!(c.set("spark.sql.shuffle.partitions", "64").unwrap(), None);

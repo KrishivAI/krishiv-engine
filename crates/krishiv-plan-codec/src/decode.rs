@@ -14,7 +14,7 @@ use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
-    SubqueryValueKind,
+    SubqueryValueKind, WriteSpec,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
@@ -511,6 +511,17 @@ impl Decoder {
             },
             Kind::WriteFiles(w) => PhysNode::WriteFiles {
                 input: self.boxed(w.input)?,
+                spec: WriteSpec {
+                    partition_by: usizes(&w.partition_by)?,
+                    dynamic_overwrite: w.dynamic_overwrite,
+                    max_records_per_file: w.max_records_per_file,
+                    format: w.format.clone(),
+                    options: w
+                        .options
+                        .iter()
+                        .map(|o| (o.key.clone(), o.value.clone()))
+                        .collect(),
+                },
             },
             Kind::Exchange(e) => PhysNode::Exchange(self.exchange(e)?),
         })
