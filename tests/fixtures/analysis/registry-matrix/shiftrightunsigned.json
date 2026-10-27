@@ -9,22 +9,6 @@
       "reason": "SELECT shiftrightunsigned(map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "shiftrightunsigned#5b6f5e1feb81/ansi_on",
-      "reason": "SELECT shiftrightunsigned(4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftrightunsigned#5b6f5e1feb81/ansi_off",
-      "reason": "SELECT shiftrightunsigned(4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftrightunsigned#9deada350e37/ansi_on",
-      "reason": "SELECT shiftrightunsigned(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftrightunsigned#9deada350e37/ansi_off",
-      "reason": "SELECT shiftrightunsigned(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "shiftrightunsigned#a296dcfd561b/ansi_on",
       "reason": "SELECT shiftrightunsigned(INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

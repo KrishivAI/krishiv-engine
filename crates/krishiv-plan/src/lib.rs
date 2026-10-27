@@ -96,9 +96,11 @@
 //! | `ExprNode::Field` | U | - | - |
 //! | `ExprNode::Subquery` | U, R | Q2, Q4, Q11, Q15-Q18, Q20-Q22 | - |
 //! | `ExprNode::Window` | U, R | - | - |
+//! | `ExprNode::Lambda` | U, R | - | - |
 //! | `ResolvedExpr::Column` | R | - | - |
 //! | `ResolvedExpr::OuterColumn` | R | - | - |
 //! | `ResolvedExpr::Function` | R | - | - |
+//! | `ResolvedExpr::LambdaVar` | R | - | - |
 //! | `ResolvedExpr::Alias` | R | - | - |
 //! | `ResolvedExpr::Field` | R | - | - |
 //!

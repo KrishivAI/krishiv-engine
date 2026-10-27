@@ -715,7 +715,7 @@ pub struct BoundColumn {
 pub struct Expr {
     #[prost(message, optional, tag = "1")]
     pub origin: ::core::option::Option<Origin>,
-    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8")]
+    #[prost(oneof = "expr::Kind", tags = "2, 3, 4, 5, 6, 7, 8, 9, 10")]
     pub kind: ::core::option::Option<expr::Kind>,
 }
 /// Nested message and enum types in `Expr`.
@@ -737,7 +737,23 @@ pub mod expr {
         /// feature: struct_field
         #[prost(message, tag = "8")]
         Field(super::FieldExpr),
+        /// feature: lambda_functions
+        #[prost(message, tag = "9")]
+        Lambda(super::Lambda),
+        /// feature: lambda_functions
+        #[prost(message, tag = "10")]
+        LambdaVar(super::BoundColumn),
     }
+}
+/// A lambda (`x -> body`): the bound body of a higher-order function's
+/// argument, with its variables as `lambda_var` leaves.
+/// feature: lambda_functions
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Lambda {
+    #[prost(message, repeated, tag = "1")]
+    pub params: ::prost::alloc::vec::Vec<BoundColumn>,
+    #[prost(uint32, tag = "2")]
+    pub body: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AliasExpr {

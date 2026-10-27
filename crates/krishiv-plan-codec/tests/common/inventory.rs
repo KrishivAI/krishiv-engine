@@ -910,6 +910,59 @@ pub(crate) fn expressions() -> PhysNode {
     }
 }
 
+/// Lambda expressions and variables: a `transform` over an array column
+/// (`transform(xs, x -> x * 2)`). The array type needs `nested_types` too.
+pub(crate) fn lambda_functions() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let array = t("array<int>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(3, "xs", array.clone(), true));
+    }
+    let xs = col(3, "xs", array.clone());
+    let var = || {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
+            column(11, "x", DataType::Integer, true),
+        ))))
+    };
+    let doubled = call(
+        Builtin::Multiply,
+        vec![var(), lit(Literal::Integer(2))],
+        DataType::Integer,
+    );
+    let transform = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            // The codec passes ids through; this is not the registry's.
+            id: FunctionId::Registry {
+                name: "transform".to_owned(),
+                id: 0,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![
+                xs,
+                Arc::new(Expr::new(ExprNode::Lambda {
+                    params: vec![column(11, "x", DataType::Integer, true)],
+                    body: doubled,
+                })),
+            ],
+            distinct: false,
+            filter: None,
+            data_type: array,
+            nullable: true,
+            deterministic: true,
+        },
+    ))));
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "doubled".to_owned(),
+            expr: transform,
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
 /// Array, map and struct types (depth 4, nullability, a comment) in a
 /// scan column, a cast, a typed NULL, a function and an alias.
 pub(crate) fn nested_types() -> PhysNode {
@@ -975,6 +1028,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         plan_of_env(PhysNode::OneRow, legacy),
     ));
     out.push(("nested_types".to_owned(), plan_of(nested_types())));
+    out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
     out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out
 }

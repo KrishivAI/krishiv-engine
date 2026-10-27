@@ -23,14 +23,6 @@
     {
       "id": "weekofyear#bae528dc4232/ansi_off",
       "reason": "SELECT weekofyear(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "weekofyear#cde71a2a9453/ansi_on",
-      "reason": "SELECT weekofyear(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "weekofyear#cde71a2a9453/ansi_off",
-      "reason": "SELECT weekofyear(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

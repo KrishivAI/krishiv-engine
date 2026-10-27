@@ -9,14 +9,6 @@
       "reason": "SELECT shiftright(INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "shiftright#387cad49d8da/ansi_on",
-      "reason": "SELECT shiftright(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftright#387cad49d8da/ansi_off",
-      "reason": "SELECT shiftright(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "shiftright#43df86d52cf4/ansi_on",
       "reason": "SELECT shiftright(4, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -47,14 +39,6 @@
     {
       "id": "shiftright#9d0da0110d86/ansi_off",
       "reason": "SELECT shiftright(INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftright#a583285fa625/ansi_on",
-      "reason": "SELECT shiftright(4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftright#a583285fa625/ansi_off",
-      "reason": "SELECT shiftright(4, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "shiftright#b67e2d9bbada/ansi_on",

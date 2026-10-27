@@ -62,8 +62,8 @@ impl PhysExpr for AndOr {
         self.l.nullable() || self.r.nullable()
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let lv = self.l.eval(batch)?;
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let lv = self.l.eval(batch, partition)?;
         if lv.is_scalar() && batch.num_rows() > 0 {
             // A literal left side decides for every row or for none.
             let l = lv
@@ -87,9 +87,9 @@ impl PhysExpr for AndOr {
         let decided = if self.and { &l_ok & &!&lb } else { &l_ok & &lb };
         let open = !&decided;
         let rv = if open.count_set_bits() == rows {
-            self.r.eval(batch)?
+            self.r.eval(batch, partition)?
         } else {
-            Value::Array(super::eval_where(self.r.as_ref(), batch, &open)?)
+            Value::Array(super::eval_where(self.r.as_ref(), batch, &open, partition)?)
         };
         let scalar = lv.is_scalar() && rv.is_scalar();
         let rows = if scalar { 1 } else { rows };
@@ -133,8 +133,8 @@ impl PhysExpr for Not {
         self.0.nullable()
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let v = self.0.eval(batch)?;
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.0.eval(batch, partition)?;
         let a = v
             .array()
             .as_boolean_opt()
@@ -167,8 +167,8 @@ impl PhysExpr for IsNull {
         false
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let v = self.e.eval(batch)?;
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.e.eval(batch, partition)?;
         let a = v.array();
         let valid = match (a.data_type(), a.logical_nulls()) {
             (ArrowType::Null, _) => BooleanBuffer::new_unset(a.len()),
@@ -246,8 +246,11 @@ impl PhysExpr for Compare {
         self.kind.is_some() && (maybe_null(&self.l) || maybe_null(&self.r))
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let (mut l, r) = (self.l.eval(batch)?, self.r.eval(batch)?);
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let (mut l, r) = (
+            self.l.eval(batch, partition)?,
+            self.r.eval(batch, partition)?,
+        );
         let scalar = l.is_scalar() && r.is_scalar();
         if scalar {
             // Kernels take at most one literal side.

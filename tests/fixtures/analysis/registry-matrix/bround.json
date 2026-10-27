@@ -17,14 +17,6 @@
       "reason": "SELECT bround(map('a', 1), 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "bround#6b63892f457c/ansi_on",
-      "reason": "SELECT bround(array(1, 2), 0) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bround#6b63892f457c/ansi_off",
-      "reason": "SELECT bround(array(1, 2), 0) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "bround#8139bd9fdb4c/ansi_on",
       "reason": "SELECT bround(2.5, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -47,14 +39,6 @@
     {
       "id": "bround#972098065b06/ansi_off",
       "reason": "SELECT bround(2.5, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bround#b53e747128fc/ansi_on",
-      "reason": "SELECT bround(2.5, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bround#b53e747128fc/ansi_off",
-      "reason": "SELECT bround(2.5, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "bround#e536627ae66a/ansi_on",

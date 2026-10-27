@@ -15,13 +15,15 @@ use krishiv_common::error::{
     DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
     DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
-    InternalError, InvalidAggregateFilterNotBoolean, InvalidExtractBaseFieldType,
+    FailedToParseTooComplex, InternalError, InvalidAggregateFilterNotBoolean,
+    InvalidExtractBaseFieldType,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
     NamedParametersNotSupported, NestedAggregateFunction, RequiredParameterNotFound,
     UnexpectedPositionalArgument, UnrecognizedParameterName, UnresolvedColumnWithSuggestion,
     UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithoutSuggestion,
 };
+use krishiv_common::stack::on_big_stack;
 use krishiv_types::DataType;
 use twox_hash::XxHash3_128;
 
@@ -31,7 +33,7 @@ use super::builtins::{NamedDefault, NamedParam, named_signature};
 use super::catalog::quoted;
 use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
 use super::fold;
-use super::resolve::{Attr, Env, Rel, Resolver};
+use super::resolve::{Attr, Env, RESOLVE_STEP, Rel, Resolver};
 use super::suggest::closest;
 use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
@@ -595,9 +597,9 @@ fn is_special(value: &str) -> bool {
 /// `sum(x)` in `sum(x) OVER w` is a window aggregate, not an aggregate of
 /// the operator).
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct Ctx {
-    agg: bool,
-    window_fn: bool,
+pub(super) struct Ctx {
+    pub(super) agg: bool,
+    pub(super) window_fn: bool,
 }
 
 enum Step {
@@ -611,14 +613,46 @@ impl Resolver<'_> {
     /// Binds `e` in `cx`, post-order with an explicit stack; a node shared
     /// within the expression is bound once.
     pub(super) fn expr(&mut self, e: &Arc<Expr>, cx: &Cx<'_>) -> Result<Bound, AnalysisError> {
-        let mut done: HashMap<(usize, Ctx), Bound> = HashMap::new();
-        // Rewritten calls stay alive for the pass: `done` is keyed by
-        // address.
-        let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
         let top = Ctx {
             agg: false,
             window_fn: false,
         };
+        self.expr_in(top, e, cx)
+    }
+
+    /// Binds `e` in `cx` under the step context `top` (see [`Self::expr`]).
+    /// Higher-order calls bind their children through this with each
+    /// child's own context, so names inside lambdas resolve as the generic
+    /// path would resolve them. Every [`RESOLVE_STEP`] levels of
+    /// higher-order nesting run on a fresh stack (see [`Resolver::rel`).
+    pub(super) fn expr_in(
+        &mut self,
+        top: Ctx,
+        e: &Arc<Expr>,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        self.expr_depth += 1;
+        let r = if self.expr_depth.is_multiple_of(RESOLVE_STEP) {
+            on_big_stack(|| self.expr_in_on_stack(top, e, cx))
+                .unwrap_or_else(|| Err(AnalysisError::new(FailedToParseTooComplex {}, e.origin)))
+        } else {
+            self.expr_in_on_stack(top, e, cx)
+        };
+        self.expr_depth -= 1;
+        r
+    }
+
+    /// [`Self::expr_in`] on the current stack.
+    fn expr_in_on_stack(
+        &mut self,
+        top: Ctx,
+        e: &Arc<Expr>,
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let mut done: HashMap<(usize, Ctx), Bound> = HashMap::new();
+        // Rewritten calls stay alive for the pass: `done` is keyed by
+        // address.
+        let mut rewritten_calls: Vec<Arc<Expr>> = Vec::new();
         let mut stack = vec![Step::Enter(Arc::clone(e), top)];
         while let Some(step) = stack.pop() {
             match step {
@@ -630,6 +664,36 @@ impl Resolver<'_> {
                         rewritten_calls.push(Arc::clone(&rewritten));
                         stack.push(Step::Link(addr(&*x), Arc::clone(&rewritten), ctx));
                         stack.push(Step::Enter(rewritten, ctx));
+                        continue;
+                    }
+                    // A lambda binds where it is used: a higher-order
+                    // call binds its array and lambda children itself
+                    // (see `hof`), while a lambda anywhere else is no
+                    // higher-order call's argument.
+                    if let ExprNode::Function(f) = &x.node
+                        && (super::hof::Hof::of(&f.name).is_some()
+                            || super::hof::has_direct_lambda(f))
+                    {
+                        let Some(h) = super::hof::Hof::of(&f.name) else {
+                            return Err(super::hof::not_higher_order(&f.name, x.origin));
+                        };
+                        let kids = self.child_ctx(&x, ctx);
+                        for (key, bound) in self.hof_children(f, h, &kids, cx, x.origin)? {
+                            let step = kids
+                                .iter()
+                                .find(|(c, _)| addr(&**c) == key)
+                                .map(|(_, k)| *k)
+                                .unwrap_or(ctx);
+                            done.insert((key, step), bound);
+                        }
+                        stack.push(Step::Exit(Arc::clone(&x), ctx));
+                        let lambda = addr(&*f.args[1]);
+                        stack.extend(
+                            kids.into_iter()
+                                .rev()
+                                .filter(|(c, _)| addr(&**c) != lambda)
+                                .map(|(c, k)| Step::Enter(c, k)),
+                        );
                         continue;
                     }
                     stack.push(Step::Exit(Arc::clone(&x), ctx));
@@ -1097,6 +1161,30 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
+            // A lambda outside a higher-order function's argument list:
+            // lambdas in argument position are bound by the higher-order
+            // call itself (see `hof`), never here. An already-bound lambda
+            // (re-analysis of a resolved plan) is preserved as-is; its body
+            // already holds `LambdaVar` leaves.
+            ExprNode::Lambda { body, .. } => {
+                let bound = crate::walk::visit_distinct(crate::walk::Node::Expr(body), |n| {
+                    if let crate::walk::Node::Expr(x) = n
+                        && matches!(&x.node, ExprNode::Resolved(ResolvedExpr::LambdaVar(_)))
+                    {
+                        return std::ops::ControlFlow::Break(());
+                    }
+                    std::ops::ControlFlow::Continue(())
+                })
+                .is_break();
+                if bound && let Some(kid) = kids.first() {
+                    keep(kid.ty.clone())
+                } else {
+                    return Err(unsupported(
+                        "lambda functions outside a higher-order function",
+                        e.origin,
+                    ));
+                }
+            }
             ExprNode::Field { base: _, name } => {
                 let b = &kids[0];
                 let st = match &b.ty.data_type {
@@ -1340,6 +1428,9 @@ impl Resolver<'_> {
                 }
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
+                // `typeof(x)` is Spark's `RuntimeReplaceable`; its type
+                // name is known once the call is typed.
+                let is_typeof = entry.id.name() == "typeof";
                 let call = ResolvedFunction {
                     id: entry.id,
                     kind: entry.kind,
@@ -1352,6 +1443,21 @@ impl Resolver<'_> {
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
                 let shown = self.call_shown(lookup_name, &expr, kids, &call_kids);
+                // `typeof(x)` is Spark's `RuntimeReplaceable`: the analyzer
+                // replaces it with the type name literal, keeping the call
+                // as the shown form (the executor gets no type logic).
+                let (expr, shown) = if is_typeof {
+                    let name = call_kids
+                        .first()
+                        .and_then(|k| k.ty.data_type.clone())
+                        .map_or_else(|| "void".to_owned(), |t| t.catalog_string());
+                    (
+                        rebuilt(ExprNode::Literal(Literal::String(name))),
+                        Some(expr),
+                    )
+                } else {
+                    (expr, shown)
+                };
                 let mut bound = Bound {
                     agg: if entry.kind == FunctionKind::Aggregate && !window_fn {
                         Some(e.origin)
@@ -1416,7 +1522,13 @@ impl Resolver<'_> {
             }
             ExprNode::Subquery { kind, plan } => {
                 let env = self.sub_env(cx);
-                let rel = self.rel(plan, &env)?;
+                // A subquery resolves without the enclosing lambda scopes:
+                // its columns must not bind to enclosing lambda variables.
+                let saved = std::mem::take(&mut self.lambdas);
+                let rel = self.rel(plan, &env);
+                let stale = std::mem::replace(&mut self.lambdas, saved);
+                debug_assert!(stale.is_empty(), "a subquery leaks lambda scopes");
+                let rel = rel?;
                 let (data_type, nullable) = match kind {
                     SubqueryKind::Scalar => {
                         if rel.out.len() != 1 {
@@ -1459,15 +1571,18 @@ impl Resolver<'_> {
                 }
             }
             ExprNode::Window(w) => self.window(e, w, kids, cx)?,
-            ExprNode::Resolved(r) => keep(match r {
-                ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => column(c),
-                ResolvedExpr::Alias { output, .. } => column(output),
-                ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
-                ResolvedExpr::Field {
-                    data_type,
-                    nullable,
-                    ..
-                } => arg_type(data_type.clone(), *nullable),
+            ExprNode::Resolved(r) => keep({
+                use ResolvedExpr::{Column, LambdaVar, OuterColumn};
+                match r {
+                    Column(c) | OuterColumn(c) | LambdaVar(c) => column(c),
+                    ResolvedExpr::Alias { output, .. } => column(output),
+                    ResolvedExpr::Function(f) => arg_type(f.data_type.clone(), f.nullable),
+                    ResolvedExpr::Field {
+                        data_type,
+                        nullable,
+                        ..
+                    } => arg_type(data_type.clone(), *nullable),
+                }
             }),
         };
         if b.shown.is_none() && kids.iter().any(|k| k.shown.is_some()) {
@@ -2743,6 +2858,19 @@ impl Resolver<'_> {
             col.name.clone_from(&parts[used - 1]);
             col
         };
+        if c.plan_id.is_none()
+            && let [name] = &c.name[..]
+            && let Some(var) = self.lambda_var(name)
+        {
+            // A lambda variable shadows the enclosing query's columns.
+            let mut col = var;
+            col.name.clone_from(name);
+            return Ok(bound(
+                ExprNode::Resolved(ResolvedExpr::LambdaVar(col.clone())),
+                &col,
+                None,
+            ));
+        }
         if let Some(id) = c.plan_id {
             let a = self.plan_column(id, &c.name, cx, origin)?;
             self.used(&a);
@@ -3482,6 +3610,14 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             }
         }
         ExprNode::Star(_) => "*".to_owned(),
+        // Spark's `lambdafunction(body, arg1, ...)`: the variables render
+        // as `namedlambdavariable()` when hidden (see `hof`).
+        ExprNode::Lambda { params, .. } => {
+            let mut args = vec![k[0].to_owned()];
+            args.extend(params.iter().map(|p| p.name.clone()));
+            format!("lambdafunction({})", args.join(", "))
+        }
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => c.name.clone(),
         ExprNode::Window(w) => pretty_window(w, k, zone),
         ExprNode::Function(FunctionCall {
             name,
@@ -3787,6 +3923,16 @@ fn call(
             let d = if distinct { "DISTINCT " } else { "" };
             format!("to_char({d}{})", k.join(", "))
         }
+        // `current_database` and `current_schema` are one expression
+        // (Spark's `CurrentDatabase`, shown as `current_schema`);
+        // `current_catalog` shows without parentheses.
+        _ if name.eq_ignore_ascii_case("current_database") => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("current_schema({d}{})", k.join(", "))
+        }
+        _ if name.eq_ignore_ascii_case("current_catalog") && k.is_empty() && !distinct => {
+            "current_catalog".to_owned()
+        }
         // Single-argument math (`sec`, `csc`, `cot`, `exp`, ...) and
         // two-argument math (`power`, `atan2`, `hypot`) print upper case,
         // as Spark's `UnaryMathExpression` / `BinaryMathExpression` do;
@@ -4089,6 +4235,38 @@ const fn frame_shape(b: &crate::FrameBound) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `lambdafunction(body, arg1, ...)`: a resolved lambda variable
+    /// prints as its name, like Spark's `NamedLambdaVariable`.
+    #[test]
+    fn lambdas_print_as_sparks_lambdafunction() {
+        let var = BoundColumn {
+            id: AttrId(9),
+            name: "y".to_owned(),
+            data_type: DataType::Integer,
+            nullable: false,
+        };
+        let body = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
+            var.clone(),
+        ))));
+        assert_eq!(pretty(&body, None), "y");
+        let lam = Expr::new(ExprNode::Lambda {
+            params: vec![var],
+            body,
+        });
+        assert_eq!(pretty(&lam, None), "lambdafunction(y, y)");
+    }
+
+    /// `*` prints as itself (the arm beside the lambda printers).
+    #[test]
+    fn stars_print_as_sql() {
+        let star = Expr::new(ExprNode::Star(crate::Star {
+            qualifier: Vec::new(),
+            except: Vec::new(),
+            plan_id: None,
+        }));
+        assert_eq!(pretty(&star, None), "*");
+    }
 
     /// `call()` renders named arguments with their `name => ` prefixes and
     /// quantified forms in their SQL shape.

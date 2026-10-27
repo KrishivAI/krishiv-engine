@@ -291,7 +291,7 @@ fn matrix_cells_match_spark() {
     // instead of passing silently.
     assert_eq!(tally.not_run, expected_not_run(), "{report}");
     assert_eq!(tally.normalized_cast_invalid_input, 96, "{report}");
-    assert_eq!(tally.normalized_months_between, 44, "{report}");
+    assert_eq!(tally.normalized_months_between, 48, "{report}");
 }
 
 /// The exact cells the engine does not run: region time zones (no tz
@@ -302,7 +302,7 @@ fn expected_not_run() -> BTreeMap<String, usize> {
     BTreeMap::from([
         (
             "analysis errors of the rewritten convert_timezone".to_owned(),
-            24,
+            28,
         ),
         ("cast of invalid UTF-8 bytes to a string".to_owned(), 23),
         ("no recorded rows".to_owned(), 62),
@@ -311,7 +311,6 @@ fn expected_not_run() -> BTreeMap<String, usize> {
         ("unsupported: INTERVAL literals".to_owned(), 144),
         ("unsupported: TIME literals".to_owned(), 6),
         ("unsupported: function DATE".to_owned(), 4),
-        ("unsupported: function array".to_owned(), 74),
         ("unsupported: function map".to_owned(), 74),
         (
             "unsupported: the function convert_timezone (it has no binding for these arguments: a region time zone)"

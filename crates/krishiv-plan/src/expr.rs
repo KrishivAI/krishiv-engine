@@ -67,6 +67,21 @@ pub enum ExprNode {
     Star(Star),
     /// An unresolved function call, operators included.
     Function(FunctionCall),
+    /// `x -> body` or `(x, y) -> body`: a lambda, bound by the analyzer
+    /// only as a direct argument of a higher-order function (`transform`,
+    /// `filter`, `exists`, `forall`, ...), where its variables take the
+    /// argument's element types (Spark's `NamedLambdaVariable`). The node
+    /// stays in place when bound: its `params` are then the variables
+    /// themselves (with stable [`AttrId`] identities), and its body holds
+    /// [`ResolvedExpr::LambdaVar`] leaves reading them.
+    Lambda {
+        /// The variables, in parameter order (with their stable identities
+        /// once bound; placeholders before).
+        params: Vec<BoundColumn>,
+        /// The body, resolved against the variables and the enclosing
+        /// query's columns.
+        body: Arc<Expr>,
+    },
     /// An unresolved `expr.field`: the field `name` of the struct `base`
     /// (Spark's `GetStructField`). A `Column` base lowers to a longer
     /// [`ColumnRef`] instead; anything else becomes this node.
@@ -391,6 +406,11 @@ pub enum ResolvedExpr {
     Column(BoundColumn),
     /// A column of an enclosing query, inside a correlated subquery.
     OuterColumn(BoundColumn),
+    /// A lambda variable, bound by the analyzer to one of the enclosing
+    /// [`ExprNode::Lambda`] node's parameters (Spark's
+    /// `NamedLambdaVariable`). It is not an output attribute: only the
+    /// higher-order function compiled around the lambda reads it.
+    LambdaVar(BoundColumn),
     /// A function bound to its identity and result type.
     Function(ResolvedFunction),
     /// The field `name` (position `ordinal`) of the struct `base` (Spark's
@@ -461,6 +481,25 @@ impl Expr {
         }))
     }
 
+    /// An unresolved `params -> body` lambda. Parameter identities are
+    /// placeholders (`AttrId(u64::MAX)`) until the analyzer binds them;
+    /// passes that reserve fresh ids (see `first_free_id`) skip them.
+    #[must_use]
+    pub fn lambda(params: Vec<String>, body: Self) -> Self {
+        Self::new(ExprNode::Lambda {
+            params: params
+                .into_iter()
+                .map(|name| BoundColumn {
+                    id: AttrId(u64::MAX),
+                    name,
+                    data_type: DataType::Null,
+                    nullable: true,
+                })
+                .collect(),
+            body: Arc::new(body),
+        })
+    }
+
     /// An unresolved call of a canonical operator.
     #[must_use]
     pub fn builtin(op: Builtin, args: Vec<Self>) -> Self {
@@ -510,7 +549,9 @@ impl Expr {
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
-            | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
+            ) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })
             | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
@@ -520,6 +561,7 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
                 ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
@@ -553,7 +595,9 @@ impl Expr {
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
-            | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
+            ) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })
             | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
@@ -563,6 +607,7 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
+            | ExprNode::Lambda { body: expr, .. }
             | ExprNode::Field { base: expr, .. }
             | ExprNode::Resolved(
                 ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },

@@ -1564,7 +1564,8 @@ fn unsupported_inputs_fail_explicitly() {
     old.profile = SparkProfile::V3_5;
     let randstr = LogicalPlan::table(["t"]).project(vec![Expr::function("randstr", vec![int(3)])]);
     assert_eq!(class(&run(randstr.clone(), &old)), "UNRESOLVED_ROUTINE");
-    assert_eq!(class(&run(randstr, &ctx)), "KRISHIV_UNSUPPORTED_FEATURE");
+    // `randstr` is implemented: it resolves on current versions.
+    assert_eq!(class(&run(randstr, &ctx)), "OK");
     // The argument count is checked first, with Spark's `expectedNum` text.
     let upper =
         LogicalPlan::table(["t"]).project(vec![Expr::function("upper", vec![int(1), int(2)])]);
@@ -1775,7 +1776,7 @@ fn function_entries_print_their_signature() {
     let uuid = ["uuid".to_owned()];
     assert!(matches!(
         b.lookup(&uuid, SparkProfile::V4_2),
-        FunctionLookup::KnownUnsupported
+        FunctionLookup::Found(_)
     ));
     assert_eq!(b.version(), 0);
 }

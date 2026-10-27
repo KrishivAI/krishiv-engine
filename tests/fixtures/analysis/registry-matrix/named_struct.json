@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "named_struct#07dc5150ab06/ansi_on",
-      "reason": "SELECT named_struct(array(1, 2), 1, \"b\", 2, \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
-    },
-    {
-      "id": "named_struct#07dc5150ab06/ansi_off",
-      "reason": "SELECT named_struct(array(1, 2), 1, \"b\", 2, \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
-    },
-    {
       "id": "named_struct#10069c1652a0/ansi_on",
       "reason": "SELECT named_struct(\"a\", 1, CAST(X'C328FF' AS STRING), 2, \"c\", 3) | DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
     },
@@ -25,28 +17,12 @@
       "reason": "SELECT named_struct(\"a\", 1, \"b\", INTERVAL '1 02:03:04' DAY TO SECOND, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "named_struct#1e2f5201056d/ansi_on",
-      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
-    },
-    {
-      "id": "named_struct#1e2f5201056d/ansi_off",
-      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
-    },
-    {
       "id": "named_struct#20cfff699118/ansi_on",
       "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
     {
       "id": "named_struct#20cfff699118/ansi_off",
       "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "named_struct#264847a8c6da/ansi_on",
-      "reason": "SELECT named_struct(\"a\", 1, array(1, 2), 2, \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
-    },
-    {
-      "id": "named_struct#264847a8c6da/ansi_off",
-      "reason": "SELECT named_struct(\"a\", 1, array(1, 2), 2, \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
     },
     {
       "id": "named_struct#29ab846d2b3f/ansi_on",
@@ -121,28 +97,12 @@
       "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "named_struct#930d6fb1e013/ansi_on",
-      "reason": "SELECT named_struct(\"a\", array(1, 2), \"b\", 2, \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "named_struct#930d6fb1e013/ansi_off",
-      "reason": "SELECT named_struct(\"a\", array(1, 2), \"b\", 2, \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "named_struct#933fd3e5ff75/ansi_on",
       "reason": "SELECT named_struct(INTERVAL '1-2' YEAR TO MONTH, 1, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
     },
     {
       "id": "named_struct#933fd3e5ff75/ansi_off",
       "reason": "SELECT named_struct(INTERVAL '1-2' YEAR TO MONTH, 1, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
-    },
-    {
-      "id": "named_struct#95267307c5c7/ansi_on",
-      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "named_struct#95267307c5c7/ansi_off",
-      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "named_struct#a5000dc6fc02/ansi_on",
@@ -159,14 +119,6 @@
     {
       "id": "named_struct#ae007784ea32/ansi_off",
       "reason": "SELECT named_struct(\"a\", 1, \"b\", map('a', 1), \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "named_struct#b780093746ad/ansi_on",
-      "reason": "SELECT named_struct(\"a\", 1, \"b\", array(1, 2), \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "named_struct#b780093746ad/ansi_off",
-      "reason": "SELECT named_struct(\"a\", 1, \"b\", array(1, 2), \"c\", 3) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     },
     {
       "id": "named_struct#c067a5924893/ansi_on",

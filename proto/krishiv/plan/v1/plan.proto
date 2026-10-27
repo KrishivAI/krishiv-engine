@@ -584,7 +584,19 @@ message Expr {
     AliasExpr alias = 7;
     // feature: struct_field
     FieldExpr field = 8;
+    // feature: lambda_functions
+    Lambda lambda = 9;
+    // feature: lambda_functions
+    BoundColumn lambda_var = 10;
   }
+}
+
+// A lambda (`x -> body`): the bound body of a higher-order function's
+// argument, with its variables as `lambda_var` leaves.
+// feature: lambda_functions
+message Lambda {
+  repeated BoundColumn params = 1;
+  uint32 body = 2;
 }
 
 message AliasExpr {

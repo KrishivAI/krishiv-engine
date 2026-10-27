@@ -23,14 +23,6 @@
     {
       "id": "luhn_check#8b95c9c9acc1/ansi_off",
       "reason": "SELECT luhn_check(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "luhn_check#a6c3ee9d1cad/ansi_on",
-      "reason": "SELECT luhn_check(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "luhn_check#a6c3ee9d1cad/ansi_off",
-      "reason": "SELECT luhn_check(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

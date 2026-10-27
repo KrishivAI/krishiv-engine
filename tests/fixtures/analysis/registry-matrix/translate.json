@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "translate#02831dc1fd11/ansi_on",
-      "reason": "SELECT translate('AaBbCc', 'abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#02831dc1fd11/ansi_off",
-      "reason": "SELECT translate('AaBbCc', 'abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "translate#3fe19d6d2609/ansi_on",
       "reason": "SELECT translate(map('a', 1), 'abc', '123') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -39,14 +31,6 @@
     {
       "id": "translate#6b471fcf6248/ansi_off",
       "reason": "SELECT translate('AaBbCc', 'abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "translate#6f4febf94e54/ansi_on",
-      "reason": "SELECT translate('AaBbCc', array(1, 2), '123') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#6f4febf94e54/ansi_off",
-      "reason": "SELECT translate('AaBbCc', array(1, 2), '123') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "translate#7ef5ac648b85/ansi_on",
@@ -87,14 +71,6 @@
     {
       "id": "translate#c7809497221c/ansi_off",
       "reason": "SELECT translate('AaBbCc', INTERVAL '1-2' YEAR TO MONTH, '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "translate#cd0fe885b0f0/ansi_on",
-      "reason": "SELECT translate(array(1, 2), 'abc', '123') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "translate#cd0fe885b0f0/ansi_off",
-      "reason": "SELECT translate(array(1, 2), 'abc', '123') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

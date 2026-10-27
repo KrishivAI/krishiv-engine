@@ -49,14 +49,6 @@
       "reason": "SELECT floor(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "floor#730d8fe10a5a/ansi_on",
-      "reason": "SELECT floor(3.1411, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has NON_FOLDABLE_ARGUMENT"
-    },
-    {
-      "id": "floor#730d8fe10a5a/ansi_off",
-      "reason": "SELECT floor(3.1411, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has NON_FOLDABLE_ARGUMENT"
-    },
-    {
       "id": "floor#986519e90987/ansi_on",
       "reason": "SELECT floor(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -71,22 +63,6 @@
     {
       "id": "floor#a8fb09ca0432/ansi_off",
       "reason": "SELECT floor(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "floor#c55c5c7689d7/ansi_on",
-      "reason": "SELECT floor(array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "floor#c55c5c7689d7/ansi_off",
-      "reason": "SELECT floor(array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "floor#eafebbc04618/ansi_on",
-      "reason": "SELECT floor(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "floor#eafebbc04618/ansi_off",
-      "reason": "SELECT floor(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "floor#f7b36fd3e154/ansi_on",

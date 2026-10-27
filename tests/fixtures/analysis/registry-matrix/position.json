@@ -9,38 +9,6 @@
       "reason": "SELECT position('bar', 'foobarbar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "position#26704394f4cf/ansi_on",
-      "reason": "SELECT position('bar', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#26704394f4cf/ansi_off",
-      "reason": "SELECT position('bar', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#293624608222/ansi_on",
-      "reason": "SELECT position(array(1, 2), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#293624608222/ansi_off",
-      "reason": "SELECT position(array(1, 2), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#356d859fa414/ansi_on",
-      "reason": "SELECT position('bar', array(1, 2), 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#356d859fa414/ansi_off",
-      "reason": "SELECT position('bar', array(1, 2), 5) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#35a7a4e8d0fc/ansi_on",
-      "reason": "SELECT position(array(1, 2), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#35a7a4e8d0fc/ansi_off",
-      "reason": "SELECT position(array(1, 2), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "position#401cb85e8a92/ansi_on",
       "reason": "SELECT position('bar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -111,14 +79,6 @@
     {
       "id": "position#a474bf49e08d/ansi_off",
       "reason": "SELECT position(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "position#b68c8f623388/ansi_on",
-      "reason": "SELECT position('bar', 'foobarbar', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "position#b68c8f623388/ansi_off",
-      "reason": "SELECT position('bar', 'foobarbar', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "position#bf25e422a3c1/ansi_on",

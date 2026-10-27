@@ -25,14 +25,6 @@
       "reason": "SELECT find_in_set('ab',INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "find_in_set#202d1b26addc/ansi_on",
-      "reason": "SELECT find_in_set(array(1, 2),'abc,b,ab,c,def') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "find_in_set#202d1b26addc/ansi_off",
-      "reason": "SELECT find_in_set(array(1, 2),'abc,b,ab,c,def') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "find_in_set#6fa5b2df63d8/ansi_on",
       "reason": "SELECT find_in_set('ab',map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -47,14 +39,6 @@
     {
       "id": "find_in_set#73fb1df4d3b1/ansi_off",
       "reason": "SELECT find_in_set(INTERVAL '1 02:03:04' DAY TO SECOND,'abc,b,ab,c,def') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "find_in_set#85b259a6c9b0/ansi_on",
-      "reason": "SELECT find_in_set('ab',array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "find_in_set#85b259a6c9b0/ansi_off",
-      "reason": "SELECT find_in_set('ab',array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "find_in_set#bef48bdf9089/ansi_on",

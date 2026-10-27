@@ -22,6 +22,7 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("bool_and", "no PySpark function"),
     ("bool_or", "no PySpark function"),
     ("count_if", "no PySpark function"),
+    ("random", "an alias of `rand`; no PySpark function"),
     ("chr", "no PySpark function; use `char`"),
     ("every", "no PySpark function"),
     ("len", "no PySpark function; use `length`"),
@@ -41,6 +42,22 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (
         "pow",
         "an alias of `power`; the exported `pow` is a row that sends `power`",
+    ),
+    (
+        "transform",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "filter",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "exists",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "forall",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
     ),
 ];
 
@@ -63,19 +80,28 @@ pub(super) fn rows() -> Vec<Row> {
     for name in [
         "cume_dist",
         "curdate",
+        "current_catalog",
+        "current_database",
         "current_date",
+        "current_schema",
         "current_timestamp",
         "current_user",
         "dense_rank",
         "e",
+        "input_file_block_length",
+        "input_file_block_start",
+        "input_file_name",
         "localtimestamp",
+        "monotonically_increasing_id",
         "now",
         "percent_rank",
         "pi",
         "rank",
         "row_number",
         "session_user",
+        "spark_partition_id",
         "user",
+        "version",
     ] {
         rows.push(Row::new(name, ""));
     }
@@ -254,7 +280,14 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, ignoreNulls: bool | Column = None",
         ));
     }
-    for name in ["coalesce", "hash", "named_struct", "struct", "xxhash64"] {
+    for name in [
+        "array",
+        "coalesce",
+        "hash",
+        "named_struct",
+        "struct",
+        "xxhash64",
+    ] {
         rows.push(Row::new(name, "*cols: ColumnOrName"));
     }
     for name in ["lpad", "rpad"] {
@@ -294,6 +327,18 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, upperChar: ColumnOrName = None, lowerChar: ColumnOrName = None, digitChar: ColumnOrName = None, otherChar: ColumnOrName = None",
         ),
         Row::new("ntile", "n: int"),
+        Row::new("rand", "seed: int = None"),
+        Row::new("randn", "seed: int = None"),
+        Row::new(
+            "randstr",
+            "length: int | Column, seed: int | Column = None",
+        ),
+        Row::new("typeof", "col: ColumnOrName"),
+        Row::new(
+            "uniform",
+            "min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column = None",
+        ),
+        Row::new("uuid", "seed: int | Column = None"),
         Row::new(
             "nth_value",
             "col: ColumnOrName, offset: int, ignoreNulls: bool = False",

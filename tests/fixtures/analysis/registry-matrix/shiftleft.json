@@ -1,28 +1,12 @@
 {
   "entries": [
     {
-      "id": "shiftleft#028e57cb3126/ansi_on",
-      "reason": "SELECT shiftleft(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftleft#028e57cb3126/ansi_off",
-      "reason": "SELECT shiftleft(array(1, 2), 1) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "shiftleft#109b5e440103/ansi_on",
       "reason": "SELECT shiftleft(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "shiftleft#109b5e440103/ansi_off",
       "reason": "SELECT shiftleft(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftleft#43daf427dafa/ansi_on",
-      "reason": "SELECT shiftleft(2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "shiftleft#43daf427dafa/ansi_off",
-      "reason": "SELECT shiftleft(2, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "shiftleft#75289f56a862/ansi_on",
