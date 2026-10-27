@@ -30,6 +30,68 @@ def _memcap_engines(ap: argparse.ArgumentParser, names: list[str]) -> list[str]:
     return out
 
 
+def _add_remote_filter_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument(
+        "--mode",
+        default="file",
+        choices=["file", "s3"],
+        help="remote-filter: read the local mirror directly, or through a throw-away S3 server",
+    )
+    p.add_argument(
+        "--input",
+        default=None,
+        help="remote-filter: local mirror directory (default: the pinned $KRISHIV_DATA/remote-filter/v1)",
+    )
+
+
+def _remote_filter_engines(ap: argparse.ArgumentParser, names: list[str]) -> list[str]:
+    from .remote_filter import ENGINES as REMOTE_FILTER_ENGINES
+
+    out = ["spark" if n == "spark-local" else n for n in names]
+    bad = [n for n in out if n not in REMOTE_FILTER_ENGINES]
+    if bad:
+        ap.error(f"remote-filter engines are {', '.join(REMOTE_FILTER_ENGINES)} (got {', '.join(bad)})")
+    return out
+
+
+def _remote_filter_input(ap: argparse.ArgumentParser, a) -> Path:
+    from .remote_filter_data import load_digest, mirror_dir
+
+    data = Path(a.input) if a.input else mirror_dir()
+    try:
+        load_digest(data)
+    except FileNotFoundError as e:
+        ap.error(str(e))
+    return data
+
+
+def _run_remote_filter(ap: argparse.ArgumentParser, a, engines: list[str], modes: list[str]) -> None:
+    from .remote_filter import MODES, REPS, run_remote_filter
+
+    data = _remote_filter_input(ap, a)
+    for mode in modes:
+        if mode not in MODES:
+            ap.error(f"remote-filter modes are {', '.join(MODES)} (got {mode!r})")
+    reps = a.reps if a.cmd == "reproduce" else (a.iterations if a.iterations is not None else REPS)
+    if reps < REPS:
+        ap.error(f"remote-filter needs at least {REPS} repetitions for the wall-time interval (got {reps})")
+    # The shared --cap flag defaults to memcap's 4.5g; remote-filter's small scope is 4 GiB unless asked.
+    cap = "4g" if a.cap == "4.5g" else a.cap
+    try:
+        for mode in modes:
+            run_remote_filter(
+                data,
+                mode,
+                cap,
+                _remote_filter_engines(ap, engines),
+                a.engine_memory,
+                reps,
+                a.timeout or None,
+            )
+    except (ValueError, FileNotFoundError, OSError) as e:
+        ap.error(str(e))
+
+
 def _run_memcap(ap: argparse.ArgumentParser, a, engines: list[str]) -> None:
     from .memcap import resolve_queries, run_memcap
 
@@ -80,7 +142,7 @@ def main(argv=None) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a suite on an engine, write JSON to $KRISHIV_DATA/results")
     r.add_argument("--engine", required=True, choices=[*ENGINES, "spark"])
-    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "dsb", "memcap", *H2O_SUITES])
+    r.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "dsb", "memcap", "remote-filter", *H2O_SUITES])
     add_h2o_args(r)
     r.add_argument("--sf", type=float, default=1)
     r.add_argument(
@@ -95,6 +157,7 @@ def main(argv=None) -> None:
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
     r.add_argument("--runner", help=RUNNER_HELP)
     _add_memcap_args(r)
+    _add_remote_filter_args(r)
     ab = sub.add_parser(
         "abba", help="interleaved ABBA Krishiv vs DuckDB (P2-T142); needs the dist-profile runner binary"
     )
@@ -130,7 +193,9 @@ def main(argv=None) -> None:
         "reproduce",
         help="reference engines side by side: correctness vs DuckDB, then ours (interleaved) and/or theirs (best of N)",
     )
-    rr.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", "memcap", *H2O_SUITES])
+    rr.add_argument(
+        "--suite", default="tpch", choices=["tpch", "tpcds", "clickbench", "memcap", "remote-filter", *H2O_SUITES]
+    )
     add_h2o_args(rr)
     rr.add_argument("--sf", type=float, default=10)
     rr.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
@@ -149,12 +214,14 @@ def main(argv=None) -> None:
     rr.add_argument("--runner", help=RUNNER_HELP)
     rr.add_argument("--profile", action="store_true", help="also record Krishiv's per-phase wall times (ours method)")
     _add_memcap_args(rr)
+    _add_remote_filter_args(rr)
     rp = sub.add_parser("report", help="Markdown comparison of the newest result per engine")
     rp.add_argument("--suite", default="tpch")
     add_h2o_args(rp)
     rp.add_argument("--sf", type=float, default=1)
     rp.add_argument("--dataset")
     rp.add_argument("--rows", default="10m", help="memcap: sales rows of the results to report")
+    rp.add_argument("--mode", default="file", choices=["file", "s3"], help="remote-filter: input mode to report")
     rp.add_argument("--baseline", default="duckdb")
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
     a = ap.parse_args(argv)
@@ -163,6 +230,10 @@ def main(argv=None) -> None:
         _, a.dataset, a.sf = h2o_target(ap, a)
     if a.cmd == "reproduce" and a.suite == "memcap":
         _run_memcap(ap, a, a.engines.split(",") if a.engines else ["krishiv", "duckdb", "polars", "spark"])
+    elif a.cmd == "reproduce" and a.suite == "remote-filter":
+        from .remote_filter import ENGINES as REMOTE_FILTER_ENGINES
+
+        _run_remote_filter(ap, a, a.engines.split(",") if a.engines else list(REMOTE_FILTER_ENGINES), [a.mode])
     elif a.cmd == "reproduce":
         from .reproduce import run_reproduce
 
@@ -224,6 +295,8 @@ def main(argv=None) -> None:
     elif a.cmd == "run" and a.suite == "memcap":
         a.reps = a.iterations if a.iterations is not None else 3
         _run_memcap(ap, a, [a.engine])
+    elif a.cmd == "run" and a.suite == "remote-filter":
+        _run_remote_filter(ap, a, [a.engine], [a.mode])
     elif a.cmd == "run":
         if a.engine == "spark":
             ap.error("--engine spark is a memcap engine; use spark-connect or spark-local elsewhere")
@@ -268,6 +341,10 @@ def main(argv=None) -> None:
             a.dataset,
         )
         print(f"result: {f}")
+    elif a.suite == "remote-filter":
+        from .remote_filter import write_remote_filter_report
+
+        print(f"report: {write_remote_filter_report(a.mode)}")
     elif a.suite == "memcap":
         from .memcap import write_memcap_report
 

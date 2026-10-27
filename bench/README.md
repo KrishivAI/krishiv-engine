@@ -89,6 +89,38 @@ uv run krishiv-bench report --suite memcap --rows 150m                          
   finished runs, finished n/N, median peak memory (`>cap (killed)` when none finished), spill and the verdict. The newest result per (engine, engine memory) is shown. The run holds `$KRISHIV_DATA/.bench.lock`.
 * Needs systemd user scopes with the memory controller (Linux, cgroup v2), Java 21 for Spark and the `dist` runner for Krishiv (see Adapters). Run 50m/150m on the benchmark server.
 
+## Selective scan of remote Parquet under a memory cap (`--suite remote-filter`)
+One very selective filter over the `sample/10BT` config of the public `HuggingFaceFW/fineweb-edu` web-text
+dataset (14 Parquet shards, about 28 GB), keep `int_score >= 4 AND token_count >= 4000 AND language_score >= 0.95`
+(about 0.2% of rows) and write the result to ONE zstd-compressed Parquet file. The point measured is the scan
+over remote storage finishing inside a small memory scope, so the report gives pass/fail under the scope as
+well as time.
+```bash
+uv run krishiv-datasets remote-filter                                   # -> $KRISHIV_DATA/remote-filter/v1/ + manifests/remote-filter-v1.sha256
+uv run krishiv-datasets remote-filter --mirror <pre-fetched dir>         # copy a pre-fetched mirror instead of downloading
+uv run krishiv-bench reproduce --suite remote-filter --cap 4g --reps 5 --engines krishiv,duckdb,polars,spark
+uv run krishiv-bench reproduce --suite remote-filter --mode s3 --cap 4g --reps 5   # through a throw-away S3 server
+uv run krishiv-bench run --engine duckdb --suite remote-filter                   # one engine, file mode
+uv run krishiv-bench report --suite remote-filter                                # -> $KRISHIV_DATA/results/report_remotefilter_file.md
+```
+* **Data**: pinned to the dataset revision in `remote_filter_data.py` (`digest.json` in the mirror records the
+  revision and the SHA-256 of every file; a mirror is never regenerated in place). The suite runs against a
+  local mirror directory (`--input`, default the pinned mirror): `file` mode reads it directly (the correctness
+  run), `s3` mode seeds it into a throw-away MinIO container and reads `s3://` through a counting proxy.
+* **Runs**: the same scope machinery as memcap (`capped.py`: fresh child process, `MemoryMax`, no swap).
+  Every invocation covers two scopes, the `--cap` scope and an unconstrained one, with at least 5 repetitions
+  in ABBA engine order per scope. Recorded per run: wall time, finished/killed/timeout/failed, peak resident
+  memory, the scope's `memory.peak`, spill bytes and bytes fetched from the object-store server (the proxy's
+  count; `null` in file mode, where local reads traverse no object store and nothing is guessed).
+* **Correctness before timing**: per engine (and mode) the row count, the exact `SUM(token_count)` and the set
+  of `id` values must equal the DuckDB reference run in the same mode; an engine whose result differs is never
+  timed. Krishiv reads S3 through session options (`fs.s3a.endpoint`, path-style access, `http://` endpoint;
+  credentials from the environment or a conf file, never on a command line, never in a recorded manifest).
+* The throw-away server is `docker run --rm` on a random loopback port with random credentials (never an
+  existing container, never a fixed name); credentials travel in an `--env-file`. A mode for plain `https://`
+  input is a named later unit, not implemented. The full-size run happens on the benchmark server (Java 21 for
+  Spark, the `dist` runner for Krishiv); Spark's S3 path additionally needs the hadoop-aws jars there.
+
 ### Provenance and licence
 The schema, seed, generator and the four queries are taken from the public MIT-licensed repository `engine-bench` by Firat Celik (https://github.com/firfircelik/engine-bench: `gen_data.py`, `queries.py`),
 adapted here (output layout, content digests, versioned directory, checksums). The licence notice that goes with that use:

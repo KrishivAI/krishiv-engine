@@ -311,6 +311,13 @@ def main(argv=None) -> None:
     p.add_argument("directory", type=Path)
     p = sub.add_parser("memcap", help="memcap suite data (seeded star schema) under $KRISHIV_DATA/memcap/v1/<rows>")
     p.add_argument("--rows", nargs="+", default=["10m"], metavar="N", help="whole millions, e.g. 10m 50m 150m")
+    p = sub.add_parser(
+        "remote-filter",
+        help="remote-filter suite data (FineWeb-Edu sample/10BT mirror) under $KRISHIV_DATA/remote-filter/v1",
+    )
+    p.add_argument(
+        "--mirror", type=Path, default=None, help="copy a pre-fetched mirror directory instead of downloading"
+    )
     p = sub.add_parser("manifest", help="(re)write sha256 manifest for a dataset dir")
     p.add_argument("name", choices=["tpch", "tpch-dbgen", "tpcds"])
     p.add_argument("--sf", type=float, default=1)
@@ -356,6 +363,13 @@ def main(argv=None) -> None:
             for label in a.rows:
                 generate(label)
         except (ValueError, FileExistsError) as e:
+            ap.error(str(e))
+    elif a.cmd == "remote-filter":
+        from .remote_filter_data import fetch
+
+        try:
+            fetch(mirror=a.mirror)
+        except (ValueError, FileExistsError, FileNotFoundError, OSError) as e:
             ap.error(str(e))
     elif a.cmd == "manifest":
         print(write_manifest(dataset_dir(a.name, a.sf), manifest_stem(a.name, a.sf)))
