@@ -34,16 +34,17 @@ use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
 use super::properties::{Distribution, Placement, range_keys};
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
-use super::subquery::{Slot, SubqueryValue};
+use super::subquery::SubqueryValue;
 use super::{PhysicalPlanner, PlanningContext};
 use crate::error::Result;
 use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
     PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
-    SubqueryId, SubqueryPlan, SubqueryValueKind, Values, expand_op, filter_op, project_op,
+    SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op, filter_op, project_op,
     replicate_op, scan_filter, sort_op, top_n_op,
 };
+use crate::values::{LocalValues, ValueService};
 
 /// How far above the planner's first fresh attribute subquery ids start:
 /// subquery values are read as attributes of these numbers, so they must
@@ -211,21 +212,23 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// A placeholder cell of the runtime filter `id` (planning validates
-    /// joins with it).
-    pub(crate) fn filter_cell(&self, id: FilterId) -> Result<Arc<krishiv_io::RuntimeFilter>> {
-        self.scan_filters
-            .values()
-            .flatten()
-            .find(|f| f.id == id)
-            .map(|f| {
-                Arc::new(krishiv_io::RuntimeFilter::new(
-                    f.id,
-                    f.column.clone(),
-                    f.key_type.clone(),
-                ))
-            })
-            .ok_or_else(|| internal(&format!("runtime filter {id} has no scan")))
+    /// Placeholder values declaring the runtime filters `ids` (planning
+    /// validates joins with them).
+    pub(crate) fn placeholder_values(
+        &self,
+        ids: impl IntoIterator<Item = FilterId>,
+    ) -> Result<Arc<dyn ValueService>> {
+        let values = LocalValues::new();
+        for id in ids {
+            let f = self
+                .scan_filters
+                .values()
+                .flatten()
+                .find(|f| f.id == id)
+                .ok_or_else(|| internal(&format!("runtime filter {id} has no scan")))?;
+            values.declare_filter(f.id, f.column.clone(), f.key_type.clone())?;
+        }
+        Ok(Arc::new(values))
     }
 
     /// Hands each scan of `node` the runtime filters joins publish to it.
@@ -653,7 +656,7 @@ impl<'a> Planner<'a> {
                 id.attr(),
                 Arc::new(SubqueryValue {
                     kind,
-                    slot: Arc::new(Slot::default()),
+                    value: LocalValues::new().subscribe(ValueId::Subquery(id))?,
                     data_type: arrow,
                 }),
             ));

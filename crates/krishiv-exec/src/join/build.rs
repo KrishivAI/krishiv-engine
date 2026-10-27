@@ -9,14 +9,14 @@ use arrow_array::{ArrayRef, Int64Array, LargeBinaryArray, UInt64Array};
 use arrow_row::Rows;
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
-use krishiv_io::{DisabledReason, FilterSnapshot, KeyFilterBuilder};
+use krishiv_io::{DisabledReason, FilterId, FilterSnapshot, KeyFilterBuilder};
 use krishiv_memory::{Reservation, SpillSignal};
 use krishiv_types::batch::{Batch, Weights};
 
 use super::grace::{Grace, Part, choose, reserve_chunks, spill_parts};
 use super::keys::{Encoded, Hashing, any_invalid};
 use super::table::{JoinTable, RowArena, key_bytes};
-use super::{Counter, JoinType, Shared, record, unsupported};
+use super::{Counter, FilterPublisher, JoinType, Shared, record, unsupported};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
@@ -43,8 +43,10 @@ pub(crate) struct BuildGlobal {
     pub(crate) built: OnceLock<Built>,
     /// Runtime filter partials merged so far, and the memory they hold.
     runtime: Mutex<Partials>,
-    /// The runtime filters, abandoned if the build never publishes them.
-    filters: Vec<Arc<krishiv_io::RuntimeFilter>>,
+    /// The runtime filters and where they are published, abandoned if the
+    /// build never publishes them.
+    filters: Vec<FilterId>,
+    publisher: Option<FilterPublisher>,
 }
 
 /// Runtime filter partials (one per filter; `None`: the filter is off).
@@ -57,9 +59,12 @@ struct Partials {
 impl Drop for BuildGlobal {
     fn drop(&mut self) {
         // A build that failed or was cancelled before finalize: consumers
-        // stop waiting for its filters (a published filter stays).
-        for f in &self.filters {
-            f.abandon(DisabledReason::ProducerFailed);
+        // stop waiting for its filters (a published partial stays: this
+        // producer's second partial is ignored).
+        if let Some(p) = &self.publisher {
+            for &id in &self.filters {
+                p.publish(id, FilterSnapshot::Disabled(DisabledReason::ProducerFailed));
+            }
         }
     }
 }
@@ -112,10 +117,16 @@ const SKETCH_BITS: u32 = 10;
 /// Builds each filter from its merged partial and publishes it, reserving
 /// it in `held` (a filter that does not fit keeps only its min/max range);
 /// a filter whose partial was dropped is disabled.
-fn publish(filters: &[super::JoinRuntimeFilter], partials: Partials, held: &mut Reservation) {
+fn publish(
+    publisher: &FilterPublisher,
+    filters: &[super::JoinRuntimeFilter],
+    partials: Partials,
+    held: &mut Reservation,
+) {
     for (f, b) in filters.iter().zip(partials.builders) {
+        let id = f.filter.id();
         let Some(b) = b else {
-            f.filter.abandon(DisabledReason::ProducerFailed);
+            publisher.publish(id, FilterSnapshot::Disabled(DisabledReason::ProducerFailed));
             continue;
         };
         let keys = b.finish();
@@ -124,7 +135,7 @@ fn publish(filters: &[super::JoinRuntimeFilter], partials: Partials, held: &mut 
         } else {
             keys.range_only()
         };
-        f.filter.publish(FilterSnapshot::Final(Arc::new(keys)));
+        publisher.publish(id, FilterSnapshot::Final(Arc::new(keys)));
     }
     // The partials' memory (hash vectors) is freed with them here.
     drop(partials.memory);
@@ -275,7 +286,9 @@ impl BuildSink {
     fn publish_filters(&self, g: &BuildGlobal, ctx: &TaskContext) -> Reservation {
         let mut held = ctx.consumer().reservation();
         let partials = std::mem::take(&mut *lock(&g.runtime));
-        publish(&self.0.runtime, partials, &mut held);
+        if let Some(publisher) = &self.0.publisher {
+            publish(publisher, &self.0.runtime, partials, &mut held);
+        }
         held
     }
 
@@ -425,6 +438,7 @@ impl BuildGlobal {
             built: OnceLock::new(),
             runtime: Mutex::new(Partials::default()),
             filters: Vec::new(),
+            publisher: None,
         };
         let _ = g.built.set(Built {
             tables: Vec::new(),
@@ -461,12 +475,8 @@ impl Sink for BuildSink {
                 builders: partials(&self.0),
                 memory: Vec::new(),
             }),
-            filters: self
-                .0
-                .runtime
-                .iter()
-                .map(|f| Arc::clone(&f.filter))
-                .collect(),
+            filters: self.0.runtime.iter().map(|f| f.filter.id()).collect(),
+            publisher: self.0.publisher.clone(),
         }))
     }
 
@@ -870,7 +880,8 @@ mod tests {
     use krishiv_memory::{MemoryConfig, MemoryPool, Reservation, TreePool};
 
     use super::{Partials, publish};
-    use crate::join::JoinRuntimeFilter;
+    use crate::join::{FilterPublisher, JoinRuntimeFilter};
+    use crate::values::{LocalValues, Producer};
 
     fn reservation(limit: usize) -> Reservation {
         let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
@@ -880,6 +891,16 @@ mod tests {
         });
         let id = pool.register("partials", None);
         Reservation::new(pool, id)
+    }
+
+    /// Publishes into `f`'s cell, as its only producer.
+    fn publisher(f: &JoinRuntimeFilter) -> FilterPublisher {
+        let values = LocalValues::new();
+        assert!(values.adopt_filter(Arc::clone(&f.filter)).is_ok());
+        FilterPublisher {
+            values: Arc::new(values),
+            producer: Producer::default(),
+        }
     }
 
     fn filter() -> JoinRuntimeFilter {
@@ -916,7 +937,7 @@ mod tests {
         p.add_keys(&shared, &spec_keys, None);
         assert!(p.memory[0].size() <= 1024);
         let mut held = reservation(1 << 20);
-        publish(&shared, p, &mut held);
+        publish(&publisher(&f), &shared, p, &mut held);
         let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
             unreachable!("not published")
         };
@@ -934,7 +955,7 @@ mod tests {
         };
         p.add_keys(&shared, &spec_keys, None);
         let mut tiny = reservation(16);
-        publish(&shared, p, &mut tiny);
+        publish(&publisher(&f), &shared, p, &mut tiny);
         let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
             unreachable!("not published")
         };
@@ -952,7 +973,7 @@ mod tests {
         };
         let wrong: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
         p.add_keys(&shared, &[wrong], None);
-        publish(&shared, p, &mut reservation(1 << 20));
+        publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
         assert!(matches!(
             f.filter.published().snapshot,
             FilterSnapshot::Disabled(_)
