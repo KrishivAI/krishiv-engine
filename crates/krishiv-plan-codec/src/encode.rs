@@ -746,6 +746,10 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
         AggregateFunction::Max => (pb::AggregateFunction::Max, false),
         AggregateFunction::First { ignore_nulls } => (pb::AggregateFunction::First, ignore_nulls),
         AggregateFunction::Last { ignore_nulls } => (pb::AggregateFunction::Last, ignore_nulls),
+        AggregateFunction::CollectList => (pb::AggregateFunction::CollectList, false),
+        AggregateFunction::CollectSet => (pb::AggregateFunction::CollectSet, false),
+        AggregateFunction::VectorSum => (pb::AggregateFunction::VectorSum, false),
+        AggregateFunction::VectorAvg => (pb::AggregateFunction::VectorAvg, false),
         // The format has no code for these yet.
         f @ (AggregateFunction::StddevSamp
         | AggregateFunction::StddevPop

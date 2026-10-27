@@ -867,6 +867,10 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         Max => AggregateFunction::Max,
         First => AggregateFunction::First { ignore_nulls: ignore },
         Last => AggregateFunction::Last { ignore_nulls: ignore },
+        CollectList => AggregateFunction::CollectList,
+        CollectSet => AggregateFunction::CollectSet,
+        VectorSum => AggregateFunction::VectorSum,
+        VectorAvg => AggregateFunction::VectorAvg,
     })?;
     let takes_ignore = matches!(
         function,

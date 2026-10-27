@@ -1168,6 +1168,14 @@ pub enum AggregateFunction {
     Max = 5,
     First = 6,
     Last = 7,
+    /// feature: collect_aggregates
+    CollectList = 8,
+    /// feature: collect_aggregates
+    CollectSet = 9,
+    /// feature: collect_aggregates
+    VectorSum = 10,
+    /// feature: collect_aggregates
+    VectorAvg = 11,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1184,6 +1192,10 @@ impl AggregateFunction {
             Self::Max => "AGGREGATE_FUNCTION_MAX",
             Self::First => "AGGREGATE_FUNCTION_FIRST",
             Self::Last => "AGGREGATE_FUNCTION_LAST",
+            Self::CollectList => "AGGREGATE_FUNCTION_COLLECT_LIST",
+            Self::CollectSet => "AGGREGATE_FUNCTION_COLLECT_SET",
+            Self::VectorSum => "AGGREGATE_FUNCTION_VECTOR_SUM",
+            Self::VectorAvg => "AGGREGATE_FUNCTION_VECTOR_AVG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1197,6 +1209,10 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_MAX" => Some(Self::Max),
             "AGGREGATE_FUNCTION_FIRST" => Some(Self::First),
             "AGGREGATE_FUNCTION_LAST" => Some(Self::Last),
+            "AGGREGATE_FUNCTION_COLLECT_LIST" => Some(Self::CollectList),
+            "AGGREGATE_FUNCTION_COLLECT_SET" => Some(Self::CollectSet),
+            "AGGREGATE_FUNCTION_VECTOR_SUM" => Some(Self::VectorSum),
+            "AGGREGATE_FUNCTION_VECTOR_AVG" => Some(Self::VectorAvg),
             _ => None,
         }
     }

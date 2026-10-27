@@ -361,11 +361,6 @@ fn max_by_with_a_limit_is_unsupported() -> R {
         let (class, _) = error(&s, &format!("SELECT {f}(x) FROM t"))?;
         assert_eq!(class, "WRONG_NUM_ARGS.WITHOUT_SUGGESTION");
     }
-    // The other aggregates that return arrays stay unsupported.
-    for f in ["collect_list", "collect_set"] {
-        let (class, _) = error(&s, &format!("SELECT {f}(x) FROM t"))?;
-        assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE", "{f}");
-    }
     Ok(())
 }
 

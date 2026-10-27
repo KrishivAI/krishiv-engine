@@ -259,6 +259,10 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "any_value" => (AggregateFunction::AnyValue { ignore_nulls }, value),
         "max_by" if f.args.len() == 2 => (AggregateFunction::MaxBy, f.args.clone()),
         "min_by" if f.args.len() == 2 => (AggregateFunction::MinBy, f.args.clone()),
+        "collect_list" if f.args.len() == 1 => (AggregateFunction::CollectList, f.args.clone()),
+        "collect_set" if f.args.len() == 1 => (AggregateFunction::CollectSet, f.args.clone()),
+        "vector_sum" if f.args.len() == 1 => (AggregateFunction::VectorSum, f.args.clone()),
+        "vector_avg" if f.args.len() == 1 => (AggregateFunction::VectorAvg, f.args.clone()),
         "stddev" | "std" | "stddev_samp" if f.args.len() == 1 => {
             (AggregateFunction::StddevSamp, f.args.clone())
         }

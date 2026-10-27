@@ -19,6 +19,10 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("mod", "no PySpark function"),
     ("any", "no PySpark function"),
     ("any_value", "no PySpark function"),
+    (
+        "array_agg",
+        "ANSI spelling of `collect_list`; SQL-only, like Spark's naming",
+    ),
     ("bool_and", "no PySpark function"),
     ("bool_or", "no PySpark function"),
     ("count_if", "no PySpark function"),
@@ -30,6 +34,8 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("max_by", "no PySpark function"),
     ("min_by", "no PySpark function"),
     ("some", "no PySpark function"),
+    ("vector_avg", "no PySpark function; SQL only"),
+    ("vector_sum", "no PySpark function; SQL only"),
     (
         "schema_of_csv",
         "PySpark's `options` map parameter has no wrapper support yet; SQL only",
@@ -121,6 +127,8 @@ pub(super) fn rows() -> Vec<Row> {
         "bit_length",
         "cbrt",
         "char",
+        "collect_list",
+        "collect_set",
         "cos",
         "cosh",
         "cot",

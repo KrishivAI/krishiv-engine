@@ -43,6 +43,7 @@ use futures::stream::FuturesUnordered;
 use krishiv_common::error::KrishivError;
 use krishiv_memory::{Reservation, SpillWriter};
 
+use super::super::is_order_sensitive;
 use super::super::rowtable::{FinalTask, Mode, RowTable, final_tasks};
 use super::super::table::Table;
 use super::{
@@ -145,14 +146,21 @@ impl HashAggregate {
                 return Ok(false);
             }
             let mut tables = std::mem::take(&mut inner.tables);
-            // The default path's merge order: the largest table first.
-            if let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].0.len()) {
+            // The default path's merge order: the largest table first,
+            // unless an order-sensitive aggregate needs partition order.
+            let ordered = self
+                .core
+                .spec
+                .aggregates
+                .iter()
+                .any(|a| is_order_sensitive(a.function));
+            if !ordered && let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].1.len()) {
                 tables.swap(0, big);
             }
             inner.busy = true;
             let mut inputs = Vec::with_capacity(tables.len());
             let mut held = Vec::with_capacity(tables.len());
-            for (t, r) in tables {
+            for (_, t, r) in tables {
                 match t {
                     Table::Rows(t) => inputs.push(t),
                     Table::Keys(_) => {
@@ -405,7 +413,7 @@ impl HashAggregate {
                 let mut runs = Vec::with_capacity(inputs.len());
                 for (t, mut r) in inputs.into_iter().zip(held) {
                     lend_headroom(&mut r);
-                    runs.push(s.write_run(&Table::Rows(t), 0, 0)?);
+                    runs.push(s.write_run(&Table::Rows(t), 0, 0, u32::MAX)?);
                 }
                 Ok(runs)
             })

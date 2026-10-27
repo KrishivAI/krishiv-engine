@@ -488,7 +488,11 @@ fn reference(
                         | AggregateFunction::Kurtosis
                         | AggregateFunction::Corr
                         | AggregateFunction::CovarSamp
-                        | AggregateFunction::CovarPop => {
+                        | AggregateFunction::CovarPop
+                        | AggregateFunction::CollectList
+                        | AggregateFunction::CollectSet
+                        | AggregateFunction::VectorSum
+                        | AggregateFunction::VectorAvg => {
                             unreachable!("no window test aggregates with this function")
                         }
                     }

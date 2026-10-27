@@ -117,6 +117,7 @@ macro_rules! registry {
 // The registry: one line per feature, kept alphabetically sorted by id.
 // (id, variant, legacy level, kind, meaning)
 registry! {
+    (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
@@ -315,6 +316,10 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::AnyValue { .. }
             | AggregateFunction::MaxBy
             | AggregateFunction::MinBy => None,
+            AggregateFunction::CollectList
+            | AggregateFunction::CollectSet
+            | AggregateFunction::VectorSum
+            | AggregateFunction::VectorAvg => Some(Feature::CollectAggregates),
         },
     }
 }

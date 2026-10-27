@@ -1297,7 +1297,7 @@ impl Resolver<'_> {
                     }
                     return self.operator_call(op, e.origin, &kids[..n]);
                 }
-                let entry = match self.ctx.functions.lookup(
+                let mut entry = match self.ctx.functions.lookup(
                     std::slice::from_ref(&lookup_name.to_owned()),
                     self.ctx.profile,
                 ) {
@@ -1318,6 +1318,21 @@ impl Resolver<'_> {
                         ));
                     }
                 };
+                // `array_agg` is Spark's spelling of `collect_list` (its
+                // result column is named `collect_list(...)`): resolve it
+                // as `collect_list` throughout.
+                if entry.id.name() == "array_agg" {
+                    entry = match self
+                        .ctx
+                        .functions
+                        .lookup(&["collect_list".to_owned()], self.ctx.profile)
+                    {
+                        FunctionLookup::Found(entry) => entry,
+                        _ => {
+                            return Err(unsupported("function array_agg".to_owned(), e.origin));
+                        }
+                    };
+                }
                 if !window_fn {
                     call_checks(&entry, e, &kids, n)?;
                 }

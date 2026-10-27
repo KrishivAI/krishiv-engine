@@ -61,6 +61,7 @@
 //! once it received a row.
 
 mod accumulator;
+mod collect;
 mod moments;
 mod node;
 mod partial;
@@ -83,6 +84,7 @@ use krishiv_memory::SpillScope;
 #[cfg(all(test, not(loom)))]
 pub(crate) use accumulator::plain;
 pub(crate) use accumulator::{Accumulator, Running, avg_decimal_wide, wide_sum_value};
+pub(crate) use collect::collect_set_supported;
 pub(crate) use moments::arity;
 pub use node::{AggregateNode, PartialNode, distinct_plan, union_distinct};
 pub use partial::{BypassPolicy, PartialAggregate};
@@ -171,6 +173,22 @@ pub enum AggregateFunction {
     MaxBy,
     /// `min_by(x, y)`, as `max_by` for the smallest `y` (same tie caveat).
     MinBy,
+    /// `collect_list(x)` (and `array_agg`, which the analyzer resolves as
+    /// `collect_list` for Spark's display name): the non-NULL values in
+    /// input order within a partition, partitions merged in partition-index
+    /// order; `[]` for no values, never NULL.
+    CollectList,
+    /// `collect_set(x)`: the distinct non-NULL values in first-seen order;
+    /// `[]` for no values, never NULL. Element identity is the grouping
+    /// key encoding (`crate::hash::KeyEncoder`), so NaN equals NaN and
+    /// `-0.0` equals `0.0`, as for grouping keys.
+    CollectSet,
+    /// `vector_sum(x)`: element-wise sums over `ARRAY<FLOAT>` (NULL vectors
+    /// skipped); NULL for no non-NULL vector.
+    VectorSum,
+    /// `vector_avg(x)`: element-wise means over `ARRAY<FLOAT>` (NULL vectors
+    /// skipped); NULL for no non-NULL vector.
+    VectorAvg,
 }
 
 /// Where an aggregate's arguments come from.
@@ -299,6 +317,16 @@ impl AggregateExpr {
             (f, t) if moments::buffer(f).is_some() && moments::reads_as_double(t) => {
                 DataType::Float64
             }
+            // `collect_list` / `collect_set` keep the input type under an
+            // array; the vector aggregates need a list of `float`. The set
+            // needs the shared key encoding for its elements.
+            (F::CollectList, t) => collect_result(t),
+            (F::CollectSet, t) if collect_set_supported(t) => collect_result(t),
+            (F::VectorSum | F::VectorAvg, DataType::List(f))
+                if *f.data_type() == DataType::Float32 =>
+            {
+                vector_result()
+            }
             (F::MaxBy | F::MinBy, _) => match self.by_types() {
                 Some((v, k))
                     if accumulator::min_max_supported(v) && accumulator::min_max_supported(k) =>
@@ -362,6 +390,17 @@ impl AggregateExpr {
                     Field::new(n("key"), key, true),
                 ]
             }
+            // The collect and vector aggregates merge in driver-partition
+            // order (see [`Run::partition`]).
+            (F::CollectList | F::CollectSet, _) => {
+                vec![Field::new(n("values"), out.clone(), true)]
+            }
+            // The vector aggregates keep the running sums and the count of
+            // non-NULL vectors; merging adds them element-wise.
+            (F::VectorSum | F::VectorAvg, _) => vec![
+                Field::new(n("sums"), vector_sums_type(), true),
+                Field::new(n("count"), DataType::Int64, false),
+            ],
         })
     }
 
@@ -386,6 +425,36 @@ impl AggregateExpr {
 
 fn sum_decimal(like: &DataType, p: u8, s: i8) -> DataType {
     decimal_on(like, (p + 10).min(38), s)
+}
+
+/// `collect_list` / `collect_set` of `t`: an array of `t`, laid out exactly
+/// as the analyzer's `array<t>` ([`krishiv_types::DataType::to_arrow`]), so
+/// the planner's check of the executor's result type against the analyzer's
+/// holds.
+fn collect_result(t: &DataType) -> DataType {
+    DataType::List(Arc::new(Field::new("element", t.clone(), false)))
+}
+
+/// `vector_sum` / `vector_avg`: an array of `float`, laid out as the
+/// analyzer's.
+fn vector_result() -> DataType {
+    DataType::List(Arc::new(Field::new("element", DataType::Float32, false)))
+}
+
+/// The partial-state sums of the vector aggregates: an array of `double`,
+/// one entry per dimension (`NULL` while no non-NULL vector was seen).
+fn vector_sums_type() -> DataType {
+    DataType::List(Arc::new(Field::new("element", DataType::Float64, false)))
+}
+
+/// Whether `f` observes input order: its merges must run in partition-index
+/// order (the sink sorts its tables by driver partition), not biggest-first.
+pub fn is_order_sensitive(f: AggregateFunction) -> bool {
+    use AggregateFunction as F;
+    matches!(
+        f,
+        F::CollectList | F::CollectSet | F::VectorSum | F::VectorAvg
+    )
 }
 
 /// `decimal(p, s)` on the carrier of the input type `like` (design

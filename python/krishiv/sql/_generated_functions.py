@@ -54,6 +54,8 @@ __all__ = [
     "char_length",
     "character_length",
     "coalesce",
+    "collect_list",
+    "collect_set",
     "concat_ws",
     "contains",
     "conv",
@@ -415,6 +417,16 @@ def character_length(str: ColumnOrName) -> Column:
 def coalesce(*cols: ColumnOrName) -> Column:
     """Calls the registry function ``coalesce``."""
     return _call("coalesce", *_cols(cols))
+
+
+def collect_list(col: ColumnOrName) -> Column:
+    """Calls the registry function ``collect_list``."""
+    return _call("collect_list", _named(col, "col"))
+
+
+def collect_set(col: ColumnOrName) -> Column:
+    """Calls the registry function ``collect_set``."""
+    return _call("collect_set", _named(col, "col"))
 
 
 def concat_ws(sep: str, *cols: ColumnOrName) -> Column:

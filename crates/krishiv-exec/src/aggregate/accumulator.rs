@@ -37,6 +37,7 @@ use arrow_schema::{DataType, TimeUnit};
 use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
+use super::collect::{CollectAcc, VectorAcc};
 use super::moments::Moments;
 use super::{
     AggInput, AggregateExpr, AggregateFunction, decimal_sum_overflow, long_overflow, out_of_range,
@@ -255,6 +256,12 @@ enum Kind {
     },
     /// The moment aggregates: Spark's buffers of doubles (see `moments`).
     Moments(Moments),
+    /// `collect_list` / `collect_set`: appended value chunks per group, in
+    /// fold order (see `collect`).
+    Collect(CollectAcc),
+    /// `vector_sum` / `vector_avg`: running sums with the non-NULL vector
+    /// count per group (see `collect`).
+    Vector(VectorAcc),
 }
 
 /// One aggregate's state for every group of a table.
@@ -944,6 +951,12 @@ impl Accumulator {
                 | F::CovarPop),
                 _,
             ) => Kind::Moments(Moments::new(f, ansi)?),
+            (F::CollectList, _) => Kind::Collect(CollectAcc::new(expr.arg_type.clone(), false)?),
+            // `CollectAcc::new` refuses the element types the shared key
+            // encoding does not order, as `result_type` does.
+            (F::CollectSet, _) => Kind::Collect(CollectAcc::new(expr.arg_type.clone(), true)?),
+            (F::VectorSum, _) => Kind::Vector(VectorAcc::new(false)),
+            (F::VectorAvg, _) => Kind::Vector(VectorAcc::new(true)),
         };
         let sum_bound = match (expr.function, expr.avg_sum_type()) {
             (F::Sum | F::Avg, DataType::Decimal64(p, _) | DataType::Decimal128(p, _)) => {
@@ -1006,16 +1019,26 @@ impl Accumulator {
                 ..
             } => vec![values.vec(), keys.vec(), v(set), v(null)],
             Kind::Moments(m) => m.vecs(),
+            Kind::Collect(c) => c.vecs(),
+            Kind::Vector(v) => v.vecs(),
         }
     }
 
     /// Bytes held.
     pub(crate) fn size(&self) -> usize {
-        let heap = match &self.kind {
-            Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } | Kind::By { heap, .. } => *heap,
-            _ => 0,
-        };
-        heap + self.vecs().iter().map(|(_, c, e)| c * e).sum::<usize>()
+        match &self.kind {
+            Kind::Collect(c) => c.size(),
+            Kind::Vector(v) => v.size(),
+            _ => {
+                let heap = match &self.kind {
+                    Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } | Kind::By { heap, .. } => {
+                        *heap
+                    }
+                    _ => 0,
+                };
+                heap + self.vecs().iter().map(|(_, c, e)| c * e).sum::<usize>()
+            }
+        }
     }
 
     /// [`size`](Self::size) after [`resize`](Self::resize) to `new` more
@@ -1028,6 +1051,14 @@ impl Accumulator {
         arg: Option<&ArrayRef>,
         key: Option<&ArrayRef>,
     ) -> usize {
+        // The collect and vector accumulators account their variable-width
+        // growth themselves (see `collect`).
+        if let Kind::Collect(c) = &self.kind {
+            return c.projected(new, arg);
+        }
+        if let Kind::Vector(v) = &self.kind {
+            return v.projected(new, arg);
+        }
         let vecs: usize = self
             .vecs()
             .iter()
@@ -1108,6 +1139,8 @@ impl Accumulator {
                 values.resize(n);
             }
             Kind::Moments(m) => m.resize(n),
+            Kind::Collect(c) => c.resize(n),
+            Kind::Vector(v) => v.resize(n),
             Kind::By {
                 values,
                 keys,
@@ -1164,6 +1197,8 @@ impl Accumulator {
                 values.reserve(new);
             }
             Kind::Moments(m) => m.reserve(new),
+            Kind::Collect(c) => c.reserve(new),
+            Kind::Vector(v) => v.reserve(new),
             Kind::By {
                 values,
                 keys,
@@ -1256,7 +1291,12 @@ impl Accumulator {
         if (state
             || matches!(
                 self.kind,
-                Kind::MinMax { .. } | Kind::Pick { .. } | Kind::By { .. } | Kind::Moments(_)
+                Kind::MinMax { .. }
+                    | Kind::Pick { .. }
+                    | Kind::By { .. }
+                    | Kind::Moments(_)
+                    | Kind::Collect(_)
+                    | Kind::Vector(_)
             ))
             && !is_unit(w)
         {
@@ -1585,6 +1625,35 @@ impl Accumulator {
                     .collect::<Result<Vec<_>>>()?;
                 m.merge(groups, &cols)?;
             }
+            (Kind::Collect(c), false) => {
+                let a = args[0];
+                if a.len() != groups.len() {
+                    return Err(internal(
+                        "a collect column of another length than the group ids".to_owned(),
+                    ));
+                }
+                c.update(groups, a, &valid, run)?;
+            }
+            (Kind::Collect(c), true) => {
+                let [state] = args else {
+                    return Err(internal(
+                        "a collect state of another shape than its values".to_owned(),
+                    ));
+                };
+                c.merge(groups, state)?;
+            }
+            (Kind::Vector(v), false) => {
+                let a = args[0];
+                if a.len() != groups.len() {
+                    return Err(internal(
+                        "a vector column of another length than the group ids".to_owned(),
+                    ));
+                }
+                v.update(groups, a, &valid, run)?;
+            }
+            (Kind::Vector(v), true) => {
+                v.merge(groups, args)?;
+            }
             (
                 Kind::By {
                     max,
@@ -1645,12 +1714,17 @@ impl Accumulator {
     /// Number of state columns.
     pub(crate) fn state_len(&self) -> usize {
         match self.kind {
-            Kind::Count(_) | Kind::SumInt { .. } | Kind::SumFloat { .. } | Kind::MinMax { .. } => 1,
+            Kind::Count(_)
+            | Kind::SumInt { .. }
+            | Kind::SumFloat { .. }
+            | Kind::MinMax { .. }
+            | Kind::Collect(_) => 1,
             Kind::SumDec { .. }
             | Kind::AvgFloat { .. }
             | Kind::AvgDec { .. }
             | Kind::Pick { .. }
-            | Kind::By { .. } => 2,
+            | Kind::By { .. }
+            | Kind::Vector(_) => 2,
             Kind::Moments(ref m) => m.width(),
         }
     }
@@ -1712,6 +1786,8 @@ impl Accumulator {
                 )),
             ],
             Kind::Moments(m) => m.state(ids)?,
+            Kind::Collect(c) => vec![c.state(ids, &self.result)?],
+            Kind::Vector(v) => vec![v.state_sums(ids)?, v.state_count(ids)],
             Kind::By {
                 values,
                 keys,
@@ -1858,6 +1934,10 @@ impl Accumulator {
                 self.decimal(out.into_iter(), &self.result)?
             }
             Kind::Moments(m) => m.evaluate(ids)?,
+            // The collect final values are the state lists; the vector
+            // ones the sums (or means) as `float`.
+            Kind::Collect(c) => c.state(ids, &self.result)?,
+            Kind::Vector(v) => v.evaluate(ids, &self.result)?,
             // Only the value: the ordering key is state, not a result.
             Kind::By {
                 values, set, null, ..

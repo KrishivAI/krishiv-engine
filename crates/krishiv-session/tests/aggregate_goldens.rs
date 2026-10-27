@@ -1,15 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Spark 4.2 `SQLQueryTestSuite` goldens for the simple aggregates
-//! (`every`, `some`, `any`, `bool_and`, `bool_or`, `any_value`): each claimed
-//! statement of the vendored `group-by` and `window` result files runs
-//! through a session over the tables the file creates, and its schema, rows
-//! (in order when the statement orders them) or error class, SQLSTATE and
+//! (`every`, `some`, `any`, `bool_and`, `bool_or`, `any_value`), the collect
+//! aggregates (`collect_list`, `collect_set`, `array_agg`) and the vector
+//! aggregates (`vector_sum`, `vector_avg`): each claimed statement of the
+//! vendored `group-by`, `vector-agg` and `window` result files runs through
+//! a session over the tables the file creates, and its schema, rows (in
+//! order when the statement orders them) or error class, SQLSTATE and
 //! message parameters must be Spark's.
 //!
 //! Claimed: the `group-by.sql` statements on `test_agg` (the boolean
 //! aggregates grouped, global, with `HAVING`, in subqueries, in windows and
 //! with wrong argument types, but not `every("true")`, which needs a string
-//! to boolean cast) and the `window.sql` statement of
+//! to boolean cast), the `collect_list`/`array_agg` statements of
+//! `group-by.sql`, every `vector-agg.sql` statement (grouped, global, NULL
+//! and empty vectors, window partitions, dimension mismatches and wrong
+//! argument types) and the `window.sql` statement of
 //! `first_value`/`any_value`/`last_value` over `()`.
 //!
 //! Not claimed (they need other functions or syntax): the other `group-by`
@@ -26,7 +31,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Int32Type, Int64Type};
+use arrow_array::types::{Float32Type, Float64Type, Int32Type, Int64Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
@@ -161,8 +166,13 @@ fn spark_type(t: &DataType) -> String {
     match t {
         DataType::Int32 => "int".into(),
         DataType::Int64 => "bigint".into(),
+        DataType::Float32 => "float".into(),
+        DataType::Float64 => "double".into(),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => "string".into(),
         DataType::Boolean => "boolean".into(),
+        DataType::List(f) | DataType::LargeList(f) => {
+            format!("array<{}>", spark_type(f.data_type()))
+        }
         other => format!("{other}"),
     }
 }
@@ -174,9 +184,27 @@ fn cell(c: &dyn Array, row: usize) -> String {
     match c.data_type() {
         DataType::Int32 => c.as_primitive::<Int32Type>().value(row).to_string(),
         DataType::Int64 => c.as_primitive::<Int64Type>().value(row).to_string(),
+        DataType::Float32 => format!("{:?}", c.as_primitive::<Float32Type>().value(row)),
+        DataType::Float64 => format!("{:?}", c.as_primitive::<Float64Type>().value(row)),
         DataType::Boolean => c.as_boolean().value(row).to_string(),
         DataType::Utf8 => c.as_string::<i32>().value(row).to_owned(),
         DataType::Utf8View => c.as_string_view().value(row).to_owned(),
+        DataType::LargeUtf8 => c.as_string::<i64>().value(row).to_owned(),
+        DataType::List(_) => {
+            let l = c.as_list::<i32>();
+            let at = |i: usize| {
+                l.value_offsets()
+                    .get(i)
+                    .copied()
+                    .map_or(0, |o| usize::try_from(o).unwrap_or(0))
+            };
+            let (start, end) = (at(row), at(row + 1).max(at(row)));
+            let items = (start..end)
+                .map(|i| cell(l.values().as_ref(), i))
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("[{items}]")
+        }
         other => format!("<{other}>"),
     }
 }
@@ -389,4 +417,96 @@ fn any_value_over_the_whole_partition_matches_spark() -> R {
         bad.extend(run(&s, case)?);
     }
     check(&bad, claimed, 1)
+}
+
+/// Every `vector-agg.sql` statement: element-wise sums and means grouped,
+/// global, over NULL and empty vectors, over window partitions, and the
+/// dimension-mismatch and wrong-argument-type errors with Spark's classes
+/// and parameters. Inline `VALUES` need no registered table.
+#[test]
+fn vector_aggregates_match_spark() -> R {
+    let cases = load("vector-agg.sql.out")?;
+    let mut bad = Vec::new();
+    let mut claimed = 0;
+    for case in &cases {
+        claimed += 1;
+        bad.extend(run(&Session::new()?, case)?);
+    }
+    check(&bad, claimed, 16)
+}
+
+/// The `collect_list`/`array_agg` statements of `group-by.sql`: Spark names
+/// `array_agg`'s column `collect_list(...)`, so both spellings give the
+/// same column. Inline `VALUES` need no registered table.
+#[test]
+fn collect_and_array_agg_match_spark() -> R {
+    let cases = load("group-by.sql.out")?;
+    let mut bad = Vec::new();
+    let mut claimed = 0;
+    for case in cases.iter().filter(|c| {
+        c.query.contains("collect_list(col)")
+            || c.query.contains("array_agg")
+            || c.query.contains("collect_list(b)")
+    }) {
+        claimed += 1;
+        bad.extend(run(&Session::new()?, case)?);
+    }
+    check(&bad, claimed, 2)
+}
+
+/// `collect_list` and `collect_set` skip NULLs; the set dedups in
+/// first-seen order. `DISTINCT` collects skip NULLs and repeats through the
+/// distinct rewrite.
+#[test]
+fn collect_skips_nulls_and_distinct_dedups() -> R {
+    let s = Session::new()?;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, true),
+        Field::new("x", DataType::Utf8, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(1), Some(1), Some(1), None])) as ArrayRef,
+            Arc::new(StringArray::from(vec![
+                Some("b"),
+                Some("a"),
+                None,
+                Some("b"),
+            ])) as ArrayRef,
+        ],
+    )?;
+    s.register_batches("t", schema, vec![batch])?;
+    // Grouped and global, in input order within the single partition.
+    let one = |sql: &str| -> R<Vec<String>> {
+        let df = block_on(s.sql(sql))?;
+        let batches = block_on(df.collect())?;
+        Ok(batches
+            .iter()
+            .flat_map(|b| {
+                (0..b.num_rows()).map(|r| {
+                    b.columns()
+                        .iter()
+                        .map(|c| cell(c.as_ref(), r))
+                        .collect::<Vec<_>>()
+                        .join("|")
+                })
+            })
+            .collect())
+    };
+    assert_eq!(
+        one("SELECT k, collect_list(x), collect_set(x) FROM t GROUP BY k ORDER BY k")?,
+        ["NULL|[b]|[b]", "1|[b,a]|[b,a]"]
+    );
+    assert_eq!(one("SELECT collect_list(x) FROM t")?, ["[b,a,b]"]);
+    assert_eq!(
+        one("SELECT collect_list(DISTINCT x), collect_set(DISTINCT x) FROM t")?,
+        ["[b,a]|[b,a]"]
+    );
+    // `FILTER (WHERE ...)` is refused for every aggregate: the planner
+    // keeps filters out of accumulators, never evaluates them inside.
+    let df = block_on(s.sql("SELECT collect_list(x) FILTER (WHERE k = 1) FROM t"))?;
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    Ok(())
 }

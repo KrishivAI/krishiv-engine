@@ -1016,13 +1016,36 @@ fn simple_aggregates() {
         err.to_string(),
         "The second argument in any_value should be a boolean literal."
     );
-    // The aggregates that return arrays stay known-unsupported.
+    // `collect_list`, `collect_set` and `array_agg` are aggregates over
+    // one argument of any type; the result is an array of the argument's
+    // type, never NULL. `vector_sum`/`vector_avg` take `ARRAY<FLOAT>` and
+    // give an array of `float`, NULL when no non-NULL vector was seen.
     for name in ["collect_list", "collect_set", "array_agg"] {
-        assert!(
-            matches!(
-                builtins().lookup(name, SparkProfile::V4_2),
-                Lookup::KnownUnsupported
-            ),
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert!(d.deterministic, "{name}");
+        assert!(d.arity.accepts(1) && !d.arity.accepts(2), "{name}");
+        let array = DataType::Array(ArrayType::new(DataType::Integer, false).into());
+        assert_eq!(
+            result(name, &[ty(DataType::Integer)], &[]).unwrap(),
+            ArgType::new(array, false),
+            "{name}"
+        );
+    }
+    for name in ["vector_sum", "vector_avg"] {
+        let d = def(name);
+        assert_eq!(d.kind, FunctionKind::Aggregate, "{name}");
+        assert!(d.arity.accepts(1) && !d.arity.accepts(2), "{name}");
+        let floats = || DataType::Array(ArrayType::new(DataType::Float, false).into());
+        assert_eq!(
+            result(name, &[ty(floats())], &[]).unwrap(),
+            ArgType::new(floats(), true),
+            "{name}"
+        );
+        let err = result(name, &[ty(DataType::Integer)], &[]).unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::DatatypeMismatchUnexpectedInputType,
             "{name}"
         );
     }

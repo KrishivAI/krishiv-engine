@@ -101,6 +101,15 @@ pub enum Aggregate {
     MaxBy,
     /// `min_by(x, y)`.
     MinBy,
+    /// `collect_list(x)` (and `array_agg`, which the analyzer resolves as
+    /// `collect_list` for Spark's display name).
+    CollectList,
+    /// `collect_set(x)`.
+    CollectSet,
+    /// `vector_sum(x)`: element-wise sums over `ARRAY<FLOAT>`.
+    VectorSum,
+    /// `vector_avg(x)`: element-wise means over `ARRAY<FLOAT>`.
+    VectorAvg,
 }
 
 /// A built-in function.

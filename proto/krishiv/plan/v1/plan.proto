@@ -345,6 +345,14 @@ enum AggregateFunction {
   AGGREGATE_FUNCTION_MAX = 5;
   AGGREGATE_FUNCTION_FIRST = 6;
   AGGREGATE_FUNCTION_LAST = 7;
+  // feature: collect_aggregates
+  AGGREGATE_FUNCTION_COLLECT_LIST = 8;
+  // feature: collect_aggregates
+  AGGREGATE_FUNCTION_COLLECT_SET = 9;
+  // feature: collect_aggregates
+  AGGREGATE_FUNCTION_VECTOR_SUM = 10;
+  // feature: collect_aggregates
+  AGGREGATE_FUNCTION_VECTOR_AVG = 11;
 }
 
 enum AggregateInput {

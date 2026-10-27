@@ -218,6 +218,39 @@ pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
     ]
 }
 
+/// One aggregate of each collect variant of this change, over types that
+/// need no feature of their own.
+pub(crate) fn collect_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+    };
+    vec![
+        a(AggregateFunction::CollectList, ArrowType::Int32),
+        a(AggregateFunction::CollectSet, ArrowType::Utf8View),
+    ]
+}
+
+/// One aggregate of each vector variant of this change: the argument is
+/// an array, so the case uses `nested_types` too.
+pub(crate) fn vector_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+    };
+    let floats = || ArrowType::List(Arc::new(Field::new("element", ArrowType::Float32, false)));
+    vec![
+        a(AggregateFunction::VectorSum, floats()),
+        a(AggregateFunction::VectorAvg, floats()),
+    ]
+}
+
 fn window_function(function: WindowFunction, frame: WindowFrame, name: &str) -> WindowFunctionPlan {
     WindowFunctionPlan {
         function,
@@ -633,6 +666,30 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     group_by: Vec::new(),
                     aggregates: vec![AggregateExpr::count_star("n")],
                     distinct: vec![true],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_collects",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: collect_aggregate_exprs(),
+                    distinct: vec![false; 2],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_vectors",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vector_aggregate_exprs(),
+                    distinct: vec![false; 2],
                     output: AggregateOutput::Final,
                 },
             },

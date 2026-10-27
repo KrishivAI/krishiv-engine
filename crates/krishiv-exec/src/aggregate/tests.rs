@@ -1473,6 +1473,7 @@ async fn first_and_last_pick_rows_in_input_order() {
     );
 }
 
+mod collect;
 mod simple;
 
 #[test]

@@ -10,7 +10,7 @@ use krishiv_common::error::{
     SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{ArrayType, DataType, DecimalType};
 
 use super::{Aggregate, Execution};
 use crate::signature::{
@@ -638,6 +638,58 @@ fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     min_max(c)
 }
 
+/// `collect_list(x)`, `collect_set(x)`, `array_agg(x)`: an array of the
+/// input's type, never NULL (an empty group is `[]`; NULL elements are
+/// skipped by the executor). Spark names `array_agg`'s column
+/// `collect_list(...)`, so the analyzer resolves it as `collect_list`
+/// (see `krishiv_plan::analyzer`).
+fn collect(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let element = c.data_type(0).cloned().unwrap_or(DataType::Null);
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(element, false).into()),
+        false,
+    ))
+}
+
+/// `vector_sum(x)` / `vector_avg(x)`: element-wise aggregates over
+/// `ARRAY<FLOAT>` only. Any other type is Spark's
+/// `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (no implicit cast is
+/// declared, so the check below sees the written type, as `ntile`'s
+/// bucket check does). The result is an array of `float`, NULL for no
+/// non-NULL vector.
+fn vector(c: &CallTypes<'_>, name: &str) -> Result<ArgType, KrishivError> {
+    let is_floats = matches!(
+        c.data_type(0),
+        Some(DataType::Array(a)) if *a.element_type() == DataType::Float
+    );
+    if !is_floats {
+        let input = c
+            .data_type(0)
+            .map_or_else(|| "VOID".to_owned(), DataType::sql);
+        let sql = |i: usize| c.sql(i).unwrap_or_default();
+        return Err(DatatypeMismatchUnexpectedInputType {
+            sql_expr: format!("\"{name}({})\"", sql(0)),
+            param_index: "first".to_owned(),
+            required_type: "\"ARRAY<FLOAT>\"".to_owned(),
+            input_sql: format!("\"{}\"", sql(0)),
+            input_type: format!("\"{input}\""),
+        }
+        .into());
+    }
+    Ok(ArgType::new(
+        DataType::Array(ArrayType::new(DataType::Float, false).into()),
+        true,
+    ))
+}
+
+fn vector_sum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    vector(c, "vector_sum")
+}
+
+fn vector_avg(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    vector(c, "vector_avg")
+}
+
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
@@ -675,6 +727,14 @@ fn aggregates() -> Vec<Spec> {
         aggregate("any", boolean_arg(), nullable_boolean, Aggregate::Max),
         aggregate("max_by", Inputs::Any, by, Aggregate::MaxBy),
         aggregate("min_by", Inputs::Any, by, Aggregate::MinBy),
+        // The collect and vector aggregates take any single argument with
+        // no implicit casts (the vector ones check the type themselves);
+        // `array_agg` is `collect_list` under Spark's display name.
+        aggregate("collect_list", Inputs::Any, collect, Aggregate::CollectList),
+        aggregate("collect_set", Inputs::Any, collect, Aggregate::CollectSet),
+        aggregate("array_agg", Inputs::Any, collect, Aggregate::CollectList),
+        aggregate("vector_sum", Inputs::Any, vector_sum, Aggregate::VectorSum),
+        aggregate("vector_avg", Inputs::Any, vector_avg, Aggregate::VectorAvg),
     ]
 }
 

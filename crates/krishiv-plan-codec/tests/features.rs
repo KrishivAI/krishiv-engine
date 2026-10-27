@@ -303,6 +303,18 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         )),
         None
     );
+    assert_eq!(
+        feature_of(Construct::Aggregate(
+            krishiv_exec::aggregate::AggregateFunction::CollectSet
+        )),
+        Some(Feature::CollectAggregates)
+    );
+    assert_eq!(
+        feature_of(Construct::Aggregate(
+            krishiv_exec::aggregate::AggregateFunction::VectorAvg
+        )),
+        Some(Feature::CollectAggregates)
+    );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
     use krishiv_exec::window::{FrameBound, FrameUnits, WindowFrame};
@@ -403,6 +415,24 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         err,
         CodecError::UnsupportedFeatures {
             missing: vec!["lambda_functions".to_owned()]
+        }
+    );
+    // A reader without `collect_aggregates` refuses the collect plan
+    // naming the feature.
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "aggregate_collects")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::NestedTypes]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["collect_aggregates".to_owned()]
         }
     );
 }
