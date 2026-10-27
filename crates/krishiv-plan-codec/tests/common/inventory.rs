@@ -740,7 +740,14 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             "write_files",
             PhysNode::WriteFiles {
                 input: boxed(scan()),
-                write: write_plan(),
+                write: None,
+            },
+        ),
+        (
+            "write_files_with_plan",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(write_plan()),
             },
         ),
         (

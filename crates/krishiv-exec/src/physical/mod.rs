@@ -335,12 +335,16 @@ pub enum PhysNode {
     /// file sink from `(write, task partition, task attempt)` with the
     /// worker's own I/O context, so the same plan bytes run on every
     /// worker. The task number in file names is the partition index.
+    /// `None` is a plan written before the `write_plan` feature: it
+    /// encodes exactly as before (no `write` field) and lists no feature,
+    /// and instantiation refuses it.
     WriteFiles {
         /// The rows to write.
         input: Box<PhysNode>,
         /// What to write: format, options (secret references only),
-        /// store, directory, job id and file limits. Plain data.
-        write: WritePlan,
+        /// store, directory, job id and file limits. Plain data; absent
+        /// in plans that predate the `write_plan` feature.
+        write: Option<WritePlan>,
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
@@ -780,7 +784,7 @@ impl PhysicalPlan {
             schema: WritePlan::result_schema(),
             root: Arc::new(PhysNode::WriteFiles {
                 input: Box::new(root),
-                write,
+                write: Some(write),
             }),
             explain,
             warnings: self.warnings,

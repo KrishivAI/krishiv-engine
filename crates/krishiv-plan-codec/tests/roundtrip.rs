@@ -157,7 +157,7 @@ fn write_with(options: BTreeMap<String, OptionValue>) -> PhysicalPlan {
     write.options = options;
     plan_of(PhysNode::WriteFiles {
         input: Box::new(inventory::scan()),
-        write,
+        write: Some(write),
     })
 }
 
@@ -213,7 +213,7 @@ fn a_write_plan_with_a_url_with_credentials_is_refused_without_naming_it() {
 fn a_reader_without_write_plan_refuses_the_plan_by_name() {
     let (_, plan) = cases()
         .into_iter()
-        .find(|(n, _)| n == "write_files")
+        .find(|(n, _)| n == "write_files_with_plan")
         .unwrap();
     assert!(plan_features(&plan).contains(&Feature::WritePlan));
     let bytes = encode(&plan).unwrap();
@@ -230,7 +230,7 @@ fn a_reader_without_write_plan_refuses_the_plan_by_name() {
 
 #[test]
 fn a_write_plan_without_a_format_or_job_id_is_corrupt() {
-    let m = message("write_files");
+    let m = message("write_files_with_plan");
     let edit = |f: &dyn Fn(&mut pb::WritePlan)| {
         let mut m = m.clone();
         for node in &mut m.nodes {
@@ -250,13 +250,39 @@ fn a_write_plan_without_a_format_or_job_id_is_corrupt() {
         &edit(&|w| w.job_uuid.clear()),
         "a write plan without a job id",
     );
-    let mut missing = message("write_files");
+    // An absent `write` is a plan written before the `write_plan`
+    // feature, not corruption: it decodes to the legacy plan.
+    let mut missing = message("write_files_with_plan");
     for node in &mut missing.nodes {
         if let Some(pb::node::Kind::WriteFiles(w)) = &mut node.kind {
             w.write = None;
         }
     }
-    corrupt(&missing, "the write plan is missing");
+    missing.features.retain(|f| f != "write_plan");
+    missing.min_reader_version = MIN_READER_VERSION;
+    let (_, legacy) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "write_files")
+        .unwrap();
+    assert_eq!(decode(&missing.encode_to_vec()).unwrap(), legacy);
+}
+
+#[test]
+fn a_write_without_a_write_plan_is_the_baseline() {
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "write_files")
+        .unwrap();
+    assert!(plan_features(&plan).is_empty());
+    let m = to_message(&plan).unwrap();
+    assert!(m.features.is_empty());
+    assert_eq!(m.min_reader_version, MIN_READER_VERSION);
+    for node in &m.nodes {
+        if let Some(pb::node::Kind::WriteFiles(w)) = &node.kind {
+            assert!(w.write.is_none());
+        }
+    }
+    assert_eq!(round_trip(&plan), plan);
 }
 
 #[test]
@@ -409,7 +435,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "exchange_hash_key_group"
             | "window_frames"
             | "window_offset_values"
-            | "write_files" => POST_MIGRATION_READER_VERSION,
+            | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");

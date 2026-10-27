@@ -553,7 +553,13 @@ impl Instantiation<'_> {
     /// number in file names is the partition index; attempt 0 names files
     /// exactly as before, and attempt `k > 0` appends `_<k>` to the job-id
     /// segment, so a late attempt can never overwrite a committed file.
-    fn write_files(&mut self, input: &PhysNode, write: &WritePlan) -> Result<Built> {
+    fn write_files(&mut self, input: &PhysNode, write: &Option<WritePlan>) -> Result<Built> {
+        let Some(write) = write else {
+            return Err(internal(
+                "a write without a write plan (written by a writer before the write_plan feature)"
+                    .to_owned(),
+            ));
+        };
         let io = self
             .worker
             .io
@@ -571,8 +577,9 @@ impl Instantiation<'_> {
                 write.format
             )));
         };
-        let fallback = Config::new();
-        let config = self.worker.config.as_deref().unwrap_or(&fallback);
+        let Some(config) = self.worker.config.as_deref() else {
+            return Err(internal("a write without a configuration".to_owned()));
+        };
         let (options, _) = format.options().parse(&write.options, config)?;
         let input = self.node(input)?;
         let sink = Arc::new(FileWriteSink::try_new(
