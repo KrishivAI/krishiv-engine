@@ -1484,7 +1484,14 @@ impl SqlFrontend for Frontend {
                 origin: Origin::UNKNOWN,
             });
         }
-        Plan::try_new(QUERIES[5]()).map_err(|error| AnalysisError {
+        // `gone` names a missing table: the unused-CTE table check reads it
+        // from the lowered plan Bind stores, without ever resolving it.
+        let plan = if query == "gone" {
+            LogicalPlan::table(["gone"]).project(vec![c("a")])
+        } else {
+            QUERIES[5]()
+        };
+        Plan::try_new(plan).map_err(|error| AnalysisError {
             error,
             origin: Origin::UNKNOWN,
         })
@@ -3515,6 +3522,36 @@ fn having_and_order_by_prefer_grouping_over_duplicate_outputs() {
     assert_eq!(params.get("proposal").map(String::as_str), Some("`a`, `a`"));
 }
 
+/// `ORDER BY` over an aggregate with an unknown column stays unresolved:
+/// with no grouping attribute of that name either, the lookup error passes
+/// through unchanged (Spark 4.2.0 reports `UNRESOLVED_COLUMN`, proposing
+/// the aggregate's outputs).
+#[test]
+fn order_by_unknown_column_over_aggregate_is_unresolved() {
+    let ctx = ctx();
+    // `SELECT a FROM t GROUP BY a ORDER BY missing`: `missing` is neither
+    // an output nor a grouping attribute.
+    let order = LogicalPlan::table(["t"])
+        .aggregate(vec![c("a")], vec![c("a")])
+        .sort(vec![crate::SortOrder::asc(c("missing"))]);
+    let e = run(order, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(
+        params.get("objectName").map(String::as_str),
+        Some("`missing`")
+    );
+    assert_eq!(params.get("proposal").map(String::as_str), Some("`a`"));
+}
+
 /// `ORDER BY` over duplicate select outputs looks below them (existing
 /// leniency): with a single input column of that name it resolves there,
 /// otherwise it stays ambiguous rather than unresolved.
@@ -4037,27 +4074,6 @@ fn order_by_through_having_reports_duplicates_as_unresolved() {
 /// the node's reads live in the lowered plan, which the
 /// unused-definition walk follows. An unused `Sql` over existing tables
 /// passes.
-struct MissingSql;
-
-impl SqlFrontend for MissingSql {
-    fn lower(&self, _query: &str, _: SourceId) -> Result<Plan, AnalysisError> {
-        Plan::try_new(LogicalPlan::table(["gone"]).project(vec![c("a")])).map_err(|error| {
-            AnalysisError {
-                error,
-                origin: Origin::UNKNOWN,
-            }
-        })
-    }
-
-    fn redact(&self, query: &str) -> RedactedSql {
-        RedactedSql::opaque(query)
-    }
-
-    fn fingerprint(&self) -> u64 {
-        11
-    }
-}
-
 #[test]
 fn unused_cte_sql_tables_are_checked() {
     // An unused definition holding SQL text over existing tables passes:
@@ -4078,13 +4094,13 @@ fn unused_cte_sql_tables_are_checked() {
     // The same shape over a missing table fails with
     // `TABLE_OR_VIEW_NOT_FOUND` at the lowered read.
     let mut bad_ctx = ctx();
-    bad_ctx.sql = Some(Arc::new(MissingSql));
+    bad_ctx.sql = Some(Arc::new(Frontend));
     let unused_missing = LogicalPlan::new(PlanNode::WithCte {
         input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
         ctes: vec![Cte {
             name: "u".to_owned(),
             plan: Arc::new(LogicalPlan::new(PlanNode::Sql {
-                query: "anything".to_owned(),
+                query: "gone".to_owned(),
                 args: SqlArgs::None,
             })),
         }],
