@@ -27,9 +27,9 @@ use krishiv_exec::{
     ExecConfig, Executor, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler,
     TokioExecutor, WorkloadClass,
 };
-use krishiv_io::csv::CsvFormat;
-use krishiv_io::parquet::ParquetFormat;
-use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
+use krishiv_io::{
+    DirectoryWrite, FormatRegistry, IoConfig, IoScheduler, SaveMode, StoreId, is_spark_file_source,
+};
 use krishiv_memory::{
     MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager, SpillScope, TreePool,
 };
@@ -108,7 +108,7 @@ pub(crate) struct SessionState {
     /// execution (`krishiv.spill.*` are build-time keys).
     spill: Mutex<Option<SpillManager>>,
     io: Arc<IoScheduler>,
-    formats: Vec<Arc<dyn FileFormat>>,
+    formats: Arc<FormatRegistry>,
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
     /// instead of reading rows from the plan.
@@ -262,7 +262,7 @@ impl SessionBuilder {
                 relations: RelationStore::new(),
                 spill: Mutex::new(None),
                 io,
-                formats: vec![Arc::new(ParquetFormat), Arc::new(CsvFormat)],
+                formats: Arc::new(FormatRegistry::with_defaults()),
                 cwd,
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
@@ -588,7 +588,7 @@ impl Session {
         let (config, conf_version) = self.state.conf.versioned_snapshot();
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
-            self.state.formats.clone(),
+            Arc::clone(&self.state.formats),
             Arc::new(LocalPaths::new(
                 StoreId::new(LOCAL_STORE),
                 self.state.cwd.clone(),
@@ -850,17 +850,17 @@ impl Session {
             .into());
         }
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
-        let Some(format) = self
-            .state
-            .formats
-            .iter()
-            .find(|f| f.name().eq_ignore_ascii_case(&format))
-            .cloned()
-        else {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!("writing the {format} format"),
+        let format = match self.state.formats.get(&format) {
+            Ok(format) => format,
+            Err(e) => {
+                if is_spark_file_source(&format) {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!("writing the {format} format"),
+                    }
+                    .into());
+                }
+                return Err(e);
             }
-            .into());
         };
         let (parsed, _) = format.options().parse(&options, &env.config)?;
         let Some(text) = path.as_plain() else {
