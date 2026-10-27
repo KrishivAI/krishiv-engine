@@ -43,6 +43,7 @@
 
 pub(crate) mod data;
 mod instantiate;
+pub mod splits;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -63,6 +64,11 @@ pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instant
 pub(crate) use instantiate::{
     Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, group_limit_op,
     hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op, top_n_op,
+};
+pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
+pub use splits::{
+    ScanSplits, SplitFileRef, assign_batch_splits, assign_file_splits, deal_ranges, files_of,
+    partitions_of, plan_file_partitions,
 };
 
 use crate::aggregate::{AggregateExpr, AggregateOutput};

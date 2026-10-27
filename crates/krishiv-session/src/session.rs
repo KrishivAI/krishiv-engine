@@ -30,7 +30,9 @@ use krishiv_exec::{
 use krishiv_io::csv::CsvFormat;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
-use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
+use krishiv_memory::{
+    MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager, SpillScope, TreePool,
+};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, BuiltinFunctions,
@@ -107,6 +109,10 @@ pub(crate) struct SessionState {
     spill: Mutex<Option<SpillManager>>,
     io: Arc<IoScheduler>,
     formats: Vec<Arc<dyn FileFormat>>,
+    /// The session's content-addressed relations: every memory table's
+    /// batches as Arrow IPC, so workers resolve a batch range through it
+    /// instead of reading rows from the plan.
+    relations: Arc<RelationStore>,
     cwd: String,
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
@@ -253,6 +259,7 @@ impl SessionBuilder {
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
+                relations: RelationStore::new(),
                 spill: Mutex::new(None),
                 io,
                 formats: vec![Arc::new(ParquetFormat), Arc::new(CsvFormat)],
@@ -454,9 +461,11 @@ impl Session {
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no
     /// equivalent of; `INTERNAL_ERROR` when a batch does not have `schema`;
-    /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with the
-    /// reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any letter
-    /// case), which queries cannot spell either.
+    /// `UNABLE_TO_ACQUIRE_MEMORY` when the relation store cannot hold the
+    /// batches' bytes (its pool is unbounded, so only a shut-down pool
+    /// refuses); `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with
+    /// with the reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any
+    /// letter case), which queries cannot spell either.
     pub fn register_batches(
         &self,
         name: &str,
@@ -483,8 +492,15 @@ impl Session {
                 b.schema()
             )));
         }
-        let batches = batches.into_iter().map(Batch::new).collect();
-        let table = krishiv_exec::planner::MemoryTable::new(schema, batches);
+        let batches: Vec<Batch> = batches.into_iter().map(Batch::new).collect();
+        // The batches as content-addressed IPC in the session's store: the
+        // table's scans split into batch ranges that workers resolve
+        // through it. The table holds the lease but not the batches, so
+        // they live once, memory-accounted; the lease releases the entry
+        // when the table is dropped or replaced.
+        let rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
+        let lease = self.state.relations.insert(&schema, &batches)?;
+        let table = krishiv_exec::planner::MemoryTable::from_lease(schema, rows, lease);
         self.state.catalog.put(
             name,
             TempTable::Memory {
@@ -722,6 +738,48 @@ impl Session {
             .await
     }
 
+    /// Runs `physical` as `task` in this process (tests): the worker of
+    /// [`Self::worker`] instantiating with the task's scan splits, executed
+    /// on the session's executor (I/O needs its runtime).
+    #[cfg(test)]
+    pub(crate) async fn run_task(
+        &self,
+        physical: &PhysicalPlan,
+        env: &QueryEnv,
+        task: &krishiv_exec::physical::TaskSpec,
+    ) -> Result<Vec<RecordBatch>, KrishivError> {
+        use krishiv_exec::physical::instantiate_task;
+        let worker = self.worker(env);
+        let node = instantiate_task(physical, &worker, task)?;
+        let state = Arc::clone(&self.state);
+        let config = Arc::clone(&env.config);
+        self.on_executor(async move {
+            let id = QueryId(state.query_ids.fetch_add(1, Ordering::Relaxed));
+            let pool = state.memory.child(&format!("query-task-{}", id.0), None);
+            let query = QueryContext::new(
+                id,
+                WorkloadClass::Interactive,
+                ExecConfig::from_config(&config),
+                pool,
+            );
+            let mut stream = state.runner.execute(node, Arc::clone(&query)).await?;
+            let mut out = Vec::new();
+            while let Some(batch) = stream.next().await {
+                out.push(batch?.into_parts().0);
+            }
+            query.finished().await;
+            Ok(out)
+        })
+        .await
+    }
+
+    /// The session's relation store (tests): every registered memory
+    /// table's batches as content-addressed IPC.
+    #[cfg(test)]
+    pub(crate) fn relations(&self) -> &Arc<RelationStore> {
+        &self.state.relations
+    }
+
     /// Runs `physical` instantiated with `worker`.
     async fn run_on(
         &self,
@@ -928,11 +986,13 @@ impl Session {
     /// What a query's plans are instantiated with in this process: the
     /// query's tables, and its spill scope under the session's spill
     /// directory (created at instantiation). Writes build their sink from
-    /// the plan with the query's I/O context, formats and configuration.
+    /// the plan with the query's I/O context, formats and configuration;
+    /// batch splits resolve through the session's relation store.
     fn worker(&self, env: &QueryEnv) -> WorkerContext {
         WorkerContext::new(
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
         )
+        .with_relations(Arc::clone(&self.state.relations))
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
             config: Arc::clone(&env.config),

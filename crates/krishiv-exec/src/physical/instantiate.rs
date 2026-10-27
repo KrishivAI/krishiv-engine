@@ -28,7 +28,7 @@
 //! Every one of them is the identity on the rows a worker computes from
 //! the whole input, so an exchange instantiates as its input.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
@@ -43,7 +43,8 @@ use object_store::path::Path;
 
 use super::{
     AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanNode, SubqueryPlan, WritePlan,
+    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SubqueryPlan, WritePlan, files_of,
+    partitions_of,
 };
 use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
 use crate::error::{Result, internal};
@@ -54,7 +55,8 @@ use crate::join::{
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, NullOf, Predicate, Project,
-    ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdowns, Sort, SortKey, TopN,
+    ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown, ScanPushdowns, Sort,
+    SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
@@ -75,12 +77,13 @@ pub trait SpillScopes: Send + Sync + fmt::Debug {
 }
 
 /// What a worker resolves a plan's references against: the tables its
-/// scans read, the spill scope of the query, and the I/O context, formats
-/// and configuration a write builds its sink from. One per query and
-/// worker.
+/// scans read, the relation store its batch splits resolve through, the
+/// spill scope of the query, and the I/O context, formats and configuration
+/// a write builds its sink from. One per query and worker.
 #[derive(Clone)]
 pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
+    relations: Option<Arc<krishiv_memory::RelationStore>>,
     spill: Option<SpillScope>,
     scopes: Option<Arc<dyn SpillScopes>>,
     io: Option<IoContext>,
@@ -89,11 +92,12 @@ pub struct WorkerContext {
 }
 
 /// Which task of a stage instantiates a plan fragment: the stage, its
-/// attempt, and the partition within it. The same fragment bytes run on
-/// every worker; the task tells instantiation which partition's files a
-/// write names and which attempt's suffix keeps a retry from overwriting a
-/// committed file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// attempt, and the partition within it, with the scan splits of the tasks
+/// that read them. The same fragment bytes run on every worker; the task
+/// tells instantiation which partition's files a write names, which
+/// attempt's suffix keeps a retry from overwriting a committed file, and
+/// which splits each scan reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSpec {
     /// The stage.
     pub stage: u32,
@@ -105,11 +109,15 @@ pub struct TaskSpec {
     pub partitions: u32,
     /// The task attempt (0 is the first try).
     pub attempt: u32,
+    /// The splits each scan of the fragment reads, by scan id. A scan
+    /// without an entry plans its own splits exactly as today, so
+    /// single-process behaviour is unchanged.
+    pub scans: BTreeMap<ScanId, ScanSplits>,
 }
 
 impl TaskSpec {
-    /// Partition 0 of 1, attempt 0: what a plan instantiated without a
-    /// distributed scheduler runs as.
+    /// Partition 0 of 1, attempt 0, reading every scan whole: what a plan
+    /// instantiated without a distributed scheduler runs as.
     #[must_use]
     pub fn whole() -> Self {
         Self {
@@ -118,6 +126,7 @@ impl TaskSpec {
             partition: 0,
             partitions: 1,
             attempt: 0,
+            scans: BTreeMap::new(),
         }
     }
 }
@@ -127,12 +136,22 @@ impl WorkerContext {
     pub fn new(tables: Arc<dyn TableProviderResolver>) -> Self {
         Self {
             tables,
+            relations: None,
             spill: None,
             scopes: None,
             io: None,
             formats: Vec::new(),
             config: None,
         }
+    }
+
+    /// The same context resolving a scan's batch splits (the
+    /// [`ScanSplits::Batches`] of its task) through `relations`: the
+    /// session's relation store.
+    #[must_use]
+    pub fn with_relations(mut self, relations: Arc<krishiv_memory::RelationStore>) -> Self {
+        self.relations = Some(relations);
+        self
     }
 
     /// The same context spilling into `scope` (one per query).
@@ -179,12 +198,18 @@ impl WorkerContext {
     pub fn spill(&self) -> Option<&SpillScope> {
         self.spill.as_ref()
     }
+
+    /// The relation store, if batch splits resolve through one.
+    pub fn relations(&self) -> Option<&Arc<krishiv_memory::RelationStore>> {
+        self.relations.as_ref()
+    }
 }
 
 impl fmt::Debug for WorkerContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WorkerContext")
             .field("tables", &self.tables)
+            .field("relations", &self.relations.is_some())
             .field("spill", &self.spill.is_some())
             .field("spill_scopes", &self.scopes.is_some())
             .field("io", &self.io.is_some())
@@ -218,7 +243,7 @@ pub fn instantiate_task(
         };
         let mut cx = Instantiation {
             worker,
-            task: *task,
+            task: task.clone(),
             spill,
             env: EvalEnv::from_plan(plan.env()),
             filters: HashMap::new(),
@@ -515,6 +540,7 @@ impl Instantiation<'_> {
 
     fn scan(&self, s: &ScanNode) -> Result<Built> {
         let factory = self.worker.tables.provider(&s.scan)?.scan()?;
+        let factory = self.splits(s.id, factory)?;
         let table = factory.table_schema();
         let mut filters = Vec::new();
         if let Some(f) = &s.filter {
@@ -545,6 +571,42 @@ impl Instantiation<'_> {
             schema: source.schema(),
             node: Arc::new(SourceNode(source)),
         })
+    }
+
+    /// The scan factory with this task's splits applied: the listed files
+    /// and partitions for a file split (reads stay pinned to the listed
+    /// versions), or the batch range of the resolved relation for a batch
+    /// split. A scan the task names nothing for builds exactly as today.
+    fn splits(&self, id: ScanId, factory: Arc<dyn ScanPushdown>) -> Result<Arc<dyn ScanPushdown>> {
+        let Some(splits) = self.task.scans.get(&id) else {
+            return Ok(factory);
+        };
+        match splits {
+            ScanSplits::Files { .. } => {
+                let partitions = partitions_of(splits)?;
+                factory.with_file_splits(files_of(splits)?, partitions)
+            }
+            ScanSplits::Batches { relation, range } => {
+                let Some(store) = &self.worker.relations else {
+                    return Err(internal(
+                        "a batch split without a relation store".to_owned(),
+                    ));
+                };
+                let resolved = store.resolve(&relation.hash)?;
+                let batches = resolved
+                    .get(range.clone())
+                    .ok_or_else(|| {
+                        internal(format!(
+                            "a batch split of {}..{} over {} batches",
+                            range.start,
+                            range.end,
+                            resolved.len()
+                        ))
+                    })?
+                    .to_vec();
+                factory.with_memory_batches(batches)
+            }
+        }
     }
 
     /// The file write of `write` over `input`, as task `self.task` runs

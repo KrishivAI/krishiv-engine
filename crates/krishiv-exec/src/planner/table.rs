@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
 use krishiv_common::error::{KrishivUnsupportedFeature, TableOrViewNotFound};
+use krishiv_memory::RelationLease;
 use krishiv_optimizer::{Statistics, TableStats};
 use krishiv_plan::{ReadSource, Scan};
 use krishiv_types::batch::Batch;
@@ -58,8 +59,16 @@ impl Statistics for ProviderStatistics {
 #[derive(Debug, Clone)]
 pub struct MemoryTable {
     schema: SchemaRef,
+    /// The batches, when the table owns them. Tables registered with a
+    /// relation store hold none: their scans resolve the lease's batches
+    /// through the store, so the batches live once, as content-addressed
+    /// IPC, instead of twice.
     batches: Vec<Batch>,
     statistics: Option<TableStats>,
+    /// The relation store lease: the batches as content-addressed IPC, so
+    /// workers resolve a batch range through the store instead of reading
+    /// rows from the plan. Tables built without a store (tests) have none.
+    relation: Option<RelationLease>,
 }
 
 impl MemoryTable {
@@ -73,6 +82,23 @@ impl MemoryTable {
                 rows,
                 ..TableStats::default()
             }),
+            relation: None,
+        }
+    }
+
+    /// A table of `rows` rows (of `schema`) whose batches live only in the
+    /// relation store: scans resolve them through `lease`. The session
+    /// registers memory tables this way, so the batches live once,
+    /// memory-accounted, instead of both in the table and in the store.
+    pub fn from_lease(schema: SchemaRef, rows: u64, lease: RelationLease) -> Self {
+        Self {
+            schema,
+            batches: Vec::new(),
+            statistics: Some(TableStats {
+                rows,
+                ..TableStats::default()
+            }),
+            relation: Some(lease),
         }
     }
 
@@ -82,10 +108,35 @@ impl MemoryTable {
         self.statistics = statistics;
         self
     }
+
+    /// The same table resolving its batch splits through `lease`: the
+    /// session's relation store entry of its batches.
+    #[must_use]
+    pub fn with_relation(mut self, lease: RelationLease) -> Self {
+        self.relation = Some(lease);
+        self
+    }
+
+    /// The relation store lease, if the table was registered with one.
+    #[must_use]
+    pub fn relation_lease(&self) -> Option<&RelationLease> {
+        self.relation.as_ref()
+    }
 }
 
 impl TableProvider for MemoryTable {
     fn scan(&self) -> Result<Arc<dyn ScanPushdown>> {
+        // A leased table's batches live in the relation store: resolve
+        // them through it, so scans read the stored copy. Anything else
+        // reads the held batches.
+        if let Some(lease) = &self.relation {
+            let store = lease.store();
+            let batches = store.resolve(&lease.hash())?;
+            return Ok(Arc::new(MemoryScan::try_new(
+                Arc::clone(&self.schema),
+                batches,
+            )?));
+        }
         Ok(Arc::new(MemoryScan::try_new(
             Arc::clone(&self.schema),
             self.batches.clone(),

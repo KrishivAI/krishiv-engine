@@ -21,6 +21,7 @@ mod physical;
 mod runtime_filters;
 mod scan_row_drop;
 mod semantics;
+mod splits;
 mod sum_rewrite;
 mod tpch;
 mod union;
