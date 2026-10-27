@@ -3973,3 +3973,62 @@ fn group_by_with_subquery_keys_resolves() {
         .aggregate(vec![c("a"), sub], vec![c("a"), f("count", vec![star()])]);
     run(plan, &ctx).unwrap();
 }
+
+/// `ORDER BY` over a `HAVING` filter resolves through the filter to the
+/// aggregate below it: duplicate select-list names are looked up below
+/// with leniency first, and when that is ambiguous too the aggregate's
+/// grouping attributes still get their try. A `HAVING` that grew the
+/// aggregate leaves a projection the sort never resolves through, and
+/// without a grouping column of the name the duplicates stay
+/// `UNRESOLVED_COLUMN` (as over the aggregate directly).
+#[test]
+fn order_by_through_having_reports_duplicates_as_unresolved() {
+    let ctx = ctx();
+    // `SELECT 1 AS z, 2 AS z, a FROM t GROUP BY a HAVING a > 0 ORDER BY z`:
+    // the `HAVING` needs nothing new (no growth), so the sort retries
+    // through the filter against the aggregate, whose grouping has no `z`:
+    // unresolved, proposing the duplicate outputs.
+    let through = LogicalPlan::table(["t"])
+        .aggregate(
+            vec![c("a")],
+            vec![int(1).alias("z"), int(2).alias("z"), c("a")],
+        )
+        .filter(gt(c("a"), int(0)))
+        .sort(vec![crate::SortOrder::asc(c("z"))]);
+    let e = run(through, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("objectName").map(String::as_str), Some("`z`"));
+    assert_eq!(
+        params.get("proposal").map(String::as_str),
+        Some("`z`, `z`, `a`")
+    );
+    // `SELECT 1 AS a, 2 AS a FROM t GROUP BY b HAVING b = 'x' ORDER BY a`:
+    // the `HAVING` grows the aggregate (a projection the sort never
+    // resolves through), and no grouping column is named `a`: unresolved.
+    let grown = LogicalPlan::table(["t"])
+        .aggregate(vec![c("b")], vec![int(1).alias("a"), int(2).alias("a")])
+        .filter(eq(c("b"), s("x")))
+        .sort(vec![crate::SortOrder::asc(c("a"))]);
+    let e = run(grown, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("objectName").map(String::as_str), Some("`a`"));
+    assert_eq!(params.get("proposal").map(String::as_str), Some("`a`, `a`"));
+}
