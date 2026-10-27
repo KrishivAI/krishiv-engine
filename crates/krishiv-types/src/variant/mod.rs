@@ -14,9 +14,11 @@
 //!
 //! # Verified behaviour (live Spark 4.2.0 probes, 2026)
 //!
-//! * Metadata header `0x01 | ((offset_width - 1) << 6)`; object headers carry
+//! * Metadata header `0x01 | (sorted_strings << 4) | ((offset_width - 1) << 6)`
+//!   (bit 5 reserved); object headers carry
 //!   the offset width, field-id width and `is_large` bit; arrays likewise
-//!   without field ids.
+//!   without field ids. Sorted-flagged dictionaries hold strictly increasing
+//!   keys.
 //! * Object field ids are ordered by key bytes with values in input order;
 //!   offsets are per-field starts plus the total, and are *not* monotonic.
 //! * Integers prefer the smallest int8/16/32/64 that fits; larger integers
@@ -28,8 +30,8 @@
 //!   `VARIANT_SIZE_LIMIT` (size limit rendered as `128.0 MiB`).
 //! * Deliberate divergences from Spark are documented on the items involved:
 //!   the reader rejects trailing bytes and out-of-range ids that Spark's lax
-//!   validator accepts; the builder imposes no nesting-depth cap (Jackson
-//!   allows 1000); non-ASCII literal terminators approximate Java's
+//!   validator accepts; the builder shares Spark's 1000-level nesting cap;
+//!   non-ASCII literal terminators approximate Java's
 //!   identifier rule (ASCII, `$` included, is exact).
 //!
 //! # Unverified

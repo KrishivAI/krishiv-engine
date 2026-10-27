@@ -3,10 +3,12 @@
 //!
 //! The parser is a hand-written single-pass tokenizer (no new dependencies;
 //! number lexemes are kept exact) driving an explicit frame stack, so
-//! arbitrarily deep documents cannot overflow the call stack. Values are
-//! appended to one buffer; closing a container splices its header, id and
-//! offset tables in front of its data. Memory stays proportional to the
-//! input, and the value buffer is capped at [`VARIANT_SIZE_LIMIT`].
+//! arbitrarily deep documents cannot overflow the call stack. Nesting past
+//! [`MAX_NESTING_DEPTH`] levels fails like Spark 4.2.0, which caps nesting at
+//! 1000. Values are appended to one buffer; closing a container splices its
+//! header, id and offset tables in front of its data. Memory stays
+//! proportional to the input, and the value buffer is capped at
+//! [`VARIANT_SIZE_LIMIT`].
 
 use std::collections::{HashMap, HashSet};
 
@@ -16,6 +18,10 @@ use krishiv_common::error::{
 
 use super::VARIANT_SIZE_LIMIT;
 use crate::error::Result;
+
+/// Maximum nesting depth of arrays and objects, matching Spark 4.2.0's
+/// `parse_json` (depth 1000 succeeds, depth 1001 fails).
+const MAX_NESTING_DEPTH: usize = 1000;
 
 /// Builds the builder's malformed-input error:
 /// `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION` with Spark's parameters
@@ -135,7 +141,8 @@ impl VariantBuilder {
     ///
     /// # Errors
     ///
-    /// `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION` for malformed input,
+    /// `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION` for malformed input
+    /// (including nesting past 1000 levels),
     /// `VARIANT_SIZE_LIMIT` when the value would exceed 128 MiB.
     pub fn from_json(text: &str) -> Result<(Vec<u8>, Vec<u8>), KrishivError> {
         let mut parser = Parser {
@@ -359,8 +366,12 @@ impl<'t> Parser<'t> {
     /// Opens a container frame, emitting a one-byte placeholder header that
     /// [`Self::close_frame`] replaces with the full tables. Offsets recorded
     /// while the frame is open stay valid because every splice happens at or
-    /// after the positions recorded so far.
+    /// after the positions recorded so far. Nesting past
+    /// [`MAX_NESTING_DEPTH`] levels is malformed, matching Spark 4.2.0.
     fn open_frame(&mut self, is_object: bool) -> Result<(), KrishivError> {
+        if self.stack.len() >= MAX_NESTING_DEPTH {
+            return Err(malformed(self.text));
+        }
         self.grow(1)?;
         let hdr = self.value.len();
         self.value.push(0x00);

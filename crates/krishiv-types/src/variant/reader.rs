@@ -40,8 +40,10 @@ fn malformed() -> KrishivError {
 const VERSION: u8 = 1;
 /// Mask of the version nibble in a metadata header byte.
 const VERSION_MASK: u8 = 0x0F;
-/// Reserved bits of a metadata header byte; must read zero.
-const METADATA_RESERVED_MASK: u8 = 0x30;
+/// Whether the dictionary keys are sorted and unique (bit 4).
+const METADATA_SORTED_MASK: u8 = 0x10;
+/// Reserved bits of a metadata header byte; must read zero (only bit 5).
+const METADATA_RESERVED_MASK: u8 = 0x20;
 
 /// The kind of a Variant value.
 ///
@@ -161,10 +163,12 @@ fn read_fixed<const N: usize>(bytes: &[u8], at: usize) -> Result<[u8; N], Krishi
 
 /// Parses and validates a metadata dictionary.
 ///
-/// Checks the version nibble (must be 1), the reserved bits (must be 0, so
-/// only headers `0x01`/`0x41`/`0x81`/`0xC1` pass), the offset width (1-4),
-/// and that the `dict_size + 1` offsets are present, start at 0, are
-/// monotonic and end exactly at the key bytes.
+/// Checks the version nibble (must be 1), the reserved bit (bit 5 must be 0;
+/// bit 4 is the `sorted_strings` flag, so headers like `0x11`/`0x51` pass),
+/// the offset width (1-4), and that the `dict_size + 1` offsets are present,
+/// start at 0, are monotonic and end exactly at the key bytes. When
+/// `sorted_strings` is set, the dictionary keys must additionally be strictly
+/// increasing by bytes (sorted and unique).
 fn parse_metadata(metadata: &[u8]) -> Result<MetadataView<'_>, KrishivError> {
     let header = *metadata.first().ok_or_else(malformed)?;
     if header & VERSION_MASK != VERSION || header & METADATA_RESERVED_MASK != 0 {
@@ -206,6 +210,23 @@ fn parse_metadata(metadata: &[u8]) -> Result<MetadataView<'_>, KrishivError> {
     }
     if previous != strings.len() {
         return Err(malformed());
+    }
+    if header & METADATA_SORTED_MASK != 0 {
+        let n = usize::try_from(dict_size).map_err(|_| malformed())?;
+        for i in 1..n {
+            let prev_start = read_table_u32(offsets, i - 1, offset_size)?;
+            let prev_end = read_table_u32(offsets, i, offset_size)?;
+            let cur_end = read_table_u32(
+                offsets,
+                i.checked_add(1).ok_or_else(malformed)?,
+                offset_size,
+            )?;
+            let prev = strings.get(prev_start..prev_end).ok_or_else(malformed)?;
+            let cur = strings.get(prev_end..cur_end).ok_or_else(malformed)?;
+            if prev >= cur {
+                return Err(malformed());
+            }
+        }
     }
     Ok(MetadataView {
         offset_size,
@@ -427,10 +448,16 @@ fn validate_exact(
                     9 => i128::from(i64::from_le_bytes(read_fixed(value, body)?)),
                     _ => i128::from_le_bytes(read_fixed(value, body)?),
                 };
-                VariantKind::Decimal {
-                    precision: decimal_precision(unscaled),
-                    scale,
+                let max: u8 = match header >> 2 {
+                    8 => 9,
+                    9 => 18,
+                    _ => 38,
+                };
+                let precision = decimal_precision(unscaled);
+                if precision > max || scale > max {
+                    return Err(malformed());
                 }
+                VariantKind::Decimal { precision, scale }
             }
             11 => VariantKind::Date,
             12 => VariantKind::Timestamp,
@@ -455,10 +482,21 @@ fn validate_exact(
     if kind == VariantKind::Object {
         let view = parse_container(value, pos, end, true)?;
         let count = usize::try_from(view.count).map_err(|_| malformed())?;
+        let mut previous: Option<&[u8]> = None;
         for i in 0..count {
-            if read_id_at(value, &view, i)? >= meta.dict_size {
+            let id = read_id_at(value, &view, i)?;
+            if id >= meta.dict_size {
                 return Err(malformed());
             }
+            // Field ids must be ordered by key bytes with unique keys; value
+            // offsets stay unconstrained (Spark emits values in input order).
+            let key = meta.key(id)?;
+            if let Some(prev) = previous
+                && prev >= key
+            {
+                return Err(malformed());
+            }
+            previous = Some(key);
         }
     }
     Ok(kind)
@@ -467,9 +505,11 @@ fn validate_exact(
 /// A validated borrow of one Variant value plus its shared dictionary.
 ///
 /// `new` checks the metadata (version 1, offset widths 1-4, monotonic
-/// dictionary offsets ending exactly at the key bytes) and the root value's
-/// framing (every id in dictionary range, every offset inside the declared
-/// total, exact consumption). Nested values are only validated when
+/// dictionary offsets ending exactly at the key bytes, sorted-flagged
+/// dictionaries strictly increasing) and the root value's framing (every id
+/// in dictionary range and ordered by key bytes with unique keys, every
+/// offset inside the declared total, decimals within their width bounds,
+/// exact consumption). Nested values are only validated when
 /// accessed. All bounds use checked arithmetic and fallible slicing, so
 /// malformed bytes surface as `MALFORMED_VARIANT`, never a panic.
 #[derive(Debug, Clone, Copy)]
@@ -659,42 +699,46 @@ impl<'a> VariantRef<'a> {
     }
 
     /// The field stored under `key`, via binary search over the field ids
-    /// (which are ordered by key bytes). Returns `None` when this is not an
-    /// object, the key is absent, or the field's bytes fail re-validation.
-    #[must_use]
-    pub fn get_field(&self, key: &str) -> Option<Self> {
+    /// (which are ordered by key bytes).
+    ///
+    /// # Errors
+    ///
+    /// `MALFORMED_VARIANT` when the object's bytes fail re-validation or a
+    /// present field's value bytes are malformed.
+    pub fn get_field(&self, key: &str) -> Result<Option<Self>, KrishivError> {
         if self.kind != VariantKind::Object {
-            return None;
+            return Ok(None);
         }
-        let view = self.view(true).ok()?;
-        let count = usize::try_from(view.count).ok()?;
-        let bound = view.data.checked_add(view.total)?;
+        let view = self.view(true)?;
+        let count = usize::try_from(view.count).map_err(|_| malformed())?;
+        let bound = view.data.checked_add(view.total).ok_or_else(malformed)?;
         let mut lo = 0_usize;
         let mut hi = count;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let id = read_id_at(self.value, &view, mid).ok()?;
+            let id = read_id_at(self.value, &view, mid)?;
             if id >= self.meta.dict_size {
-                return None;
+                return Err(malformed());
             }
-            let stored = self.meta.key(id).ok()?;
+            let stored = self.meta.key(id)?;
             match stored.cmp(key.as_bytes()) {
                 core::cmp::Ordering::Less => lo = mid + 1,
                 core::cmp::Ordering::Greater => hi = mid,
                 core::cmp::Ordering::Equal => {
                     let start = view
                         .data
-                        .checked_add(read_off_at(self.value, &view, mid).ok()?)?;
+                        .checked_add(read_off_at(self.value, &view, mid)?)
+                        .ok_or_else(malformed)?;
                     if start > bound {
-                        return None;
+                        return Err(malformed());
                     }
-                    let extent = value_extent(self.value, start, bound).ok()?;
-                    let end = start.checked_add(extent)?;
-                    return self.child(start, end).ok();
+                    let extent = value_extent(self.value, start, bound)?;
+                    let end = start.checked_add(extent).ok_or_else(malformed)?;
+                    return Ok(Some(self.child(start, end)?));
                 }
             }
         }
-        None
+        Ok(None)
     }
 
     /// Reads fixed-width payload bytes at `at`, mapping absence to

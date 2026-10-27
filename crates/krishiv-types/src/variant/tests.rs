@@ -215,20 +215,22 @@ fn spark_ground_truth_bytes() {
     assert_eq!(obj.field_key_at(0), Ok("a"));
     assert_eq!(obj.field_key_at(1), Ok("b"));
     assert_eq!(obj.field_key_at(2), Ok("c"));
-    assert_eq!(obj.get_field("b").unwrap().as_i64(), Ok(1));
-    let arr_a = obj.get_field("a").unwrap();
+    assert_eq!(obj.get_field("b").unwrap().unwrap().as_i64(), Ok(1));
+    let arr_a = obj.get_field("a").unwrap().unwrap();
     assert_eq!(arr_a.len(), Ok(4));
     assert_eq!(arr_a.get_index(1).unwrap().as_decimal(), Ok((25, 1)));
     assert_eq!(arr_a.get_index(2).unwrap().as_str(), Ok("x"));
     assert_eq!(
         obj.get_field("c")
             .unwrap()
+            .unwrap()
             .get_field("d")
+            .unwrap()
             .unwrap()
             .as_bool(),
         Ok(true)
     );
-    assert!(obj.get_field("missing").is_none());
+    assert!(obj.get_field("missing").unwrap().is_none());
     let obj2 = assert_bytes(
         "{\"a\":{\"a\":1},\"b\":[{\"a\":2}]}",
         "01020001026162",
@@ -237,7 +239,9 @@ fn spark_ground_truth_bytes() {
     assert_eq!(
         obj2.get_field("a")
             .unwrap()
+            .unwrap()
             .get_field("a")
+            .unwrap()
             .unwrap()
             .as_i64(),
         Ok(1)
@@ -245,9 +249,11 @@ fn spark_ground_truth_bytes() {
     assert_eq!(
         obj2.get_field("b")
             .unwrap()
+            .unwrap()
             .get_index(0)
             .unwrap()
             .get_field("a")
+            .unwrap()
             .unwrap()
             .as_i64(),
         Ok(2)
@@ -257,17 +263,19 @@ fn spark_ground_truth_bytes() {
         "0102000203c3a961",
         "020201000200090c0102010000020c02",
     );
-    assert_eq!(obj3.get_field("é").unwrap().as_i64(), Ok(1));
+    assert_eq!(obj3.get_field("é").unwrap().unwrap().as_i64(), Ok(1));
     assert_eq!(
         obj3.get_field("a")
             .unwrap()
+            .unwrap()
             .get_field("é")
+            .unwrap()
             .unwrap()
             .as_i64(),
         Ok(2)
     );
     let ctrl = assert_bytes("{\"k\":\"\\u0001\"}", "010100016b", "02010000020501");
-    assert_eq!(ctrl.get_field("k").unwrap().as_str(), Ok("\u{1}"));
+    assert_eq!(ctrl.get_field("k").unwrap().unwrap().as_str(), Ok("\u{1}"));
     // Trailing text after the first value is ignored.
     assert_bytes("{\"a\":1} x", "0101000161", "02010000020c01");
 }
@@ -512,7 +520,7 @@ fn container_size_boundaries() {
     );
     let back = VariantRef::new(&meta, &value).unwrap();
     assert_eq!(back.len(), Ok(300));
-    assert_eq!(back.get_field("k299").unwrap().as_i64(), Ok(299));
+    assert_eq!(back.get_field("k299").unwrap().unwrap().as_i64(), Ok(299));
 
     let array =
         |n: usize| VariantBuilder::from_json(&format!("[{}]", vec!["1"; n].join(","))).unwrap();
@@ -581,18 +589,36 @@ fn wide_offsets() {
     assert_eq!(VariantRef::new(&meta, &value).unwrap().len(), Ok(8_500_000));
 }
 
-/// Deep nesting works without a call-stack limit (Jackson would reject past
-/// 1000 levels; the builder imposes none and stays proportional in memory).
+/// Deep nesting stays iterative in the reader while the builder shares
+/// Spark 4.2.0's 1000-level cap (depth 1000 works for arrays and objects,
+/// depth 1001 fails as malformed).
 #[test]
 fn deep_nesting_is_iterative() {
-    for depth in [500, 2_000] {
-        let doc = format!("{}{}{}", "[".repeat(depth), "1", "]".repeat(depth));
-        let (meta, value) = VariantBuilder::from_json(&doc).unwrap();
-        let mut back = VariantRef::new(&meta, &value).unwrap();
-        for _ in 0..depth {
-            back = back.get_index(0).unwrap();
-        }
-        assert_eq!(back.as_i64(), Ok(1));
+    // Depth 1000 arrays work and read back iteratively.
+    let doc = format!("{}{}{}", "[".repeat(1000), "1", "]".repeat(1000));
+    let (meta, value) = VariantBuilder::from_json(&doc).unwrap();
+    let mut back = VariantRef::new(&meta, &value).unwrap();
+    for _ in 0..1000 {
+        back = back.get_index(0).unwrap();
+    }
+    assert_eq!(back.as_i64(), Ok(1));
+    // Depth 1000 objects work and read back through `get_field`.
+    let doc = format!("{}{}{}", "{\"a\":".repeat(1000), "1", "}".repeat(1000));
+    let (meta, value) = VariantBuilder::from_json(&doc).unwrap();
+    let mut back = VariantRef::new(&meta, &value).unwrap();
+    for _ in 0..1000 {
+        back = back.get_field("a").unwrap().unwrap();
+    }
+    assert_eq!(back.as_i64(), Ok(1));
+    // Depth 1001 fails for both shapes with Spark's malformed-record error.
+    for doc in [
+        format!("{}{}{}", "[".repeat(1001), "1", "]".repeat(1001)),
+        format!("{}{}{}", "{\"a\":".repeat(1001), "1", "}".repeat(1001)),
+    ] {
+        assert_eq!(
+            VariantBuilder::from_json(&doc).map_err(|e| e.error_class()),
+            Err(ErrorClass::MalformedRecordInParsingWithoutSuggestion),
+        );
     }
 }
 
@@ -679,10 +705,10 @@ fn reader_widths_and_large_forms() {
     // the minimum).
     let back = read_pair("0101000161", "1201000000020c01");
     assert_eq!(back.len(), Ok(1));
-    assert_eq!(back.get_field("a").unwrap().as_i64(), Ok(1));
+    assert_eq!(back.get_field("a").unwrap().unwrap().as_i64(), Ok(1));
     // Small object with 3-byte field ids.
     let back = read_pair("0101000161", "220100000000020c01");
-    assert_eq!(back.get_field("a").unwrap().as_i64(), Ok(1));
+    assert_eq!(back.get_field("a").unwrap().unwrap().as_i64(), Ok(1));
     // Small array with 3-byte offsets.
     let back = read_pair("0101000161", "0b0100000001000000");
     assert_eq!(back.len(), Ok(1));
@@ -709,6 +735,12 @@ fn reader_rejects_malformed_bytes() {
         "200100",
         "240100000000000000",
         "2801000000000000000000000000000000",
+        "2000ffffff7f",
+        "200a01000000",
+        "2400ffffffffffffff7f",
+        "24130100000000000000",
+        "2800ffffffffffffffffffffffffffffff7f",
+        "28270100000000000000000000000000000000",
         "5000",
         "4001000000",
         "4002",
@@ -751,6 +783,8 @@ fn reader_rejects_malformed_bytes() {
         "010100036162",
         "010200010002006162",
         "010100010062aa",
+        "11020001026261",
+        "11020001026161",
     ];
     for meta in bad_metas {
         assert!(
@@ -758,6 +792,11 @@ fn reader_rejects_malformed_bytes() {
             "meta {meta}"
         );
     }
+    // Sorted-flagged metadata with sorted unique keys is accepted.
+    let back = read_pair("11020001026162", "020200010002040c010c02");
+    assert_eq!(back.len(), Ok(2));
+    assert_eq!(back.get_field("a").unwrap().unwrap().as_i64(), Ok(1));
+    assert_eq!(back.get_field("b").unwrap().unwrap().as_i64(), Ok(2));
     // Field id outside the dictionary.
     assert!(is_malformed(VariantRef::new(
         &hex_bytes("010000"),
@@ -768,11 +807,25 @@ fn reader_rejects_malformed_bytes() {
         &hex_bytes("010000"),
         &hex_bytes("030200040002000c010c02")
     )));
+    // Object ids out of key order are malformed.
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("01020001026162"),
+        &hex_bytes("020201000002040c010c02")
+    )));
+    // Duplicate object ids are malformed.
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("01020001026261"),
+        &hex_bytes("020200000100050c010c0200")
+    )));
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("01020001026162"),
+        &hex_bytes("02020000000002040c010c02")
+    )));
     // Out-of-range and wrong-kind access on valid values.
     let back = read_pair("010000", "0303000204050c01056100");
     assert!(is_malformed(back.get_index(3)));
     assert!(is_malformed(back.field_at(0)));
-    assert!(back.get_field("a").is_none());
+    assert!(back.get_field("a").unwrap().is_none());
     let obj = read_pair("0101000161", "02010000020c01");
     assert!(is_malformed(obj.get_index(0)));
     assert!(is_malformed(obj.field_at(1)));
@@ -786,18 +839,81 @@ fn reader_rejects_malformed_bytes() {
     );
 }
 
-/// Spark-accepted quirks the reader deliberately tolerates: unsorted object
-/// offsets (Spark emits values in input order) and duplicate field ids pass
-/// validation and read back.
+/// Decimal widths reject unscaled values with more digits than they hold and
+/// scales past the same maximum.
+#[test]
+fn decimal_bounds_are_validated() {
+    // decimal4 holds 9 digits: 2147483647 has 10.
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("010000"),
+        &hex_bytes("2000ffffff7f")
+    )));
+    // decimal4 scale past 9.
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("010000"),
+        &hex_bytes("200a01000000")
+    )));
+    // decimal8 holds 18 digits: i64::MAX has 19.
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("010000"),
+        &hex_bytes("2400ffffffffffffff7f")
+    )));
+    // decimal8 scale past 18.
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("010000"),
+        &hex_bytes("24130100000000000000")
+    )));
+    // decimal16 holds 38 digits: 10^38 has 39.
+    let mut decimal16 = vec![0x28, 0x00];
+    decimal16.extend_from_slice(&10_i128.pow(38).to_le_bytes());
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("010000"),
+        &decimal16
+    )));
+    // decimal16 at i128::MAX (39 digits) is malformed.
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("010000"),
+        &hex_bytes("2800ffffffffffffffffffffffffffffff7f")
+    )));
+    // decimal16 scale 39 past the 38 maximum.
+    assert!(is_malformed(VariantRef::new(
+        &hex_bytes("010000"),
+        &hex_bytes("28270100000000000000000000000000000000")
+    )));
+}
+
+/// `get_field` distinguishes an absent key from corrupt bytes.
+#[test]
+fn get_field_reports_corruption() {
+    let obj = read_pair("0101000161", "02010000020c01");
+    assert!(obj.get_field("missing").unwrap().is_none());
+    assert!(
+        read_pair("010000", "0303000204050c01056100")
+            .get_field("a")
+            .unwrap()
+            .is_none()
+    );
+    // A present key whose value bytes are truncated errors.
+    let corrupt = read_pair("0101000161", "02010000010c");
+    assert_eq!(
+        corrupt
+            .get_field("a")
+            .map(|_| ())
+            .map_err(|e| e.error_class()),
+        Err(ErrorClass::MalformedVariant)
+    );
+}
+
+/// Spark-accepted quirk the reader deliberately tolerates: unsorted object
+/// offsets (Spark emits values in input order) pass validation and read back.
+/// Duplicate or out-of-key-order field ids are rejected (see
+/// `reader_rejects_malformed_bytes`).
 #[test]
 fn reader_tolerates_spark_quirks() {
     // {"b":1,"a":2}: ids [1,0] (key order), offsets [2,0,4] (input order).
     let back = read_pair("01020001026261", "020201000200040c010c02");
-    assert_eq!(back.get_field("a").unwrap().as_i64(), Ok(2));
-    assert_eq!(back.get_field("b").unwrap().as_i64(), Ok(1));
-    // Duplicate ids validate (as in Spark 4.2.0's own validator).
-    let back = read_pair("01020001026261", "020200000100050c010c0200");
-    assert_eq!(back.len(), Ok(2));
+    assert_eq!(back.get_field("a").unwrap().unwrap().as_i64(), Ok(2));
+    assert_eq!(back.get_field("b").unwrap().unwrap().as_i64(), Ok(1));
 }
 
 /// The value buffer is capped at 128 MiB with Spark's error and parameters.
@@ -1076,7 +1192,8 @@ fn check_value(back: &VariantRef<'_>, expected: &Expect) {
             assert_eq!(back.kind(), VariantKind::Object);
             assert_eq!(back.len(), Ok(fields.len()));
             for (key, value) in fields {
-                check_value(&back.get_field(key).unwrap(), value);
+                let child = back.get_field(key).unwrap().unwrap();
+                check_value(&child, value);
             }
         }
     }
