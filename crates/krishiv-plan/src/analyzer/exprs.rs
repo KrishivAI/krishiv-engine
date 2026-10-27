@@ -1484,7 +1484,7 @@ impl Resolver<'_> {
                 // `id.name()` is the canonical lower-case name, so a
                 // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
                 let is_schema_of_csv = entry.id.name() == "schema_of_csv";
-                if lookup_name.eq_ignore_ascii_case("mask") {
+                if is_builtin_entry(&entry) && lookup_name.eq_ignore_ascii_case("mask") {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
@@ -4475,5 +4475,54 @@ mod tests {
             suggestions("str", params.into_iter()),
             "`str` `otherChar` `digitChar`"
         );
+    }
+
+    /// Operators are never qualified: only a bare name matches an operator,
+    /// so `session.+` prints as written.
+    #[test]
+    fn qualified_operators_print_as_written() {
+        let qualified = Expr::new(ExprNode::Function(FunctionCall {
+            name: "+".to_owned(),
+            qualifier: vec!["session".to_owned()],
+            args: vec![
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(1)))),
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(2)))),
+            ],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+        }));
+        assert_eq!(pretty(&qualified, None), "session.+(1, 2)");
+        let bare = Expr::new(ExprNode::Function(FunctionCall {
+            name: "+".to_owned(),
+            qualifier: Vec::new(),
+            args: vec![
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(1)))),
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(2)))),
+            ],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+        }));
+        assert_eq!(pretty(&bare, None), "(1 + 2)");
+    }
+
+    /// The test helper's result rule answers typeless and nullable.
+    #[test]
+    fn test_entries_answer_without_a_type() {
+        use krishiv_functions::signature::CallTypes;
+        let call = CallTypes::new(&[], &[]);
+        for id in [
+            FunctionId::Builtin(Builtin::Add),
+            FunctionId::Udf {
+                name: "my_udf".to_owned(),
+                version: 1,
+            },
+        ] {
+            let e = entry(id);
+            let ty = (e.result)(&call).unwrap();
+            assert_eq!(ty.data_type, None);
+            assert!(ty.nullable);
+        }
     }
 }

@@ -356,7 +356,7 @@ fn call(
             let kids = kids(f, conf, memo, functions)?;
             registry(name, f, kids, conf)
         }
-        FunctionId::Udf { .. } => udf(f, conf, functions),
+        FunctionId::Udf { name, version } => udf(name, *version, f, conf, functions),
     }
 }
 
@@ -365,18 +365,14 @@ fn call(
 /// non-literal argument, an unknown version or a failure to bind never
 /// folds; a bound call that fails folds to its error (the analyzer's
 /// raising-literal form).
-fn udf(f: &ResolvedFunction, conf: Conf, functions: &dyn FunctionRegistry) -> Folded {
-    let FunctionId::Udf { name, version } = &f.id else {
-        return None;
-    };
-    if !f
-        .args
-        .iter()
-        .all(|a| matches!(a.node, ExprNode::Literal(_)))
-    {
-        return None;
-    }
-    let udf = functions.resolve_udf(name, *version)?;
+fn udf(
+    name: &str,
+    version: u32,
+    f: &ResolvedFunction,
+    conf: Conf,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
+    let udf = functions.resolve_udf(name, version)?;
     let literals: Vec<ArrayRef> = f
         .args
         .iter()
@@ -1075,6 +1071,39 @@ mod tests {
             ),
             None
         );
+        // The fixtures expose their contracts directly.
+        let registry = TestUdfs::new();
+        assert!(matches!(
+            registry.lookup(&["anything".to_owned()], SparkProfile::V4_2),
+            FunctionLookup::NotFound
+        ));
+        assert!(registry.version() > 0);
+        let udf_impl = TestUdf {
+            name: "test_udf",
+            version: 2,
+            deterministic: true,
+        };
+        assert_eq!(krishiv_udf_sdk::ScalarUdf::name(&udf_impl), "test_udf");
+        assert_eq!(krishiv_udf_sdk::ScalarUdf::version(&udf_impl), 2);
+        let field = krishiv_udf_sdk::ScalarUdf::return_field(&udf_impl, &[]).unwrap();
+        assert_eq!(field.data_type, DataType::Integer);
+        assert!(field.nullable);
+        let props = krishiv_udf_sdk::ScalarUdf::properties(&udf_impl);
+        assert!(props.deterministic);
+        // The column path reports its rows.
+        let array: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1, 2]));
+        let out = krishiv_udf_sdk::ScalarUdf::invoke(
+            &udf_impl,
+            &[krishiv_udf_sdk::UdfArg::Column(&array)],
+            2,
+            &krishiv_udf_sdk::InvokeContext {
+                partition: 0,
+                ansi: true,
+                time_zone: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(out.len(), 2);
     }
 
     fn int(v: i32) -> Expr {

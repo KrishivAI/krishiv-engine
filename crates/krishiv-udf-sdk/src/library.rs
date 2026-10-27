@@ -45,13 +45,13 @@ impl UdfLibrary {
     /// replacing any UDF of that name, and bumps the library version.
     ///
     /// The `name` call goes through [`guard_call`] like every other trait
-    /// call: a panicking `name` is returned as a [`UdfError`] instead of
+    /// call: a panicking `name` is returned as a [`UdfError`](crate::UdfError) instead of
     /// unwinding (there is no name to register the UDF under). An empty
     /// name, or one containing a `.` or a backtick, is also an error,
     /// since such a UDF can never be called by name.
     ///
     /// # Errors
-    /// A [`UdfError`] when `name` panics, is empty, or contains a `.` or
+    /// A [`UdfError`](crate::UdfError) when `name` panics, is empty, or contains a `.` or
     /// a backtick.
     pub fn register(&self, udf: Arc<dyn ScalarUdf>) -> Result<(), super::UdfError> {
         let name = guard_call("unknown", "name", || udf.name().to_owned())?;
@@ -308,5 +308,117 @@ mod tests {
             assert!(lib.is_empty(), "{bad}");
             assert_eq!(lib.version(), 0, "{bad}");
         }
+    }
+
+    #[test]
+    fn fixtures_expose_their_declared_contracts() {
+        let lib = UdfLibrary::new();
+        lib.register(Arc::new(Identity { version: 1 })).unwrap();
+        let udf = lib.get("my_identity").unwrap();
+        assert_eq!(udf.version(), 1);
+        assert_eq!(
+            udf.signature(),
+            &Signature::Exact(Vec::new()),
+            "zero-arg signature"
+        );
+        let field = udf.return_field(&[]).unwrap();
+        assert_eq!(field.data_type, krishiv_types::DataType::Integer);
+        assert!(field.nullable);
+        assert!(
+            udf.invoke(
+                &[],
+                0,
+                &InvokeContext {
+                    partition: 0,
+                    ansi: true,
+                    time_zone: None,
+                }
+            )
+            .is_err()
+        );
+        // The panicking-name and bad-name fixtures expose theirs too.
+        let panicking = PanicName;
+        assert_eq!(panicking.version(), 1);
+        assert_eq!(panicking.signature(), &Signature::Exact(Vec::new()));
+        assert!(panicking.return_field(&[]).is_ok());
+        assert!(
+            panicking
+                .invoke(
+                    &[],
+                    0,
+                    &InvokeContext {
+                        partition: 0,
+                        ansi: true,
+                        time_zone: None,
+                    }
+                )
+                .is_err()
+        );
+        for bad in ["", "a.b", "a`b"] {
+            let udf = BadName(bad);
+            assert_eq!(udf.version(), 1);
+            assert_eq!(udf.signature(), &Signature::Exact(Vec::new()));
+            assert!(udf.return_field(&[]).is_ok());
+            assert!(
+                udf.invoke(
+                    &[],
+                    0,
+                    &InvokeContext {
+                        partition: 0,
+                        ansi: true,
+                        time_zone: None,
+                    }
+                )
+                .is_err()
+            );
+        }
+    }
+
+    /// A UDF whose `version` panics still resolves by name and version: the
+    /// match defaults to true so binding surfaces `FAILED_EXECUTE_UDF`
+    /// rather than `KRISHIV_UDF_NOT_AVAILABLE`.
+    #[derive(Debug)]
+    struct PanicVersion;
+
+    impl ScalarUdf for PanicVersion {
+        fn name(&self) -> &str {
+            "panic_version"
+        }
+
+        fn version(&self) -> u32 {
+            panic!("version went bang")
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: krishiv_types::DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            _: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Err(UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn a_panicking_version_still_matches() {
+        let lib = UdfLibrary::new();
+        lib.register(Arc::new(PanicVersion)).unwrap();
+        assert!(lib.get("panic_version").is_some());
+        assert!(lib.get_versioned("panic_version", 1).is_some());
+        assert!(lib.get_versioned("panic_version", 999).is_some());
+        assert!(lib.get_versioned("nosuch", 1).is_none());
     }
 }

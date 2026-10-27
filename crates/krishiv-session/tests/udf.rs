@@ -1472,3 +1472,534 @@ fn panicking_name_fails_registration_as_failed_execute_udf() {
     assert_eq!(err.sql_state(), Some("39000"));
     assert!(err.to_string().contains("boom"), "{err}");
 }
+
+/// A UDF whose trait methods panic or fail: analysis fails with
+/// `FAILED_EXECUTE_UDF` naming the panic, never unwinding.
+macro_rules! panic_udf {
+    ($name:ident, $udf_name:expr, $method:ident, $panic:expr) => {
+        #[derive(Debug)]
+        struct $name;
+        impl ScalarUdf for $name {
+            fn name(&self) -> &str {
+                if stringify!($method) == "name" {
+                    panic!($panic)
+                } else {
+                    $udf_name
+                }
+            }
+            fn version(&self) -> u32 {
+                if stringify!($method) == "version" {
+                    panic!($panic)
+                } else {
+                    1
+                }
+            }
+            fn signature(&self) -> &Signature {
+                if stringify!($method) == "signature" {
+                    panic!($panic)
+                } else {
+                    use std::sync::OnceLock;
+                    static SIG: OnceLock<Signature> = OnceLock::new();
+                    SIG.get_or_init(int_sig)
+                }
+            }
+            fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+                if stringify!($method) == "return_field" {
+                    return Err(UdfError::new($panic));
+                }
+                Ok(ReturnField {
+                    data_type: DataType::Integer,
+                    nullable: true,
+                })
+            }
+            fn properties(&self) -> UdfProperties {
+                if stringify!($method) == "properties" {
+                    panic!($panic)
+                }
+                UdfProperties::default()
+            }
+            fn invoke(
+                &self,
+                args: &[UdfArg<'_>],
+                _rows: usize,
+                _: &InvokeContext,
+            ) -> Result<ArrayRef, UdfError> {
+                Ok(args[0].array())
+            }
+        }
+    };
+}
+
+panic_udf!(
+    PanicVersionUdf,
+    "panic_version_udf",
+    version,
+    "version went bang"
+);
+panic_udf!(
+    PanicSigUdf,
+    "panic_sig_udf",
+    signature,
+    "signature went bang"
+);
+panic_udf!(
+    PanicPropsUdf,
+    "panic_props_udf",
+    properties,
+    "properties went bang"
+);
+
+#[test]
+fn panicking_version_signature_properties_fail_at_analysis() {
+    let s = Session::new().unwrap();
+    s.register_udf(PanicVersionUdf).unwrap();
+    s.register_udf(PanicSigUdf).unwrap();
+    s.register_udf(PanicPropsUdf).unwrap();
+    for (query, needle) in [
+        ("SELECT panic_version_udf(1)", "version went bang"),
+        ("SELECT panic_sig_udf(1)", "signature went bang"),
+        ("SELECT panic_props_udf(1)", "properties went bang"),
+    ] {
+        let e = block_on(s.sql(query)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf, "{query}");
+        assert_eq!(e.sql_state(), Some("39000"), "{query}");
+        assert!(e.to_string().contains(needle), "{query}: {e}");
+    }
+    // DataFrame API fails the same way.
+    let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int32Array::from(vec![1]))],
+    )
+    .unwrap();
+    s.register_batches("pv", schema, vec![batch]).unwrap();
+    let df = s
+        .table("pv")
+        .select([call_function("panic_version_udf", [col("a")])]);
+    let e = block_on(df.collect()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf);
+}
+
+#[test]
+fn failing_return_field_fails_at_analysis() {
+    #[derive(Debug)]
+    struct FailingReturn;
+    impl ScalarUdf for FailingReturn {
+        fn name(&self) -> &str {
+            "failing_return_udf"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(int_sig)
+        }
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Err(UdfError::new("no result for these args"))
+        }
+        fn invoke(
+            &self,
+            args: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Ok(args[0].array())
+        }
+    }
+    let s = Session::new().unwrap();
+    s.register_udf(FailingReturn).unwrap();
+    let e = block_on(s.sql("SELECT failing_return_udf(1)")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::FailedExecuteUdf);
+    assert!(e.to_string().contains("no result"), "{e}");
+}
+
+#[test]
+fn empty_names_fail_registration_as_unknown() {
+    #[derive(Debug)]
+    struct EmptyName;
+    impl ScalarUdf for EmptyName {
+        fn name(&self) -> &str {
+            ""
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+        fn invoke(
+            &self,
+            _: &[UdfArg<'_>],
+            rows: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Ok(Arc::new(Int32Array::from(vec![1; rows])))
+        }
+    }
+    #[derive(Debug)]
+    struct DottedName;
+    impl ScalarUdf for DottedName {
+        fn name(&self) -> &str {
+            "a.b"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(Vec::new()))
+        }
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+        fn invoke(
+            &self,
+            _: &[UdfArg<'_>],
+            rows: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Ok(Arc::new(Int32Array::from(vec![1; rows])))
+        }
+    }
+    let s = Session::new().unwrap();
+    let err = s.register_udf(EmptyName).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::FailedExecuteUdf);
+    assert!(err.to_string().contains("unknown"), "{err}");
+    let err = s.register_udf(DottedName).unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::FailedExecuteUdf);
+    assert!(err.to_string().contains("a.b"), "{err}");
+}
+
+#[test]
+fn explain_verbose_folds_udfs_through_the_traced_path() {
+    let s = Session::new().unwrap();
+    s.register_udf(AddOne).unwrap();
+    // EXPLAIN VERBOSE exercises `optimize_traced_with_udfs`.
+    let plan = explain(&s, "SELECT add_one(1)");
+    assert!(plan.contains("2") || plan.contains("add_one"), "{plan}");
+    let verbose = {
+        let df = block_on(s.sql("EXPLAIN VERBOSE SELECT add_one(1)")).unwrap();
+        let rows = block_on(df.collect()).unwrap();
+        let mut out = String::new();
+        for b in &rows {
+            for c in b.columns() {
+                if let Some(view) = c.as_any().downcast_ref::<StringViewArray>() {
+                    for v in view.iter().flatten() {
+                        out.push_str(v);
+                        out.push('\n');
+                    }
+                }
+                if let Some(plain) = c.as_any().downcast_ref::<StringArray>() {
+                    for v in plain.iter().flatten() {
+                        out.push_str(v);
+                        out.push('\n');
+                    }
+                }
+            }
+        }
+        out
+    };
+    assert!(!verbose.is_empty(), "verbose plan explains");
+}
+
+#[test]
+fn session_qualified_named_arguments_are_rejected() {
+    let s = Session::new().unwrap();
+    s.register_udf(AddOne).unwrap();
+    for query in [
+        "SELECT session.add_one(x => 1)",
+        "SELECT system.session.add_one(x => 1)",
+    ] {
+        let e = block_on(s.sql(query)).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::NamedParametersNotSupported,
+            "{query}"
+        );
+    }
+}
+
+#[test]
+fn session_qualified_unknown_is_unresolved_routine() {
+    let s = Session::new().unwrap();
+    for query in [
+        "SELECT session.nosuchfn(1)",
+        "SELECT system.session.nosuchfn(1)",
+    ] {
+        let e = block_on(s.sql(query)).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::UnresolvedRoutine, "{query}");
+        assert!(e.to_string().contains("nosuchfn"), "{query}: {e}");
+    }
+    // `system.builtin` of a UDF-only name is unknown too (on a session
+    // without the UDF, as in `builtins_win_over_a_same_name_udf`).
+    let s2 = Session::new().unwrap();
+    let e = block_on(s2.sql("SELECT system.builtin.add_one(1)")).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnresolvedRoutine);
+}
+
+/// A session UDF named like the multi-argument built-in `mask`.
+#[derive(Debug)]
+struct MaskUdf;
+impl ScalarUdf for MaskUdf {
+    fn name(&self) -> &str {
+        "mask"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn signature(&self) -> &Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::String)]))
+    }
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::String,
+            nullable: true,
+        })
+    }
+    fn invoke(
+        &self,
+        args: &[UdfArg<'_>],
+        rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        let input = args[0].array();
+        let text = |a: &ArrayRef| -> Vec<Option<String>> {
+            if let Some(view) = a.as_any().downcast_ref::<StringViewArray>() {
+                return view.iter().map(|v| v.map(str::to_owned)).collect();
+            }
+            a.as_any()
+                .downcast_ref::<StringArray>()
+                .map(|p| p.iter().map(|v| v.map(str::to_owned)).collect())
+                .unwrap_or_else(|| vec![None; rows])
+        };
+        let col = text(&input);
+        let out: Vec<Option<String>> = (0..rows)
+            .map(|i| {
+                let at = if col.len() == 1 { 0 } else { i };
+                col.get(at)
+                    .cloned()
+                    .flatten()
+                    .map(|v| format!("udf-mask:{v}"))
+            })
+            .collect();
+        Ok(Arc::new(StringArray::from(out)))
+    }
+}
+
+#[test]
+fn mask_builtin_keeps_defaults_while_qualified_runs_the_udf() {
+    let s = Session::new().unwrap();
+    s.register_udf(MaskUdf).unwrap();
+    // Built-in `mask` with explicit replacements runs.
+    let rows = collect(&s, "SELECT mask('Ab1', 'X', 'x', 'n', NULL)");
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    // Built-in `mask` fills omitted replacements with its defaults.
+    let rows = collect(&s, "SELECT mask('Ab1', 'Q')");
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    // Qualified reaches the UDF verbatim.
+    assert_eq!(
+        one_string(&s, "SELECT session.mask('abcd')"),
+        "udf-mask:abcd"
+    );
+    assert_eq!(
+        one_string(&s, "SELECT system.session.mask('abcd')"),
+        "udf-mask:abcd"
+    );
+}
+
+/// A session UDF named like `locate` (two-arg builtin with a default).
+#[derive(Debug)]
+struct LocateUdf;
+impl ScalarUdf for LocateUdf {
+    fn name(&self) -> &str {
+        "locate"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn signature(&self) -> &Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(|| {
+            Signature::Exact(vec![
+                UdfInputType::Exact(DataType::String),
+                UdfInputType::Exact(DataType::String),
+            ])
+        })
+    }
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Integer,
+            nullable: true,
+        })
+    }
+    fn invoke(
+        &self,
+        _: &[UdfArg<'_>],
+        rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        Ok(Arc::new(Int32Array::from(vec![99; rows])))
+    }
+}
+
+#[test]
+fn locate_builtin_defaults_and_qualified_udf() {
+    let s = Session::new().unwrap();
+    s.register_udf(LocateUdf).unwrap();
+    // Built-in default: `locate('b', 'abc')` finds position 2.
+    let rows = collect(&s, "SELECT locate('b', 'abc')");
+    assert_eq!(ints(&rows), [Some(2)]);
+    assert_eq!(
+        ints(&collect(&s, "SELECT session.locate('b', 'abc')")),
+        [Some(99)]
+    );
+}
+
+#[test]
+fn named_struct_folds_foldable_names() {
+    let s = Session::new().unwrap();
+    // `'a' || 'b'` folds to `'ab'`, which becomes the field name.
+    let rows = collect(&s, "SELECT named_struct('a' || 'b', 1)");
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+}
+
+#[test]
+fn udf_calls_of_all_scalar_types_fold() {
+    // Each scalar literal type folds through the UDF binding.
+    let s = Session::new().unwrap();
+    s.register_udf(EchoString).unwrap();
+    assert_eq!(one_string(&s, "SELECT echo_str('x')"), "x");
+    let s2 = Session::new().unwrap();
+    #[derive(Debug)]
+    struct BoolEcho;
+    impl ScalarUdf for BoolEcho {
+        fn name(&self) -> &str {
+            "bool_echo"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Boolean)]))
+        }
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Boolean,
+                nullable: true,
+            })
+        }
+        fn invoke(
+            &self,
+            args: &[UdfArg<'_>],
+            rows: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            use arrow_array::BooleanArray;
+            let input = args[0]
+                .array()
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .ok_or_else(|| UdfError::new("needs BOOL"))?
+                .clone();
+            assert_eq!(
+                input.len(),
+                if matches!(args[0], UdfArg::Scalar(_)) {
+                    1
+                } else {
+                    rows
+                }
+            );
+            Ok(Arc::new(input))
+        }
+    }
+    s2.register_udf(BoolEcho).unwrap();
+    let plan = explain(&s2, "SELECT bool_echo(true)");
+    assert!(plan.contains("true AS"), "{plan}");
+    // A null literal folds to null without invoking.
+    let s3 = Session::new().unwrap();
+    s3.register_udf(AddOne).unwrap();
+    let rows = collect(&s3, "SELECT add_one(CAST(NULL AS INT))");
+    assert_eq!(ints(&rows), [None]);
+}
+
+#[test]
+fn nondeterministic_distinct_filtered_and_column_calls_do_not_fold() {
+    let s = Session::new().unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    s.register_udf(CountingEcho {
+        deterministic: false,
+        calls: Arc::clone(&calls),
+    })
+    .unwrap();
+    // Nondeterministic already covered; distinct/filter also stay.
+    for query in [
+        "SELECT nondet_echo(DISTINCT 'a')",
+        "SELECT nondet_echo('a') FILTER (WHERE true)",
+    ] {
+        let plan = explain(&s, query);
+        assert!(plan.contains("nondet_echo"), "{query}: {plan}");
+    }
+}
+
+#[test]
+fn inline_values_reject_nondeterministic_calls() {
+    use krishiv_common::error::ErrorClass;
+    let s = Session::new().unwrap();
+    s.register_udf(AddOne).unwrap();
+    s.register_udf(CountingEcho {
+        deterministic: false,
+        calls: Arc::new(AtomicUsize::new(0)),
+    })
+    .unwrap();
+    // Deterministic UDFs are allowed in inline tables.
+    let df = block_on(s.sql("SELECT * FROM (VALUES (add_one(1)))")).unwrap();
+    let rows = block_on(df.collect()).unwrap();
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    // Session-qualified deterministic UDFs too.
+    let df = block_on(s.sql("SELECT * FROM (VALUES (session.add_one(1)))")).unwrap();
+    let rows = block_on(df.collect()).unwrap();
+    assert_eq!(rows.iter().map(RecordBatch::num_rows).sum::<usize>(), 1);
+    // Nondeterministic UDFs cannot be evaluated in an inline table.
+    for query in [
+        "SELECT * FROM (VALUES (nondet_echo('a')))",
+        "SELECT * FROM (VALUES (session.nondet_echo('a')))",
+        "SELECT * FROM (VALUES (rand(1)))",
+    ] {
+        let e = block_on(s.sql(query)).unwrap_err();
+        assert!(
+            e.error_class() == ErrorClass::InvalidInlineTableCannotEvaluateExpressionInInlineTable
+                || e.to_string().contains("inline"),
+            "{query}: {e}"
+        );
+    }
+}
+
+#[test]
+fn udf_results_with_views_run() {
+    // A STRING UDF returns plain Utf8; the evaluator converts to views.
+    let s = session();
+    s.register_udf(EchoString).unwrap();
+    let rows = collect(&s, "SELECT echo_str(name) FROM people ORDER BY name");
+    let mut got = strings(&rows);
+    got.sort();
+    assert_eq!(got, [None, Some("b".to_owned()), Some("c".to_owned())]);
+}

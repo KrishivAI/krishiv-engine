@@ -328,10 +328,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::Function(id) => match id {
             FunctionId::Udf { .. } => Some(Feature::RustUdf),
             FunctionId::Builtin(_) => None,
-            FunctionId::Registry { .. } => None,
             // A future identity is baseline until it is classified
             // (encoding refuses it first).
-            _ => None,
+            FunctionId::Registry { .. } | _ => None,
         },
     }
 }
@@ -525,7 +524,6 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
 /// them); values of one are still entered, so nothing hides.
 #[expect(
     clippy::match_same_arms,
-    clippy::collapsible_match,
     reason = "every current expression kind is listed explicitly"
 )]
 fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
@@ -562,10 +560,10 @@ fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
             | ExprNode::Alias { .. }
             | ExprNode::Lambda { .. }
             | ExprNode::Field { .. }
-            | ExprNode::Window(_) => {}
-            // A future expression kind: its children are still walked below,
-            // so nested calls cannot hide; encoding refuses it first.
-            _ => {}
+            // A future expression kind hits this arm too: its children are
+            // still walked below, so nested calls cannot hide; encoding
+            // refuses it first.
+            | ExprNode::Window(_) | _ => {}
         }
         e.for_each_child(&mut |c| stack.push(c));
     }

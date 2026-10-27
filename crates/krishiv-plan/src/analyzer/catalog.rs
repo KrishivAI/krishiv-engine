@@ -551,3 +551,18 @@ impl Catalog for MemoryCatalog {
         Box::pin(std::future::ready(Ok(found)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::BuiltinFunctions;
+    use super::FunctionRegistry;
+
+    #[test]
+    fn registries_without_udfs_resolve_none() {
+        // The default `resolve_udf`: registries hosting no UDFs answer `None`,
+        // so constant folding leaves UDF calls alone.
+        let builtins = BuiltinFunctions::new();
+        assert!(builtins.resolve_udf("my_udf", 1).is_none());
+        assert!(builtins.resolve_udf("upper", 2).is_none());
+    }
+}

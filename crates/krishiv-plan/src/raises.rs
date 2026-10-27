@@ -462,9 +462,20 @@ mod tests {
             false
         ));
         assert!(!may_raise(
-            &named("startswith", vec![s.clone(), s], DataType::Boolean),
+            &named("startswith", vec![s.clone(), s.clone()], DataType::Boolean),
             false
         ));
+        // User code may raise (or fail its contract): never assumed pure.
+        let udf = call(
+            FunctionId::Udf {
+                name: "my_udf".to_owned(),
+                version: 1,
+            },
+            vec![s],
+            DataType::Boolean,
+        );
+        assert!(may_raise(&udf, false));
+        assert!(may_raise(&udf, true));
     }
 
     #[test]

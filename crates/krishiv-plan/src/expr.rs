@@ -775,3 +775,50 @@ impl Drop for Expr {
         walk::teardown_expr(self);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::literal::Literal;
+
+    #[test]
+    fn negated_finds_negative_operands_resolved_or_not() {
+        let inner = Arc::new(Expr::literal(Literal::Integer(3)));
+        // Unresolved `negative(x)`.
+        let unresolved = Expr::new(ExprNode::Function(FunctionCall {
+            name: "negative".to_owned(),
+            qualifier: Vec::new(),
+            args: vec![Arc::clone(&inner)],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+        }));
+        assert!(negated(&unresolved).is_some());
+        // A qualified name is never an operator.
+        let qualified = Expr::new(ExprNode::Function(FunctionCall {
+            name: "negative".to_owned(),
+            qualifier: vec!["session".to_owned()],
+            args: vec![Arc::clone(&inner)],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+        }));
+        assert!(negated(&qualified).is_none());
+        // Resolved `-x` (a UDF id works like any other: only the name matters).
+        let resolved = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(Builtin::Negative),
+                kind: FunctionKind::Scalar,
+                args: vec![Arc::clone(&inner)],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Integer,
+                nullable: false,
+                deterministic: true,
+            },
+        )));
+        assert!(negated(&resolved).is_some());
+        // Anything else is not negated.
+        assert!(negated(&Expr::literal(Literal::Integer(1))).is_none());
+    }
+}

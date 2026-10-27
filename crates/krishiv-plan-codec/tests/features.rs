@@ -766,3 +766,32 @@ fn an_unknown_hash_scheme_is_corrupt() {
     assert_eq!(hashed, 1);
     corrupt(&m, "an unknown hash scheme");
 }
+
+/// A `Subquery` expression's `IN` values are entered when scanning for UDF
+/// calls, so a UDF hiding there still needs the feature.
+#[test]
+fn subquery_in_values_with_a_udf_need_rust_udf() {
+    use krishiv_plan::{Expr, ExprNode, SubqueryKind};
+    let udf_expr = match inventory::udf_call() {
+        krishiv_exec::physical::PhysNode::Project { items, .. } => match &items[..] {
+            [krishiv_exec::physical::ProjectItemPlan::Expr { expr, .. }] => {
+                std::sync::Arc::clone(expr)
+            }
+            _ => panic!("inventory udf_call holds one expression"),
+        },
+        _ => panic!("inventory udf_call is a project"),
+    };
+    let subquery = std::sync::Arc::new(Expr::new(ExprNode::Subquery {
+        kind: SubqueryKind::In(vec![std::sync::Arc::clone(&udf_expr)]),
+        plan: std::sync::Arc::new(krishiv_plan::LogicalPlan::new(
+            krishiv_plan::PlanNode::OneRowRelation,
+        )),
+    }));
+    let plan = plan_of(krishiv_exec::physical::PhysNode::Filter {
+        input: Box::new(krishiv_exec::physical::PhysNode::OneRow),
+        layout: Vec::new(),
+        predicate: subquery,
+        subqueries: Vec::new(),
+    });
+    assert!(plan_features(&plan).contains(&Feature::RustUdf));
+}

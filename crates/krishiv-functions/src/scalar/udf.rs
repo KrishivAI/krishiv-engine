@@ -172,10 +172,18 @@ impl ScalarFunction for UdfBound {
         }
         let strict = self.strict.then(|| strict_mask(args));
         // A null in every row: null without invoking, so a strict UDF
-        // never sees a null (a null literal is every row).
-        if matches!(strict, Some(Strict::AllNull)) {
-            return Ok(new_null_array(&self.return_type, rows));
+        // never sees a null (a null literal is every row). Narrowed so the
+        // match below needs no second `AllNull` arm.
+        enum Narrow {
+            None,
+            Some(BooleanBuffer),
         }
+        let strict: Option<Narrow> = match strict {
+            Some(Strict::AllNull) => return Ok(new_null_array(&self.return_type, rows)),
+            Some(Strict::None) => Some(Narrow::None),
+            Some(Strict::Some(valid)) => Some(Narrow::Some(valid)),
+            None => None,
+        };
         // Every argument a literal: compute one row, then repeat it.
         if args.iter().all(|a| matches!(a, Arg::Scalar(_))) {
             let out = self.invoke_udf(args, 1)?;
@@ -187,15 +195,13 @@ impl ScalarFunction for UdfBound {
         }
         match strict {
             // No nulls (or not strict): invoke over the batch.
-            Some(Strict::None) | None => {
+            Some(Narrow::None) | None => {
                 let out = self.invoke_udf(args, rows)?;
                 self.check(&out, rows)?;
                 Ok(out)
             }
-            // Already returned above; kept for exhaustiveness.
-            Some(Strict::AllNull) => Ok(new_null_array(&self.return_type, rows)),
             // Some nulls: invoke over the non-null rows, scatter back.
-            Some(Strict::Some(valid)) => {
+            Some(Narrow::Some(valid)) => {
                 let kept: Vec<usize> = valid
                     .iter()
                     .enumerate()
@@ -767,5 +773,192 @@ mod tests {
             assert!(err.to_string().contains("went bang"), "{what}: {err}");
             assert!(err.to_string().contains("panic_meta"), "{what}: {err}");
         }
+    }
+
+    #[derive(Debug)]
+    struct PanicName;
+    impl ScalarUdf for PanicName {
+        fn name(&self) -> &str {
+            panic!("name went bang")
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+        fn invoke(
+            &self,
+            args: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Ok(args[0].array())
+        }
+    }
+
+    #[derive(Debug)]
+    struct PanicVersion;
+    impl ScalarUdf for PanicVersion {
+        fn name(&self) -> &str {
+            "panic_version"
+        }
+        fn version(&self) -> u32 {
+            panic!("version went bang")
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+        fn invoke(
+            &self,
+            args: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Ok(args[0].array())
+        }
+    }
+
+    #[test]
+    fn panicking_name_and_version_become_failed_execute_udf() {
+        let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(PanicName);
+        let err = bind_udf(
+            &udf,
+            &[ArrowType::Int32],
+            &DataType::Integer,
+            true,
+            true,
+            Some(0),
+        )
+        .unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::FailedExecuteUdf);
+        assert!(err.to_string().contains("name went bang"), "{err}");
+        assert!(err.to_string().contains("unknown"), "{err}");
+        let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(PanicVersion);
+        let err = bind_udf(
+            &udf,
+            &[ArrowType::Int32],
+            &DataType::Integer,
+            true,
+            true,
+            Some(0),
+        )
+        .unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::FailedExecuteUdf);
+        assert!(err.to_string().contains("version went bang"), "{err}");
+        assert!(err.to_string().contains("panic_version"), "{err}");
+    }
+
+    #[test]
+    fn binary_and_string_bind_to_plain_carriers() {
+        // BINARY binds to the plain Binary carrier (views convert at eval).
+        let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> =
+            Arc::new(Identity::new(int_sig(), true, true));
+        let bound = bind_udf(
+            &udf,
+            &[ArrowType::Int32],
+            &DataType::Binary,
+            true,
+            true,
+            Some(0),
+        )
+        .unwrap();
+        assert_eq!(bound.return_type(), &ArrowType::Binary);
+        assert_eq!(format!("{bound:?}"), format!("{bound:?}"));
+        let debug = format!("{bound:?}");
+        assert!(debug.contains("UdfFunction"), "{debug}");
+        assert!(debug.contains("identity_i32"), "{debug}");
+    }
+
+    #[test]
+    fn strict_intersection_masks_both_columns() {
+        use arrow_array::Int32Array;
+        let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> =
+            Arc::new(Identity::new(int_sig(), true, true));
+        // Two-argument strict UDF: bind with two INTs via a custom signature.
+        let two = Signature::Exact(vec![
+            UdfInputType::Exact(DataType::Integer),
+            UdfInputType::Exact(DataType::Integer),
+        ]);
+        let udf2: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(Identity::new(two, true, true));
+        let bound = bind_udf(
+            &udf2,
+            &[ArrowType::Int32, ArrowType::Int32],
+            &DataType::Integer,
+            true,
+            true,
+            Some(0),
+        )
+        .unwrap();
+        // Nulls in either column mask the row (intersection).
+        let a = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+        let b = Arc::new(Int32Array::from(vec![Some(1), Some(2), None]));
+        let out = bound.invoke(&[Arg::Array(a), Arg::Array(b)], 3).unwrap();
+        let out = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(out.len(), 3);
+        assert!(out.is_null(1) && out.is_null(2));
+        assert_eq!(out.value(0), 1);
+        let _ = udf;
+    }
+
+    #[test]
+    fn masked_wrong_row_counts_are_internal() {
+        use arrow_array::Int32Array;
+        use arrow_buffer::BooleanBuffer;
+        // `take`/`scatter` length mismatches are engine bugs.
+        let valid = BooleanBuffer::from(vec![true, false, true]);
+        let wrong = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+        let err = scatter(&wrong, &valid).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::InternalError);
+        let err = take(&wrong, &[usize::MAX]).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::InternalError);
+        // The fixtures expose their declared fields.
+        let id = Identity::new(int_sig(), true, true);
+        assert!(id.return_field(&[]).is_ok());
+        let broken = Broken { what: "other" };
+        assert!(broken.return_field(&[]).is_ok());
+        let array: ArrayRef = Arc::new(Int32Array::from(vec![7]));
+        let out = broken
+            .invoke(
+                &[UdfArg::Column(&array)],
+                1,
+                &InvokeContext {
+                    partition: 0,
+                    ansi: true,
+                    time_zone: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        let meta = PanicMeta { what: "other" };
+        assert!(meta.return_field(&[]).is_ok());
+        let out = meta
+            .invoke(
+                &[UdfArg::Column(&array)],
+                1,
+                &InvokeContext {
+                    partition: 0,
+                    ansi: true,
+                    time_zone: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(out.len(), 1);
     }
 }

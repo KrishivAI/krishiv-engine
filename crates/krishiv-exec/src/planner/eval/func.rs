@@ -9,7 +9,7 @@ use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
-use krishiv_udf_sdk::{ScalarUdf, guard_call};
+use krishiv_udf_sdk::ScalarUdf;
 
 use super::strings::to_view;
 use super::{Input, PhysExpr, Value, literal_array, unsupported_expr};
@@ -24,7 +24,7 @@ pub(super) fn compile_udf(
     f: &ResolvedFunction,
     args: Vec<Arc<dyn PhysExpr>>,
     input: Input<'_>,
-    e: &Expr,
+    _e: &Expr,
 ) -> Result<Arc<dyn PhysExpr>> {
     let bind_args = f
         .args
@@ -39,6 +39,9 @@ pub(super) fn compile_udf(
         })
         .collect::<Result<Vec<_>>>()?;
     let arg_types: Vec<ArrowType> = bind_args.iter().map(BindArg::data_type).collect();
+    // `bind_udf` reports user faults as `FAILED_EXECUTE_UDF` and engine
+    // faults as `INTERNAL_ERROR` (never `KRISHIV_UNSUPPORTED_FEATURE`,
+    // which has no planning fallback), so there is nothing to map here.
     let function = krishiv_functions::scalar::bind_udf(
         udf,
         &arg_types,
@@ -46,31 +49,15 @@ pub(super) fn compile_udf(
         f.nullable,
         input.env.ansi,
         input.env.zone,
-    )
-    .map_err(|err| {
-        if err.error_class() == krishiv_common::error::ErrorClass::KrishivUnsupportedFeature {
-            unsupported_expr(e)
-        } else {
-            err
-        }
-    })?;
+    )?;
     let out = f.data_type.to_arrow();
-    // The binding returns plain carriers; Spark's `STRING` is a view here.
-    let view = match (function.return_type(), &out) {
-        (a, b) if a == b => false,
-        (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView) => true,
-        (a, b) => {
-            // `name` through `guard_call`: a panicking `name` must not
-            // unwind planning from an error message (the mismatch is
-            // already an internal error, so the structured message keeps
-            // it one).
-            let udf_name = guard_call("unknown", "name", || udf.name().to_owned())
-                .unwrap_or_else(|e| e.message().to_owned());
-            return Err(internal(&format!(
-                "{udf_name} returns {a} where the analyzer typed {b}"
-            )));
-        }
-    };
+    // The binding returns plain carriers; Spark's `STRING` and `BINARY`
+    // are views here. Both derive from the analyzer's type, so they only
+    // ever match or convert to a view (by construction, no mismatch).
+    let view = matches!(
+        (function.return_type(), &out),
+        (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView)
+    );
     Ok(Arc::new(Call {
         function,
         args,

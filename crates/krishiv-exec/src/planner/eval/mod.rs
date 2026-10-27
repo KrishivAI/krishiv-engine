@@ -769,4 +769,33 @@ mod tests {
         let compiled = compile(&e, input).unwrap();
         assert_eq!(compiled.data_type(), &arrow_schema::DataType::Int32);
     }
+
+    /// The fixture exposes its declared contract directly.
+    #[test]
+    fn udf_fixture_exposes_its_contract() {
+        let udf = Identity(2);
+        assert_eq!(udf.name(), "my_udf");
+        assert_eq!(udf.version(), 2);
+        assert_eq!(
+            udf.signature(),
+            &Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)])
+        );
+        let field = udf.return_field(&[]).unwrap();
+        assert_eq!(field.data_type, DataType::Integer);
+        assert!(field.nullable);
+        let array: arrow_array::ArrayRef =
+            std::sync::Arc::new(arrow_array::Int32Array::from(vec![1]));
+        let out = udf
+            .invoke(
+                &[UdfArg::Column(&array)],
+                1,
+                &InvokeContext {
+                    partition: 0,
+                    ansi: true,
+                    time_zone: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(out.len(), 1);
+    }
 }

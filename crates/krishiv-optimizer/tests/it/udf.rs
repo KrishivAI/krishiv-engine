@@ -168,3 +168,288 @@ fn other_udf_calls_stay_in_the_plan() {
         ExprNode::Resolved(ResolvedExpr::Function(_))
     ));
 }
+
+/// An identity UDF over every scalar literal type: folding covers each
+/// `udf_array`/`udf_literal` arm, and nulls fold to null.
+#[derive(Debug)]
+struct TypedIdentity {
+    data_type: DataType,
+}
+
+impl ScalarUdf for TypedIdentity {
+    fn name(&self) -> &str {
+        "typed_identity"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn signature(&self) -> &Signature {
+        use std::sync::OnceLock;
+        static SIG: OnceLock<Signature> = OnceLock::new();
+        SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Any]))
+    }
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: self.data_type.clone(),
+            nullable: true,
+        })
+    }
+    fn properties(&self) -> krishiv_udf_sdk::UdfProperties {
+        krishiv_udf_sdk::UdfProperties {
+            deterministic: true,
+            null_handling: krishiv_udf_sdk::NullHandling::Strict,
+        }
+    }
+    fn invoke(
+        &self,
+        args: &[UdfArg<'_>],
+        _rows: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        Ok(args[0].array())
+    }
+}
+
+fn typed_call(data_type: DataType, literal: Literal) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            id: FunctionId::Udf {
+                name: "typed_identity".to_owned(),
+                version: 1,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![Arc::new(Expr::literal(literal))],
+            distinct: false,
+            filter: None,
+            data_type,
+            nullable: true,
+            deterministic: true,
+        },
+    ))))
+}
+
+fn fold_typed(
+    data_type: DataType,
+    literal: Literal,
+    lib: &UdfLibrary,
+    config: &Config,
+) -> Arc<Expr> {
+    let p = Plan::try_new(LogicalPlan::new(PlanNode::Project {
+        input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+        exprs: vec![typed_call(data_type, literal)],
+    }))
+    .unwrap();
+    project_expr(&optimize_with_udfs(&p, &NoStatistics, lib, config).unwrap())
+}
+
+#[test]
+fn udf_folding_covers_every_scalar_type() {
+    use krishiv_types::DecimalType;
+    // Register one UDF per tested type (the library keys by name; reuse
+    // the same name with the call's type, since folding reads the call).
+    let config = config();
+    let dec = |u: i128| Literal::Decimal {
+        unscaled: u,
+        data_type: DecimalType::try_new(10, 2).unwrap(),
+    };
+    let cases: Vec<(DataType, Literal)> = vec![
+        (DataType::Boolean, Literal::Boolean(true)),
+        (DataType::Byte, Literal::Byte(7)),
+        (DataType::Short, Literal::Short(7)),
+        (DataType::Integer, Literal::Integer(7)),
+        (DataType::Long, Literal::Long(7)),
+        (DataType::Float, Literal::Float(1.5)),
+        (DataType::Double, Literal::Double(2.5)),
+        (
+            DataType::Decimal(DecimalType::try_new(10, 2).unwrap()),
+            dec(150),
+        ),
+        (DataType::String, Literal::String("hi".to_owned())),
+        (DataType::Binary, Literal::Binary(vec![1, 2])),
+        (DataType::Date, Literal::Date(3)),
+        (DataType::Timestamp, Literal::Timestamp(4)),
+        (DataType::TimestampNtz, Literal::TimestampNtz(5)),
+        (DataType::Integer, Literal::Null(Some(DataType::Integer))),
+    ];
+    for (data_type, literal) in cases {
+        let lib = Arc::new(UdfLibrary::new());
+        lib.register(Arc::new(TypedIdentity {
+            data_type: data_type.clone(),
+        }))
+        .unwrap();
+        let folded = fold_typed(data_type.clone(), literal.clone(), &lib, &config);
+        assert!(
+            matches!(folded.node, ExprNode::Literal(_)),
+            "{data_type:?} folds to a literal, not {:?}",
+            folded.node
+        );
+    }
+}
+
+#[test]
+fn udf_folding_leaves_unfoldables_in_the_plan() {
+    use krishiv_plan::Literal as L;
+    let lib = Arc::new(UdfLibrary::new());
+    lib.register(Arc::new(TypedIdentity {
+        data_type: DataType::Integer,
+    }))
+    .unwrap();
+    let config = config();
+    // An interval literal has no UDF form.
+    let interval = L::DayTimeInterval {
+        micros: 1,
+        start: krishiv_plan::DayTimeField::Day,
+        end: krishiv_plan::DayTimeField::Day,
+    };
+    let folded = fold_typed(DataType::Integer, interval, &lib, &config);
+    assert!(matches!(
+        folded.node,
+        ExprNode::Resolved(ResolvedExpr::Function(_))
+    ));
+    // DISTINCT, FILTER and aggregate calls never fold.
+    let base = ResolvedFunction {
+        id: FunctionId::Udf {
+            name: "typed_identity".to_owned(),
+            version: 1,
+        },
+        kind: FunctionKind::Scalar,
+        args: vec![Arc::new(Expr::literal(L::Integer(1)))],
+        distinct: false,
+        filter: None,
+        data_type: DataType::Integer,
+        nullable: true,
+        deterministic: true,
+    };
+    let variants = [
+        ResolvedFunction {
+            distinct: true,
+            ..base.clone()
+        },
+        ResolvedFunction {
+            filter: Some(Arc::new(Expr::literal(L::Boolean(true)))),
+            ..base.clone()
+        },
+        ResolvedFunction {
+            kind: FunctionKind::Aggregate,
+            ..base
+        },
+    ];
+    for mut g in variants {
+        g.args = vec![Arc::new(Expr::literal(L::Integer(1)))];
+        let p = Plan::try_new(LogicalPlan::new(PlanNode::Project {
+            input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+            exprs: vec![Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Function(g),
+            )))],
+        }))
+        .unwrap();
+        let out = project_expr(&optimize_with_udfs(&p, &NoStatistics, &lib, &config).unwrap());
+        assert!(matches!(
+            out.node,
+            ExprNode::Resolved(ResolvedExpr::Function(_))
+        ));
+    }
+    // A failing call stays in the plan (errors surface at execution).
+    #[derive(Debug)]
+    struct Failing;
+    impl ScalarUdf for Failing {
+        fn name(&self) -> &str {
+            "failing_udf"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Any]))
+        }
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+        fn invoke(
+            &self,
+            _: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<ArrayRef, UdfError> {
+            Err(UdfError::new("boom"))
+        }
+    }
+    let lib2 = Arc::new(UdfLibrary::new());
+    lib2.register(Arc::new(Failing)).unwrap();
+    let p = Plan::try_new(LogicalPlan::new(PlanNode::Project {
+        input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+        exprs: vec![Arc::new(Expr::new(ExprNode::Resolved(
+            ResolvedExpr::Function(ResolvedFunction {
+                id: FunctionId::Udf {
+                    name: "failing_udf".to_owned(),
+                    version: 1,
+                },
+                kind: FunctionKind::Scalar,
+                args: vec![Arc::new(Expr::literal(L::Integer(1)))],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Integer,
+                nullable: true,
+                deterministic: true,
+            }),
+        )))],
+    }))
+    .unwrap();
+    let out = project_expr(&optimize_with_udfs(&p, &NoStatistics, &lib2, &config).unwrap());
+    assert!(matches!(
+        out.node,
+        ExprNode::Resolved(ResolvedExpr::Function(_))
+    ));
+    // A non-literal argument never folds.
+    let resolved_col = || {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+            krishiv_plan::BoundColumn {
+                id: krishiv_plan::AttrId(1),
+                name: "a".to_owned(),
+                data_type: DataType::Integer,
+                nullable: true,
+            },
+        ))))
+    };
+    let p = Plan::try_new(LogicalPlan::new(PlanNode::Project {
+        input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+        exprs: vec![Arc::new(Expr::new(ExprNode::Resolved(
+            ResolvedExpr::Function(ResolvedFunction {
+                id: FunctionId::Udf {
+                    name: "typed_identity".to_owned(),
+                    version: 1,
+                },
+                kind: FunctionKind::Scalar,
+                args: vec![resolved_col()],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Integer,
+                nullable: true,
+                deterministic: true,
+            }),
+        )))],
+    }))
+    .unwrap();
+    let out = project_expr(&optimize_with_udfs(&p, &NoStatistics, &lib, &config).unwrap());
+    assert!(matches!(
+        out.node,
+        ExprNode::Resolved(ResolvedExpr::Function(_))
+    ));
+    // An aggregate over expressions is left alone.
+    let agg = Arc::new(LogicalPlan::new(PlanNode::Aggregate {
+        input: Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+        grouping: krishiv_plan::Grouping::GroupBy(vec![typed_call(
+            DataType::Integer,
+            L::Integer(1),
+        )]),
+        aggregates: vec![],
+    }));
+    let p = Plan::try_new((*agg).clone()).unwrap();
+    let out = optimize_with_udfs(&p, &NoStatistics, &lib, &config).unwrap();
+    assert!(matches!(out.root().node, PlanNode::Aggregate { .. }));
+}
