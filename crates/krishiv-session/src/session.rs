@@ -28,9 +28,7 @@ use krishiv_exec::{
     ExecConfig, Executor, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler,
     TokioExecutor, WorkloadClass,
 };
-use krishiv_io::csv::CsvFormat;
-use krishiv_io::parquet::ParquetFormat;
-use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
+use krishiv_io::{DirectoryWrite, FormatRegistry, IoConfig, IoScheduler, SaveMode, StoreId};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
@@ -107,7 +105,7 @@ pub(crate) struct SessionState {
     /// execution (`krishiv.spill.*` are build-time keys).
     spill: Mutex<Option<SpillManager>>,
     io: Arc<IoScheduler>,
-    formats: Vec<Arc<dyn FileFormat>>,
+    formats: Arc<FormatRegistry>,
     cwd: String,
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
@@ -256,7 +254,7 @@ impl SessionBuilder {
                 memory,
                 spill: Mutex::new(None),
                 io,
-                formats: vec![Arc::new(ParquetFormat), Arc::new(CsvFormat)],
+                formats: Arc::new(FormatRegistry::with_defaults()),
                 cwd,
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
@@ -573,7 +571,7 @@ impl Session {
         let (config, conf_version) = self.state.conf.versioned_snapshot();
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
-            self.state.formats.clone(),
+            Arc::clone(&self.state.formats),
             Arc::new(LocalPaths::new(
                 StoreId::new(LOCAL_STORE),
                 self.state.cwd.clone(),
@@ -790,18 +788,7 @@ impl Session {
             .into());
         }
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
-        let Some(format) = self
-            .state
-            .formats
-            .iter()
-            .find(|f| f.name().eq_ignore_ascii_case(&format))
-            .cloned()
-        else {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!("writing the {format} format"),
-            }
-            .into());
-        };
+        let format = self.state.formats.get(&format)?;
         let (options, _) = format.options().parse(&options, &env.config)?;
         let Some(text) = path.as_plain() else {
             return Err(KrishivUnsupportedFeature {

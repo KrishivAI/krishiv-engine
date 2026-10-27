@@ -20,6 +20,7 @@
 use std::cmp::Ordering;
 
 use crate::request::{CmpOp, Collation, ColumnPath, PushdownExpr, ScalarValue};
+use krishiv_common::SketchRef;
 
 /// A value that is exact, an estimate or bound that must not be used for
 /// pruning (truncated min/max, statistics of writers known to order them
@@ -78,6 +79,12 @@ pub struct ColumnStatistics {
     /// unit may hold NaN rows that `min`/`max` do not cover (the Parquet
     /// specification keeps NaN out of them), and pruning accounts for them.
     pub nan_count: Precision<u64>,
+    /// Number of distinct non-null values (an estimate or absent; never
+    /// used for pruning, only for costing).
+    pub distinct: Precision<u64>,
+    /// A serialized distinct-count sketch (a later statistics task reads
+    /// it); pruning ignores it.
+    pub sketch: Option<SketchRef>,
 }
 
 /// Statistics of a file or of a unit of one. Formats without statistics

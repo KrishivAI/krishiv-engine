@@ -16,7 +16,7 @@ use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::files::{FileReads, LocalPaths, LocatedPath, PathLocator};
 use krishiv_io::parquet::ParquetFormat;
-use krishiv_io::{FileFormat, IoConfig, IoScheduler, StoreId};
+use krishiv_io::{FormatRegistry, IoConfig, IoScheduler, StoreId};
 use krishiv_plan::analyzer::testing::context;
 use krishiv_plan::analyzer::{
     Analyzer as _, DefaultAnalyzer, FileSchemaResolver, MemoryCatalog, ResolutionConf, SourceKind,
@@ -65,8 +65,25 @@ fn longs(s: &SchemaRef) -> RecordBatch {
     RecordBatch::try_new(Arc::clone(s), vec![Arc::new(Int64Array::from(vec![1_i64]))]).unwrap()
 }
 
-fn reads(env: &Env, formats: Vec<Arc<dyn FileFormat>>, paths: Arc<dyn PathLocator>) -> FileReads {
-    FileReads::new(env.io.clone(), formats, paths, Arc::new(Config::new()))
+fn reads(
+    env: &Env,
+    formats: Vec<Arc<dyn krishiv_io::FileFormat>>,
+    paths: Arc<dyn PathLocator>,
+) -> FileReads {
+    FileReads::new(
+        env.io.clone(),
+        registry_of(formats),
+        paths,
+        Arc::new(Config::new()),
+    )
+}
+
+fn registry_of(formats: Vec<Arc<dyn krishiv_io::FileFormat>>) -> Arc<FormatRegistry> {
+    let mut registry = FormatRegistry::new();
+    for f in formats {
+        registry.register(f).unwrap();
+    }
+    Arc::new(registry)
 }
 
 fn paths(p: &[&str]) -> Vec<OptionValue> {
@@ -148,11 +165,36 @@ fn directories_list_like_spark() {
         assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature, "{p}");
     }
     // Paths come before the format: a missing path of a format without a
-    // reader here is PATH_NOT_FOUND, an existing one unsupported.
+    // reader here is PATH_NOT_FOUND, an existing one DATA_SOURCE_NOT_FOUND.
     let got = env.block_on(r.infer("json", &paths(&["/nope"]), &none));
     assert_eq!(class(got).0, ErrorClass::PathNotFound);
     let got = env.block_on(r.infer("json", &paths(&["/d"]), &none));
-    assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(class(got).0, ErrorClass::DataSourceNotFound);
+    let got = env.block_on(r.infer("json", &paths(&["/d"]), &none));
+    assert_eq!(class(got).1, "json");
+    // The registered test format resolves case-insensitively, like SQL USING.
+    let got = env.block_on(r.infer("MOCK", &paths(&["/d"]), &none));
+    assert_eq!(columns(got), [("a".to_owned(), DataType::Integer)]);
+    // SQL's `mock`.`/d` reads through the same resolver.
+    let mut ctx = context(
+        MemoryCatalog::new("spark_catalog"),
+        ResolutionConf::default(),
+    );
+    ctx.files = Some(Arc::new(r) as Arc<dyn FileSchemaResolver>);
+    let plan = Plan::try_new(LogicalPlan::table(["mock", "/d"])).unwrap();
+    let analyzed = env.block_on(DefaultAnalyzer.analyze(&plan, &ctx)).unwrap();
+    assert_eq!(analyzed.output[0].name, "a");
+    // An unknown `USING` format is Spark's DATA_SOURCE_NOT_FOUND (42K02).
+    let read = LogicalPlan::new(PlanNode::Read(ReadSource::Files {
+        format: "delta".to_owned(),
+        paths: paths(&["/d"]),
+        options: BTreeMap::new(),
+    }));
+    let e = env
+        .block_on(DefaultAnalyzer.analyze(&Plan::try_new(read).unwrap(), &ctx))
+        .unwrap_err();
+    assert_eq!(e.error.error_class(), ErrorClass::DataSourceNotFound);
+    assert_eq!(e.error.error_class().sql_state(), Some("42K02"));
 }
 
 #[test]
@@ -230,7 +272,7 @@ fn parquet_types_and_options() {
     let (session, _) = Config::from_pairs([("spark.sql.parquet.mergeSchema", "true")]).unwrap();
     let merging = FileReads::new(
         env.io.clone(),
-        vec![Arc::new(ParquetFormat)],
+        registry_of(vec![Arc::new(ParquetFormat)]),
         Arc::new(MemPaths::default()),
         Arc::new(session),
     );
@@ -295,7 +337,7 @@ fn local_files() {
     );
     let r = FileReads::new(
         sched.context(),
-        vec![Arc::new(ParquetFormat)],
+        registry_of(vec![Arc::new(ParquetFormat)]),
         Arc::new(LocalPaths::new(store, root.clone())),
         Arc::new(Config::new()),
     );
@@ -393,7 +435,7 @@ fn agrees_with_spark_on_the_file_read_probe() {
         // One query, one resolver, as a session runs it.
         ctx.files = Some(Arc::new(FileReads::new(
             sched.context(),
-            vec![Arc::new(ParquetFormat)],
+            registry_of(vec![Arc::new(ParquetFormat)]),
             Arc::new(LocalPaths::new(store.clone(), "/")),
             Arc::new(Config::new()),
         )));

@@ -19,9 +19,9 @@
 //! `mergeSchema`): Parquet reads the first file's footer, CSV samples
 //! all of them. Not yet supported, failing with
 //! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories (Spark's
-//! partition discovery), paths with a scheme other than `file`, and file
-//! sources without a [`FileFormat`] here, and merging the files' schemas
-//! (`mergeSchema`).
+//! partition discovery), paths with a scheme other than `file`, and merging
+//! the files' schemas (`mergeSchema`). A format with no [`FileFormat`]
+//! registered under its name fails with Spark's `DATA_SOURCE_NOT_FOUND`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,7 +34,7 @@ use krishiv_common::error::{
     KrishivError, KrishivUnsupportedFeature, PathNotFound, UnableToInferSchema,
 };
 use krishiv_common::secret::OptionValue;
-use krishiv_io::{FileFormat, FileRef, FormatOptions, IoContext, StoreId};
+use krishiv_io::{FileFormat, FileRef, FormatOptions, FormatRegistry, IoContext, StoreId};
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
 use krishiv_types::DataType;
 use object_store::path::Path;
@@ -179,7 +179,7 @@ type ReadKey = (String, Vec<OptionValue>, BTreeMap<String, OptionValue>);
 /// Make one per query; the next query lists the files again.
 pub struct FileReads {
     io: IoContext,
-    formats: Vec<Arc<dyn FileFormat>>,
+    formats: Arc<FormatRegistry>,
     paths: Arc<dyn PathLocator>,
     session: Arc<Config>,
     listed: Mutex<Vec<(ReadKey, Arc<FileListing>)>>,
@@ -188,10 +188,7 @@ pub struct FileReads {
 impl fmt::Debug for FileReads {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileReads")
-            .field(
-                "formats",
-                &self.formats.iter().map(|x| x.name()).collect::<Vec<_>>(),
-            )
+            .field("formats", &self.formats.names())
             .field("paths", &self.paths)
             .finish_non_exhaustive()
     }
@@ -203,7 +200,7 @@ impl FileReads {
     #[must_use]
     pub fn new(
         io: IoContext,
-        formats: Vec<Arc<dyn FileFormat>>,
+        formats: Arc<FormatRegistry>,
         paths: Arc<dyn PathLocator>,
         session: Arc<Config>,
     ) -> Self {
@@ -220,9 +217,10 @@ impl FileReads {
     /// on the first call, the same listing after.
     ///
     /// # Errors
-    /// `PATH_NOT_FOUND`, `UNABLE_TO_INFER_SCHEMA`, option errors,
-    /// `KRISHIV_UNSUPPORTED_FEATURE` (see the module docs) and storage
-    /// failures.
+    /// `PATH_NOT_FOUND`, `UNABLE_TO_INFER_SCHEMA`, Spark's
+    /// `DATA_SOURCE_NOT_FOUND` for a format with nothing registered under
+    /// its name, option errors, `KRISHIV_UNSUPPORTED_FEATURE` (see the
+    /// module docs) and storage failures.
     pub async fn listing(
         &self,
         format: &str,
@@ -270,14 +268,7 @@ impl FileReads {
             self.list_path(&at, &mut files).await?;
         }
         files.sort_by(|a, b| a.path.as_ref().cmp(b.path.as_ref()));
-        let Some(f) = self
-            .formats
-            .iter()
-            .find(|f| f.name().eq_ignore_ascii_case(format))
-        else {
-            return Err(unsupported(format!("the {format} file format")));
-        };
-        let format = Arc::clone(f);
+        let format = self.formats.get(format)?;
         if self.merges_schemas(format.name(), options) {
             return Err(unsupported(
                 "merging the schemas of files (mergeSchema)".to_owned(),
@@ -365,9 +356,7 @@ impl FileSchemaResolver for FileReads {
 
     fn source_kind(&self, name: &str) -> SourceKind {
         let name = name.to_ascii_lowercase();
-        if SPARK_FILE_SOURCES.contains(&name.as_str())
-            || self.formats.iter().any(|f| f.name() == name)
-        {
+        if SPARK_FILE_SOURCES.contains(&name.as_str()) || self.formats.contains(&name) {
             SourceKind::File
         } else if SPARK_OTHER_SOURCES.contains(&name.as_str()) {
             SourceKind::Other

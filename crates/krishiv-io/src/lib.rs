@@ -35,6 +35,7 @@ pub mod io;
 pub mod json;
 mod options;
 pub mod parquet;
+mod registry;
 mod request;
 pub mod runtime_filter;
 mod scan;
@@ -62,6 +63,7 @@ pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,
 };
+pub use registry::FormatRegistry;
 pub use request::{
     CmpOp, Collation, ColumnPath, FieldMapping, MembershipFilter, MetadataCols, PushdownExpr,
     ROW_INDEX_COLUMN, RowFilterPolicy, RowLevel, RowSelection, ScalarValue, ScanRequest,

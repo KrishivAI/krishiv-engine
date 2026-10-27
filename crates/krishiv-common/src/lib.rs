@@ -3,10 +3,13 @@
 
 #![forbid(unsafe_code)]
 
+pub use sketch::SketchRef;
+
 pub mod config;
 pub mod cpu;
 pub mod error;
 pub mod experimental;
 pub mod redact;
 pub mod secret;
+pub mod sketch;
 pub mod stack;
