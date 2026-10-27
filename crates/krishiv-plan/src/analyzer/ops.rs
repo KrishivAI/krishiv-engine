@@ -2192,7 +2192,9 @@ impl Resolver<'_> {
         // The lookup below a duplicated name reports it as ambiguous; an
         // `ORDER BY` reports it as unresolved (Spark 4.2.0:
         // `SELECT a AS k, b AS k FROM t ORDER BY k`), only `LIMIT` and
-        // `HAVING` say ambiguous.
+        // `HAVING` say ambiguous. `AMBIGUOUS_REFERENCE` always carries its
+        // `name` parameter, so without one (or without a matching sort
+        // key) the error passes through unchanged.
         let reported = |e: AnalysisError| -> AnalysisError {
             if !e
                 .error
@@ -2202,25 +2204,21 @@ impl Resolver<'_> {
             {
                 return e;
             }
-            let Some(name) = e
-                .error
+            e.error
                 .message_parameters()
                 .iter()
                 .find_map(|(k, v)| (*k == "name").then(|| v.clone()))
-            else {
-                return e;
-            };
-            exprs
-                .iter()
-                .find_map(|x| match &x.node {
-                    ExprNode::Column(col)
-                        if col.plan_id.is_none()
-                            && col.name.len() == 1
-                            && quoted(&col.name) == name =>
-                    {
-                        Some(unresolved(&col.name, &c.out, x.origin))
-                    }
-                    _ => None,
+                .and_then(|name| {
+                    exprs.iter().find_map(|x| match &x.node {
+                        ExprNode::Column(col)
+                            if col.plan_id.is_none()
+                                && col.name.len() == 1
+                                && quoted(&col.name) == name =>
+                        {
+                            Some(unresolved(&col.name, &c.out, x.origin))
+                        }
+                        _ => None,
+                    })
                 })
                 .unwrap_or(e)
         };

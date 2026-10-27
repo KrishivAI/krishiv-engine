@@ -928,35 +928,33 @@ impl Resolver<'_> {
         let mut roots: Vec<&LogicalPlan> = vec![&c.plan];
         let mut seen_roots: HashSet<usize> = HashSet::new();
         while let Some(root) = roots.pop() {
-            if !seen_roots.insert(addr(root)) {
-                continue;
+            // Each root is walked once (a lowered `Sql` plan is a fresh
+            // tree, so no root repeats).
+            if seen_roots.insert(addr(root)) {
+                let _ = visit_distinct(Node::Plan(root), |node| {
+                    let Node::Plan(p) = node else {
+                        return ControlFlow::Continue(());
+                    };
+                    if let PlanNode::Sql { .. } = &p.node
+                        && let Some(lowered) = self.b.sql.get(&addr(p))
+                    {
+                        roots.push(lowered);
+                    }
+                    if let PlanNode::Read(ReadSource::Table { name, .. }) = &p.node
+                        && let Some(BoundTable::Missing) = self.b.tables.get(name)
+                    {
+                        missing = Some(AnalysisError::new(
+                            TableOrViewNotFound {
+                                relation_name: quoted(name),
+                                search_path: self.b.search_path.clone(),
+                            },
+                            p.origin,
+                        ));
+                        return ControlFlow::Break(());
+                    }
+                    ControlFlow::Continue(())
+                });
             }
-            let _ = visit_distinct(Node::Plan(root), |node| {
-                if missing.is_some() {
-                    return ControlFlow::Break(());
-                }
-                let Node::Plan(p) = node else {
-                    return ControlFlow::Continue(());
-                };
-                if let PlanNode::Sql { .. } = &p.node
-                    && let Some(lowered) = self.b.sql.get(&addr(p))
-                {
-                    roots.push(lowered);
-                }
-                if let PlanNode::Read(ReadSource::Table { name, .. }) = &p.node
-                    && let Some(BoundTable::Missing) = self.b.tables.get(name)
-                {
-                    missing = Some(AnalysisError::new(
-                        TableOrViewNotFound {
-                            relation_name: quoted(name),
-                            search_path: self.b.search_path.clone(),
-                        },
-                        p.origin,
-                    ));
-                    return ControlFlow::Break(());
-                }
-                ControlFlow::Continue(())
-            });
             if missing.is_some() {
                 break;
             }

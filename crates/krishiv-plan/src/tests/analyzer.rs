@@ -4032,3 +4032,205 @@ fn order_by_through_having_reports_duplicates_as_unresolved() {
     assert_eq!(params.get("objectName").map(String::as_str), Some("`a`"));
     assert_eq!(params.get("proposal").map(String::as_str), Some("`a`, `a`"));
 }
+
+/// A `Sql` node inside an unused CTE is still checked for missing tables:
+/// the node's reads live in the lowered plan, which the
+/// unused-definition walk follows. An unused `Sql` over existing tables
+/// passes.
+struct MissingSql;
+
+impl SqlFrontend for MissingSql {
+    fn lower(&self, _query: &str, _: SourceId) -> Result<Plan, AnalysisError> {
+        Plan::try_new(LogicalPlan::table(["gone"]).project(vec![c("a")])).map_err(|error| {
+            AnalysisError {
+                error,
+                origin: Origin::UNKNOWN,
+            }
+        })
+    }
+
+    fn redact(&self, query: &str) -> RedactedSql {
+        RedactedSql::opaque(query)
+    }
+
+    fn fingerprint(&self) -> u64 {
+        11
+    }
+}
+
+#[test]
+fn unused_cte_sql_tables_are_checked() {
+    // An unused definition holding SQL text over existing tables passes:
+    // the walk follows the lowered plan Bind stored for the `Sql` node.
+    let mut good_ctx = ctx();
+    good_ctx.sql = Some(Arc::new(Frontend));
+    let unused_sql = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "u".to_owned(),
+            plan: Arc::new(LogicalPlan::new(PlanNode::Sql {
+                query: "q6".to_owned(),
+                args: SqlArgs::None,
+            })),
+        }],
+    });
+    run(unused_sql, &good_ctx).unwrap();
+    // The same shape over a missing table fails with
+    // `TABLE_OR_VIEW_NOT_FOUND` at the lowered read.
+    let mut bad_ctx = ctx();
+    bad_ctx.sql = Some(Arc::new(MissingSql));
+    let unused_missing = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![c("a")])),
+        ctes: vec![Cte {
+            name: "u".to_owned(),
+            plan: Arc::new(LogicalPlan::new(PlanNode::Sql {
+                query: "anything".to_owned(),
+                args: SqlArgs::None,
+            })),
+        }],
+    });
+    let e = run(unused_missing, &bad_ctx).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(
+        params.get("relationName").map(String::as_str),
+        Some("`gone`")
+    );
+}
+
+/// `ORDER BY` with several keys converts only the ambiguous one: a
+/// resolvable key before it still binds, and the duplicate stays
+/// `UNRESOLVED_COLUMN` (Spark 4.2.0 proposes the duplicate outputs, as
+/// for a single key). (multi-key case)
+#[test]
+fn order_by_second_duplicate_key_is_unresolved() {
+    let ctx = ctx();
+    // `SELECT 1 AS x, 2 AS x, b FROM t ORDER BY b, x`: `b` resolves to
+    // the input column while `x` stays unresolved. (multi-key sort)
+    let order = LogicalPlan::table(["t"])
+        .project(vec![int(1).alias("x"), int(2).alias("x"), c("b")])
+        .sort(vec![
+            crate::SortOrder::asc(c("b")),
+            crate::SortOrder::asc(c("x")),
+        ]);
+    let e = run(order, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("objectName").map(String::as_str), Some("`x`"));
+}
+
+/// `ORDER BY` through a `HAVING` filter also resolves a grouping
+/// expression written out in full: with no growth the sort retries
+/// against the aggregate below the filter, where the expression is the
+/// aggregate's output (as over the aggregate directly) or is added to
+/// it (as over the aggregate directly).
+#[test]
+fn order_by_through_having_resolves_full_grouping_expression() {
+    let ctx = ctx();
+    // `SELECT a + 1 AS k FROM t GROUP BY a + 1 HAVING k > 0 ORDER BY a + 1`:
+    // the `HAVING` needs nothing new, so the sort retries through the
+    // filter against the aggregate, resolving to the `k` output.
+    let plan = LogicalPlan::table(["t"])
+        .aggregate(
+            vec![add(c("a"), int(1))],
+            vec![add(c("a"), int(1)).alias("k")],
+        )
+        .filter(gt(c("k"), int(0)))
+        .sort(vec![crate::SortOrder::asc(add(c("a"), int(1)))]);
+    let a = run(plan, &ctx).unwrap();
+    assert_eq!(
+        a.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["k"]
+    );
+    // The sort key is the `k` output.
+    let mut keys = Vec::new();
+    let _ = visit_distinct(Node::Plan(a.plan.root()), |node| {
+        if let Node::Plan(p) = node
+            && let PlanNode::Sort { order, .. } = &p.node
+        {
+            keys.extend(order.iter().flat_map(|o| resolved_ids(&o.expr)));
+        }
+        ControlFlow::Continue(())
+    });
+    assert_eq!(keys, vec![a.output[0].id]);
+    // `SELECT count(*) AS c FROM t GROUP BY a + 1 HAVING count(*) > 0
+    // ORDER BY a + 1`: the grouping expression is not an output, so the
+    // retry adds it to the aggregate below the filter and sorts by it.
+    let grown = LogicalPlan::table(["t"])
+        .aggregate(
+            vec![add(c("a"), int(1))],
+            vec![f("count", vec![star()]).alias("c")],
+        )
+        .filter(gt(f("count", vec![star()]), int(0)))
+        .sort(vec![crate::SortOrder::asc(add(c("a"), int(1)))]);
+    let b = run(grown, &ctx).unwrap();
+    assert_eq!(b.output.len(), 2);
+    let mut grown_keys = Vec::new();
+    let _ = visit_distinct(Node::Plan(b.plan.root()), |node| {
+        if let Node::Plan(p) = node
+            && let PlanNode::Sort { order, .. } = &p.node
+        {
+            grown_keys.extend(order.iter().flat_map(|o| resolved_ids(&o.expr)));
+        }
+        ControlFlow::Continue(())
+    });
+    assert_eq!(grown_keys.len(), 1);
+    assert!(b.output.iter().any(|o| o.id == grown_keys[0]));
+}
+
+/// `ORDER BY` over duplicate outputs above windows still reports them
+/// as unresolved: the sort reads the select list only, never resolving
+/// through the windows to the aggregate below.
+#[test]
+fn order_by_over_windows_reports_duplicates_as_unresolved() {
+    let ctx = ctx();
+    let ranked = Expr::new(ExprNode::Window(crate::WindowExpr {
+        function: Arc::new(f("row_number", Vec::new())),
+        window: crate::WindowSpecRef::Spec(crate::WindowSpec {
+            partition_by: Vec::new(),
+            order_by: Vec::new(),
+            frame: None,
+        }),
+    }));
+    // `SELECT 1 AS x, 2 AS x, a, row_number() OVER () FROM t GROUP BY a
+    // HAVING a > 0 ORDER BY x`: the `HAVING` needs nothing new, so the
+    // sort retries through the filter, but the aggregate holds windows,
+    // so the duplicates stay `UNRESOLVED_COLUMN`.
+    let plan = LogicalPlan::table(["t"])
+        .aggregate(
+            vec![c("a")],
+            vec![
+                int(1).alias("x"),
+                int(2).alias("x"),
+                c("a"),
+                ranked.alias("r"),
+            ],
+        )
+        .filter(gt(c("a"), int(0)))
+        .sort(vec![crate::SortOrder::asc(c("x"))]);
+    let e = run(plan, &ctx).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    let params: std::collections::BTreeMap<_, _> = e
+        .error
+        .message_parameters()
+        .iter()
+        .map(|(k, v)| (*k, v.clone()))
+        .collect();
+    assert_eq!(params.get("objectName").map(String::as_str), Some("`x`"));
+}
