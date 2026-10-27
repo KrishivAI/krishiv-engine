@@ -388,49 +388,46 @@ fn partition_by_with_bogus_mode_reports_invalid_save_mode() {
 }
 
 #[test]
-fn unregistered_format_fails_with_data_source_not_found() {
+fn unknown_format_fails_with_unsupported_feature() {
     let dir = tempfile::tempdir().unwrap();
     let s = session();
-    // A name no format is registered under: Spark's DATA_SOURCE_NOT_FOUND.
-    for format in ["orc", "avro"] {
+    // The JSON shortcut (the engine has no JSON writer yet).
+    let err = block_on(s.table("people").write().json(&out(&dir, "j"))).unwrap_err();
+    assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert!(err.to_string().contains("writing the json format"), "{err}");
+    // Any other Spark built-in source without an implementation, through
+    // `format`.
+    for format in ["text", "orc", "avro"] {
         let path = out(&dir, format);
         let err = block_on(s.table("people").write().format(format).save(&path)).unwrap_err();
-        assert_eq!(err.error_class().name(), "DATA_SOURCE_NOT_FOUND");
-        assert_eq!(err.error_class().sql_state(), Some("42K02"));
-        assert!(err.to_string().contains(format), "{err}");
+        assert_eq!(
+            err.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{format}"
+        );
+        assert!(
+            err.to_string()
+                .contains(&format!("writing the {format} format")),
+            "{err}"
+        );
         // The failed write leaves nothing behind.
         assert!(!dir.path().join(format).exists());
     }
 }
 
 #[test]
-fn json_write_round_trips_through_the_registered_format() {
+fn unknown_format_name_fails_with_data_source_not_found() {
     let dir = tempfile::tempdir().unwrap();
     let s = session();
-    let path = out(&dir, "j");
-    block_on(s.table("people").write().json(&path)).unwrap();
-    assert!(dir.path().join("j").join("_SUCCESS").exists());
-    assert_eq!(
-        block_on(s.read().format("json").load([&path]).count()).unwrap(),
-        3
-    );
-}
-
-#[test]
-fn text_write_needs_a_single_string_column() {
-    let dir = tempfile::tempdir().unwrap();
-    let s = session();
-    // `text` is registered, so the write reaches its writer: two columns
-    // fail its single-column check, as in Spark.
-    let err = block_on(
-        s.table("people")
-            .write()
-            .format("text")
-            .save(&out(&dir, "t")),
-    )
-    .unwrap_err();
-    assert_eq!(err.error_class().name(), "_LEGACY_ERROR_TEMP_1290");
-    assert!(!dir.path().join("t").exists());
+    // A name Spark does not know at all: Spark's DATA_SOURCE_NOT_FOUND.
+    let format = "nosuchformat";
+    let path = out(&dir, format);
+    let err = block_on(s.table("people").write().format(format).save(&path)).unwrap_err();
+    assert_eq!(err.error_class().name(), "DATA_SOURCE_NOT_FOUND");
+    assert_eq!(err.error_class().sql_state(), Some("42K02"));
+    assert!(err.to_string().contains(format), "{err}");
+    // The failed write leaves nothing behind.
+    assert!(!dir.path().join(format).exists());
 }
 
 #[test]

@@ -28,7 +28,9 @@ use krishiv_exec::{
     ExecConfig, Executor, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler,
     TokioExecutor, WorkloadClass,
 };
-use krishiv_io::{DirectoryWrite, FormatRegistry, IoConfig, IoScheduler, SaveMode, StoreId};
+use krishiv_io::{
+    DirectoryWrite, FormatRegistry, IoConfig, IoScheduler, SaveMode, StoreId, is_spark_file_source,
+};
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
@@ -788,7 +790,18 @@ impl Session {
             .into());
         }
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
-        let format = self.state.formats.get(&format)?;
+        let format = match self.state.formats.get(&format) {
+            Ok(format) => format,
+            Err(e) => {
+                if is_spark_file_source(&format) {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!("writing the {format} format"),
+                    }
+                    .into());
+                }
+                return Err(e);
+            }
+        };
         let (options, _) = format.options().parse(&options, &env.config)?;
         let Some(text) = path.as_plain() else {
             return Err(KrishivUnsupportedFeature {

@@ -1010,7 +1010,7 @@ fn writes_follow_spark_save_modes() {
     );
     assert_eq!(
         class(block_on(people.write().format("avro").save(&out))),
-        ErrorClass::DataSourceNotFound
+        ErrorClass::KrishivUnsupportedFeature
     );
     assert_eq!(count(), 1);
     // Spark 4.2.0: a repeated column name fails with COLUMN_ALREADY_EXISTS,

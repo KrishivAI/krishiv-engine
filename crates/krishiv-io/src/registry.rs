@@ -16,6 +16,31 @@ use krishiv_common::error::{DataSourceNotFound, KrishivError};
 
 use crate::FileFormat;
 
+/// Spark 4.2's built-in data sources that read files (`` name.`path` ``
+/// reads them), as a Spark run classifies them. A name here without a
+/// registered [`FileFormat`] is a known source the engine has no reader or
+/// writer for, not an unknown data source.
+pub const SPARK_FILE_SOURCES: &[&str] = &[
+    "parquet",
+    "orc",
+    "avro",
+    "json",
+    "csv",
+    "text",
+    "binaryfile",
+    "xml",
+    "libsvm",
+];
+
+/// Whether `name` is one of Spark's built-in file sources
+/// ([`SPARK_FILE_SOURCES`]), case-insensitively.
+#[must_use]
+pub fn is_spark_file_source(name: &str) -> bool {
+    SPARK_FILE_SOURCES
+        .iter()
+        .any(|s| s.eq_ignore_ascii_case(name))
+}
+
 /// Name-based resolution of [`FileFormat`] implementations.
 #[derive(Default)]
 pub struct FormatRegistry {
@@ -40,7 +65,9 @@ impl FormatRegistry {
         }
     }
 
-    /// The built-in formats (Parquet, CSV, JSON, text).
+    /// The built-in formats (Parquet, CSV): exactly the formats the
+    /// session registered before the registry existed, so no other format
+    /// becomes user-visible by accident.
     #[must_use]
     pub fn with_defaults() -> Self {
         let mut r = Self::new();
@@ -49,8 +76,6 @@ impl FormatRegistry {
         // `check-format-neutral` lint allows.
         let _ = r.register(Arc::new(crate::parquet::ParquetFormat));
         let _ = r.register(Arc::new(crate::csv::CsvFormat));
-        let _ = r.register(Arc::new(crate::json::JsonFormat));
-        let _ = r.register(Arc::new(crate::text_format::TextFormat));
         r
     }
 
@@ -74,7 +99,11 @@ impl FormatRegistry {
     /// The format `name` (case-insensitive).
     ///
     /// # Errors
-    /// Spark's `DATA_SOURCE_NOT_FOUND` for an unknown name.
+    /// Spark's `DATA_SOURCE_NOT_FOUND` for a name with nothing registered
+    /// under it, including Spark built-in sources the engine has no
+    /// implementation for. Callers that know whether `name` is a Spark
+    /// built-in source (see [`SPARK_FILE_SOURCES`]) report those as
+    /// `KRISHIV_UNSUPPORTED_FEATURE` instead.
     pub fn get(&self, name: &str) -> Result<Arc<dyn FileFormat>, KrishivError> {
         let key = name.to_ascii_lowercase();
         self.by_name.get(&key).cloned().ok_or_else(|| {
@@ -105,16 +134,23 @@ mod tests {
     #[test]
     fn unknown_names_fail_with_data_source_not_found() {
         let r = FormatRegistry::with_defaults();
-        for name in ["parquet", "PARQUET", "csv", "json", "text"] {
+        for name in ["parquet", "PARQUET", "csv", "CSV"] {
             assert!(r.get(name).is_ok(), "{name}");
             assert!(r.contains(name), "{name}");
         }
-        let Err(e) = r.get("delta") else {
-            panic!("unknown format resolved")
-        };
-        assert_eq!(e.error_class().name(), "DATA_SOURCE_NOT_FOUND");
-        assert_eq!(e.sql_state(), Some("42K02"));
-        assert!(e.to_string().contains("delta"), "{e}");
+        // Spark built-in sources without an implementation are still
+        // unregistered here; reads and writes report them as unsupported.
+        for name in ["orc", "avro", "json", "text"] {
+            assert!(!r.contains(name), "{name}");
+        }
+        for name in ["delta", "nosuchformat"] {
+            let Err(e) = r.get(name) else {
+                panic!("unknown format resolved")
+            };
+            assert_eq!(e.error_class().name(), "DATA_SOURCE_NOT_FOUND");
+            assert_eq!(e.sql_state(), Some("42K02"));
+            assert!(e.to_string().contains(name), "{e}");
+        }
         // A registry that only knows one format still resolves it by case.
         let mut single = FormatRegistry::new();
         single.register(Arc::new(crate::csv::CsvFormat)).unwrap();
@@ -130,8 +166,8 @@ mod tests {
     }
 
     #[test]
-    fn defaults_cover_the_built_in_file_sources() {
+    fn defaults_register_parquet_and_csv() {
         let r = FormatRegistry::with_defaults();
-        assert_eq!(r.names(), ["csv", "json", "parquet", "text"]);
+        assert_eq!(r.names(), ["csv", "parquet"]);
     }
 }

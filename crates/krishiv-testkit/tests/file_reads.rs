@@ -165,13 +165,29 @@ fn directories_list_like_spark() {
         assert_eq!(class(got).0, ErrorClass::KrishivUnsupportedFeature, "{p}");
     }
     // Paths come before the format: a missing path of a format without a
-    // reader here is PATH_NOT_FOUND, an existing one DATA_SOURCE_NOT_FOUND.
+    // reader here is PATH_NOT_FOUND, an existing one of a Spark built-in
+    // source without an implementation is unsupported.
     let got = env.block_on(r.infer("json", &paths(&["/nope"]), &none));
     assert_eq!(class(got).0, ErrorClass::PathNotFound);
-    let got = env.block_on(r.infer("json", &paths(&["/d"]), &none));
-    assert_eq!(class(got).0, ErrorClass::DataSourceNotFound);
-    let got = env.block_on(r.infer("json", &paths(&["/d"]), &none));
-    assert_eq!(class(got).1, "json");
+    for format in ["json", "orc", "avro"] {
+        let got = env.block_on(r.infer(format, &paths(&["/d"]), &none));
+        let (kind, param) = class(got);
+        assert_eq!(kind, ErrorClass::KrishivUnsupportedFeature, "{format}");
+        assert!(
+            param.contains(&format!("the {format} file format")),
+            "{format}: {param}"
+        );
+    }
+    // A name Spark does not know at all is Spark's DATA_SOURCE_NOT_FOUND.
+    for format in ["delta", "nosuchformat"] {
+        let got = env.block_on(r.infer(format, &paths(&["/d"]), &none));
+        let (kind, param) = class(got);
+        assert_eq!(kind, ErrorClass::DataSourceNotFound, "{format}");
+        assert_eq!(kind.sql_state(), Some("42K02"), "{format}");
+        assert_eq!(param, format.to_owned(), "{format}");
+    }
+    // Without the three-way resolution this reported an unknown name as
+    // unsupported; DATA_SOURCE_NOT_FOUND carries SQLSTATE 42K02.
     // The registered test format resolves case-insensitively, like SQL USING.
     let got = env.block_on(r.infer("MOCK", &paths(&["/d"]), &none));
     assert_eq!(columns(got), [("a".to_owned(), DataType::Integer)]);
@@ -208,12 +224,14 @@ fn source_kinds_follow_spark() {
     for (name, kind) in [
         ("parquet", SourceKind::File),
         ("CSV", SourceKind::File),
+        ("ORC", SourceKind::File),
+        ("avro", SourceKind::File),
         ("binaryFile", SourceKind::File),
         ("mock", SourceKind::File),
         ("jdbc", SourceKind::Other),
         ("noop", SourceKind::Other),
         ("delta", SourceKind::Unknown),
-        ("foo", SourceKind::Unknown),
+        ("nosuchformat", SourceKind::Unknown),
     ] {
         assert_eq!(r.source_kind(name), kind, "{name}");
     }
