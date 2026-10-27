@@ -195,6 +195,9 @@ pub(super) struct ScanLocal {
     pub(super) claimed: u64,
     /// The runtime filters' row stage.
     pub(super) rows: super::RowStage,
+    /// The driver's partition: pushed filters evaluate stateful functions
+    /// in it (see [`Predicate::evaluate_in`]).
+    pub(super) partition: u32,
 }
 
 impl MemoryScan {
@@ -278,7 +281,12 @@ impl MemoryScan {
 
     /// Reads the next piece of the claimed (non-empty) morsel, filtered and
     /// projected.
-    pub(super) fn next_piece(&self, local: &mut ScanLocal, batch_rows: usize) -> Result<Batch> {
+    pub(super) fn next_piece(
+        &self,
+        local: &mut ScanLocal,
+        batch_rows: usize,
+        partition: u32,
+    ) -> Result<Batch> {
         let batch = self
             .batches
             .get(local.batches.start)
@@ -301,7 +309,7 @@ impl MemoryScan {
             if piece.num_rows() == 0 {
                 break;
             }
-            let mask = filter.evaluate(piece.data())?;
+            let mask = filter.evaluate_in(piece.data(), partition)?;
             piece = piece.filter(&mask)?;
         }
         // After the pushed filters, as Spark evaluates a runtime filter
@@ -352,7 +360,8 @@ impl MemoryScan {
         // One piece per call, even an empty input batch or one a pushed
         // filter emptied: the driver must reach a batch boundary (cancel,
         // abort and spill checks) after every piece read.
-        let piece = self.next_piece(local, g.batch_rows)?;
+        let partition = local.partition;
+        let piece = self.next_piece(local, g.batch_rows, partition)?;
         g.returned
             .fetch_add(piece.num_rows() as u64, Ordering::Relaxed);
         Ok(Some(piece))
@@ -421,6 +430,7 @@ impl Source for MemoryScan {
             offset: 0,
             claimed: 0,
             rows: super::RowStage::new(&g.runtime, &self.table, self.runtime.settings()),
+            partition: _ctx.partition(),
         }))
     }
 

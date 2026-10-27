@@ -159,7 +159,7 @@ impl PhysExpr for SubqueryValue {
         self.kind == Kind::Scalar
     }
 
-    fn eval(&self, _batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, _batch: &RecordBatch, _partition: u32) -> Result<Value> {
         let (_, v) = self
             .value
             .current()

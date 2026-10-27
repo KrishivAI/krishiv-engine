@@ -2,75 +2,75 @@
   "entries": [
     {
       "query": "SELECT map_zip_with(array_map1, array_map2, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(decimal_map1, decimal_map2, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(decimal_map1, double_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(decimal_map1, int_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(decimal_map1, string_map4, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(decimal_map2, double_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(decimal_map2, int_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(double_map, float_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(float_infinity_map1, float_infinity_map2, (k, v1, v2) -> (v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: row and struct constructors"
     },
     {
       "query": "SELECT map_zip_with(float_nan_map1, float_nan_map2, (k, v1, v2) -> (v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: row and struct constructors"
     },
     {
       "query": "SELECT map_zip_with(float_zero_map, float_neg_zero_map, (k, v1, v2) -> (v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: row and struct constructors"
     },
     {
       "query": "SELECT map_zip_with(int_map, bigint_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(smallint_map, int_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(string_map1, int_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(string_map2, date_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(struct_map1, struct_map2, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(timestamp_map, string_map3, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     },
     {
       "query": "SELECT map_zip_with(tinyint_map, smallint_map, (k, v1, v2) -> struct(k, v1, v2)) m\nFROM various_maps",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: lambda functions"
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function map_zip_with"
     }
   ],
   "file": "typeCoercion/native/mapZipWith",

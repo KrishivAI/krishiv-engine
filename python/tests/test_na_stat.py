@@ -310,8 +310,8 @@ def test_dropna_resolves_names_like_the_session(typed: DataFrame, spark: SparkSe
 @pytest.mark.parametrize(
     ("kwargs", "condition", "parameters"),
     [
-        ({"how": "some"}, "VALUE_NOT_ALLOWED", {"arg_name": "how", "allowed_values": "['any', 'all']"}),
-        ({"how": 1}, "NOT_EXPECTED_TYPE", {"arg_name": "how", "expected_type": "str", "arg_type": "int"}),
+        ({"how": "some"}, "VALUE_NOT_ANY_OR_ALL", {"arg_name": "how", "arg_value": "some"}),
+        ({"how": 1}, "VALUE_NOT_ANY_OR_ALL", {"arg_name": "how", "arg_value": 1}),
         ({"thresh": "2"}, "NOT_EXPECTED_TYPE", {"arg_name": "thresh", "expected_type": "int", "arg_type": "str"}),
         (
             {"subset": 3},
@@ -322,12 +322,50 @@ def test_dropna_resolves_names_like_the_session(typed: DataFrame, spark: SparkSe
     ],
 )
 def test_dropna_argument_errors(
-    typed: DataFrame, kwargs: dict[str, Any], condition: str, parameters: dict[str, str]
+    typed: DataFrame, kwargs: dict[str, Any], condition: str, parameters: dict[str, Any]
 ) -> None:
     with fails(errors.PySparkTypeError if condition == "NOT_EXPECTED_TYPE" else errors.PySparkValueError, condition):
         typed.dropna(**kwargs)
     with fails(errors.PySparkException, condition, **parameters):
         typed.na.drop(**kwargs)
+
+
+@pytest.mark.parametrize("how", ["some", "", 1, 0, False])
+def test_dropna_how_must_be_any_or_all(typed: DataFrame, how: Any) -> None:
+    with fails(errors.PySparkValueError, "VALUE_NOT_ANY_OR_ALL", arg_name="how", arg_value=how):
+        typed.dropna(how=how)
+    with fails(errors.PySparkValueError, "VALUE_NOT_ANY_OR_ALL", arg_name="how", arg_value=how):
+        typed.na.drop(how=how)
+
+
+def test_dropna_how_rejects_an_array(typed: DataFrame) -> None:
+    """A multi-element array as ``how`` fails with ``VALUE_NOT_ANY_OR_ALL`` instead of an
+    ambiguous-truth-value error (``in`` would truth-test the elementwise ``==``)."""
+
+    class _Array:
+        """Stands in for a multi-element NumPy array: ``==`` yields an object whose truth
+        value is ambiguous, exactly like ``numpy.ndarray.__eq__``."""
+
+        def __eq__(self, other: object) -> Any:
+            class _Compared:
+                def __bool__(self) -> bool:
+                    raise ValueError(
+                        "The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()"
+                    )
+
+            return _Compared()
+
+    how = _Array()
+    with pytest.raises(errors.PySparkValueError) as info:
+        typed.dropna(how=how)  # ty: ignore[invalid-argument-type]
+    assert info.value.getCondition() == "VALUE_NOT_ANY_OR_ALL"
+    assert (info.value.getMessageParameters() or {})["arg_name"] == "how"
+    assert (info.value.getMessageParameters() or {})["arg_value"] is how
+    with pytest.raises(errors.PySparkValueError) as info:
+        typed.na.drop(how=how)
+    assert info.value.getCondition() == "VALUE_NOT_ANY_OR_ALL"
+    assert (info.value.getMessageParameters() or {})["arg_name"] == "how"
+    assert (info.value.getMessageParameters() or {})["arg_value"] is how
 
 
 def test_dropna_names_that_are_not_columns(typed: DataFrame) -> None:
@@ -1160,7 +1198,7 @@ def test_error_messages_are_pysparks(typed: DataFrame) -> None:
         ),
         (
             lambda: typed.dropna(how="some"),
-            "[VALUE_NOT_ALLOWED] Value for `how` has to be amongst the following values: ['any', 'all'].",
+            "[VALUE_NOT_ANY_OR_ALL] Value for `how` must be 'any' or 'all', got 'some'.",
         ),
         (
             lambda: typed.fillna(None),  # ty: ignore[invalid-argument-type]

@@ -9,22 +9,6 @@
       "reason": "SELECT signum(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "signum#492e1b60af0f/ansi_on",
-      "reason": "SELECT signum(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "signum#492e1b60af0f/ansi_off",
-      "reason": "SELECT signum(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "signum#5de30314d52d/ansi_on",
-      "reason": "SELECT signum(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "signum#5de30314d52d/ansi_off",
-      "reason": "SELECT signum(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "signum#7c837d354941/ansi_on",
       "reason": "SELECT signum(INTERVAL -'100' YEAR) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

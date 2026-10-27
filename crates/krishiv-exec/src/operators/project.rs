@@ -9,7 +9,7 @@ use arrow_schema::{Field, Schema, SchemaRef};
 use krishiv_types::batch::Batch;
 
 use super::expr::ScalarExpr;
-use super::no_state;
+use super::{PartitionState, local_mut};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{LocalState, Operator, OperatorOutput};
@@ -138,15 +138,18 @@ impl Operator for Project {
         Arc::clone(&self.schema)
     }
 
-    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
-        Ok(no_state())
+    fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(PartitionState {
+            partition: ctx.partition(),
+        }))
     }
 
-    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+    fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
         let rows = input.num_rows();
         if rows == 0 {
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
+        let partition = local_mut::<PartitionState>(local, "Project")?.partition;
         let data = input.data();
         let columns = self
             .items
@@ -158,7 +161,7 @@ impl Operator for Project {
                         .get(*index)
                         .map(Arc::clone)
                         .ok_or_else(|| internal(format!("project index {index} out of range"))),
-                    ProjectItem::Expr { expr, .. } => expr.evaluate(data),
+                    ProjectItem::Expr { expr, .. } => expr.evaluate_in(data, partition),
                 }
             })
             .collect::<Result<Vec<_>>>()?;

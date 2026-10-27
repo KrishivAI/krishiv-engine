@@ -475,6 +475,16 @@ impl Encoder {
             ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
                 Kind::OuterColumn(bound_column(c, &self.nested)?)
             }
+            ExprNode::Lambda { params, body } => Kind::Lambda(pb::Lambda {
+                params: params
+                    .iter()
+                    .map(|p| bound_column(p, &self.nested))
+                    .collect::<Result<_>>()?,
+                body: self.child(body),
+            }),
+            ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
+                Kind::LambdaVar(bound_column(c, &self.nested)?)
+            }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => Kind::Function(self.function(f)?),
             ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
                 Kind::Alias(pb::AliasExpr {
@@ -482,6 +492,19 @@ impl Encoder {
                     output: Some(bound_column(output, &self.nested)?),
                 })
             }
+            ExprNode::Resolved(ResolvedExpr::Field {
+                base,
+                ordinal,
+                name,
+                data_type,
+                nullable,
+            }) => Kind::Field(pb::FieldExpr {
+                base: self.child(base),
+                ordinal: u32::try_from(*ordinal).map_err(|_| unresolved("a field ordinal"))?,
+                name: name.clone(),
+                data_type: Some(spark_type(data_type, &self.nested)?),
+                nullable: *nullable,
+            }),
             ExprNode::Column(_) => return Err(unresolved("an unresolved column")),
             ExprNode::Star(_) => return Err(unresolved("an unresolved star")),
             ExprNode::Function(_) => return Err(unresolved("an unresolved function call")),
