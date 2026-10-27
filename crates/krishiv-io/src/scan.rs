@@ -493,11 +493,22 @@ impl ScanStream {
         }
         if !missing.is_empty() {
             let need: u64 = missing.iter().map(|r| r.end - r.start).sum();
-            let target = self.held_bytes().saturating_add(need);
+            // The read's coalescing gaps are held until its ranges are
+            // copied out: reserved for the read, released by `account`.
+            let gaps = self
+                .io
+                .request_bytes(&self.file, &missing)
+                .saturating_sub(need);
+            // With a gate the ranges are the share's (`grow_share`), so the
+            // reservation covers only the gaps.
+            let target = match self.gate {
+                Some(_) => self.held_bytes().saturating_add(gaps),
+                None => self.held_bytes().saturating_add(need).saturating_add(gaps),
+            };
             let grow = usize::try_from(target)
                 .unwrap_or(usize::MAX)
                 .saturating_sub(self.mem.size());
-            if grow > 0 && self.gate.is_none() {
+            if grow > 0 {
                 self.mem.grow(grow).await?;
             }
             let fetched = self.io.get_ranges(&self.file, &missing).await?;
@@ -557,13 +568,17 @@ impl ScanStream {
             self.settled = true;
             return;
         }
-        let target = usize::try_from(self.held_bytes() + bytes).unwrap_or(usize::MAX);
+        // In flight, the reads hold their coalescing gaps too: reserved
+        // until they complete (`prefetched` counts `span`), then only the
+        // ranges stay (`ready`).
+        let span = self.io.request_bytes(&self.file, &ranges).max(bytes);
+        let target = usize::try_from(self.held_bytes() + span).unwrap_or(usize::MAX);
         let grow = target.saturating_sub(self.mem.size());
         if grow > 0 && self.mem.try_grow(grow).is_err() {
             return;
         }
         let fut = self.io.fetch(self.file.clone(), ranges.clone());
-        self.in_flight = Some((bytes, fut, ranges));
+        self.in_flight = Some((span, fut, ranges));
     }
 
     /// Drops prefetched bytes and returns the bytes released.
