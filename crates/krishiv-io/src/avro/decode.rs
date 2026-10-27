@@ -14,18 +14,24 @@
 //! emitted in the file-level request schema, with `_tmp_metadata_row_index`
 //! appended when asked.
 //!
-//! Corrupt records follow `mode`: `FAILFAST` fails the scan, `DROPMALFORMED`
-//! drops the rest of the block, `PERMISSIVE` appends one null row (when the
-//! output allows it) and drops the rest of the block. A record can never be
-//! skipped and resumed mid-block: the framing past a bad datum is
-//! unknowable. Dates and timestamps before the calendar switch follow
-//! `datetimeRebaseMode` (`EXCEPTION` fails, `CORRECTED` reads them as
-//! stored, `LEGACY` is refused when such a value appears).
+//! Corrupt records follow `mode`: `FAILFAST` (the default) fails the scan,
+//! `DROPMALFORMED` drops the rest of the block, `PERMISSIVE` appends one
+//! null row (when the output allows it and the row is selected) and drops
+//! the rest of the block. A record that decodes but that a column cannot
+//! hold is checked against every column before any column takes it, so a
+//! dropped record leaves no partial row. A record can never be skipped and
+//! resumed mid-block: the framing past a bad datum is unknowable. Dates and
+//! timestamps before the calendar switch follow the file's own rebase mode
+//! when its header names a Spark version (`CORRECTED`, or `LEGACY` for files
+//! written in that mode), else `datetimeRebaseMode` (`EXCEPTION` fails,
+//! `CORRECTED` reads them as stored, `LEGACY` is refused when such a value
+//! appears).
 
 use std::collections::BTreeMap;
 use std::ops::Range;
 use std::sync::Arc;
 
+use apache_avro::reader::datum::GenericDatumReader;
 use apache_avro::{Schema as AvroSchema, types::Value as AvroValue};
 use arrow_array::builder::{
     ArrayBuilder, BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
@@ -38,8 +44,9 @@ use arrow_schema::{DataType, Field, SchemaRef, TimeUnit};
 use bytes::Bytes;
 
 use super::AvroMetadata;
-use super::options::{AvroOptions, Codec as OptCodec, Mode, Rebase};
-use super::schema::{field_default, schema_kind};
+use super::block_codec;
+use super::options::{AvroOptions, Mode, Rebase};
+use super::schema::{UnionShape, field_default, null_branch_index, schema_kind, union_shape};
 use crate::error::{FormatError, FormatResult, internal, unsupported};
 use crate::format::{Decoder, ScanUnitMetrics, Step, UnitPlan};
 use crate::request::{ROW_INDEX_COLUMN, ScanRequest, project_batch};
@@ -66,7 +73,7 @@ type Header = (BTreeMap<Vec<u8>, Vec<u8>>, usize);
 /// The outcome of parsing a byte prefix: more bytes, the value, or a bad
 /// magic.
 pub(crate) enum Parsed<T> {
-    Need(usize),
+    Need,
     Done(T),
     BadMagic,
 }
@@ -98,7 +105,7 @@ fn parse_slice(buf: &[u8], pos: usize) -> Option<(&[u8], usize)> {
 /// The parsed header: the metadata entries and the header's length.
 pub(crate) fn parse_header(buf: &[u8]) -> Parsed<Header> {
     if buf.len() < MAGIC.len() {
-        return Parsed::Need(MAGIC.len());
+        return Parsed::Need;
     }
     if &buf[..MAGIC.len()] != MAGIC {
         // Not a header at all; the caller reports the magic.
@@ -108,7 +115,7 @@ pub(crate) fn parse_header(buf: &[u8]) -> Parsed<Header> {
     let mut meta = BTreeMap::new();
     loop {
         let Some((count, n)) = parse_long(buf, pos) else {
-            return Parsed::Need(pos + 1);
+            return Parsed::Need;
         };
         pos += n;
         if count == 0 {
@@ -118,7 +125,7 @@ pub(crate) fn parse_header(buf: &[u8]) -> Parsed<Header> {
         // header walk skips (the entries follow it).
         if count < 0 {
             let Some((_, n)) = parse_long(buf, pos) else {
-                return Parsed::Need(pos + 1);
+                return Parsed::Need;
             };
             pos += n;
         }
@@ -130,17 +137,17 @@ pub(crate) fn parse_header(buf: &[u8]) -> Parsed<Header> {
         }
         for _ in 0..entries {
             let Some((k, n)) = parse_slice(buf, pos) else {
-                return Parsed::Need(pos + 1);
+                return Parsed::Need;
             };
             let Some((v, m)) = parse_slice(buf, pos + n) else {
-                return Parsed::Need(pos + n + 1);
+                return Parsed::Need;
             };
             pos += n + m;
             meta.insert(k.to_vec(), v.to_vec());
         }
     }
     if buf.len() < pos + 16 {
-        return Parsed::Need(pos + 16);
+        return Parsed::Need;
     }
     Parsed::Done((meta, pos))
 }
@@ -150,23 +157,36 @@ fn corrupt(reason: impl Into<String>) -> FormatError {
     FormatError::Corrupt(reason.into())
 }
 
-/// The nullable union of `schema`, if it is one: the null branch index and
-/// the single non-null branch.
-fn nullable_parts(schema: &AvroSchema) -> Option<(u32, &AvroSchema)> {
-    match schema {
-        AvroSchema::Union(u) if u.variants().len() == 2 => {
-            let null = u
-                .variants()
-                .iter()
-                .position(|s| matches!(s, AvroSchema::Null))?;
-            let inner = u
-                .variants()
-                .iter()
-                .find(|s| !matches!(s, AvroSchema::Null))?;
-            Some((u32::try_from(null).ok()?, inner))
-        }
-        _ => None,
-    }
+/// A union with exactly one non-null branch (`["null", T]` in either order,
+/// or `[T]`), which Spark reads as `T`.
+struct Single<'a> {
+    /// The index of the null branch, if the union has one.
+    null: Option<u32>,
+    /// The index of the non-null branch.
+    branch: u32,
+    /// The non-null branch.
+    inner: &'a AvroSchema,
+}
+
+/// The single-branch union `schema`, if it is one.
+fn single_branch(schema: &AvroSchema) -> Option<Single<'_>> {
+    let AvroSchema::Union(u) = schema else {
+        return None;
+    };
+    let UnionShape::Single(inner) = union_shape(u.variants()) else {
+        return None;
+    };
+    let index_of = |wanted: &dyn Fn(&AvroSchema) -> bool| {
+        u.variants()
+            .iter()
+            .position(wanted)
+            .and_then(|i| u32::try_from(i).ok())
+    };
+    Some(Single {
+        null: index_of(&|s| matches!(s, AvroSchema::Null)),
+        branch: index_of(&|s| !matches!(s, AvroSchema::Null))?,
+        inner,
+    })
 }
 
 /// Resolves `value` (in `writer` terms) against the `reader` schema: null
@@ -183,44 +203,43 @@ fn resolve(
     value: AvroValue,
     positional: bool,
 ) -> FormatResult<AvroValue> {
-    match (nullable_parts(writer), nullable_parts(reader)) {
-        (Some((_, w)), Some((r_null, r))) => {
+    let not_nullable = || corrupt("a null value for a non-nullable field");
+    match (single_branch(writer), single_branch(reader)) {
+        (Some(w), Some(r)) => {
             let inner = match value {
                 AvroValue::Union(_, inner) => *inner,
-                AvroValue::Null => AvroValue::Null,
                 other => other,
             };
             if matches!(inner, AvroValue::Null) {
-                Ok(AvroValue::Union(r_null, Box::new(AvroValue::Null)))
+                let null = r.null.ok_or_else(not_nullable)?;
+                Ok(AvroValue::Union(null, Box::new(AvroValue::Null)))
             } else {
                 Ok(AvroValue::Union(
-                    r_null,
-                    Box::new(resolve(w, r, inner, positional)?),
+                    r.branch,
+                    Box::new(resolve(w.inner, r.inner, inner, positional)?),
                 ))
             }
         }
-        (Some((_, w)), None) => {
+        (Some(w), None) => {
             let inner = match value {
                 AvroValue::Union(_, inner) => *inner,
-                AvroValue::Null => {
-                    return Err(corrupt("a null value for a non-nullable field"));
-                }
                 other => other,
             };
             if matches!(inner, AvroValue::Null) {
-                return Err(corrupt("a null value for a non-nullable field"));
+                let null = null_branch_index(reader).ok_or_else(not_nullable)?;
+                return Ok(AvroValue::Union(null, Box::new(AvroValue::Null)));
             }
-            resolve(w, reader, inner, positional)
+            resolve(w.inner, reader, inner, positional)
         }
-        (None, Some((r_null, r))) => Ok(AvroValue::Union(
-            r_null,
-            Box::new(resolve(writer, r, value, positional)?),
+        (None, Some(r)) => Ok(AvroValue::Union(
+            r.branch,
+            Box::new(resolve(writer, r.inner, value, positional)?),
         )),
         (None, None) => resolve_inner(writer, reader, value, positional),
     }
 }
 
-/// Resolves `value` with neither side a nullable union.
+/// Resolves `value` with neither side a single-branch union.
 ///
 /// # Errors
 /// [`FormatError::Corrupt`] for a value the reader schema cannot hold.
@@ -535,10 +554,10 @@ enum Node {
 
 /// Fresh builders for `field` holding `schema` values.
 fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
-    // Nullable unions hold their single branch; the builders are the
+    // Unions with one non-null branch hold that branch; the builders are the
     // branch's (nulls append as nulls).
-    if let Some((_, inner)) = nullable_parts(schema) {
-        return node_of(field, inner);
+    if let Some(single) = single_branch(schema) {
+        return node_of(field, single.inner);
     }
     Ok(match field.data_type() {
         DataType::Null => Node::Null { len: 0 },
@@ -573,7 +592,12 @@ fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
             let schemas = match schema {
                 AvroSchema::Record(r) => r.fields.iter().map(|f| f.schema.clone()).collect(),
                 AvroSchema::Union(u) => {
-                    let members: Vec<AvroSchema> = u.variants().to_vec();
+                    let members: Vec<AvroSchema> = u
+                        .variants()
+                        .iter()
+                        .filter(|s| !matches!(s, AvroSchema::Null))
+                        .cloned()
+                        .collect();
                     if members.len() != fields.len() {
                         return Err(corrupt("a struct column of another shape"));
                     }
@@ -593,17 +617,10 @@ fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
             }
         }
         DataType::List(item) | DataType::LargeList(item) | DataType::FixedSizeList(item, _) => {
-            let item_schema = match schema {
-                AvroSchema::Array(a) => (*a.items).clone(),
-                AvroSchema::Union(u) => {
-                    let members: Vec<AvroSchema> = u.variants().to_vec();
-                    if members.len() != 1 {
-                        return Err(corrupt("a list column of another shape"));
-                    }
-                    members.into_iter().next().unwrap_or(AvroSchema::Null)
-                }
-                _ => return Err(corrupt("a list column of another shape")),
+            let AvroSchema::Array(a) = schema else {
+                return Err(corrupt("a list column of another shape"));
             };
+            let item_schema = (*a.items).clone();
             Node::List {
                 values: Box::new(node_of(item, &item_schema)?),
                 item: Arc::clone(item),
@@ -620,17 +637,10 @@ fn node_of(field: &Field, schema: &AvroSchema) -> FormatResult<Node> {
             let (Some(key_field), Some(value_field)) = (key_field, value_field) else {
                 return Err(corrupt("a map column without key and value fields"));
             };
-            let value_schema = match schema {
-                AvroSchema::Map(m) => (*m.types).clone(),
-                AvroSchema::Union(u) => {
-                    let members: Vec<AvroSchema> = u.variants().to_vec();
-                    if members.len() != 1 {
-                        return Err(corrupt("a map column of another shape"));
-                    }
-                    members.into_iter().next().unwrap_or(AvroSchema::Null)
-                }
-                _ => return Err(corrupt("a map column of another shape")),
+            let AvroSchema::Map(m) = schema else {
+                return Err(corrupt("a map column of another shape"));
             };
+            let value_schema = (*m.types).clone();
             Node::Map {
                 keys: Box::new(node_of(&key_field, &AvroSchema::String)?),
                 values: Box::new(node_of(&value_field, &value_schema)?),
@@ -702,50 +712,59 @@ fn append_null(node: &mut Node) -> FormatResult<()> {
     Ok(())
 }
 
-/// Appends `value` (in `reader` terms) to `node`.
+/// Appends `value` (in `reader` terms) to `node`; with `dry` set it only
+/// checks that the append would succeed and changes nothing, so a row can be
+/// checked against every column before any column takes it.
 ///
 /// # Errors
 /// [`FormatError::Corrupt`] for a value the column cannot hold (overflow,
 /// a short fixed value, an out-of-range decimal) and
 /// [`FormatError::InvalidUtf8`] for a string that is not UTF-8.
 #[expect(clippy::too_many_lines, reason = "one arm per leaf type")]
-fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue) -> FormatResult<()> {
+fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue, dry: bool) -> FormatResult<()> {
     if matches!(value, AvroValue::Null) {
-        return append_null(node);
+        return if dry { Ok(()) } else { append_null(node) };
     }
     // A union into a struct sets the selected member and nulls the rest
-    // (Spark's `member0..N` mapping). Nullable unions never reach this:
-    // they strip to their branch above.
-    if let (
-        Node::Struct {
+    // (Spark's `member0..N` mapping, one member per non-null branch).
+    // Unions with one non-null branch never reach this: they are their
+    // branch.
+    if let (AvroValue::Union(i, inner), AvroSchema::Union(u)) = (value, reader)
+        && !matches!(**inner, AvroValue::Null)
+        && matches!(union_shape(u.variants()), UnionShape::Members)
+        && let Node::Struct {
             schemas,
             children,
             nulls,
             len,
-        },
-        AvroValue::Union(i, inner),
-    ) = (&mut *node, value)
-        && matches!(reader, AvroSchema::Union(_))
-        && nullable_parts(reader).is_none()
+        } = &mut *node
     {
+        let out_of_range = || corrupt("a union value with an out-of-range branch index");
         let i = usize::try_from(*i).unwrap_or(usize::MAX);
-        if i >= children.len() {
-            return Err(corrupt("a union value with an out-of-range branch index"));
+        let before = u.variants().get(..i).ok_or_else(out_of_range)?;
+        let member = before
+            .iter()
+            .filter(|s| !matches!(s, AvroSchema::Null))
+            .count();
+        if member >= children.len() {
+            return Err(out_of_range());
         }
         for (j, (child, s)) in children.iter_mut().zip(schemas.iter()).enumerate() {
-            if j == i {
-                append(child, s, inner)?;
-            } else {
+            if j == member {
+                append(child, s, inner, dry)?;
+            } else if !dry {
                 append_null(child)?;
             }
         }
-        nulls.append_non_null();
-        *len += 1;
+        if !dry {
+            nulls.append_non_null();
+            *len += 1;
+        }
         return Ok(());
     }
     if let AvroValue::Union(i, inner) = value {
         if matches!(**inner, AvroValue::Null) {
-            return append_null(node);
+            return if dry { Ok(()) } else { append_null(node) };
         }
         let inner_reader = match reader {
             AvroSchema::Union(u) => u
@@ -754,34 +773,84 @@ fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue) -> FormatResu
                 .ok_or_else(|| corrupt("a union value with an out-of-range branch index"))?,
             _ => return Err(corrupt("a union value for a non-union column")),
         };
-        return append(node, inner_reader, inner);
+        return append(node, inner_reader, inner, dry);
     }
-    // A nullable union's branch was stripped above; a bare union here wraps
-    // the value's own branch.
+    // A bare union here wraps the value's own branch.
     if let AvroSchema::Union(u) = reader {
         let branches: Vec<&AvroSchema> = u.variants().iter().collect();
         if branches.len() == 1 {
-            return append(node, branches[0], value);
+            return append(node, branches[0], value, dry);
         }
     }
     match (node, value) {
-        (Node::Bool(b), AvroValue::Boolean(v)) => b.append_value(*v),
-        (Node::Int32(b), AvroValue::Int(v) | AvroValue::Date(v) | AvroValue::TimeMillis(v)) => {
-            b.append_value(*v);
+        (Node::Bool(b), AvroValue::Boolean(v)) => {
+            if !dry {
+                b.append_value(*v);
+            }
         }
-        (Node::Int64(b), AvroValue::Long(v) | AvroValue::TimeMicros(v)) => b.append_value(*v),
-        (Node::Float32(b), AvroValue::Float(v)) => b.append_value(*v),
-        (Node::Float64(b), AvroValue::Float(v)) => b.append_value(f64::from(*v)),
-        (Node::Float64(b), AvroValue::Double(v)) => b.append_value(*v),
-        (Node::String(b), AvroValue::String(v) | AvroValue::Enum(_, v)) => b.append_value(v),
-        (Node::String(b), AvroValue::Bytes(v)) => b.append_value(
-            std::str::from_utf8(v)
-                .map_err(|_| FormatError::InvalidUtf8("an Avro string".to_owned()))?,
-        ),
-        (Node::String(b), AvroValue::Uuid(v)) => b.append_value(v.to_string()),
-        (Node::Binary(b), AvroValue::Bytes(v) | AvroValue::Fixed(_, v)) => b.append_value(v),
-        (Node::Binary(b), AvroValue::String(v)) => b.append_value(v.as_bytes()),
-        (Node::Binary(b), AvroValue::Uuid(v)) => b.append_value(v.as_bytes().as_slice()),
+        (Node::Int32(b), AvroValue::Int(v) | AvroValue::Date(v) | AvroValue::TimeMillis(v)) => {
+            if !dry {
+                b.append_value(*v);
+            }
+        }
+        (Node::Int64(b), AvroValue::Long(v) | AvroValue::TimeMicros(v)) => {
+            if !dry {
+                b.append_value(*v);
+            }
+        }
+        // The `int`/`long` union is a `long` column.
+        (Node::Int64(b), AvroValue::Int(v)) => {
+            if !dry {
+                b.append_value(i64::from(*v));
+            }
+        }
+        (Node::Float32(b), AvroValue::Float(v)) => {
+            if !dry {
+                b.append_value(*v);
+            }
+        }
+        (Node::Float64(b), AvroValue::Float(v)) => {
+            if !dry {
+                b.append_value(f64::from(*v));
+            }
+        }
+        (Node::Float64(b), AvroValue::Double(v)) => {
+            if !dry {
+                b.append_value(*v);
+            }
+        }
+        (Node::String(b), AvroValue::String(v) | AvroValue::Enum(_, v)) => {
+            if !dry {
+                b.append_value(v);
+            }
+        }
+        (Node::String(b), AvroValue::Bytes(v)) => {
+            let text = std::str::from_utf8(v)
+                .map_err(|_| FormatError::InvalidUtf8("an Avro string".to_owned()))?;
+            if !dry {
+                b.append_value(text);
+            }
+        }
+        (Node::String(b), AvroValue::Uuid(v)) => {
+            if !dry {
+                b.append_value(v.to_string());
+            }
+        }
+        (Node::Binary(b), AvroValue::Bytes(v) | AvroValue::Fixed(_, v)) => {
+            if !dry {
+                b.append_value(v);
+            }
+        }
+        (Node::Binary(b), AvroValue::String(v)) => {
+            if !dry {
+                b.append_value(v.as_bytes());
+            }
+        }
+        (Node::Binary(b), AvroValue::Uuid(v)) => {
+            if !dry {
+                b.append_value(v.as_bytes().as_slice());
+            }
+        }
         (Node::Decimal { builder, precision }, AvroValue::Decimal(v)) => {
             let bytes = Vec::<u8>::try_from(v)
                 .map_err(|e| corrupt(format!("an undecodable decimal: {e}")))?;
@@ -790,22 +859,34 @@ fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue) -> FormatResu
             if unscaled.abs() >= max {
                 return Err(corrupt("a decimal value outside its precision"));
             }
-            builder.append_value(unscaled);
+            if !dry {
+                builder.append_value(unscaled);
+            }
         }
-        (Node::Date(b), AvroValue::Date(v)) => b.append_value(*v),
+        (Node::Date(b), AvroValue::Date(v)) => {
+            if !dry {
+                b.append_value(*v);
+            }
+        }
         (
             Node::Timestamp(b),
             AvroValue::TimestampMillis(v) | AvroValue::LocalTimestampMillis(v),
         ) => {
-            b.append_value(
-                v.checked_mul(1000)
-                    .ok_or_else(|| corrupt("a timestamp out of range"))?,
-            );
+            let micros = v
+                .checked_mul(1000)
+                .ok_or_else(|| corrupt("a timestamp out of range"))?;
+            if !dry {
+                b.append_value(micros);
+            }
         }
         (
             Node::Timestamp(b),
             AvroValue::TimestampMicros(v) | AvroValue::LocalTimestampMicros(v),
-        ) => b.append_value(*v),
+        ) => {
+            if !dry {
+                b.append_value(*v);
+            }
+        }
         (
             Node::Struct {
                 schemas,
@@ -819,10 +900,12 @@ fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue) -> FormatResu
                 return Err(corrupt("a struct value of another shape"));
             }
             for ((_, v), (child, s)) in pairs.iter().zip(children.iter_mut().zip(schemas.iter())) {
-                append(child, s, v)?;
+                append(child, s, v, dry)?;
             }
-            nulls.append_non_null();
-            *len += 1;
+            if !dry {
+                nulls.append_non_null();
+                *len += 1;
+            }
         }
         (
             Node::List {
@@ -835,12 +918,16 @@ fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue) -> FormatResu
             AvroValue::Array(items),
         ) => {
             for v in items {
-                append(values, item_schema, v)?;
+                append(values, item_schema, v, dry)?;
             }
-            let end = i32::try_from(node_len(values))
+            // Each element adds one entry to `values`, so the end offset is
+            // known without appending (a dry run appends nothing).
+            let end = i32::try_from(node_len(values) + if dry { items.len() } else { 0 })
                 .map_err(|_| corrupt("a list value with too many elements"))?;
-            offsets.push(end);
-            nulls.append_non_null();
+            if !dry {
+                offsets.push(end);
+                nulls.append_non_null();
+            }
         }
         (
             Node::Map {
@@ -856,14 +943,24 @@ fn append(node: &mut Node, reader: &AvroSchema, value: &AvroValue) -> FormatResu
             // Sorted by key, so the output does not depend on the hash map.
             let mut entries: Vec<(&String, &AvroValue)> = entries.iter().collect();
             entries.sort_by(|a, b| a.0.cmp(b.0));
+            let count = entries.len();
             for (k, v) in entries {
-                append(keys, &AvroSchema::String, &AvroValue::String(k.clone()))?;
-                append(values, value_schema, v)?;
+                if !dry {
+                    append(
+                        keys,
+                        &AvroSchema::String,
+                        &AvroValue::String(k.clone()),
+                        false,
+                    )?;
+                }
+                append(values, value_schema, v, dry)?;
             }
-            let end = i32::try_from(node_len(values))
+            let end = i32::try_from(node_len(values) + if dry { count } else { 0 })
                 .map_err(|_| corrupt("a map value with too many entries"))?;
-            offsets.push(end);
-            nulls.append_non_null();
+            if !dry {
+                offsets.push(end);
+                nulls.append_non_null();
+            }
         }
         _ => {
             return Err(corrupt(format!(
@@ -1056,6 +1153,34 @@ fn check_rebase_value(reader: &AvroSchema, value: &AvroValue, rebase: Rebase) ->
     }
 }
 
+/// Copies of one decoded datum alive at once: the value `read_value`
+/// returns, the resolved value and the clones resolution makes of record
+/// fields.
+const VALUE_COPIES: usize = 3;
+
+/// The in-memory size of an owned Avro `value`: what decoding one datum
+/// allocates, which depends on the input (a few input bytes can become many
+/// values).
+fn value_bytes(value: &AvroValue) -> usize {
+    let name = size_of::<String>();
+    size_of::<AvroValue>()
+        + match value {
+            AvroValue::String(s) | AvroValue::Enum(_, s) => s.capacity(),
+            AvroValue::Bytes(b) | AvroValue::Fixed(_, b) => b.capacity(),
+            AvroValue::Union(_, inner) => value_bytes(inner),
+            AvroValue::Array(items) => items.iter().map(value_bytes).sum(),
+            AvroValue::Map(entries) => entries
+                .iter()
+                .map(|(k, v)| name + k.capacity() + value_bytes(v))
+                .sum(),
+            AvroValue::Record(pairs) => pairs
+                .iter()
+                .map(|(k, v)| name + k.capacity() + value_bytes(v))
+                .sum(),
+            _ => 0,
+        }
+}
+
 /// A block being decoded: its decompressed bytes, the read position, the
 /// records left and the file row of the next record.
 #[derive(Debug)]
@@ -1077,6 +1202,8 @@ pub(crate) struct AvroDecoder {
     out_schema: SchemaRef,
     columns: Vec<(Field, AvroSchema)>,
     o: AvroOptions,
+    /// The rebase mode in force: the file's own, else the option's.
+    rebase: Rebase,
     pending: BTreeMap<u64, Bytes>,
     pending_bytes: usize,
     open: Option<OpenBlock>,
@@ -1084,6 +1211,9 @@ pub(crate) struct AvroDecoder {
     file_rows: Vec<u64>,
     batch_rows: usize,
     row_width: usize,
+    /// The largest decoded datum's in-memory size so far (see
+    /// [`value_bytes`]).
+    peak_value_bytes: usize,
     all_nullable: bool,
     metrics: ScanUnitMetrics,
     done: bool,
@@ -1180,6 +1310,7 @@ impl AvroDecoder {
             out_schema,
             columns,
             o: o.clone(),
+            rebase: meta.writer_rebase.unwrap_or(o.rebase),
             pending: BTreeMap::new(),
             pending_bytes: 0,
             open: None,
@@ -1187,6 +1318,7 @@ impl AvroDecoder {
             file_rows: Vec::new(),
             batch_rows: 0,
             row_width: row_width(&req.table_schema).max(1),
+            peak_value_bytes: 0,
             all_nullable,
             metrics: ScanUnitMetrics {
                 units: u64::try_from(units.units.len()).unwrap_or(u64::MAX),
@@ -1218,7 +1350,6 @@ impl AvroDecoder {
     /// Opens block `index`: takes its bytes, checks the sync marker and
     /// decompresses the records.
     fn open_block(&mut self, index: usize) -> FormatResult<()> {
-        use apache_avro::Codec as AvCodec;
         let block = self.meta.blocks[index].clone();
         let raw = self.take(&block.bytes)?;
         if raw.len() < 16 || raw[raw.len() - 16..] != self.meta.sync {
@@ -1232,18 +1363,7 @@ impl AvroDecoder {
             return Err(corrupt("a block with a bad length"));
         }
         let mut data = raw[data_start..data_end].to_vec();
-        let codec = match self.meta.codec {
-            OptCodec::Null => AvCodec::Null,
-            OptCodec::Deflate => AvCodec::Deflate(apache_avro::DeflateSettings::default()),
-            OptCodec::Snappy => AvCodec::Snappy,
-            OptCodec::Zstandard => AvCodec::Zstandard(apache_avro::ZstandardSettings::default()),
-            OptCodec::Bzip2 | OptCodec::Xz => {
-                return Err(FormatError::Other(unsupported(format!(
-                    "the Avro {} codec (not enabled in this build)",
-                    self.meta.codec.header_name()
-                ))));
-            }
-        };
+        let codec = block_codec(self.meta.codec)?;
         codec
             .decompress(&mut data)
             .map_err(|e| corrupt(format!("an undecodable block: {e}")))?;
@@ -1256,10 +1376,10 @@ impl AvroDecoder {
         Ok(())
     }
 
-    /// Handles a corrupt record per `mode`: `FAILFAST` fails; otherwise the
-    /// rest of the block is dropped, with one null row in `PERMISSIVE` mode
-    /// when the output allows it.
-    fn corrupt_record(&mut self, reason: String) -> FormatResult<bool> {
+    /// Handles the corrupt record at `file_row` per `mode`: `FAILFAST` fails;
+    /// otherwise the rest of the block is dropped, with one null row in
+    /// `PERMISSIVE` mode when the output allows it and the row is selected.
+    fn corrupt_record(&mut self, reason: String, file_row: u64) -> FormatResult<bool> {
         match self.o.mode {
             Mode::FailFast => Err(corrupt(reason)),
             Mode::DropMalformed => {
@@ -1267,14 +1387,12 @@ impl AvroDecoder {
                 Ok(false)
             }
             Mode::Permissive => {
-                let row = self.open.as_mut().map(|open| {
-                    let row = open.file_row;
-                    open.file_row += 1;
-                    row
-                });
-                if let Some(file_row) = row
-                    && self.all_nullable
-                {
+                let selected = self
+                    .req
+                    .selection
+                    .as_ref()
+                    .is_none_or(|s| s.contains(file_row));
+                if selected && self.all_nullable {
                     for node in &mut self.nodes {
                         append_null(node)?;
                     }
@@ -1287,9 +1405,9 @@ impl AvroDecoder {
         }
     }
 
-    /// Decodes one record of the open block into the batch (`false`: the
-    /// block is exhausted).
-    fn decode_one(&mut self) -> FormatResult<bool> {
+    /// Decodes one record of the open block with `datum` into the batch
+    /// (`false`: the block is exhausted).
+    fn decode_one(&mut self, datum: &GenericDatumReader<'_>) -> FormatResult<bool> {
         let Some(open) = self.open.as_mut() else {
             return Ok(false);
         };
@@ -1299,9 +1417,7 @@ impl AvroDecoder {
             }
             return Ok(false);
         }
-        let reader = apache_avro::reader::datum::GenericDatumReader::builder(&self.meta.writer)
-            .build()
-            .map_err(|e| corrupt(format!("an unreadable schema: {e}")))?;
+        let file_row = open.file_row;
         let mut cursor = std::io::Cursor::new(&open.bytes[open.pos..]);
         // `apache-avro`'s `GenericDatumReader::read_value` can panic on
         // malformed datum bytes (out-of-range indexes, unchecked slices)
@@ -1311,22 +1427,22 @@ impl AvroDecoder {
         // the rest of the block), so neither advances `pos`/`left`/`file_row`
         // here.
         let value = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            reader.read_value(&mut cursor)
+            datum.read_value(&mut cursor)
         }));
         let value = match value {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
-                return self.corrupt_record(format!("an undecodable record: {e}"));
+                return self.corrupt_record(format!("an undecodable record: {e}"), file_row);
             }
             Err(_) => {
-                return self.corrupt_record("an undecodable record".to_owned());
+                return self.corrupt_record("an undecodable record".to_owned(), file_row);
             }
         };
         let consumed = usize::try_from(cursor.position()).unwrap_or(usize::MAX);
         open.pos = open.pos.saturating_add(consumed);
         open.left -= 1;
-        let file_row = open.file_row;
         open.file_row += 1;
+        self.peak_value_bytes = self.peak_value_bytes.max(value_bytes(&value));
         // A value the read schema cannot hold is a schema error, not a
         // corrupt record: it fails in every mode.
         let resolved = resolve(
@@ -1335,32 +1451,48 @@ impl AvroDecoder {
             value,
             self.o.positional,
         )?;
-        let AvroValue::Record(pairs) = resolved else {
-            return self.corrupt_record("a record value that is not a record".to_owned());
-        };
         let selected = self
             .req
             .selection
             .as_ref()
             .is_none_or(|s| s.contains(file_row));
-        if selected {
-            let mut bad: Option<String> = None;
+        if !selected {
+            return Ok(true);
+        }
+        // Unlike corrupt data this always fails: a value needing a rebase is
+        // rejected even in `PERMISSIVE` mode.
+        check_rebase_value(&self.meta.reader, &resolved, self.rebase)?;
+        let AvroValue::Record(pairs) = &resolved else {
+            return self.corrupt_record("a record value that is not a record".to_owned(), file_row);
+        };
+        // Where a bad record is dropped or nulled, check every column before
+        // any takes the row; `FAILFAST` fails the scan at the first bad value.
+        let carry_on = self.o.mode != Mode::FailFast;
+        if carry_on {
             for ((_, v), (node, (_, s))) in pairs
                 .iter()
                 .zip(self.nodes.iter_mut().zip(self.columns.iter()))
             {
-                if let Err(e) = append(node, s, v) {
-                    bad = Some(e.to_string());
-                    break;
+                if let Err(e) = append(node, s, v, true) {
+                    return self.corrupt_record(e.to_string(), file_row);
                 }
             }
-            if let Some(reason) = bad {
-                return self.corrupt_record(reason);
-            }
-            check_rebase_value(&self.meta.reader, &AvroValue::Record(pairs), self.o.rebase)?;
-            self.file_rows.push(file_row);
-            self.batch_rows += 1;
         }
+        for ((_, v), (node, (_, s))) in pairs
+            .iter()
+            .zip(self.nodes.iter_mut().zip(self.columns.iter()))
+        {
+            if let Err(e) = append(node, s, v, false) {
+                // After a passed check this is a broken invariant.
+                return if carry_on {
+                    Err(e)
+                } else {
+                    self.corrupt_record(e.to_string(), file_row)
+                };
+            }
+        }
+        self.file_rows.push(file_row);
+        self.batch_rows += 1;
         Ok(true)
     }
 
@@ -1440,8 +1572,12 @@ impl Decoder for AvroDecoder {
                 self.open_block(index)?;
                 self.next += 1;
             }
+            let meta = Arc::clone(&self.meta);
+            let datum = GenericDatumReader::builder(&meta.writer)
+                .build()
+                .map_err(|e| corrupt(format!("an unreadable schema: {e}")))?;
             while self.batch_rows < BATCH_ROWS {
-                if !self.decode_one()? {
+                if !self.decode_one(&datum)? {
                     self.open = None;
                     break;
                 }
@@ -1485,7 +1621,9 @@ impl Decoder for AvroDecoder {
     }
 
     fn working_bytes(&self) -> usize {
-        self.batch_rows.saturating_mul(self.row_width)
+        self.batch_rows
+            .saturating_mul(self.row_width)
+            .saturating_add(self.peak_value_bytes.saturating_mul(VALUE_COPIES))
     }
 
     fn next_decode_bytes(&self) -> usize {

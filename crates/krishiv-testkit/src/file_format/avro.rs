@@ -26,8 +26,9 @@ impl FormatFixture for AvroFixture {
         Arc::new(AvroFormat)
     }
 
-    fn unit_rows(&self, _rows: usize) -> Vec<(String, String)> {
-        Vec::new()
+    fn unit_rows(&self, rows: usize) -> Vec<(String, String)> {
+        // Blocks are the units: cap the rows of a block so files hold several.
+        vec![("krishiv.avro.blockRows".to_owned(), rows.to_string())]
     }
 
     fn footerless(&self) -> bool {

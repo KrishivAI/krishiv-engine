@@ -2,28 +2,32 @@
 //! The Avro writer: Arrow batches into one container file, framed
 //! incrementally (see the module docs).
 //!
-//! The header (magic, the `avro.schema` and `avro.codec` metadata, a
-//! deterministic sync marker derived from the schema JSON) is queued first,
-//! then records accumulate into blocks: a block is framed once it holds
-//! [`BLOCK_TARGET_BYTES`] of encoded records (or [`BLOCK_ROWS`] rows, or a
-//! [`Encoder::flush`]) and drained through [`Encoder::take_bytes`], so the
-//! framework uploads while the next block builds. The sync marker is fixed
-//! per schema (never random): two writes of the same rows and options agree
-//! byte for byte. This deterministic marker is intentional and differs from
-//! writers that use a random marker per file; files stay readable because
-//! readers use the marker stored in each file's header.
+//! The header (magic, the `avro.schema` and `avro.codec` metadata, a sync
+//! marker derived from the write job's seed and the schema JSON) is queued
+//! first, then records are encoded straight into the open block's bytes: a
+//! block is framed once it holds [`BLOCK_TARGET_BYTES`] of encoded records
+//! (or [`BLOCK_ROWS`] rows, or a [`Encoder::flush`]) and drained through
+//! [`Encoder::take_bytes`], so the framework uploads while the next block
+//! builds. The sync marker is fixed per write job and file (never random):
+//! two writes of the same rows, options and job agree byte for byte, while
+//! the marker cannot be computed from the schema alone, so row data cannot
+//! forge a block boundary for readers that split by scanning for it. Files
+//! stay readable because readers use the marker stored in each file's
+//! header.
 
-use std::collections::BTreeMap;
+use std::sync::Arc;
 
-use apache_avro::{Decimal as AvroDecimal, Schema as AvroSchema, types::Value as AvroValue};
+use apache_avro::Schema as AvroSchema;
+use apache_avro::schema::InnerDecimalSchema;
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, RecordBatch};
+use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, RecordBatch};
 use arrow_schema::{DataType, SchemaRef, TimeUnit};
 use bytes::Bytes;
 
-use super::options::{AvroOptions, Codec as OptCodec};
+use super::block_codec;
+use super::options::AvroOptions;
 use super::schema::{schema_json_of_arrow, schema_kind};
-use crate::error::{FormatError, FormatResult, unsupported};
+use crate::error::{FormatError, FormatResult};
 use crate::format::{Encoder, WrittenFile};
 use crate::options::FormatOptions;
 use crate::stats::{FileStatistics, Precision};
@@ -103,48 +107,124 @@ where
     Ok((a, b))
 }
 
-/// The value of cell `row` of `array` in `schema` (writer) terms.
+/// The `row`th string of a UTF-8 array of any of its three layouts.
+fn str_at(array: &ArrayRef, row: usize) -> Option<&str> {
+    match array.data_type() {
+        DataType::Utf8View => Some(array.as_string_view().value(row)),
+        DataType::Utf8 => Some(array.as_string::<i32>().value(row)),
+        DataType::LargeUtf8 => Some(array.as_string::<i64>().value(row)),
+        _ => None,
+    }
+}
+
+/// The `row`th value of a primitive array of type `T`.
+fn prim<T: ArrowPrimitiveType>(array: &ArrayRef, row: usize) -> T::Native {
+    array.as_primitive::<T>().value(row)
+}
+
+/// The count-prefixed block of the elements `start..end` of `values`
+/// (nothing but the closing zero block when empty), as an array's items.
+///
+/// # Errors
+/// [`FormatError::WriteFailed`] for an element the schema cannot hold.
+fn put_items(
+    out: &mut Vec<u8>,
+    items: &AvroSchema,
+    values: &ArrayRef,
+    start: usize,
+    end: usize,
+) -> FormatResult<()> {
+    if end > start {
+        put_long(out, i64::try_from(end - start).unwrap_or(i64::MAX));
+        for i in start..end {
+            put_cell(out, items, values, i)?;
+        }
+    }
+    put_long(out, 0);
+    Ok(())
+}
+
+/// `v`, the unscaled value of an Arrow decimal of scale `from`, as the
+/// unscaled value of an Avro decimal of `precision` digits and scale `to`.
+///
+/// # Errors
+/// [`FormatError::WriteFailed`] when the rescale overflows, drops non-zero
+/// digits or leaves more than `precision` digits.
+fn rescale(v: i128, from: i8, to: usize, precision: usize) -> FormatResult<i128> {
+    let fail = || write_failed("a decimal value the Avro schema cannot hold");
+    if v == 0 {
+        return Ok(0);
+    }
+    let diff = i64::try_from(to)
+        .map_err(|_| fail())?
+        .checked_sub(i64::from(from))
+        .ok_or_else(fail)?;
+    let factor = 10_i128
+        .checked_pow(u32::try_from(diff.unsigned_abs()).map_err(|_| fail())?)
+        .ok_or_else(fail)?;
+    let v = if diff >= 0 {
+        v.checked_mul(factor).ok_or_else(fail)?
+    } else if v % factor == 0 {
+        v / factor
+    } else {
+        return Err(fail());
+    };
+    let limit = u32::try_from(precision)
+        .ok()
+        .and_then(|p| 10_u128.checked_pow(p));
+    if limit.is_some_and(|limit| v.unsigned_abs() >= limit) {
+        return Err(fail());
+    }
+    Ok(v)
+}
+
+/// The bytes of cell `row` of `array` in `schema` (writer) terms, appended
+/// to `out`.
 ///
 /// # Errors
 /// [`FormatError::WriteFailed`] for a null in a non-nullable schema or a
 /// value the schema cannot hold.
-fn cell(schema: &AvroSchema, array: &ArrayRef, row: usize) -> FormatResult<AvroValue> {
+fn put_cell(
+    out: &mut Vec<u8>,
+    schema: &AvroSchema,
+    array: &ArrayRef,
+    row: usize,
+) -> FormatResult<()> {
     // Nullable unions wrap every value; the null branch holds nulls.
     if let AvroSchema::Union(u) = schema {
-        let branches: Vec<(usize, &AvroSchema)> = u
+        let too_many = || write_failed("a union with too many branches");
+        if array.is_null(row) {
+            let Some(null) = u
+                .variants()
+                .iter()
+                .position(|s| matches!(s, AvroSchema::Null))
+            else {
+                return Err(write_failed("a null value for a non-nullable field"));
+            };
+            put_long(out, i64::try_from(null).map_err(|_| too_many())?);
+            return Ok(());
+        }
+        let mut branches = u
             .variants()
             .iter()
             .enumerate()
-            .filter(|(_, s)| !matches!(s, AvroSchema::Null))
-            .collect();
-        let null = u
-            .variants()
-            .iter()
-            .position(|s| matches!(s, AvroSchema::Null));
-        if array.is_null(row) {
-            let Some(null) = null else {
-                return Err(write_failed("a null value for a non-nullable field"));
-            };
-            let index =
-                u32::try_from(null).map_err(|_| write_failed("a union with too many branches"))?;
-            return Ok(AvroValue::Union(index, Box::new(AvroValue::Null)));
-        }
-        let [(branch_index, branch)] = branches.as_slice() else {
+            .filter(|(_, s)| !matches!(s, AvroSchema::Null));
+        let (Some((index, branch)), None) = (branches.next(), branches.next()) else {
             return Err(write_failed(
                 "a value for a union without exactly one non-null branch",
             ));
         };
-        let index = u32::try_from(*branch_index)
-            .map_err(|_| write_failed("a union with too many branches"))?;
-        return Ok(AvroValue::Union(index, Box::new(cell(branch, array, row)?)));
+        put_long(out, i64::try_from(index).map_err(|_| too_many())?);
+        return put_cell(out, branch, array, row);
     }
     if array.is_null(row) {
         return Err(write_failed("a null value for a non-nullable field"));
     }
-    scalar(schema, array, row)
+    put_scalar(out, schema, array, row)
 }
 
-/// The non-null value of cell `row` of `array` in `schema` terms.
+/// The bytes of the non-null cell `row` of `array` in `schema` terms,
+/// appended to `out` in Avro's binary encoding.
 ///
 /// # Errors
 /// [`FormatError::WriteFailed`] for a value the schema cannot hold.
@@ -152,139 +232,107 @@ fn cell(schema: &AvroSchema, array: &ArrayRef, row: usize) -> FormatResult<AvroV
     clippy::too_many_lines,
     reason = "one arm per Arrow type; each validates its range"
 )]
-fn scalar(schema: &AvroSchema, array: &ArrayRef, row: usize) -> FormatResult<AvroValue> {
+fn put_scalar(
+    out: &mut Vec<u8>,
+    schema: &AvroSchema,
+    array: &ArrayRef,
+    row: usize,
+) -> FormatResult<()> {
+    use arrow_array::types as t;
     let fail = |what: &str| write_failed(format!("a {what} value the Avro schema cannot hold"));
-    Ok(match (schema, array.data_type()) {
+    match (schema, array.data_type()) {
         (AvroSchema::Boolean, DataType::Boolean) => {
-            AvroValue::Boolean(array.as_boolean().value(row))
+            out.push(u8::from(array.as_boolean().value(row)));
         }
-        (AvroSchema::Int, DataType::Int8) => AvroValue::Int(i32::from(
-            array
-                .as_primitive::<arrow_array::types::Int8Type>()
-                .value(row),
-        )),
-        (AvroSchema::Int, DataType::Int16) => AvroValue::Int(i32::from(
-            array
-                .as_primitive::<arrow_array::types::Int16Type>()
-                .value(row),
-        )),
-        (AvroSchema::Int, DataType::Int32) => AvroValue::Int(
-            array
-                .as_primitive::<arrow_array::types::Int32Type>()
-                .value(row),
-        ),
-        (AvroSchema::Long, DataType::Int64) => AvroValue::Long(
-            array
-                .as_primitive::<arrow_array::types::Int64Type>()
-                .value(row),
-        ),
-        (AvroSchema::Long, DataType::Int32) => AvroValue::Long(i64::from(
-            array
-                .as_primitive::<arrow_array::types::Int32Type>()
-                .value(row),
-        )),
-        (AvroSchema::Float, DataType::Float32) => AvroValue::Float(
-            array
-                .as_primitive::<arrow_array::types::Float32Type>()
-                .value(row),
-        ),
-        (AvroSchema::Double, DataType::Float32) => AvroValue::Double(f64::from(
-            array
-                .as_primitive::<arrow_array::types::Float32Type>()
-                .value(row),
-        )),
-        (AvroSchema::Double, DataType::Float64) => AvroValue::Double(
-            array
-                .as_primitive::<arrow_array::types::Float64Type>()
-                .value(row),
-        ),
+        (AvroSchema::Int, DataType::Int8) => {
+            put_long(out, i64::from(prim::<t::Int8Type>(array, row)));
+        }
+        (AvroSchema::Int, DataType::Int16) => {
+            put_long(out, i64::from(prim::<t::Int16Type>(array, row)));
+        }
+        (AvroSchema::Int | AvroSchema::Long, DataType::Int32) => {
+            put_long(out, i64::from(prim::<t::Int32Type>(array, row)));
+        }
+        (AvroSchema::Long, DataType::Int64) => put_long(out, prim::<t::Int64Type>(array, row)),
+        (AvroSchema::Float, DataType::Float32) => {
+            out.extend_from_slice(&prim::<t::Float32Type>(array, row).to_le_bytes());
+        }
+        (AvroSchema::Double, DataType::Float32) => {
+            out.extend_from_slice(&f64::from(prim::<t::Float32Type>(array, row)).to_le_bytes());
+        }
+        (AvroSchema::Double, DataType::Float64) => {
+            out.extend_from_slice(&prim::<t::Float64Type>(array, row).to_le_bytes());
+        }
         (AvroSchema::Bytes, DataType::BinaryView) => {
-            AvroValue::Bytes(array.as_binary_view().value(row).to_vec())
+            put_bytes(out, array.as_binary_view().value(row));
         }
         (AvroSchema::Bytes, DataType::Binary) => {
-            AvroValue::Bytes(array.as_binary::<i32>().value(row).to_vec())
+            put_bytes(out, array.as_binary::<i32>().value(row));
         }
         (AvroSchema::Bytes, DataType::LargeBinary) => {
-            AvroValue::Bytes(array.as_binary::<i64>().value(row).to_vec())
+            put_bytes(out, array.as_binary::<i64>().value(row));
         }
         (AvroSchema::Bytes, DataType::Utf8View) => {
-            AvroValue::Bytes(array.as_string_view().value(row).as_bytes().to_vec())
+            put_bytes(out, array.as_string_view().value(row).as_bytes());
         }
-        (AvroSchema::String, DataType::Utf8View) => {
-            AvroValue::String(array.as_string_view().value(row).to_owned())
+        (AvroSchema::String, DataType::Utf8View | DataType::Utf8 | DataType::LargeUtf8) => {
+            let s = str_at(array, row).ok_or_else(|| fail("string"))?;
+            put_bytes(out, s.as_bytes());
         }
-        (AvroSchema::String, DataType::Utf8) => {
-            AvroValue::String(array.as_string::<i32>().value(row).to_owned())
-        }
-        (AvroSchema::String, DataType::LargeUtf8) => {
-            AvroValue::String(array.as_string::<i64>().value(row).to_owned())
-        }
-        (AvroSchema::Fixed(f), DataType::BinaryView) => {
+        (AvroSchema::String, DataType::BinaryView) => {
             let v = array.as_binary_view().value(row);
+            std::str::from_utf8(v).map_err(|_| write_failed("binary bytes that are not UTF-8"))?;
+            put_bytes(out, v);
+        }
+        (AvroSchema::Fixed(f), DataType::BinaryView | DataType::Binary) => {
+            let v = match array.data_type() {
+                DataType::Binary => array.as_binary::<i32>().value(row),
+                _ => array.as_binary_view().value(row),
+            };
             if v.len() != f.size {
                 return Err(fail("fixed"));
             }
-            AvroValue::Fixed(f.size, v.to_vec())
+            out.extend_from_slice(v);
         }
-        (AvroSchema::Fixed(f), DataType::Binary) => {
-            let v = array.as_binary::<i32>().value(row);
-            if v.len() != f.size {
-                return Err(fail("fixed"));
+        (AvroSchema::Decimal(d), DataType::Decimal128(_, scale)) => {
+            let v = rescale(
+                prim::<t::Decimal128Type>(array, row),
+                *scale,
+                d.scale,
+                d.precision,
+            )?;
+            let minimal = minimal_bytes(v);
+            match &d.inner {
+                InnerDecimalSchema::Bytes => put_bytes(out, &minimal),
+                InnerDecimalSchema::Fixed(f) => {
+                    let pad = f
+                        .size
+                        .checked_sub(minimal.len())
+                        .ok_or_else(|| fail("decimal"))?;
+                    out.resize(out.len() + pad, if v < 0 { 0xFF } else { 0x00 });
+                    out.extend_from_slice(&minimal);
+                }
             }
-            AvroValue::Fixed(f.size, v.to_vec())
         }
-        (AvroSchema::Decimal(_), DataType::Decimal128(_, _)) => {
-            let v = array
-                .as_primitive::<arrow_array::types::Decimal128Type>()
-                .value(row);
-            AvroValue::Decimal(AvroDecimal::from(minimal_bytes(v)))
+        (AvroSchema::Date, DataType::Date32) => {
+            put_long(out, i64::from(prim::<t::Date32Type>(array, row)));
         }
-        (AvroSchema::Date, DataType::Date32) => AvroValue::Date(
-            array
-                .as_primitive::<arrow_array::types::Date32Type>()
-                .value(row),
-        ),
-        (AvroSchema::TimeMillis, DataType::Time32(TimeUnit::Millisecond)) => AvroValue::TimeMillis(
-            array
-                .as_primitive::<arrow_array::types::Time32MillisecondType>()
-                .value(row),
-        ),
-        (AvroSchema::TimeMicros, DataType::Time64(TimeUnit::Microsecond)) => AvroValue::TimeMicros(
-            array
-                .as_primitive::<arrow_array::types::Time64MicrosecondType>()
-                .value(row),
-        ),
-        (AvroSchema::TimestampMillis, DataType::Timestamp(TimeUnit::Millisecond, _)) => {
-            AvroValue::TimestampMillis(
-                array
-                    .as_primitive::<arrow_array::types::TimestampMillisecondType>()
-                    .value(row),
-            )
+        (AvroSchema::TimeMillis, DataType::Time32(TimeUnit::Millisecond)) => {
+            put_long(out, i64::from(prim::<t::Time32MillisecondType>(array, row)));
         }
-        (AvroSchema::TimestampMicros, DataType::Timestamp(TimeUnit::Microsecond, _)) => {
-            AvroValue::TimestampMicros(
-                array
-                    .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
-                    .value(row),
-            )
+        (AvroSchema::TimeMicros, DataType::Time64(TimeUnit::Microsecond)) => {
+            put_long(out, prim::<t::Time64MicrosecondType>(array, row));
         }
-        (AvroSchema::LocalTimestampMillis, DataType::Timestamp(TimeUnit::Millisecond, _)) => {
-            AvroValue::LocalTimestampMillis(
-                array
-                    .as_primitive::<arrow_array::types::TimestampMillisecondType>()
-                    .value(row),
-            )
-        }
-        (AvroSchema::LocalTimestampMicros, DataType::Timestamp(TimeUnit::Microsecond, _)) => {
-            AvroValue::LocalTimestampMicros(
-                array
-                    .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
-                    .value(row),
-            )
-        }
+        (
+            AvroSchema::TimestampMillis | AvroSchema::LocalTimestampMillis,
+            DataType::Timestamp(TimeUnit::Millisecond, _),
+        ) => put_long(out, prim::<t::TimestampMillisecondType>(array, row)),
+        (
+            AvroSchema::TimestampMicros | AvroSchema::LocalTimestampMicros,
+            DataType::Timestamp(TimeUnit::Microsecond, _),
+        ) => put_long(out, prim::<t::TimestampMicrosecondType>(array, row)),
         (AvroSchema::Record(r), DataType::Struct(_)) => {
             let s = array.as_struct();
-            let mut pairs = Vec::with_capacity(r.fields.len());
             for f in &r.fields {
                 let Some(child) = s.column_by_name(&f.name) else {
                     return Err(write_failed(format!(
@@ -292,76 +340,68 @@ fn scalar(schema: &AvroSchema, array: &ArrayRef, row: usize) -> FormatResult<Avr
                         f.name
                     )));
                 };
-                pairs.push((f.name.clone(), cell(&f.schema, child, row)?));
+                put_cell(out, &f.schema, child, row)?;
             }
-            AvroValue::Record(pairs)
         }
         (AvroSchema::Array(a), DataType::List(_)) => {
             let l = array.as_list::<i32>();
             let (start, end) = window(l.value_offsets(), row, l.values().len())?;
-            (start..end)
-                .map(|i| cell(&a.items, l.values(), i))
-                .collect::<FormatResult<Vec<_>>>()
-                .map(AvroValue::Array)?
+            put_items(out, &a.items, l.values(), start, end)?;
         }
         (AvroSchema::Array(a), DataType::LargeList(_)) => {
             let l = array.as_list::<i64>();
             let (start, end) = window(l.value_offsets(), row, l.values().len())?;
-            (start..end)
-                .map(|i| cell(&a.items, l.values(), i))
-                .collect::<FormatResult<Vec<_>>>()
-                .map(AvroValue::Array)?
+            put_items(out, &a.items, l.values(), start, end)?;
         }
         (AvroSchema::Array(a), DataType::FixedSizeList(_, _)) => {
             let l = array.as_fixed_size_list();
-            let len = usize::try_from(l.value_length())
-                .map_err(|_| write_failed("a list value outside its offsets"))?;
-            let start = row
-                .checked_mul(len)
-                .ok_or_else(|| write_failed("a list value outside its offsets"))?;
+            let bad = || write_failed("a list value outside its offsets");
+            let len = usize::try_from(l.value_length()).map_err(|_| bad())?;
+            let start = row.checked_mul(len).ok_or_else(bad)?;
             let end = start
                 .checked_add(len)
                 .filter(|end| *end <= l.values().len())
-                .ok_or_else(|| write_failed("a list value outside its offsets"))?;
-            (start..end)
-                .map(|i| cell(&a.items, l.values(), i))
-                .collect::<FormatResult<Vec<_>>>()
-                .map(AvroValue::Array)?
+                .ok_or_else(bad)?;
+            put_items(out, &a.items, l.values(), start, end)?;
         }
         (AvroSchema::Map(m), DataType::Map(_, _)) => {
             let map = array.as_map();
             let (start, end) = window(map.value_offsets(), row, map.entries().len())?;
             let entries = map.entries();
-            let keys = entries.column(0).as_string_view();
-            // Sorted by key, so the output does not depend on storage order.
-            let mut order: Vec<usize> = (start..end).collect();
-            order.sort_by(|&a, &b| keys.value(a).cmp(keys.value(b)));
-            let mut out = BTreeMap::new();
-            for i in order {
-                out.insert(
-                    keys.value(i).to_owned(),
-                    cell(&m.types, entries.column(1), i)?,
-                );
+            let keys = entries.column(0);
+            // Sorted by key, so the output does not depend on storage order;
+            // of equal keys the last one wins.
+            let mut order = (start..end)
+                .map(|i| {
+                    str_at(keys, i)
+                        .map(|k| (k, i))
+                        .ok_or_else(|| write_failed("a map key that is not a UTF-8 string"))
+                })
+                .collect::<FormatResult<Vec<_>>>()?;
+            order.sort_by(|a, b| a.0.cmp(b.0));
+            let mut kept = Vec::with_capacity(order.len());
+            for (n, &(key, i)) in order.iter().enumerate() {
+                if order.get(n + 1).is_none_or(|next| next.0 != key) {
+                    kept.push((key, i));
+                }
             }
-            AvroValue::Map(out.into_iter().collect())
+            if !kept.is_empty() {
+                put_long(out, i64::try_from(kept.len()).unwrap_or(i64::MAX));
+                for (key, i) in kept {
+                    put_bytes(out, key.as_bytes());
+                    put_cell(out, &m.types, entries.column(1), i)?;
+                }
+            }
+            put_long(out, 0);
         }
         (AvroSchema::Enum(e), DataType::Utf8View) => {
-            let symbol = array.as_string_view().value(row).to_owned();
+            let symbol = array.as_string_view().value(row);
             let index = e
                 .symbols
                 .iter()
-                .position(|s| s == &symbol)
-                .and_then(|i| u32::try_from(i).ok())
+                .position(|s| s == symbol)
                 .ok_or_else(|| fail("enum"))?;
-            AvroValue::Enum(index, symbol)
-        }
-        (AvroSchema::String, DataType::BinaryView) => {
-            let v = array.as_binary_view().value(row);
-            AvroValue::String(
-                std::str::from_utf8(v)
-                    .map_err(|_| write_failed("binary bytes that are not UTF-8"))?
-                    .to_owned(),
-            )
+            put_long(out, i64::try_from(index).map_err(|_| fail("enum"))?);
         }
         _ => {
             return Err(write_failed(format!(
@@ -370,15 +410,17 @@ fn scalar(schema: &AvroSchema, array: &ArrayRef, row: usize) -> FormatResult<Avr
                 schema_kind(schema)
             )));
         }
-    })
+    }
+    Ok(())
 }
 
 /// The sans-IO Avro encoder: batches into framed, compressed blocks.
 #[derive(Debug)]
 pub(crate) struct AvroEncoder {
-    schema: AvroSchema,
-    codec: OptCodec,
+    schema: Arc<AvroSchema>,
+    codec: apache_avro::Codec,
     sync: [u8; 16],
+    block_rows: usize,
     /// Framed bytes ready to upload.
     out: Vec<u8>,
     /// The open block's encoded records.
@@ -392,20 +434,14 @@ impl AvroEncoder {
     /// An encoder of `schema` rows with `o`.
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for a codec this build cannot write;
+    /// `CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION` for the
+    /// zstandard codec and `KRISHIV_UNSUPPORTED_FEATURE` for the other
+    /// codecs this build cannot write;
     /// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for a bad `avroSchema`;
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a schema with no Avro type.
     pub(crate) fn new(schema: &SchemaRef, o: &FormatOptions) -> FormatResult<Self> {
         let opts = AvroOptions::new(o, true)?;
-        match opts.codec {
-            OptCodec::Bzip2 | OptCodec::Xz => {
-                return Err(FormatError::Other(unsupported(format!(
-                    "writing Avro with the {} codec (only uncompressed, snappy, deflate and zstandard are supported)",
-                    opts.codec.header_name()
-                ))));
-            }
-            OptCodec::Null | OptCodec::Snappy | OptCodec::Deflate | OptCodec::Zstandard => {}
-        }
+        let codec = block_codec(opts.codec)?;
         let json = match &opts.avro_schema {
             Some(s) => s.clone(),
             None => schema_json_of_arrow(schema, &opts.record_name, &opts.record_namespace)?,
@@ -426,7 +462,7 @@ impl AvroEncoder {
                 "the schema is not a record",
             )));
         };
-        let sync = sync_of(&json);
+        let sync = sync_of(opts.sync_seed.as_deref(), &json);
         let mut out = Vec::with_capacity(1024);
         out.extend_from_slice(MAGIC);
         // The metadata map: exactly the schema and the codec, as Spark writes.
@@ -438,9 +474,10 @@ impl AvroEncoder {
         put_long(&mut out, 0);
         out.extend_from_slice(&sync);
         Ok(Self {
-            schema: parsed,
-            codec: opts.codec,
+            schema: Arc::new(parsed),
+            codec,
             sync,
+            block_rows: opts.block_rows.map_or(BLOCK_ROWS, |n| n.min(BLOCK_ROWS)),
             out,
             pending: Vec::new(),
             pending_rows: 0,
@@ -454,21 +491,8 @@ impl AvroEncoder {
         if self.pending_rows == 0 {
             return Ok(());
         }
-        use apache_avro::Codec as AvCodec;
-        let codec = match self.codec {
-            OptCodec::Null => AvCodec::Null,
-            OptCodec::Deflate => AvCodec::Deflate(apache_avro::DeflateSettings::default()),
-            OptCodec::Snappy => AvCodec::Snappy,
-            OptCodec::Zstandard => AvCodec::Zstandard(apache_avro::ZstandardSettings::default()),
-            OptCodec::Bzip2 | OptCodec::Xz => {
-                return Err(FormatError::Other(unsupported(format!(
-                    "writing Avro with the {} codec (only uncompressed, snappy, deflate and zstandard are supported)",
-                    self.codec.header_name()
-                ))));
-            }
-        };
         let mut data = std::mem::take(&mut self.pending);
-        codec
+        self.codec
             .compress(&mut data)
             .map_err(|e| write_failed(format!("an incompressible block: {e}")))?;
         put_long(
@@ -482,20 +506,18 @@ impl AvroEncoder {
     }
 }
 
-/// The sync marker of a schema: FNV-1a of its JSON with two seeds, so two
-/// writes of the same schema agree byte for byte.
-fn sync_of(json: &str) -> [u8; 16] {
-    fn fnv(json: &str, seed: u64) -> u64 {
-        let mut h = seed;
-        for b in json.bytes() {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(0x0100_0000_01b3);
-        }
-        h
-    }
+/// The sync marker of a file: XXH64 (two seeds) of the write job's `seed`
+/// and the schema JSON, so a job's file is reproducible while the marker
+/// cannot be computed from the schema alone. Without a seed (a write outside
+/// a write job) the marker is a function of the schema only.
+fn sync_of(seed: Option<&str>, json: &str) -> [u8; 16] {
+    let mut material = Vec::with_capacity(json.len() + seed.map_or(0, str::len) + 1);
+    material.extend_from_slice(seed.unwrap_or_default().as_bytes());
+    material.push(0);
+    material.extend_from_slice(json.as_bytes());
     let (a, b) = (
-        fnv(json, 0xcbf2_9ce4_8422_2325),
-        fnv(json, 0x8422_2325_cbf2_9ce4),
+        twox_hash::XxHash64::oneshot(0xcbf2_9ce4_8422_2325, &material),
+        twox_hash::XxHash64::oneshot(0x8422_2325_cbf2_9ce4, &material),
     );
     let mut sync = [0_u8; 16];
     sync[..8].copy_from_slice(&a.to_le_bytes());
@@ -505,30 +527,33 @@ fn sync_of(json: &str) -> [u8; 16] {
 
 impl Encoder for AvroEncoder {
     fn write(&mut self, batch: &RecordBatch) -> FormatResult<()> {
-        let fields = match &self.schema {
-            AvroSchema::Record(r) => r.fields.clone(),
-            _ => return Err(write_failed("a writer schema that is not a record")),
+        let schema = Arc::clone(&self.schema);
+        let AvroSchema::Record(record) = &*schema else {
+            return Err(write_failed("a writer schema that is not a record"));
         };
-        let schema = self.schema.clone();
-        let writer = apache_avro::writer::datum::GenericDatumWriter::builder(&schema)
-            .build()
-            .map_err(|e| write_failed(format!("an unwritable schema: {e}")))?;
-        for row in 0..batch.num_rows() {
-            let mut pairs = Vec::with_capacity(fields.len());
-            for f in &fields {
-                let index = batch
-                    .schema()
+        // Each field's column, resolved once for the batch.
+        let batch_schema = batch.schema();
+        let columns = record
+            .fields
+            .iter()
+            .map(|f| {
+                let index = batch_schema
                     .index_of(&f.name)
                     .map_err(|_| write_failed(format!("a batch without the field {}", f.name)))?;
-                pairs.push((f.name.clone(), cell(&f.schema, batch.column(index), row)?));
+                Ok((&f.schema, batch.column(index)))
+            })
+            .collect::<FormatResult<Vec<_>>>()?;
+        for row in 0..batch.num_rows() {
+            let mark = self.pending.len();
+            for (field, column) in &columns {
+                if let Err(e) = put_cell(&mut self.pending, field, column, row) {
+                    self.pending.truncate(mark);
+                    return Err(e);
+                }
             }
-            let datum = writer
-                .write_value_to_vec(AvroValue::Record(pairs))
-                .map_err(|e| write_failed(format!("an unencodable row: {e}")))?;
-            self.pending.extend_from_slice(&datum);
             self.pending_rows += 1;
             self.rows += 1;
-            if self.pending_rows >= BLOCK_ROWS || self.pending.len() >= BLOCK_TARGET_BYTES {
+            if self.pending_rows >= self.block_rows || self.pending.len() >= BLOCK_TARGET_BYTES {
                 self.flush_block()?;
             }
         }

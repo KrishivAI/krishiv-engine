@@ -285,7 +285,10 @@ fn reads_apache_avro_types() {
             {"name": "tm", "type": {"type": "long", "logicalType": "timestamp-millis"}},
             {"name": "lm", "type": {"type": "long", "logicalType": "local-timestamp-micros"}},
             {"name": "uni", "type": ["long", "null"]},
-            {"name": "multi", "type": ["int", "string"]}
+            {"name": "multi", "type": ["int", "string"]},
+            {"name": "il", "type": ["int", "long"]},
+            {"name": "fd", "type": ["null", "float", "double"]},
+            {"name": "m3", "type": ["int", "string", "null"]}
         ]
     }"#;
     let uuid = "123e4567-e89b-12d3-a456-426614174000";
@@ -308,6 +311,12 @@ fn reads_apache_avro_types() {
                 "multi".to_owned(),
                 V::Union(1, Box::new(V::String("x".to_owned()))),
             ),
+            ("il".to_owned(), V::Union(0, Box::new(V::Int(5)))),
+            ("fd".to_owned(), V::Union(1, Box::new(V::Float(1.5)))),
+            (
+                "m3".to_owned(),
+                V::Union(1, Box::new(V::String("s".to_owned()))),
+            ),
         ]),
         V::Record(vec![
             ("e".to_owned(), V::Enum(0, "A".to_owned())),
@@ -321,6 +330,9 @@ fn reads_apache_avro_types() {
             ("lm".to_owned(), V::LocalTimestampMicros(-1_000_000)),
             ("uni".to_owned(), V::Union(1, Box::new(V::Null))),
             ("multi".to_owned(), V::Union(0, Box::new(V::Int(-3)))),
+            ("il".to_owned(), V::Union(1, Box::new(V::Long(7)))),
+            ("fd".to_owned(), V::Union(2, Box::new(V::Double(2.5)))),
+            ("m3".to_owned(), V::Union(2, Box::new(V::Null))),
         ]),
     ];
     let file = env.put("interop.avro", apache_write(schema_json, &values));
@@ -349,6 +361,20 @@ fn reads_apache_avro_types() {
             ("uni".to_owned(), DataType::Int64),
             (
                 "multi".to_owned(),
+                DataType::Struct(
+                    vec![
+                        Field::new("member0", DataType::Int32, true),
+                        Field::new("member1", DataType::Utf8View, true),
+                    ]
+                    .into(),
+                )
+            ),
+            // Spark's union mapping: `int` and `long` are a `long`, `float`
+            // and `double` a `double`, and a null branch is dropped.
+            ("il".to_owned(), DataType::Int64),
+            ("fd".to_owned(), DataType::Float64),
+            (
+                "m3".to_owned(),
                 DataType::Struct(
                     vec![
                         Field::new("member0", DataType::Int32, true),
@@ -431,6 +457,26 @@ fn reads_apache_avro_types() {
     assert_eq!(
         multi.column(1).as_string_view().iter().collect::<Vec<_>>(),
         vec![Some("x"), None]
+    );
+    assert_eq!(
+        col("il")
+            .as_primitive::<Int64Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        vec![Some(5), Some(7)]
+    );
+    assert_eq!(
+        col("fd")
+            .as_primitive::<arrow_array::types::Float64Type>()
+            .iter()
+            .collect::<Vec<_>>(),
+        vec![Some(1.5), Some(2.5)]
+    );
+    let m3 = col("m3").as_struct().clone();
+    assert_eq!((m3.is_valid(0), m3.is_null(1)), (true, true));
+    assert_eq!(
+        m3.column(1).as_string_view().iter().collect::<Vec<_>>(),
+        vec![Some("s"), None]
     );
     // Files we write read back through `apache-avro` itself.
     let ours = env.encode(
@@ -566,8 +612,6 @@ fn compression_codecs_round_trip() {
         ("null", "null"),
         ("snappy", "snappy"),
         ("deflate", "deflate"),
-        ("zstandard", "zstandard"),
-        ("zstd", "zstandard"),
     ] {
         let o = env.options(&[("compression", option)]);
         let bytes = env.encode(&schema, std::slice::from_ref(&batch), &o);
@@ -581,11 +625,27 @@ fn compression_codecs_round_trip() {
         let got = env.scan(&file, &table_req, &o).unwrap();
         assert_eq!(concat(&out_schema, &got), retype_batch(&batch, &out_schema));
     }
-    // `bzip2` and `xz` are accepted options but not enabled in this build.
-    for codec in ["bzip2", "xz"] {
+    // `bzip2`, `xz` and `zstandard` are accepted options but not enabled in
+    // this build: `zstandard` is Spark's `CODEC_NOT_AVAILABLE` error.
+    let refused = [
+        ("bzip2", ErrorClass::KrishivUnsupportedFeature),
+        ("xz", ErrorClass::KrishivUnsupportedFeature),
+        (
+            "zstandard",
+            ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion,
+        ),
+    ];
+    // `zstd` spells `zstandard`.
+    let o = env.options(&[("compression", "zstd")]);
+    let e = AvroEncoder::new(&schema, &o).unwrap_err();
+    assert_eq!(
+        class_of(&e),
+        ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion
+    );
+    for (codec, class) in refused {
         let o = env.options(&[("compression", codec)]);
         let e = AvroEncoder::new(&schema, &o).unwrap_err();
-        assert_eq!(class_of(&e), ErrorClass::KrishivUnsupportedFeature);
+        assert_eq!(class_of(&e), class, "{codec}");
         // A file headed with such a codec fails the metadata read the same way.
         let plain = env.options(&[("compression", "uncompressed")]);
         let mut bytes = env.encode(&schema, std::slice::from_ref(&batch), &plain);
@@ -618,7 +678,7 @@ fn compression_codecs_round_trip() {
                     .read_metadata(&AvroFormat, &file, MetadataNeeds::default(), &o),
             )
             .unwrap_err();
-        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        assert_eq!(e.error_class(), class, "{codec}");
     }
 }
 
@@ -728,17 +788,36 @@ fn schema_mapping_matches_spark_docs() {
         ),
         (r#"["null","int"]"#, Ok(DataType::Int32)),
         (r#"["string","null"]"#, Ok(DataType::Utf8View)),
+        // Unions follow Spark's `SchemaConverters`: nulls are dropped (the
+        // union is nullable), then one branch is that branch, `int` and
+        // `long` are a `long`, `float` and `double` a `double`, and anything
+        // else a struct of `member0..N` over the non-null branches.
         (
             r#"["int","string","null"]"#,
             Ok(DataType::Struct(
                 vec![
                     Field::new("member0", DataType::Int32, true),
                     Field::new("member1", DataType::Utf8View, true),
-                    Field::new("member2", DataType::Null, true),
                 ]
                 .into(),
             )),
         ),
+        (
+            r#"["int","string"]"#,
+            Ok(DataType::Struct(
+                vec![
+                    Field::new("member0", DataType::Int32, true),
+                    Field::new("member1", DataType::Utf8View, true),
+                ]
+                .into(),
+            )),
+        ),
+        (r#"["int","long"]"#, Ok(DataType::Int64)),
+        (r#"["long","null","int"]"#, Ok(DataType::Int64)),
+        (r#"["float","double"]"#, Ok(DataType::Float64)),
+        (r#"["null","double","float"]"#, Ok(DataType::Float64)),
+        (r#"["int"]"#, Ok(DataType::Int32)),
+        (r#"["string"]"#, Ok(DataType::Utf8View)),
         (
             r#"{"type":"long","logicalType":"timestamp-nanos"}"#,
             Err(ErrorClass::KrishivUnsupportedFeature),
@@ -772,7 +851,7 @@ fn schema_mapping_matches_spark_docs() {
             Ok((field.data_type().clone(), field.is_nullable()))
         })();
         let want: Result<(DataType, bool), ErrorClass> = want.clone().map(|dt| {
-            let nullable = matches!(*fragment, r#"["null","int"]"# | r#"["string","null"]"#);
+            let nullable = fragment.starts_with('[') && fragment.contains(r#""null""#);
             (dt, nullable)
         });
         assert_eq!(got, want, "{fragment}");
@@ -1237,6 +1316,26 @@ fn corrupt_files_are_typed_errors() {
     let got = env.scan(&file, &table_req, &drop).unwrap();
     let got = concat(&out_schema, &got);
     assert_eq!(rows(std::slice::from_ref(&got)), 3);
+    // The null row takes the damaged record's file row (3), when selected;
+    // a damaged record outside the selection adds nothing.
+    let mut indexed = ScanRequest::all(Arc::clone(&schema));
+    indexed.metadata_cols.row_index = true;
+    let indexed_schema = mapped_schema(&schema, &indexed);
+    let got = concat(
+        &indexed_schema,
+        &env.scan(&file, &indexed, &permissive).unwrap(),
+    );
+    assert_eq!(
+        got.column_by_name("_tmp_metadata_row_index")
+            .unwrap()
+            .as_primitive::<Int64Type>()
+            .values()
+            .to_vec(),
+        vec![0, 1, 2, 3]
+    );
+    indexed.selection = Some(crate::request::RowSelection::excluding(6, [3]));
+    let got = env.scan(&file, &indexed, &permissive).unwrap();
+    assert_eq!(rows(&got), 3);
     // A damaged sync marker fails the block scan in every mode: framing is
     // not a record, and the metadata read validates it.
     let sync_at = usize::try_from(meta.blocks[1].bytes.end).unwrap() - 1;
@@ -1610,4 +1709,665 @@ fn env_options_none() -> FormatOptions {
         )
         .unwrap()
         .0
+}
+
+/// Like [`apache_write`], with `meta` added to the header.
+fn apache_write_meta(
+    schema_json: &str,
+    values: &[apache_avro::types::Value],
+    meta: &[(&str, &str)],
+) -> Vec<u8> {
+    let schema = AvroSchema::parse_str(schema_json).unwrap();
+    let mut writer =
+        apache_avro::Writer::with_codec(&schema, Vec::new(), apache_avro::Codec::Null).unwrap();
+    for (key, value) in meta {
+        writer
+            .add_user_metadata((*key).to_owned(), value.as_bytes())
+            .unwrap();
+    }
+    writer.extend_from_slice(values).unwrap();
+    writer.into_inner().unwrap()
+}
+
+/// A file with an ancient date and timestamp, and the schema it was written
+/// with (`apache_write_meta` adds the header entries under test).
+fn ancient_file(env: &Env, name: &str, meta: &[(&str, &str)]) -> FileRef {
+    use apache_avro::types::Value as V;
+    let schema_json = r#"{
+        "type": "record", "name": "r", "fields": [
+            {"name": "d", "type": {"type": "int", "logicalType": "date"}},
+            {"name": "t", "type": {"type": "long", "logicalType": "timestamp-micros"}}
+        ]
+    }"#;
+    let values = vec![V::Record(vec![
+        ("d".to_owned(), V::Date(-200_000)),
+        ("t".to_owned(), V::TimestampMicros(-30_000_000_000_000)),
+    ])];
+    env.put(name, apache_write_meta(schema_json, &values, meta))
+}
+
+/// A file written by Spark 3.0 or later says how it was written: its rebase
+/// mode comes from the header (`CORRECTED`, or `LEGACY` with the
+/// `legacyDateTime` key; Spark 2.x files are `LEGACY`), whatever
+/// `datetimeRebaseMode` says. Only files without a Spark version use the
+/// option.
+#[test]
+fn spark_headers_choose_the_rebase_mode() {
+    let env = Env::new();
+    let version = ("org.apache.spark.version", "4.2.0");
+    let legacy = ("org.apache.spark.legacyDateTime", "");
+    for (name, meta, want_rows) in [
+        ("v3.avro", vec![version], Some(1)),
+        ("v3-legacy.avro", vec![version, legacy], None),
+        ("v2.avro", vec![("org.apache.spark.version", "2.4.8")], None),
+        ("unknown.avro", vec![], None),
+    ] {
+        let file = ancient_file(&env, name, &meta);
+        // The default `EXCEPTION` mode applies only to the unknown writer.
+        let o = env.options(&[]);
+        let req = ScanRequest::all(env.infer(&file, &o));
+        match (env.scan(&file, &req, &o), want_rows) {
+            (Ok(got), Some(n)) => assert_eq!(rows(&got), n, "{name}"),
+            (Err(e), None) => {
+                let class = if name == "unknown.avro" {
+                    ErrorClass::FailedReadFileNoHint
+                } else {
+                    ErrorClass::KrishivUnsupportedFeature
+                };
+                assert_eq!(e.error_class(), class, "{name}");
+            }
+            (got, want) => panic!("{name}: {got:?} against {want:?}"),
+        }
+        // The option does not override what the file says.
+        let o = env.options(&[("datetimeRebaseMode", "CORRECTED")]);
+        let got = env.scan(&file, &req, &o);
+        match name {
+            "v3.avro" | "unknown.avro" => assert_eq!(rows(&got.unwrap()), 1, "{name}"),
+            _ => assert_eq!(
+                got.unwrap_err().error_class(),
+                ErrorClass::KrishivUnsupportedFeature,
+                "{name}"
+            ),
+        }
+    }
+}
+
+/// `compression` and `datetimeRebaseMode` fall back to Spark's session
+/// confs; an option given explicitly wins.
+#[test]
+fn session_confs_back_the_options() {
+    let env = Env::new();
+    let mut conf = krishiv_common::config::Config::new();
+    conf.set("spark.sql.avro.compression.codec", "deflate")
+        .unwrap();
+    conf.set("spark.sql.avro.datetimeRebaseModeInRead", "CORRECTED")
+        .unwrap();
+    let parse = |user: &[(&str, &str)]| {
+        let user = user
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), option_value(k, v)))
+            .collect();
+        AvroFormat.options().parse(&user, &conf).unwrap().0
+    };
+    let o = parse(&[]);
+    assert_eq!(o.str("compression"), Some("deflate"));
+    assert_eq!(o.str("datetimeRebaseMode"), Some("CORRECTED"));
+    let given = parse(&[
+        ("compression", "uncompressed"),
+        ("datetimeRebaseMode", "EXCEPTION"),
+    ]);
+    assert_eq!(given.str("compression"), Some("uncompressed"));
+    assert_eq!(given.str("datetimeRebaseMode"), Some("EXCEPTION"));
+    // Without a conf the defaults hold.
+    let o = env.options(&[]);
+    assert_eq!(o.str("compression"), Some("snappy"));
+    assert_eq!(o.str("datetimeRebaseMode"), Some("EXCEPTION"));
+    // The conf reaches the written header and the read.
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![Some(1)]))],
+    )
+    .unwrap();
+    let bytes = env.encode(&schema, &[batch], &parse(&[]));
+    assert!(bytes.windows(7).any(|w| w == b"deflate"));
+    let file = ancient_file(&env, "conf.avro", &[]);
+    let o = parse(&[]);
+    let got = env
+        .scan(&file, &ScanRequest::all(env.infer(&file, &o)), &o)
+        .unwrap();
+    assert_eq!(rows(&got), 1);
+}
+
+/// A corrupt file fails the read unless `mode` says otherwise (Spark's
+/// default is `FAILFAST`).
+#[test]
+fn mode_defaults_to_failfast() {
+    use super::options::{AvroOptions, Mode};
+    let env = Env::new();
+    let default = AvroOptions::new(&env.options(&[]), false).unwrap();
+    assert_eq!(default.mode, Mode::FailFast);
+    for (mode, want) in [
+        ("PERMISSIVE", Mode::Permissive),
+        ("DROPMALFORMED", Mode::DropMalformed),
+        ("FAILFAST", Mode::FailFast),
+    ] {
+        let o = AvroOptions::new(&env.options(&[("mode", mode)]), false).unwrap();
+        assert_eq!(o.mode, want, "{mode}");
+    }
+}
+
+/// A record that decodes but that a later column rejects (an out-of-range
+/// decimal, a timestamp that overflows microseconds) takes no value in the
+/// earlier columns: `PERMISSIVE` keeps one null row at the record's own file
+/// row, `DROPMALFORMED` drops the record and the rest of its block, and
+/// `FAILFAST` fails. A row outside the selection is never read.
+#[test]
+fn a_record_a_column_rejects_leaves_no_partial_row() {
+    use crate::request::RowSelection;
+    use apache_avro::types::Value as V;
+    let env = Env::new();
+    let schema_json = r#"{
+        "type": "record", "name": "r", "fields": [
+            {"name": "a", "type": ["null", "int"]},
+            {"name": "ts", "type": ["null", {"type": "long", "logicalType": "timestamp-millis"}]},
+            {"name": "d", "type": ["null", {"type": "bytes", "logicalType": "decimal", "precision": 5, "scale": 2}]}
+        ]
+    }"#;
+    let record = |a: i32, ts: i64, d: Vec<u8>| {
+        V::Record(vec![
+            ("a".to_owned(), V::Union(1, Box::new(V::Int(a)))),
+            (
+                "ts".to_owned(),
+                V::Union(1, Box::new(V::TimestampMillis(ts))),
+            ),
+            (
+                "d".to_owned(),
+                V::Union(1, Box::new(V::Decimal(apache_avro::Decimal::from(d)))),
+            ),
+        ])
+    };
+    // 100 and 300 are `1.00` and `3.00`; 123456 has six digits.
+    let cases = [
+        ("timestamp", [(2, i64::MAX, vec![0x01, 0x2C])]),
+        ("decimal", [(2, 2000, vec![0x01, 0xE2, 0x40])]),
+    ];
+    for (name, [(a, ts, d)]) in cases {
+        let values = vec![
+            record(1, 1000, vec![0x64]),
+            record(a, ts, d),
+            record(3, 3000, vec![0x01, 0x2C]),
+        ];
+        let file = env.put(&format!("{name}.avro"), apache_write(schema_json, &values));
+        let o = env.options(&[]);
+        let inferred = env.infer(&file, &o);
+        let mut req = ScanRequest::all(Arc::clone(&inferred));
+        req.metadata_cols.row_index = true;
+        let out_schema = mapped_schema(&inferred, &req);
+        let run = |o: &FormatOptions, req: &ScanRequest| {
+            env.scan(&file, req, o).map(|got| concat(&out_schema, &got))
+        };
+        let a_of = |b: &RecordBatch| {
+            b.column(0)
+                .as_primitive::<Int32Type>()
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        let ts_of = |b: &RecordBatch| {
+            b.column(1)
+                .as_primitive::<TimestampMicrosecondType>()
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        let d_of = |b: &RecordBatch| {
+            b.column(2)
+                .as_primitive::<Decimal128Type>()
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        let index_of = |b: &RecordBatch| {
+            b.column_by_name("_tmp_metadata_row_index")
+                .unwrap()
+                .as_primitive::<Int64Type>()
+                .values()
+                .to_vec()
+        };
+        // The default fails the read.
+        let e = run(&o, &req).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::FailedReadFileNoHint, "{name}");
+        // One null row, every column the same length, at the record's row.
+        let permissive = env.options(&[("mode", "PERMISSIVE")]);
+        let got = run(&permissive, &req).unwrap();
+        assert_eq!(a_of(&got), vec![Some(1), None], "{name}");
+        assert_eq!(ts_of(&got), vec![Some(1_000_000), None], "{name}");
+        assert_eq!(d_of(&got), vec![Some(100), None], "{name}");
+        assert_eq!(index_of(&got), vec![0, 1], "{name}");
+        // The record and the rest of its block are dropped.
+        let drop = env.options(&[("mode", "DROPMALFORMED")]);
+        let got = run(&drop, &req).unwrap();
+        assert_eq!(a_of(&got), vec![Some(1)], "{name}");
+        assert_eq!(ts_of(&got), vec![Some(1_000_000)], "{name}");
+        assert_eq!(d_of(&got), vec![Some(100)], "{name}");
+        assert_eq!(index_of(&got), vec![0], "{name}");
+        // Unselected, the bad record is never read, in any mode.
+        let mut skipped = req.clone();
+        skipped.selection = Some(RowSelection::excluding(3, [1]));
+        for o in [&o, &permissive, &drop] {
+            let got = run(o, &skipped).unwrap();
+            assert_eq!(a_of(&got), vec![Some(1), Some(3)], "{name}");
+            assert_eq!(index_of(&got), vec![0, 2], "{name}");
+        }
+    }
+}
+
+/// Map entries are written in key order (the last of equal keys wins) for
+/// every UTF-8 key layout, so a file does not depend on the storage order.
+#[test]
+fn map_entries_are_written_in_key_order() {
+    use arrow_array::{LargeStringArray, StringArray};
+    let env = Env::new();
+    let plain = env.options(&[("compression", "uncompressed")]);
+    type Keys = fn(&[&str]) -> ArrayRef;
+    let layouts: [(DataType, Keys); 3] = [
+        (DataType::Utf8, |k| Arc::new(StringArray::from(k.to_vec()))),
+        (DataType::LargeUtf8, |k| {
+            Arc::new(LargeStringArray::from(k.to_vec()))
+        }),
+        (DataType::Utf8View, |k| {
+            Arc::new(StringViewArray::from(k.to_vec()))
+        }),
+    ];
+    // Row 0 in two storage orders (`a`=1, `b`=2, `c`=3), row 1 with a
+    // repeated key.
+    let orders: [&[(&str, i32)]; 2] = [
+        &[("b", 2), ("c", 3), ("a", 1), ("a", 9), ("a", 1), ("x", 0)],
+        &[("c", 3), ("a", 1), ("x", 0), ("b", 2), ("a", 9), ("a", 1)],
+    ];
+    for (key_type, keys) in layouts {
+        let entry_fields = Fields::from(vec![
+            Field::new("key", key_type.clone(), false),
+            Field::new("value", DataType::Int32, false),
+        ]);
+        let map_type = DataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(entry_fields.clone()),
+                false,
+            )),
+            false,
+        );
+        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new("m", map_type, false)]));
+        let mut files = Vec::new();
+        for order in orders {
+            // Row 0: `a`, `b`, `c` (three entries); row 1: `a` twice.
+            let row0: Vec<(&str, i32)> = order
+                .iter()
+                .copied()
+                .filter(|(k, v)| *k != "x" && !(*k == "a" && *v == 9))
+                .collect();
+            let row1 = [("a", 5), ("a", 9)];
+            let all: Vec<(&str, i32)> = row0.iter().copied().chain(row1).collect();
+            let key_names: Vec<&str> = all.iter().map(|(k, _)| *k).collect();
+            let entries = StructArray::new(
+                entry_fields.clone(),
+                vec![
+                    keys(&key_names),
+                    Arc::new(Int32Array::from(
+                        all.iter().map(|(_, v)| *v).collect::<Vec<_>>(),
+                    )) as ArrayRef,
+                ],
+                None,
+            );
+            let map = arrow_array::MapArray::new(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(entry_fields.clone()),
+                    false,
+                )),
+                OffsetBuffer::new(
+                    vec![
+                        0_i32,
+                        i32::try_from(row0.len()).unwrap(),
+                        i32::try_from(all.len()).unwrap(),
+                    ]
+                    .into(),
+                ),
+                entries,
+                None,
+                false,
+            );
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(map)]).unwrap();
+            let bytes = env.encode(&schema, &[batch], &plain);
+            let file = env.put(&format!("map-{key_type}.avro"), bytes.clone());
+            let meta = env.metadata(&file, &plain);
+            let any: &dyn std::any::Any = meta.as_ref();
+            let meta = any.downcast_ref::<super::AvroMetadata>().unwrap();
+            let data = &meta.blocks[0].data;
+            files.push(
+                bytes[usize::try_from(data.start).unwrap()..usize::try_from(data.end).unwrap()]
+                    .to_vec(),
+            );
+        }
+        // A count (zigzag 3), the three entries as key and value (zigzag),
+        // the closing zero block; then one entry (`a`: 9) and its zero block.
+        let expected: Vec<u8> = vec![6, 2, b'a', 2, 2, b'b', 4, 2, b'c', 6, 0, 2, 2, b'a', 18, 0];
+        assert_eq!(files[0], expected, "{key_type}");
+        assert_eq!(files[1], expected, "{key_type}");
+    }
+}
+
+/// An Arrow decimal is rescaled to the scale of the Avro schema (exactly, or
+/// the write fails), checked against its precision and sign-extended to a
+/// `fixed` size.
+#[test]
+fn decimals_are_rescaled_to_the_avro_schema() {
+    let env = Env::new();
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+        "d",
+        DataType::Decimal128(10, 4),
+        true,
+    )]));
+    let batch = |values: Vec<Option<i128>>| {
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(
+                Decimal128Array::from(values)
+                    .with_precision_and_scale(10, 4)
+                    .unwrap(),
+            )],
+        )
+        .unwrap()
+    };
+    let wide = [("inexact", 12345), ("too wide", 9_999_999_900)];
+    for (label, decimal_type, extra) in [
+        (
+            "bytes",
+            r#"{"type":"bytes","logicalType":"decimal","precision":6,"scale":2}"#,
+            vec![],
+        ),
+        (
+            "fixed",
+            r#"{"type":"fixed","name":"dec","size":3,"logicalType":"decimal","precision":6,"scale":2}"#,
+            vec![],
+        ),
+        (
+            // 1000.00 needs three bytes.
+            "short fixed",
+            r#"{"type":"fixed","name":"dec","size":2,"logicalType":"decimal","precision":6,"scale":2}"#,
+            vec![("no room", 10_000_000)],
+        ),
+    ] {
+        let avro_schema = format!(
+            r#"{{"type":"record","name":"r","fields":[{{"name":"d","type":["null",{decimal_type}]}}]}}"#
+        );
+        let o = env.options(&[("avroSchema", &avro_schema)]);
+        let good = batch(vec![Some(12300), Some(-4500), Some(0), None]);
+        let file = env.put(
+            &format!("dec-{label}.avro"),
+            env.encode(&schema, &[good], &o),
+        );
+        let inferred = env.infer(&file, &o);
+        let req = ScanRequest::all(Arc::clone(&inferred));
+        let out_schema = mapped_schema(&inferred, &req);
+        let got = concat(&out_schema, &env.scan(&file, &req, &o).unwrap());
+        assert_eq!(
+            got.column(0).data_type(),
+            &DataType::Decimal128(6, 2),
+            "{label}"
+        );
+        assert_eq!(
+            got.column(0)
+                .as_primitive::<Decimal128Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(123), Some(-45), Some(0), None],
+            "{label}"
+        );
+        // A value that is not a whole number of the Avro scale, has more
+        // digits than the Avro precision or does not fit the `fixed` size is
+        // a write error.
+        for (what, value) in wide.into_iter().chain(extra) {
+            let mut enc = AvroEncoder::new(&schema, &o).unwrap();
+            let e = enc.write(&batch(vec![Some(value)])).unwrap_err();
+            assert!(
+                matches!(e, FormatError::WriteFailed(_)),
+                "{label} {what}: {e:?}"
+            );
+        }
+    }
+}
+
+/// The sync marker depends on the write job's seed, not only the schema, so
+/// it cannot be computed from the schema; a job's file stays reproducible.
+#[test]
+fn sync_marker_comes_from_the_write_job_seed() {
+    let env = Env::new();
+    let o = env.options(&[]);
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![Some(1), Some(2)]))],
+    )
+    .unwrap();
+    let write = |o: &FormatOptions| env.encode(&schema, std::slice::from_ref(&batch), o);
+    let a = write(&o.clone().with_write_seed("job-a/0/0"));
+    assert_eq!(a, write(&o.clone().with_write_seed("job-a/0/0")));
+    let b = write(&o.clone().with_write_seed("job-b/0/0"));
+    let c = write(&o.clone().with_write_seed("job-a/0/1"));
+    let none = write(&o);
+    assert_eq!(none, write(&o));
+    for other in [&b, &c, &none] {
+        assert_ne!(&a, other);
+    }
+    // Each file still reads back with the marker its header names.
+    for bytes in [a, b, c, none] {
+        let file = env.put("seeded.avro", bytes);
+        let got = env
+            .scan(&file, &ScanRequest::all(Arc::clone(&schema)), &o)
+            .unwrap();
+        assert_eq!(rows(&got), 2);
+    }
+}
+
+/// An empty block (a count of zero) is a valid frame: the blocks after it
+/// are still scanned and read.
+#[test]
+fn an_empty_block_does_not_end_the_block_scan() {
+    let env = Env::new();
+    let plain = env.options(&[("compression", "uncompressed")]);
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![Some(1), Some(2), Some(3)]))],
+    )
+    .unwrap();
+    let mut enc = AvroEncoder::new(&schema, &plain).unwrap();
+    let mut two = Vec::new();
+    for _ in 0..2 {
+        enc.write(&batch).unwrap();
+        enc.flush().unwrap();
+        while let Some(bytes) = enc.take_bytes() {
+            two.extend_from_slice(&bytes);
+        }
+    }
+    two.extend_from_slice(&Box::new(enc).finish().unwrap().tail);
+    let meta = env.metadata(&env.put("two.avro", two.clone()), &plain);
+    let any: &dyn std::any::Any = meta.as_ref();
+    let meta = any.downcast_ref::<super::AvroMetadata>().unwrap();
+    let at = usize::try_from(meta.blocks[1].bytes.start).unwrap();
+    let mut spliced = two[..at].to_vec();
+    spliced.extend_from_slice(&[0, 0]);
+    spliced.extend_from_slice(&meta.sync);
+    spliced.extend_from_slice(&two[at..]);
+    let file = env.put("empty-block.avro", spliced);
+    let meta = env.metadata(&file, &plain);
+    let any: &dyn std::any::Any = meta.as_ref();
+    let meta = any.downcast_ref::<super::AvroMetadata>().unwrap();
+    assert_eq!(
+        meta.blocks.iter().map(|b| b.count).collect::<Vec<_>>(),
+        vec![3, 0, 3]
+    );
+    assert_eq!(meta.rows, 6);
+    let mut req = ScanRequest::all(Arc::clone(&schema));
+    req.metadata_cols.row_index = true;
+    let got = env.scan(&file, &req, &plain).unwrap();
+    assert_eq!(rows(&got), 6);
+}
+
+/// The metadata pass reads the header and, per block, its sync marker and
+/// the next block's header; never the records.
+#[test]
+fn the_block_index_does_not_read_the_records() {
+    let env = Env::new();
+    let o = env.options(&[("compression", "uncompressed")]);
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8View, true)]));
+    let text = "x".repeat(1000);
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringViewArray::from(vec![
+            Some(text.as_str());
+            4000
+        ]))],
+    )
+    .unwrap();
+    let file = env.put("big.avro", env.encode(&schema, &[batch], &o));
+    assert!(file.size > 1 << 20, "a file of several megabytes");
+    let before = crate::io::IoCounters::get(&env.io.counters().bytes_read);
+    let meta = env.metadata(&file, &o);
+    let read = crate::io::IoCounters::get(&env.io.counters().bytes_read) - before;
+    let any: &dyn std::any::Any = meta.as_ref();
+    let meta = any.downcast_ref::<super::AvroMetadata>().unwrap();
+    assert!(meta.blocks.len() > 4, "{} blocks", meta.blocks.len());
+    assert!(
+        read < 200 << 10,
+        "{read} bytes read for the metadata of {} bytes",
+        file.size
+    );
+}
+
+/// Defaults of fields the file lacks: a union default is the selected
+/// branch (its own index), and `bytes`, `fixed` and decimal defaults are
+/// ISO-8859-1 strings with one code point per byte.
+#[test]
+fn defaults_follow_the_avro_specification() {
+    use super::schema::field_default;
+    use apache_avro::types::Value as V;
+    use serde_json::json;
+    let parse = |json: &str| AvroSchema::parse_str(json).unwrap();
+    // A union default belongs to the non-null branch, wherever it is.
+    for (union, branch) in [(r#"["string","null"]"#, 0), (r#"["null","string"]"#, 1)] {
+        let got = field_default(&parse(union), Some(&json!("hi"))).unwrap();
+        assert_eq!(
+            got,
+            V::Union(branch, Box::new(V::String("hi".to_owned()))),
+            "{union}"
+        );
+    }
+    let null = field_default(&parse(r#"["string","null"]"#), Some(&json!(null))).unwrap();
+    assert_eq!(null, V::Union(1, Box::new(V::Null)));
+    // One code point per byte: U+00FF is the byte 0xFF.
+    assert_eq!(
+        field_default(&parse(r#""bytes""#), Some(&json!("\u{ff}\u{0}a"))).unwrap(),
+        V::Bytes(vec![0xFF, 0x00, b'a'])
+    );
+    assert_eq!(
+        field_default(
+            &parse(r#"{"type":"fixed","name":"f","size":2}"#),
+            Some(&json!("\u{ff}\u{1}"))
+        )
+        .unwrap(),
+        V::Fixed(2, vec![0xFF, 0x01])
+    );
+    let decimal = parse(r#"{"type":"bytes","logicalType":"decimal","precision":9,"scale":2}"#);
+    let V::Decimal(d) = field_default(&decimal, Some(&json!("\u{ff}\u{38}"))).unwrap() else {
+        panic!("not a decimal");
+    };
+    assert_eq!(Vec::<u8>::try_from(&d).unwrap(), vec![0xFF, 0x38]);
+    // Above U+00FF is not a byte; the fixed size counts bytes, not UTF-8.
+    for (schema, default) in [
+        (r#""bytes""#, "\u{100}"),
+        (r#"{"type":"fixed","name":"f","size":2}"#, "\u{100}a"),
+        (r#"{"type":"fixed","name":"f","size":2}"#, "\u{ff}"),
+    ] {
+        assert!(
+            field_default(&parse(schema), Some(&json!(default))).is_err(),
+            "{schema} {default:?}"
+        );
+    }
+    // Read end to end: a file without the field gets the default.
+    let env = Env::new();
+    let file_schema = r#"{"type":"record","name":"r","fields":[{"name":"a","type":"int"}]}"#;
+    let file = env.put(
+        "defaults.avro",
+        apache_write(file_schema, &[V::Record(vec![("a".to_owned(), V::Int(1))])]),
+    );
+    let reader = r#"{"type":"record","name":"r","fields":[
+        {"name":"a","type":"int"},
+        {"name":"b","type":"bytes","default":"\u00ff"},
+        {"name":"u","type":["string","null"],"default":"hi"}
+    ]}"#;
+    let o = env.options(&[("avroSchema", reader)]);
+    let inferred = env.infer(&file, &o);
+    let req = ScanRequest::all(Arc::clone(&inferred));
+    let out_schema = mapped_schema(&inferred, &req);
+    let got = concat(&out_schema, &env.scan(&file, &req, &o).unwrap());
+    assert_eq!(
+        got.column(1).as_binary_view().iter().collect::<Vec<_>>(),
+        vec![Some([0xFF].as_slice())]
+    );
+    assert_eq!(
+        got.column(2).as_string_view().iter().collect::<Vec<_>>(),
+        vec![Some("hi")]
+    );
+}
+
+/// The file writer seeds each file's encoder with its job, task and file
+/// number, so the same rows written by two jobs carry different markers.
+#[test]
+fn written_files_are_seeded_by_their_job() {
+    let env = Env::new();
+    let o = env.options(&[]);
+    let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![Some(1), Some(2)]))],
+    )
+    .unwrap();
+    let mut syncs = Vec::new();
+    for job in ["job-a", "job-a", "job-b"] {
+        let files = env.rt.block_on(async {
+            let pool: Arc<dyn krishiv_memory::MemoryPool> =
+                krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+            let id = pool.register("write", None);
+            let mut writer = crate::FileWriter::new(
+                &env.io,
+                Arc::new(AvroFormat),
+                Arc::clone(&schema),
+                o.clone(),
+                crate::WriteOptions {
+                    store: StoreId::new(STORE),
+                    dir: Path::from(job),
+                    task: 0,
+                    job_uuid: job.to_owned(),
+                    max_records_per_file: 0,
+                    target_file_bytes: 0,
+                },
+                krishiv_memory::Reservation::new(pool, id),
+            )
+            .unwrap();
+            writer.write(&batch).await.unwrap();
+            writer.finish().await.unwrap()
+        });
+        let meta = env.rt.block_on(async {
+            object_store::ObjectStoreExt::head(env.store.as_ref(), &files[0].path)
+                .await
+                .unwrap()
+        });
+        let file = FileRef::from_meta(StoreId::new(STORE), &meta);
+        let meta = env.metadata(&file, &o);
+        let any: &dyn std::any::Any = meta.as_ref();
+        syncs.push(any.downcast_ref::<super::AvroMetadata>().unwrap().sync);
+    }
+    assert_eq!(syncs[0], syncs[1]);
+    assert_ne!(syncs[0], syncs[2]);
 }

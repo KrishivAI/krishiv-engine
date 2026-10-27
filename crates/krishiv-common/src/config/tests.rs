@@ -164,6 +164,32 @@ fn spill_entries_parse_and_default() {
 }
 
 #[test]
+fn avro_entries_parse_and_default() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        (
+            c.get(&AVRO_COMPRESSION_CODEC)
+                .and_then(ConfigValue::as_str)
+                .map(str::to_owned),
+            c.get(&AVRO_DATETIME_REBASE_MODE_IN_READ)
+                .and_then(ConfigValue::as_str)
+                .map(str::to_owned),
+        )
+    };
+    assert_eq!(get(&c), (Some("snappy".into()), Some("EXCEPTION".into())));
+    c.set("spark.sql.avro.compression.codec", "DEFLATE")
+        .unwrap();
+    c.set("spark.sql.avro.datetimeRebaseModeInRead", "corrected")
+        .unwrap();
+    assert_eq!(get(&c), (Some("deflate".into()), Some("CORRECTED".into())));
+    assert!(c.set("spark.sql.avro.compression.codec", "gzip").is_err());
+    assert!(
+        c.set("spark.sql.avro.datetimeRebaseModeInRead", "never")
+            .is_err()
+    );
+}
+
+#[test]
 fn invalid_values_are_typed_errors() {
     let mut c = Config::new();
     for (k, v) in [

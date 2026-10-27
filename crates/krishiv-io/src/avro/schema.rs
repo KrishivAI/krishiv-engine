@@ -5,8 +5,11 @@
 //! primitives map to their Arrow counterpart (`int` → `Int32`, `long` →
 //! `Int64`, `float` → `Float32`, `double` → `Float64`, `boolean` →
 //! `Boolean`, `string` → `Utf8View`, `bytes` and `fixed` → `BinaryView`);
-//! a nullable union `["null", T]` (either order) maps to a nullable `T`;
-//! any other union maps to a struct of `member0..N`; `enum` maps to
+//! unions follow Spark's `SchemaConverters`: the null branches are dropped and
+//! the union is nullable; what is left is `T` for one branch, `long` for
+//! `int` and `long`, `double` for `float` and `double`, and otherwise a
+//! struct of `member0..N` (one nullable member per remaining branch);
+//! `enum` maps to
 //! `Utf8View` (a string), `uuid` to the string or bytes holding it; `date` →
 //! `Date32`; `timestamp-millis` and `timestamp-micros` → zoned microsecond
 //! `Timestamp` (millis are scaled); `local-timestamp-millis`/`-micros` →
@@ -33,28 +36,50 @@ fn unsupported(feature: String) -> FormatError {
     FormatError::Other(crate::error::unsupported(feature))
 }
 
-/// The nullable union of `variants`, if it is `["null", T]` in either order:
-/// the single non-null branch.
-fn nullable_branch(variants: &[AvroSchema]) -> Option<&AvroSchema> {
-    if variants.len() != 2 {
-        return None;
-    }
-    let nulls = variants
+/// How Spark maps a union's branches once the null branches are dropped
+/// (`SchemaConverters.toSqlTypeHelper`).
+pub(crate) enum UnionShape<'a> {
+    /// One branch: the union is that branch.
+    Single(&'a AvroSchema),
+    /// Exactly `int` and `long`: a `long`.
+    Long,
+    /// Exactly `float` and `double`: a `double`.
+    Double,
+    /// A struct of `member0..N`, one member per non-null branch.
+    Members,
+}
+
+/// The shape of the union of `variants` (see [`UnionShape`]).
+pub(crate) fn union_shape(variants: &[AvroSchema]) -> UnionShape<'_> {
+    let branches: Vec<&AvroSchema> = variants
         .iter()
-        .filter(|s| matches!(s, AvroSchema::Null))
-        .count();
-    if nulls != 1 {
-        return None;
+        .filter(|s| !matches!(s, AvroSchema::Null))
+        .collect();
+    match branches.as_slice() {
+        [one] => UnionShape::Single(one),
+        [a, b] => {
+            let has = |wanted: &AvroSchema| {
+                std::mem::discriminant(*a) == std::mem::discriminant(wanted)
+                    || std::mem::discriminant(*b) == std::mem::discriminant(wanted)
+            };
+            if has(&AvroSchema::Int) && has(&AvroSchema::Long) {
+                UnionShape::Long
+            } else if has(&AvroSchema::Float) && has(&AvroSchema::Double) {
+                UnionShape::Double
+            } else {
+                UnionShape::Members
+            }
+        }
+        _ => UnionShape::Members,
     }
-    variants.iter().find(|s| !matches!(s, AvroSchema::Null))
 }
 
-/// Whether `schema` is a nullable union (either order).
+/// Whether `schema` is a union with a null branch.
 fn is_nullable_union(schema: &AvroSchema) -> bool {
-    matches!(schema, AvroSchema::Union(u) if nullable_branch(u.variants()).is_some())
+    null_branch_index(schema).is_some()
 }
 
-/// The Arrow type of a non-union Avro schema.
+/// The Arrow type of an Avro schema.
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a schema with no Spark type here.
@@ -89,17 +114,24 @@ fn arrow_of(schema: &AvroSchema) -> FormatResult<DataType> {
         }
         AvroSchema::Union(u) => {
             let variants = u.variants();
-            if let Some(inner) = nullable_branch(variants) {
-                return arrow_of(inner);
+            match union_shape(variants) {
+                UnionShape::Single(inner) => return arrow_of(inner),
+                UnionShape::Long => DataType::Int64,
+                UnionShape::Double => DataType::Float64,
+                UnionShape::Members => {
+                    // Its fields are nullable as only one holds a value per
+                    // row.
+                    let members = variants
+                        .iter()
+                        .filter(|s| !matches!(s, AvroSchema::Null))
+                        .enumerate()
+                        .map(|(i, s)| {
+                            field_of(&format!("member{i}"), s).map(|f| f.with_nullable(true))
+                        })
+                        .collect::<FormatResult<Vec<_>>>()?;
+                    DataType::Struct(members.into())
+                }
             }
-            // Any other union is a struct of `member0..N`, its fields
-            // nullable as only one holds a value per row.
-            let members = variants
-                .iter()
-                .enumerate()
-                .map(|(i, s)| field_of(&format!("member{i}"), s).map(|f| f.with_nullable(true)))
-                .collect::<FormatResult<Vec<_>>>()?;
-            DataType::Struct(members.into())
         }
         AvroSchema::Record(r) => {
             let fields = r
@@ -168,7 +200,8 @@ fn arrow_of(schema: &AvroSchema) -> FormatResult<DataType> {
     })
 }
 
-/// An Arrow field of an Avro schema: nullable exactly for nullable unions.
+/// An Arrow field of an Avro schema: nullable exactly for unions with a null
+/// branch.
 fn field_of(name: &str, schema: &AvroSchema) -> FormatResult<Field> {
     let dt = arrow_of(schema)?;
     Ok(Field::new(name, dt, is_nullable_union(schema)))
@@ -469,15 +502,26 @@ fn json_default(schema: &AvroSchema, json: &serde_json::Value) -> FormatResult<A
                 .variants()
                 .iter()
                 .position(|s| matches!(s, AvroSchema::Null));
-            let inner = u.variants().iter().find(|s| !matches!(s, AvroSchema::Null));
-            if let (Some(null), Some(inner)) = (null, inner) {
-                let null = u32::try_from(null).map_err(|_| {
-                    crate::error::FormatError::Corrupt("a union with too many branches".to_owned())
-                })?;
+            let inner = u
+                .variants()
+                .iter()
+                .enumerate()
+                .find(|(_, s)| !matches!(s, AvroSchema::Null));
+            if let (Some(null), Some((branch, inner))) = (null, inner) {
+                let index = |i: usize| {
+                    u32::try_from(i).map_err(|_| {
+                        crate::error::FormatError::Corrupt(
+                            "a union with too many branches".to_owned(),
+                        )
+                    })
+                };
                 if is_json_null(json) {
-                    return Ok(AvroValue::Union(null, Box::new(AvroValue::Null)));
+                    return Ok(AvroValue::Union(index(null)?, Box::new(AvroValue::Null)));
                 }
-                return Ok(AvroValue::Union(null, Box::new(json_default(inner, json)?)));
+                return Ok(AvroValue::Union(
+                    index(branch)?,
+                    Box::new(json_default(inner, json)?),
+                ));
             }
         }
         for (i, branch) in u.variants().iter().enumerate() {
@@ -514,7 +558,9 @@ fn json_default(schema: &AvroSchema, json: &serde_json::Value) -> FormatResult<A
             AvroValue::Double(v.as_f64().ok_or_else(|| corrupt("a double default"))?)
         }
         (AvroSchema::String, J::String(v)) => AvroValue::String(v.clone()),
-        (AvroSchema::Bytes, J::String(v)) => AvroValue::Bytes(v.as_bytes().to_vec()),
+        (AvroSchema::Bytes, J::String(v)) => {
+            AvroValue::Bytes(latin1_bytes(v).ok_or_else(|| corrupt("a bytes default"))?)
+        }
         (AvroSchema::Enum(e), J::String(v)) => {
             let index = e
                 .symbols
@@ -525,14 +571,14 @@ fn json_default(schema: &AvroSchema, json: &serde_json::Value) -> FormatResult<A
             AvroValue::Enum(index, v.clone())
         }
         (AvroSchema::Fixed(f), J::String(v)) => {
-            if v.len() != f.size {
-                return Err(corrupt("a fixed default"));
-            }
-            AvroValue::Fixed(f.size, v.as_bytes().to_vec())
+            let bytes = latin1_bytes(v)
+                .filter(|b| b.len() == f.size)
+                .ok_or_else(|| corrupt("a fixed default"))?;
+            AvroValue::Fixed(f.size, bytes)
         }
-        (AvroSchema::Decimal(_), J::String(v)) => {
-            AvroValue::Decimal(apache_avro::Decimal::from(v.as_bytes().to_vec()))
-        }
+        (AvroSchema::Decimal(_), J::String(v)) => AvroValue::Decimal(apache_avro::Decimal::from(
+            latin1_bytes(v).ok_or_else(|| corrupt("a decimal default"))?,
+        )),
         (AvroSchema::Uuid(_), J::String(v)) => {
             AvroValue::Uuid(v.parse().map_err(|_| corrupt("a uuid default"))?)
         }
@@ -588,6 +634,13 @@ fn json_default(schema: &AvroSchema, json: &serde_json::Value) -> FormatResult<A
         ),
         _ => return Err(corrupt("a mismatched default")),
     })
+}
+
+/// The bytes of an Avro `bytes` or `fixed` default: a JSON string with one
+/// code point per byte (U+0000 to U+00FF, ISO-8859-1); `None` for a code
+/// point above U+00FF.
+fn latin1_bytes(s: &str) -> Option<Vec<u8>> {
+    s.chars().map(|c| u8::try_from(u32::from(c)).ok()).collect()
 }
 
 /// The index of the `null` branch of a nullable union.

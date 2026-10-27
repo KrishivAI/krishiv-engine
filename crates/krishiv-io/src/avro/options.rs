@@ -5,9 +5,12 @@
 //! The names, defaults and value spellings follow the Spark 4.2 Avro data
 //! source documentation: `avroSchema`, `compression`, `recordName`,
 //! `recordNamespace`, `ignoreExtension`, `positionalFieldMatching`, `mode`
-//! and `datetimeRebaseMode`. Unlike the CSV format there are no session-conf
-//! fallbacks: Spark's Avro options have no documented `spark.sql.avro.*`
-//! conf keys, so every option is read as given, else its default.
+//! and `datetimeRebaseMode`. `compression` falls back to
+//! `spark.sql.avro.compression.codec` and `datetimeRebaseMode` to
+//! `spark.sql.avro.datetimeRebaseModeInRead`, the session confs Spark
+//! documents for them; every other option is read as given, else its
+//! default. `krishiv.avro.blockRows` is an internal writer option (it caps
+//! the rows of a block so tests can write several small blocks).
 
 use std::sync::LazyLock;
 
@@ -65,13 +68,14 @@ macro_rules! options {
 static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
     options! {
         OptionSpec { name: "avroSchema", kind: OptionKind::String, default: OptionDefault::None, conf_fallback: None, metadata_key: true, doc: "The Avro schema (JSON) to read or write with: the reader schema for a read, the output schema for a write. When unset, a read uses each file's own schema and a write builds one from the data." };
-        OptionSpec { name: "compression", kind: OptionKind::Enum(COMPRESSIONS), default: OptionDefault::Str("snappy"), conf_fallback: None, metadata_key: false, doc: "The block codec: uncompressed (null), snappy (default), deflate, bzip2, xz, zstandard.", };
+        OptionSpec { name: "compression", kind: OptionKind::Enum(COMPRESSIONS), default: OptionDefault::Str("snappy"), conf_fallback: Some("spark.sql.avro.compression.codec"), metadata_key: false, doc: "The block codec: uncompressed (null), snappy (default), deflate, bzip2, xz, zstandard.", };
         spec("recordName", "topLevelRecord", "The record name of a written schema built from the data (without `avroSchema`).");
         spec("recordNamespace", "", "The record namespace of a written schema built from the data (without `avroSchema`).");
         flag("ignoreExtension", true, "Must be true (the default): the framework lists files without filtering by extension, so extensions are always ignored; false is refused.");
         flag("positionalFieldMatching", false, "Match a file's fields to the read schema by position instead of by name.");
-        OptionSpec { name: "mode", kind: OptionKind::Enum(MODES), default: OptionDefault::Str("PERMISSIVE"), conf_fallback: None, metadata_key: false, doc: "How corrupt records are handled.", };
-        OptionSpec { name: "datetimeRebaseMode", kind: OptionKind::Enum(REBASE_MODES), default: OptionDefault::Str("EXCEPTION"), conf_fallback: None, metadata_key: false, doc: "How dates and timestamps before 1582-10-15 are handled (Spark's Avro default is EXCEPTION).", };
+        OptionSpec { name: "mode", kind: OptionKind::Enum(MODES), default: OptionDefault::Str("FAILFAST"), conf_fallback: None, metadata_key: false, doc: "How corrupt records are handled: FAILFAST (the default, as Spark's) fails the read; PERMISSIVE and DROPMALFORMED drop the rest of the block (PERMISSIVE keeps one null row).", };
+        OptionSpec { name: "datetimeRebaseMode", kind: OptionKind::Enum(REBASE_MODES), default: OptionDefault::Str("EXCEPTION"), conf_fallback: Some("spark.sql.avro.datetimeRebaseModeInRead"), metadata_key: false, doc: "How dates and timestamps before 1582-10-15 are handled in files whose writer is unknown (Spark's Avro default is EXCEPTION); files written by Spark 3.0 or later say how they were written.", };
+        OptionSpec { name: "krishiv.avro.blockRows", kind: OptionKind::Int { min: 1, max: i64::MAX }, default: OptionDefault::None, conf_fallback: None, metadata_key: false, doc: "Internal: the most rows a written block holds (the default and the ceiling are 4096).", };
     }
 });
 
@@ -144,6 +148,10 @@ pub(crate) struct AvroOptions {
     pub positional: bool,
     pub mode: Mode,
     pub rebase: Rebase,
+    /// The rows a written block holds at most, when below the default.
+    pub block_rows: Option<usize>,
+    /// The write job's seed (see [`FormatOptions::write_seed`]).
+    pub sync_seed: Option<String>,
 }
 
 impl AvroOptions {
@@ -177,14 +185,18 @@ impl AvroOptions {
             positional: o.bool("positionalFieldMatching").unwrap_or(false),
             mode: match o.str("mode") {
                 Some("DROPMALFORMED") => Mode::DropMalformed,
-                Some("FAILFAST") => Mode::FailFast,
-                _ => Mode::Permissive,
+                Some("PERMISSIVE") => Mode::Permissive,
+                _ => Mode::FailFast,
             },
             rebase: match o.str("datetimeRebaseMode") {
                 Some("CORRECTED") => Rebase::Corrected,
                 Some("LEGACY") => Rebase::Legacy,
                 _ => Rebase::Exception,
             },
+            block_rows: o
+                .int("krishiv.avro.blockRows")
+                .and_then(|v| usize::try_from(v).ok()),
+            sync_seed: o.write_seed().map(str::to_owned),
         })
     }
 }
