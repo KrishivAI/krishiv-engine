@@ -1,4 +1,10 @@
 pub mod krishiv_session
+pub use krishiv_session::CounterSample
+pub use krishiv_session::GaugeSample
+pub use krishiv_session::HistogramBucket
+pub use krishiv_session::HistogramSample
+pub use krishiv_session::MetricDict
+pub use krishiv_session::MetricsSnapshot
 pub use krishiv_session::QueryProfile
 pub use krishiv_session::TextOptions
 pub mod krishiv_session::functions
@@ -290,6 +296,7 @@ pub fn krishiv_session::Session::conf(&self) -> krishiv_session::RuntimeConf
 pub fn krishiv_session::Session::drop_temp_view(&self, &str) -> bool
 pub fn krishiv_session::Session::expr(&self, &str) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::memory_reserved(&self) -> usize
+pub fn krishiv_session::Session::metrics(&self) -> krishiv_session::MetricsSnapshot
 pub fn krishiv_session::Session::new() -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader
 pub fn krishiv_session::Session::register_batches(&self, &str, arrow_schema::schema::SchemaRef, alloc::vec::Vec<arrow_array::record_batch::RecordBatch>) -> core::result::Result<(), krishiv_common::error::KrishivError>

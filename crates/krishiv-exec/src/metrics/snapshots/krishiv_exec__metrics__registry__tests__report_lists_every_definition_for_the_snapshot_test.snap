@@ -1,0 +1,28 @@
+---
+source: crates/krishiv-exec/src/metrics/registry.rs
+expression: report
+---
+krishiv.query.count counter {query} [status=succeeded|failed|cancelled|denied,class=interactive|batch|background|agent,error_class] -> krishiv_query_count_total
+krishiv.query.duration histogram s [status=succeeded|failed|cancelled|denied,class=interactive|batch|background|agent] -> krishiv_query_duration_seconds
+krishiv.query.active gauge {query} [class=interactive|batch|background|agent] -> krishiv_query_active
+krishiv.query.cpu.time counter s [class=interactive|batch|background|agent] -> krishiv_query_cpu_time_seconds_total
+krishiv.query.scan.rows counter {row} [] -> krishiv_query_scan_rows_total
+krishiv.query.scan.bytes counter By [] -> krishiv_query_scan_bytes_bytes_total
+krishiv.query.output.rows counter {row} [] -> krishiv_query_output_rows_total
+krishiv.query.spill.bytes counter By [] -> krishiv_query_spill_bytes_bytes_total
+krishiv.query.spill.files counter {file} [] -> krishiv_query_spill_files_total
+krishiv.query.memory.peak histogram By [class=interactive|batch|background|agent] -> krishiv_query_memory_peak_bytes
+krishiv.memory.reserved gauge By [] -> krishiv_memory_reserved_bytes
+krishiv.memory.limit gauge By [] -> krishiv_memory_limit_bytes
+krishiv.memory.arbitration.spills counter 1 [] -> krishiv_memory_arbitration_spills_total
+krishiv.memory.arbitration.aborts counter 1 [] -> krishiv_memory_arbitration_aborts_total
+krishiv.spill.disk.used gauge By [] -> krishiv_spill_disk_used_bytes
+krishiv.cache.hits counter 1 [cache=metadata] -> krishiv_cache_hits_total
+krishiv.cache.misses counter 1 [cache=metadata] -> krishiv_cache_misses_total
+krishiv.cache.evictions counter 1 [cache=metadata] -> krishiv_cache_evictions_total
+krishiv.cache.size gauge By [cache=metadata] -> krishiv_cache_size_bytes
+krishiv.io.requests counter 1 [op,store_kind] -> krishiv_io_requests_total
+krishiv.io.bytes.read counter By [op,store_kind] -> krishiv_io_bytes_read_bytes_total
+krishiv.io.request.duration histogram s [op,store_kind] -> krishiv_io_request_duration_seconds
+krishiv.exec.driver.stalls counter 1 [] -> krishiv_exec_driver_stalls_total
+krishiv.build.info gauge 1 [version,git_sha] -> krishiv_build_info

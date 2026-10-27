@@ -5,14 +5,18 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll};
+use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
+use futures::Stream;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use krishiv_common::config::Config;
+use krishiv_common::config::{Config, ConfigValue, METRICS_ENABLED};
 use krishiv_common::error::{
     ColumnAlreadyExists, ErrorQueryContext, InternalError, KrishivError, KrishivUnsupportedFeature,
 };
@@ -25,13 +29,17 @@ use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
 use krishiv_exec::{
-    ExecConfig, Executor, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler,
-    TokioExecutor, WorkloadClass,
+    ExecConfig, Executor, ExecutorConfig, MetricsRegistry, MetricsSnapshot, QueryContext, QueryId,
+    QueryOutcome, QueryRunner, Scheduler, Status, TokioExecutor, WorkloadClass,
 };
 use krishiv_io::csv::CsvFormat;
 use krishiv_io::parquet::ParquetFormat;
-use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
-use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
+use krishiv_io::{
+    DirectoryWrite, FileFormat, IoConfig, IoCounters, IoScheduler, SaveMode, StoreId,
+};
+use krishiv_memory::{
+    ArbitrationStats, MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool,
+};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, BuiltinFunctions,
@@ -103,9 +111,15 @@ pub(crate) struct SessionState {
     executor: Arc<dyn Executor>,
     runner: QueryRunner,
     memory: Arc<dyn MemoryPool>,
+    /// The concrete pool tree behind [`Self::memory`]: its arbitration
+    /// counters feed the metrics fold.
+    memory_tree: Arc<TreePool>,
+    /// The engine's metrics registry: every query that reaches execution
+    /// folds into it once at query end (when `krishiv.metrics.enabled`).
+    metrics: Arc<MetricsRegistry>,
     /// The spill directory, opened by the first query that plans for
     /// execution (`krishiv.spill.*` are build-time keys).
-    spill: Mutex<Option<SpillManager>>,
+    spill: Arc<Mutex<Option<SpillManager>>>,
     io: Arc<IoScheduler>,
     formats: Vec<Arc<dyn FileFormat>>,
     cwd: String,
@@ -229,7 +243,8 @@ impl SessionBuilder {
             Some(e) => e,
             None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
-        let memory: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::from_config(&config));
+        let memory_tree = TreePool::new(&MemoryConfig::from_config(&config));
+        let memory: Arc<dyn MemoryPool> = Arc::<TreePool>::clone(&memory_tree);
         let io =
             IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
         io.attach_memory(&memory);
@@ -237,10 +252,20 @@ impl SessionBuilder {
             StoreId::new(LOCAL_STORE),
             Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
         );
+        let metrics = Arc::new(MetricsRegistry::new());
+        register_gauges(&metrics, &memory, &io)?;
         let cwd = std::env::current_dir()
             .ok()
             .and_then(|d| d.to_str().map(str::to_owned))
             .unwrap_or_else(|| "/".to_owned());
+        let spill = Arc::new(Mutex::new(None));
+        {
+            let spill = Arc::clone(&spill);
+            metrics.add_gauge("krishiv.spill.disk.used", Vec::new(), move || {
+                let slot = spill.lock().unwrap_or_else(PoisonError::into_inner);
+                Some(slot.as_ref().map_or(0, SpillManager::used_bytes))
+            })?;
+        }
         Ok(Session {
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
@@ -254,7 +279,9 @@ impl SessionBuilder {
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
-                spill: Mutex::new(None),
+                memory_tree,
+                metrics,
+                spill,
                 io,
                 formats: vec![Arc::new(ParquetFormat), Arc::new(CsvFormat)],
                 cwd,
@@ -265,6 +292,74 @@ impl SessionBuilder {
             }),
         })
     }
+}
+
+/// Registers the engine gauges on `metrics`: closures over the owning
+/// components, evaluated at scrape time, never pushed.
+fn register_gauges(
+    metrics: &Arc<MetricsRegistry>,
+    memory: &Arc<dyn MemoryPool>,
+    io: &Arc<IoScheduler>,
+) -> Result<(), KrishivError> {
+    {
+        let memory = Arc::clone(memory);
+        metrics.add_gauge("krishiv.memory.reserved", Vec::new(), move || {
+            u64::try_from(memory.reserved()).ok()
+        })?;
+    }
+    {
+        let memory = Arc::clone(memory);
+        metrics.add_gauge("krishiv.memory.limit", Vec::new(), move || {
+            memory.effective_limit().and_then(|l| u64::try_from(l).ok())
+        })?;
+    }
+    {
+        let io = Arc::clone(io);
+        metrics.add_gauge(
+            "krishiv.cache.size",
+            vec![("cache".to_owned(), "metadata".to_owned())],
+            move || Some(io.cache().bytes()),
+        )?;
+    }
+    metrics.add_gauge(
+        "krishiv.build.info",
+        vec![
+            ("version".to_owned(), env!("CARGO_PKG_VERSION").to_owned()),
+            (
+                "git_sha".to_owned(),
+                option_env!("KRISHIV_GIT_SHA")
+                    .unwrap_or("unknown")
+                    .to_owned(),
+            ),
+        ],
+        || Some(1),
+    )?;
+    for class in [
+        WorkloadClass::Interactive,
+        WorkloadClass::Batch,
+        WorkloadClass::Background,
+        WorkloadClass::Agent,
+    ] {
+        // A weak handle: a strong one would cycle the registry through its
+        // own gauges and leak every session's registry (and its spill
+        // manager) forever.
+        let registry = Arc::downgrade(metrics);
+        metrics.add_gauge(
+            "krishiv.query.active",
+            vec![("class".to_owned(), class.as_str().to_owned())],
+            move || registry.upgrade().map(|r| r.active_queries(class)),
+        )?;
+    }
+    Ok(())
+}
+
+/// Whether queries fold into the metrics registry: `krishiv.metrics.enabled`
+/// (default false).
+fn metrics_enabled(config: &Config) -> bool {
+    config
+        .get(&METRICS_ENABLED)
+        .and_then(ConfigValue::as_bool)
+        .unwrap_or(false)
 }
 
 impl Session {
@@ -724,15 +819,6 @@ impl Session {
     }
 
     /// Runs `physical` instantiated with `worker`.
-    async fn run_on(
-        &self,
-        physical: &PhysicalPlan,
-        worker: WorkerContext,
-        env: &QueryEnv,
-    ) -> Result<RecordBatchStream, KrishivError> {
-        Ok(self.run_on_query(physical, worker, env, false).await?.0)
-    }
-
     async fn run_on_query(
         &self,
         physical: &PhysicalPlan,
@@ -751,15 +837,172 @@ impl Session {
             },
             pool,
         );
-        let stream = self
+        if !metrics_enabled(&env.config) {
+            let stream = self
+                .state
+                .runner
+                .submit(physical.clone(), worker, Arc::clone(&query))
+                .await?;
+            return Ok((
+                Box::pin(stream.map(|b| b.and_then(into_record_batch))),
+                query,
+            ));
+        }
+        // The fold below runs exactly once per started query; without it a
+        // query is invisible to the registry.
+        self.state.metrics.query_begin(query.class());
+        let start = QueryStart::capture(&self.state);
+        match self
             .state
             .runner
             .submit(physical.clone(), worker, Arc::clone(&query))
-            .await?;
-        Ok((
-            Box::pin(stream.map(|b| b.and_then(into_record_batch))),
-            query,
-        ))
+            .await
+        {
+            Err(error) => {
+                start.fold(&self.state, &query, Some(&error));
+                Err(error)
+            }
+            Ok(stream) => {
+                let fold = Some(QueryFold {
+                    query: Arc::clone(&query),
+                    state: Arc::clone(&self.state),
+                    start,
+                });
+                let stream = MetricStream {
+                    inner: stream,
+                    fold,
+                };
+                Ok((
+                    Box::pin(stream.map(|b| b.and_then(into_record_batch))),
+                    query,
+                ))
+            }
+        }
+    }
+
+    /// The engine's metrics snapshot: the folded series of ended queries
+    /// plus the gauges read now. Query series appear only when
+    /// `krishiv.metrics.enabled` was true as the queries ran.
+    ///
+    /// ```
+    /// let session = krishiv_session::Session::new()?;
+    /// let snapshot = session.metrics();
+    /// assert!(snapshot.gauges.iter().any(|g| g.name == "krishiv.build.info"));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn metrics(&self) -> MetricsSnapshot {
+        self.state.metrics.snapshot()
+    }
+}
+
+/// The process counters a query-end fold attributes, and when the query
+/// started: read at query start so the fold records the deltas.
+struct QueryStart {
+    started: Instant,
+    arbitration: ArbitrationStats,
+    cache_hits: u64,
+    cache_misses: u64,
+}
+
+impl QueryStart {
+    fn capture(state: &SessionState) -> Self {
+        let totals = state.io.totals();
+        Self {
+            started: Instant::now(),
+            arbitration: state.memory_tree.stats(),
+            cache_hits: IoCounters::get(&totals.cache_hits),
+            cache_misses: IoCounters::get(&totals.cache_misses),
+        }
+    }
+
+    /// Folds the query's metrics with the deltas since [`Self::capture`]:
+    /// the one fold of this query. `error` is the stream's terminal error,
+    /// if any; otherwise the query's own error decides the outcome (none is
+    /// success). A zero wall time means the query never finished (a
+    /// cancelled stream dropped early): the duration then runs to now.
+    fn fold(self, state: &SessionState, query: &QueryContext, error: Option<&KrishivError>) {
+        let stored = query.error();
+        let (status, error_class) = Status::from_error(error.or(stored.as_ref()));
+        let metrics = query.metrics();
+        let wall = metrics.wall_time;
+        // A zero wall time means the query never finished (a cancelled
+        // stream dropped early): the duration then runs from query start
+        // to the fold.
+        let duration = if wall.is_zero() {
+            self.started.elapsed()
+        } else {
+            wall
+        };
+        let totals = state.io.totals();
+        let arbitration = state.memory_tree.stats();
+        state.metrics.fold(&QueryOutcome {
+            class: query.class(),
+            status,
+            error_class: error_class.as_deref(),
+            duration_secs: duration.as_secs_f64(),
+            metrics: &metrics,
+            arbitration_spills: arbitration
+                .spill_requests
+                .saturating_sub(self.arbitration.spill_requests),
+            arbitration_aborts: arbitration.aborts.saturating_sub(self.arbitration.aborts),
+            cache_hits: IoCounters::get(&totals.cache_hits).saturating_sub(self.cache_hits),
+            cache_misses: IoCounters::get(&totals.cache_misses).saturating_sub(self.cache_misses),
+        });
+    }
+}
+
+/// The one fold of a running query, taken when its stream ends.
+struct QueryFold {
+    query: Arc<QueryContext>,
+    state: Arc<SessionState>,
+    start: QueryStart,
+}
+
+impl QueryFold {
+    fn finish(self, error: Option<&KrishivError>) {
+        self.start.fold(&self.state, &self.query, error);
+    }
+}
+
+/// The result stream with the query's fold attached: the stream's end
+/// (batches, the query's error, or a drop) folds the query's metrics once.
+struct MetricStream {
+    inner: BoxStream<'static, Result<Batch, KrishivError>>,
+    fold: Option<QueryFold>,
+}
+
+impl Stream for MetricStream {
+    type Item = Result<Batch, KrishivError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(None) => {
+                if let Some(fold) = self.fold.take() {
+                    fold.finish(None);
+                }
+                Poll::Ready(None)
+            }
+            Poll::Ready(Some(Err(error))) => {
+                if let Some(fold) = self.fold.take() {
+                    fold.finish(Some(&error));
+                }
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(Some(Ok(batch))) => Poll::Ready(Some(Ok(batch))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for MetricStream {
+    fn drop(&mut self) {
+        if let Some(fold) = self.fold.take() {
+            // The caller went away: cancel first (a recorded error wins),
+            // then fold what the drivers merged so far.
+            fold.query.cancel();
+            fold.finish(None);
+        }
     }
 }
 
@@ -826,7 +1069,7 @@ impl Session {
         )?);
         let plan = physical.into_write(&sink)?;
         let worker = self.worker(env).with_write_sink(Arc::clone(&sink));
-        let mut rows = self.run_on(&plan, worker, env).await?;
+        let (mut rows, _) = self.run_on_query(&plan, worker, env, false).await?;
         while let Some(batch) = rows.next().await {
             batch?;
         }

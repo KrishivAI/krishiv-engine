@@ -62,5 +62,8 @@ pub use explain_graph::{
     GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
 };
 pub use krishiv_exec::profile::{QueryProfile, TextOptions};
+pub use krishiv_exec::{
+    CounterSample, GaugeSample, HistogramBucket, HistogramSample, MetricDict, MetricsSnapshot,
+};
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use session::{RecordBatchStream, Session, SessionBuilder};

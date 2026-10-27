@@ -3299,6 +3299,7 @@ name = "xtask"
 version = "0.1.0-alpha"
 dependencies = [
  "krishiv-common",
+ "krishiv-exec",
  "serde",
  "serde_json",
  "tempfile",
