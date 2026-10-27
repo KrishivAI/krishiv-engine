@@ -384,9 +384,6 @@ impl<F: FormatFixture> FormatFixture for ThroughExecutor<F> {
     fn footerless(&self) -> bool {
         self.0.footerless()
     }
-    fn has_statistics(&self) -> bool {
-        self.0.has_statistics()
-    }
     fn supports_field_ids(&self) -> bool {
         self.0.supports_field_ids()
     }

@@ -182,6 +182,15 @@ fn avro_entries_parse_and_default() {
     c.set("spark.sql.avro.datetimeRebaseModeInRead", "corrected")
         .unwrap();
     assert_eq!(get(&c), (Some("deflate".into()), Some("CORRECTED".into())));
+    // The Krishiv keys address the same entries as the Spark aliases.
+    c.set("krishiv.sql.avro.compression.codec", "uncompressed")
+        .unwrap();
+    c.set("krishiv.sql.avro.datetimeRebaseModeInRead", "LEGACY")
+        .unwrap();
+    assert_eq!(
+        get(&c),
+        (Some("uncompressed".into()), Some("LEGACY".into()))
+    );
     assert!(c.set("spark.sql.avro.compression.codec", "gzip").is_err());
     assert!(
         c.set("spark.sql.avro.datetimeRebaseModeInRead", "never")

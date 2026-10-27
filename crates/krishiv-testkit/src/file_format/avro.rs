@@ -39,10 +39,6 @@ impl FormatFixture for AvroFixture {
         true
     }
 
-    fn has_statistics(&self) -> bool {
-        false
-    }
-
     fn supports_field_ids(&self) -> bool {
         false
     }

@@ -118,12 +118,6 @@ pub trait FormatFixture: Send + Sync {
     fn footerless(&self) -> bool {
         false
     }
-    /// Whether the format stores column statistics that prune units (Avro
-    /// reports only row and byte counts, so the pruning-vacuity check does
-    /// not apply to it).
-    fn has_statistics(&self) -> bool {
-        true
-    }
     /// Whether the format preserves field ids for [`FieldMapping::FieldId`]
     /// (Avro has no field ids, so the field-id check does not apply to it).
     fn supports_field_ids(&self) -> bool {
@@ -773,10 +767,10 @@ pub fn pruning_soundness(fx: &dyn FormatFixture) -> SuiteResult {
             }
         }
     }
-    // Not vacuous: statistics pruned some units (formats without column
-    // statistics, like Avro, cannot prune and skip this).
+    // Not vacuous: statistics pruned some units (footerless formats
+    // store none and skip this).
     ensure!(
-        fx.footerless() || !fx.has_statistics() || returned_rows < 150 * input.num_rows(),
+        fx.footerless() || returned_rows < 150 * input.num_rows(),
         "no predicate pruned anything"
     );
     nan_behind_float_bounds(&env, fx)
