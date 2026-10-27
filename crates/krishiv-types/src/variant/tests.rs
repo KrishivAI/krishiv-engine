@@ -917,19 +917,45 @@ fn reader_tolerates_spark_quirks() {
 }
 
 /// The value buffer is capped at 128 MiB with Spark's error and parameters.
+/// The aggregate limit is reached with many strings each below the 20,000,000
+/// UTF-16-unit per-string limit.
 #[test]
 fn variant_size_limit() {
     assert_eq!(VARIANT_SIZE_LIMIT, 128 * 1024 * 1024);
-    // Exactly at the limit still builds: 5 header bytes plus this string.
-    let exact = format!("\"{}\"", "x".repeat(VARIANT_SIZE_LIMIT - 5));
+    // 127 one-MiB strings plus a tail that fills the buffer exactly: small
+    // array (2 header bytes), `(128 + 1) * 4` offset bytes, and each long
+    // string costs 5 header bytes plus its payload.
+    let one_mib = "x".repeat(1_048_576);
+    let mut exact = String::with_capacity(134_300_000);
+    exact.push('[');
+    for _ in 0..127 {
+        exact.push('"');
+        exact.push_str(&one_mib);
+        exact.push('"');
+        exact.push(',');
+    }
+    let tail = "x".repeat(1_047_418);
+    exact.push('"');
+    exact.push_str(&tail);
+    exact.push('"');
+    exact.push(']');
     let (meta, value) = VariantBuilder::from_json(&exact).unwrap();
     assert_eq!(value.len(), VARIANT_SIZE_LIMIT);
-    assert_eq!(
-        VariantRef::new(&meta, &value).unwrap().as_str(),
-        Ok("x".repeat(VARIANT_SIZE_LIMIT - 5).as_str())
-    );
-    // One byte more fails.
-    let over = format!("\"{}\"", "x".repeat(VARIANT_SIZE_LIMIT - 4));
+    assert_eq!(VariantRef::new(&meta, &value).unwrap().len(), Ok(128));
+    // One payload byte more exceeds the aggregate limit.
+    let mut over = String::with_capacity(134_300_000);
+    over.push('[');
+    for _ in 0..127 {
+        over.push('"');
+        over.push_str(&one_mib);
+        over.push('"');
+        over.push(',');
+    }
+    let tail = "x".repeat(1_047_419);
+    over.push('"');
+    over.push_str(&tail);
+    over.push('"');
+    over.push(']');
     let err = VariantBuilder::from_json(&over).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::VariantSizeLimit);
     let params = err.message_parameters();
@@ -940,6 +966,117 @@ fn variant_size_limit() {
     assert!(
         params.contains(&("functionName", "`parse_json`".to_owned())),
         "{params:?}"
+    );
+}
+
+/// Spark 4.2.0 string-value limits: 20,000,000 UTF-16 code units parse,
+/// 20,000,001 fail; a char outside the BMP counts 2.
+#[test]
+fn string_value_limits() {
+    let ok = format!("\"{}\"", "x".repeat(20_000_000));
+    VariantBuilder::from_json(&ok).unwrap();
+    let over = format!("\"{}\"", "x".repeat(20_000_001));
+    assert_eq!(
+        VariantBuilder::from_json(&over).map_err(|e| e.error_class()),
+        Err(ErrorClass::MalformedRecordInParsingWithoutSuggestion)
+    );
+    // Outside the BMP counts 2 units: 19,999,998 `x` plus one emoji is
+    // exactly 20,000,000 units and parses.
+    let ok_emoji = format!("\"{}{}\"", "x".repeat(19_999_998), "\u{1F600}");
+    VariantBuilder::from_json(&ok_emoji).unwrap();
+    // One more `x` is 20,000,001 units and fails.
+    let over_emoji = format!("\"{}{}\"", "x".repeat(19_999_999), "\u{1F600}");
+    assert_eq!(
+        VariantBuilder::from_json(&over_emoji).map_err(|e| e.error_class()),
+        Err(ErrorClass::MalformedRecordInParsingWithoutSuggestion)
+    );
+    // Ten million emoji are 20,000,000 units and parse; one more fails.
+    let ok_many = format!("\"{}\"", "\u{1F600}".repeat(10_000_000));
+    VariantBuilder::from_json(&ok_many).unwrap();
+    let over_many = format!("\"{}\"", "\u{1F600}".repeat(10_000_001));
+    assert_eq!(
+        VariantBuilder::from_json(&over_many).map_err(|e| e.error_class()),
+        Err(ErrorClass::MalformedRecordInParsingWithoutSuggestion)
+    );
+}
+
+/// Spark 4.2.0 field-name limits: 50,000 UTF-16 code units parse, 50,001
+/// fail; 50,000 `é` parse, so the count is characters, not bytes.
+#[test]
+fn field_name_limits() {
+    let ok = format!("{{\"{}\":1}}", "a".repeat(50_000));
+    VariantBuilder::from_json(&ok).unwrap();
+    let over = format!("{{\"{}\":1}}", "a".repeat(50_001));
+    assert_eq!(
+        VariantBuilder::from_json(&over).map_err(|e| e.error_class()),
+        Err(ErrorClass::MalformedRecordInParsingWithoutSuggestion)
+    );
+    // Multi-byte BMP chars count as one unit, not by bytes.
+    let ok_e = format!("{{\"{}\":1}}", "\u{e9}".repeat(50_000));
+    VariantBuilder::from_json(&ok_e).unwrap();
+    let over_e = format!("{{\"{}\":1}}", "\u{e9}".repeat(50_001));
+    assert_eq!(
+        VariantBuilder::from_json(&over_e).map_err(|e| e.error_class()),
+        Err(ErrorClass::MalformedRecordInParsingWithoutSuggestion)
+    );
+    // Outside the BMP counts 2 units: 49,998 `a` plus one emoji is 50,000.
+    let ok_emoji = format!("{{\"{}{}\":1}}", "a".repeat(49_998), "\u{1F600}");
+    VariantBuilder::from_json(&ok_emoji).unwrap();
+    let over_emoji = format!("{{\"{}{}\":1}}", "a".repeat(49_999), "\u{1F600}");
+    assert_eq!(
+        VariantBuilder::from_json(&over_emoji).map_err(|e| e.error_class()),
+        Err(ErrorClass::MalformedRecordInParsingWithoutSuggestion)
+    );
+}
+
+/// Spark 4.2.0 number digit limits: integer-part digits above 1000 fail (a
+/// leading `-` is not counted), and integer plus fraction digits above 1001
+/// fail; exponent digits are not limited.
+#[test]
+fn number_digit_limits() {
+    for text in [
+        "9".repeat(1000),
+        format!("-{}", "9".repeat(1000)),
+        format!("0.{}", "0".repeat(1000)),
+        format!("1.{}", "0".repeat(1000)),
+        format!("1e{}", "0".repeat(999)),
+    ] {
+        VariantBuilder::from_json(&text)
+            .unwrap_or_else(|e| panic!("{text:.40}...: should parse: {e}"));
+    }
+    for text in [
+        "9".repeat(1001),
+        format!("-{}", "9".repeat(1001)),
+        format!("0.{}", "0".repeat(1001)),
+        format!("{}.{}", "9".repeat(1000), "0".repeat(1000)),
+        format!("{}.1", "9".repeat(1001)),
+    ] {
+        assert_eq!(
+            VariantBuilder::from_json(&text).map_err(|e| e.error_class()),
+            Err(ErrorClass::MalformedRecordInParsingWithoutSuggestion),
+            "{text:.40}..."
+        );
+    }
+}
+
+/// Iterating a large array through `get_index` stays linear because the
+/// validated container header is cached instead of rescanned per access.
+#[test]
+fn array_iteration_is_linear() {
+    let doc = format!("[{}]", vec!["1"; 100_000].join(","));
+    let (meta, value) = VariantBuilder::from_json(&doc).unwrap();
+    let back = VariantRef::new(&meta, &value).unwrap();
+    assert_eq!(back.len(), Ok(100_000));
+    let start = std::time::Instant::now();
+    let mut sum: i64 = 0;
+    for i in 0..100_000 {
+        sum += back.get_index(i).unwrap().as_i64().unwrap();
+    }
+    assert_eq!(sum, 100_000);
+    assert!(
+        start.elapsed().as_secs() < 10,
+        "100k get_index took {:?}",
+        start.elapsed()
     );
 }
 

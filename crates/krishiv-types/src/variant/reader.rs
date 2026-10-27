@@ -522,6 +522,11 @@ pub struct VariantRef<'a> {
     value: &'a [u8],
     /// The validated kind of [`Self::value`].
     kind: VariantKind,
+    /// The validated container header for objects and arrays (`None` for
+    /// scalars). Filled once in [`Self::new`] and [`Self::child`] so
+    /// accessors reuse it instead of re-parsing the header and re-validating
+    /// every offset on each call.
+    container: Option<ContainerView>,
 }
 
 impl<'a> VariantRef<'a> {
@@ -534,11 +539,17 @@ impl<'a> VariantRef<'a> {
     pub fn new(metadata: &'a [u8], value: &'a [u8]) -> Result<Self, KrishivError> {
         let meta = parse_metadata(metadata)?;
         let kind = validate_exact(value, 0, value.len(), &meta)?;
+        let container = match kind {
+            VariantKind::Object => Some(parse_container(value, 0, value.len(), true)?),
+            VariantKind::Array => Some(parse_container(value, 0, value.len(), false)?),
+            _ => None,
+        };
         Ok(Self {
             metadata,
             meta,
             value,
             kind,
+            container,
         })
     }
 
@@ -566,16 +577,23 @@ impl<'a> VariantRef<'a> {
     fn child(&self, start: usize, end: usize) -> Result<Self, KrishivError> {
         let slice = self.value.get(start..end).ok_or_else(malformed)?;
         let kind = validate_exact(slice, 0, slice.len(), &self.meta)?;
+        let container = match kind {
+            VariantKind::Object => Some(parse_container(slice, 0, slice.len(), true)?),
+            VariantKind::Array => Some(parse_container(slice, 0, slice.len(), false)?),
+            _ => None,
+        };
         Ok(Self {
             metadata: self.metadata,
             meta: self.meta,
             value: slice,
             kind,
+            container,
         })
     }
 
-    /// Re-parses this value's container header (already validated at
-    /// construction; re-checked here so every access stands on its own).
+    /// Returns this value's cached container header (validated once at
+    /// construction; every accessor re-validates only the bounds it touches
+    /// through fallible slicing).
     fn view(&self, is_object: bool) -> Result<ContainerView, KrishivError> {
         let matches = match self.kind {
             VariantKind::Object => is_object,
@@ -585,7 +603,7 @@ impl<'a> VariantRef<'a> {
         if !matches {
             return Err(malformed());
         }
-        parse_container(self.value, 0, self.value.len(), is_object)
+        self.container.ok_or_else(malformed)
     }
 
     /// Number of fields (objects) or elements (arrays).

@@ -23,6 +23,34 @@ use crate::error::Result;
 /// `parse_json` (depth 1000 succeeds, depth 1001 fails).
 const MAX_NESTING_DEPTH: usize = 1000;
 
+/// Maximum decoded string value length in UTF-16 code units, matching Spark
+/// 4.2.0's `parse_json` (20,000,000 parses, 20,000,001 is malformed). A char
+/// outside the BMP counts 2.
+const MAX_STRING_UTF16: usize = 20_000_000;
+
+/// Maximum decoded object field-name length in UTF-16 code units, matching
+/// Spark 4.2.0's `parse_json` (50,000 parses, 50,001 is malformed).
+const MAX_FIELD_NAME_UTF16: usize = 50_000;
+
+/// Maximum integer-part digit count in a JSON number, matching Spark 4.2.0's
+/// `parse_json` (1000 digits parse, 1001 are malformed; a leading `-` is not
+/// counted).
+const MAX_INTEGER_DIGITS: usize = 1000;
+
+/// Maximum integer plus fraction digit count in a JSON number with a
+/// fraction, matching Spark 4.2.0 (`0.` plus 1000 fraction digits parses,
+/// `0.` plus 1001 fails; 1000 integer digits plus `.` plus 1000 fraction
+/// digits fails). Exponent digits are not limited.
+const MAX_FRACTION_TOTAL_DIGITS: usize = 1001;
+
+/// Counts UTF-16 code units of decoded `bytes` (`None` when they are not
+/// valid UTF-8, in which case no input-limit check applies).
+fn utf16_units(bytes: &[u8]) -> Option<usize> {
+    core::str::from_utf8(bytes)
+        .ok()
+        .map(|s| s.encode_utf16().count())
+}
+
 /// Builds the builder's malformed-input error:
 /// `MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION` with Spark's parameters
 /// (`badRecord` is the whole input, `failFastMode` is `FAILFAST`).
@@ -493,6 +521,9 @@ impl<'t> Parser<'t> {
             return Err(malformed(self.text));
         }
         let key = self.parse_string()?;
+        if utf16_units(&key).is_some_and(|n| n > MAX_FIELD_NAME_UTF16) {
+            return Err(malformed(self.text));
+        }
         self.skip_ws();
         if self.peek() != Some(b':') {
             return Err(malformed(self.text));
@@ -574,6 +605,9 @@ impl<'t> Parser<'t> {
         match self.peek() {
             Some(b'"') => {
                 let string = self.parse_string()?;
+                if utf16_units(&string).is_some_and(|n| n > MAX_STRING_UTF16) {
+                    return Err(malformed(self.text));
+                }
                 self.emit_string(&string)?;
                 Ok(RootClass::Compound)
             }
@@ -723,7 +757,10 @@ impl<'t> Parser<'t> {
     /// Parses one JSON number at the cursor and emits its Variant encoding.
     ///
     /// Shape errors (leading zeros, missing digits, lone signs) are
-    /// malformed; the value rules follow Spark: pure integers take the
+    /// malformed; input limits matching Spark 4.2.0 also fail as malformed
+    /// (integer-part digits above 1000, or integer plus fraction digits above
+    /// 1001; exponent digits are unlimited). The value rules follow Spark:
+    /// pure integers take the
     /// smallest int8/16/32/64 that fits, then decimal (scale 0) up to 38
     /// digits, then double; fractions take decimal when `precision <= 38`
     /// and `scale <= 38` (width by `max(precision, scale)`), else double;
@@ -733,6 +770,7 @@ impl<'t> Parser<'t> {
         if self.peek() == Some(b'-') {
             self.bump()?;
         }
+        let int_start = self.pos;
         // Integer part: `0` alone, or a non-zero digit plus digits.
         match self.peek() {
             Some(b'0') => {
@@ -748,15 +786,33 @@ impl<'t> Parser<'t> {
             }
             Some(_) | None => return Err(malformed(self.text)),
         }
+        let int_len = self
+            .pos
+            .checked_sub(int_start)
+            .ok_or_else(|| malformed(self.text))?;
+        if int_len > MAX_INTEGER_DIGITS {
+            return Err(malformed(self.text));
+        }
         let mut has_fraction = false;
         if self.peek() == Some(b'.') {
             has_fraction = true;
             self.bump()?;
+            let frac_start = self.pos;
             if !matches!(self.peek(), Some(b'0'..=b'9')) {
                 return Err(malformed(self.text));
             }
             while matches!(self.peek(), Some(b'0'..=b'9')) {
                 self.bump()?;
+            }
+            let frac_len = self
+                .pos
+                .checked_sub(frac_start)
+                .ok_or_else(|| malformed(self.text))?;
+            let total = int_len
+                .checked_add(frac_len)
+                .ok_or_else(|| malformed(self.text))?;
+            if total > MAX_FRACTION_TOTAL_DIGITS {
+                return Err(malformed(self.text));
             }
         }
         let mut has_exponent = false;
