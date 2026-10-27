@@ -72,6 +72,17 @@ class DataFrame:
         options: list[tuple[str, str]] | None = ...,
         partition_by: list[str] | None = ...,
     ) -> None: ...
+    def write_to_table(
+        self,
+        table: str,
+        mode: str,
+        provider: str | None = ...,
+        options: list[tuple[str, str]] | None = ...,
+        properties: list[tuple[str, str]] | None = ...,
+        partitioned_by: list[str] | None = ...,
+        cluster_by: list[str] | None = ...,
+        condition: str | None = ...,
+    ) -> None: ...
     def explain(self, mode: str, json: bool = ...) -> str: ...
     def create_or_replace_temp_view(self, name: str) -> None: ...
     def schema(self) -> list[tuple[str, str, bool]]: ...

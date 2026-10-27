@@ -383,6 +383,7 @@ impl Session {
             Statement::DropNamespace(n) => self.exec_drop_namespace(&n).await,
             Statement::Use(u) => self.exec_use(&u).await,
             Statement::Show(s) => self.exec_show(&s).await,
+            Statement::Describe(d) => self.exec_describe_table(&d).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, &redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, &redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, &redacted).await,

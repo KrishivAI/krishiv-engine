@@ -36,9 +36,9 @@ use krishiv_common::secret::OptionValue;
 use krishiv_plan::analyzer::{TableColumn, TableIdent};
 use krishiv_plan::{LogicalPlan, PlanNode, SourceId};
 use krishiv_sql::ast::{
-    ColumnName, CreateNamespace, CreateTable, CreateTableLike, DataTypeKind, DdlName, DropBehavior,
-    DropNamespace, DropTable, Expr, ExprKind, Literal, OptionKey, Show, ShowKind, TableElement,
-    TableOption, Use,
+    ColumnName, CreateNamespace, CreateTable, CreateTableLike, DataTypeKind, DdlName, Describe,
+    DescribeKind, DropBehavior, DropNamespace, DropTable, Expr, ExprKind, Ident, Literal,
+    ObjectName, OptionKey, Show, ShowKind, Span, TableElement, TableOption, Use,
 };
 use krishiv_types::DataType;
 
@@ -862,6 +862,292 @@ impl Session {
         df.analyzed_in(env).await?;
         Ok(df)
     }
+
+    /// Runs `DESCRIBE TABLE name`: the stored columns (`col_name`,
+    /// `data_type`, `comment`), in order, of a temporary entry or a
+    /// file-backed table. Types render as [`DataType::simple_string`], as
+    /// Spark's `DESCRIBE` shows them; a column without a comment shows an
+    /// empty string. Anything beyond the plain table form (`EXTENDED`,
+    /// `FORMATTED`, `PARTITION`, a column, `AS JSON`, functions,
+    /// namespaces and queries) fails with `KRISHIV_UNSUPPORTED_FEATURE`.
+    /// (No golden covers the output shape or nullability; both follow the
+    /// `SET` command's string frames.)
+    pub(crate) async fn exec_describe_table(
+        &self,
+        d: &Describe,
+    ) -> Result<DataFrame, KrishivError> {
+        let DescribeKind::Table {
+            mode,
+            table,
+            partition,
+            column,
+            as_json,
+            ..
+        } = &d.kind
+        else {
+            return Err(unsupported(
+                "DESCRIBE FUNCTION, DESCRIBE NAMESPACE and DESCRIBE QUERY",
+            ));
+        };
+        if mode.is_some() {
+            return Err(unsupported(
+                "DESCRIBE TABLE EXTENDED and DESCRIBE TABLE FORMATTED",
+            ));
+        }
+        if partition.is_some() {
+            return Err(unsupported("DESCRIBE TABLE PARTITION"));
+        }
+        if !column.is_empty() {
+            return Err(unsupported("DESCRIBE TABLE column"));
+        }
+        if *as_json {
+            return Err(unsupported("DESCRIBE TABLE AS JSON"));
+        }
+        let env = self.query_env();
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let current = self.state.catalog.current_namespace();
+        let (ns, name) = resolve_table_name(table, &current)?;
+        let original = table.span().text("");
+        // Temporary entries resolve for unqualified names only, as reads do.
+        let single = matches!(table, DdlName::Parts(n) if n.parts.len() == 1);
+        if single && let Some(entry) = self.state.catalog.get(&name, case_sensitive) {
+            let (columns, comments) = match &*entry {
+                crate::catalog::TempTable::Memory { columns, .. }
+                | crate::catalog::TempTable::Files { columns, .. }
+                | crate::catalog::TempTable::View { columns, .. } => {
+                    (columns.clone(), vec![None; columns.len()])
+                }
+            };
+            return self.describe_frame(&columns, &comments).await;
+        }
+        if !self.state.catalog.namespace_exists(&ns, case_sensitive) {
+            return Err(SchemaNotFound {
+                schema_name: quote(&ns),
+            }
+            .into());
+        }
+        let Some(found) = self.state.catalog.get_table(&ns, &name, case_sensitive) else {
+            return Err(TableOrViewNotFound {
+                relation_name: written_name(table, original),
+                search_path: search_path(&current),
+            }
+            .into());
+        };
+        self.describe_frame(&found.columns, &found.col_comments)
+            .await
+    }
+
+    /// A frame of (`col_name`, `data_type`, `comment`) string rows for
+    /// [`Self::exec_describe_table`], in column order.
+    async fn describe_frame(
+        &self,
+        columns: &[TableColumn],
+        comments: &[Option<String>],
+    ) -> Result<DataFrame, KrishivError> {
+        let one = || {
+            DataFrame::new(
+                self.clone(),
+                Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+            )
+        };
+        let row = |name: &str, data_type: &str, comment: &str| {
+            one().select([
+                lit(name).alias("col_name"),
+                lit(data_type).alias("data_type"),
+                lit(comment).alias("comment"),
+            ])
+        };
+        let df = if columns.is_empty() {
+            row("", "", "").limit(0)
+        } else if columns.len() == 1 {
+            let data_type = columns[0].data_type.simple_string();
+            let comment = comments.first().and_then(Option::as_deref).unwrap_or("");
+            row(&columns[0].name, &data_type, comment)
+        } else {
+            let inputs: Vec<Arc<LogicalPlan>> = columns
+                .iter()
+                .zip(comments.iter().chain(std::iter::repeat(&None)))
+                .map(|(c, comment)| {
+                    Arc::clone(
+                        &row(
+                            &c.name,
+                            &c.data_type.simple_string(),
+                            comment.as_deref().unwrap_or(""),
+                        )
+                        .plan,
+                    )
+                })
+                .collect();
+            DataFrame::new(
+                self.clone(),
+                Arc::new(LogicalPlan::new(PlanNode::Union {
+                    inputs,
+                    by_name: false,
+                    allow_missing_columns: false,
+                })),
+            )
+        };
+        let env = self.query_env();
+        df.analyzed_in(env).await?;
+        Ok(df)
+    }
+
+    /// Writes `df` as the table `spec.table`
+    /// ([`DataFrameWriterV2`](crate::DataFrameWriterV2)): the same write
+    /// and metadata path as `CREATE TABLE ... AS SELECT` ([`Self::exec_ctas`]),
+    /// so `writeTo("t").create()` and `CREATE TABLE t AS SELECT ...` run one
+    /// code path. `Create` fails on an existing table with
+    /// `TABLE_OR_VIEW_ALREADY_EXISTS`, `Replace` fails on a missing one with
+    /// `TABLE_OR_VIEW_NOT_FOUND`, and `CreateOrReplace` does either. The
+    /// metadata is inserted only after the write commits, so a failed write
+    /// leaves no table and no files. Partitioning and clustering fail with
+    /// `KRISHIV_UNSUPPORTED_FEATURE`, as in [`Self::exec_create_table`];
+    /// `INSERT` (append and overwrites) never reaches here: those methods
+    /// fail before any command runs.
+    pub(crate) async fn exec_write_v2(
+        &self,
+        df: &DataFrame,
+        spec: V2WriteSpec,
+        mode: V2Mode,
+    ) -> Result<(), KrishivError> {
+        let env = self.query_env();
+        let case_sensitive = env.analysis.conf.case_sensitive;
+        let parsed = krishiv_sql::parse_multipart_identifier(&spec.table, &self.parser_options())
+            .map_err(|e| e.error)?;
+        let written: Vec<String> = parsed.parts.iter().map(|p| p.value.clone()).collect();
+        let ddl_name = DdlName::Parts(ObjectName {
+            parts: parsed.parts,
+            span: Span::default(),
+        });
+        let current = self.state.catalog.current_namespace();
+        let (ns, name) = resolve_table_name(&ddl_name, &current)?;
+        if !self.state.catalog.namespace_exists(&ns, case_sensitive) {
+            return Err(SchemaNotFound {
+                schema_name: quote(&ns),
+            }
+            .into());
+        }
+        if !spec.partitioned_by.is_empty() || !spec.cluster_by.is_empty() {
+            return Err(unsupported("partitioned tables"));
+        }
+        let default = crate::conf::get(&env.config, "spark.sql.sources.default");
+        let provider = match spec.provider {
+            Some(p) => {
+                let using = ObjectName {
+                    parts: vec![Ident {
+                        value: p,
+                        quoted: false,
+                        span: Span::default(),
+                    }],
+                    span: Span::default(),
+                };
+                provider_name(Some(&using), None)?
+            }
+            None => provider_name(None, default)?,
+        };
+        let refs: Vec<&str> = written.iter().map(String::as_str).collect();
+        let single = matches!(&ddl_name, DdlName::Parts(n) if n.parts.len() == 1);
+        if single && self.state.catalog.exists(&name, case_sensitive) {
+            match mode {
+                V2Mode::Create => {
+                    return Err(TableOrViewAlreadyExists {
+                        relation_name: quoted(&refs),
+                    }
+                    .into());
+                }
+                V2Mode::Replace | V2Mode::CreateOrReplace => {
+                    self.state.catalog.drop_table(&name);
+                }
+            }
+        }
+        let store_exists = self
+            .state
+            .catalog
+            .get_table(&ns, &name, case_sensitive)
+            .is_some();
+        match mode {
+            V2Mode::Create if store_exists => {
+                return Err(TableOrViewAlreadyExists {
+                    relation_name: quoted(&refs),
+                }
+                .into());
+            }
+            V2Mode::Replace if !store_exists => {
+                return Err(TableOrViewNotFound {
+                    relation_name: quoted(&refs),
+                    search_path: search_path(&current),
+                }
+                .into());
+            }
+            V2Mode::Create | V2Mode::Replace | V2Mode::CreateOrReplace => {}
+        }
+        let warehouse = self.state.catalog.warehouse_root(&env.config, self.cwd());
+        let location = managed_location(&warehouse, &ns, &name);
+        if matches!(mode, V2Mode::Create) && std::fs::symlink_metadata(&location).is_ok() {
+            return Err(LocationAlreadyExists {
+                identifier: TableIdent {
+                    catalog: CATALOG.to_owned(),
+                    namespace: vec![ns.clone()],
+                    name: name.clone(),
+                }
+                .to_string(),
+                location: location.clone(),
+            }
+            .into());
+        }
+        let analysis = df.analyzed_in(env).await?;
+        let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
+        self.write_files(
+            physical,
+            &analysis.env,
+            WriteTarget {
+                format: provider.clone(),
+                mode: if matches!(mode, V2Mode::Create) {
+                    "error".to_owned()
+                } else {
+                    "overwrite".to_owned()
+                },
+                path: OptionValue::from_user("path", &location),
+                options: spec.options.clone(),
+                partition_by: Vec::new(),
+            },
+        )
+        .await?;
+        let columns: Vec<TableColumn> = analysis
+            .analyzed
+            .output
+            .iter()
+            .map(|c| TableColumn {
+                name: c.name.clone(),
+                data_type: c.data_type.clone(),
+                nullable: c.nullable,
+            })
+            .collect();
+        let width = columns.len();
+        let table = CatalogTable {
+            ident: TableIdent {
+                catalog: CATALOG.to_owned(),
+                namespace: vec![ns],
+                name,
+            },
+            kind: CatalogTableKind::Managed,
+            provider,
+            location,
+            columns,
+            col_comments: vec![None; width],
+            col_defaults: vec![None; width],
+            options: spec.options,
+            properties: spec.properties,
+            comment: None,
+            created_at: now_string(),
+            owner: self.owner_name().to_owned(),
+        };
+        let case_sensitive = analysis.env.analysis.conf.case_sensitive;
+        self.state
+            .catalog
+            .create_table(table, CreateMode::Replace, case_sensitive)?;
+        Ok(())
+    }
 }
 
 /// The metadata of a CTAS target, before its columns are known.
@@ -887,6 +1173,36 @@ struct CreateTableSpec {
     computed_location: bool,
     /// Whether `OR REPLACE` was written (the write overwrites).
     replace: bool,
+}
+
+/// What [`Session::exec_write_v2`] writes: the table name as written and
+/// the builder state of [`DataFrameWriterV2`](crate::DataFrameWriterV2).
+/// Tables are always managed (the writer has no `LOCATION`); options are
+/// typed as secrets where Spark redacts them, as in `CREATE TABLE`.
+pub(crate) struct V2WriteSpec {
+    /// The table name as written (`t`, `db.t` or `spark_catalog.db.t`).
+    pub table: String,
+    /// `using`: `None` for `spark.sql.sources.default`.
+    pub provider: Option<String>,
+    /// `option`/`options`: the table's options and its read options.
+    pub options: BTreeMap<String, OptionValue>,
+    /// `tableProperty`: the `TBLPROPERTIES`.
+    pub properties: BTreeMap<String, String>,
+    /// `partitionedBy` columns.
+    pub partitioned_by: Vec<String>,
+    /// `clusterBy` columns.
+    pub cluster_by: Vec<String>,
+}
+
+/// How [`Session::exec_write_v2`] treats an existing table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum V2Mode {
+    /// Fail with `TABLE_OR_VIEW_ALREADY_EXISTS`.
+    Create,
+    /// Fail with `TABLE_OR_VIEW_NOT_FOUND` when there is no such table.
+    Replace,
+    /// Either.
+    CreateOrReplace,
 }
 
 #[cfg(test)]
@@ -1636,5 +1952,93 @@ mod tests {
             |_: &mut CatalogTable| {}
         ));
         run(&s, "DROP DATABASE mydb CASCADE");
+    }
+
+    #[test]
+    fn v2_write_stores_provider_options_and_properties() {
+        use futures::executor::block_on;
+        use krishiv_common::secret::OptionValue;
+
+        let s = session();
+        run(&s, "CREATE TABLE src USING csv AS SELECT 1 AS a");
+        let df = s.table("src");
+        block_on(
+            df.write_to_table("t")
+                .using("csv")
+                .option("header", "true")
+                .options([("sep", "|")])
+                .table_property("k", "v")
+                .create(),
+        )
+        .unwrap();
+        let table = s.state.catalog.get_table("default", "t", false).unwrap();
+        assert_eq!(table.provider, "csv");
+        assert_eq!(
+            table
+                .options
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect::<Vec<_>>(),
+            [
+                ("header".to_owned(), "true".to_owned()),
+                ("sep".to_owned(), "|".to_owned()),
+            ]
+        );
+        // Options are typed as secrets where Spark redacts them: the
+        // values never appear in errors.
+        assert_eq!(
+            table.options.get("header"),
+            Some(&OptionValue::from_user("header", "true"))
+        );
+        assert_eq!(
+            table.properties,
+            BTreeMap::from([("k".to_owned(), "v".to_owned())])
+        );
+        // A secret option value is redacted from the write path too.
+        block_on(
+            s.table("src")
+                .write_to_table("u")
+                .option("password", "hunter2")
+                .create(),
+        )
+        .unwrap();
+        let table = s.state.catalog.get_table("default", "u", false).unwrap();
+        assert_eq!(
+            table.options.get("password"),
+            Some(&OptionValue::from_user("password", "hunter2"))
+        );
+        run(&s, "DROP TABLE t");
+        run(&s, "DROP TABLE u");
+        run(&s, "DROP TABLE src");
+    }
+
+    #[test]
+    fn v2_write_defaults_to_the_configured_provider() {
+        use futures::executor::block_on;
+
+        let s = session();
+        run(&s, "CREATE TABLE src USING parquet AS SELECT 1 AS a");
+        block_on(s.table("src").write_to_table("t").create()).unwrap();
+        assert_eq!(
+            s.state
+                .catalog
+                .get_table("default", "t", false)
+                .unwrap()
+                .provider,
+            "parquet"
+        );
+        run(&s, "DROP TABLE t");
+        s.conf().set("spark.sql.sources.default", "csv").unwrap();
+        block_on(s.table("src").write_to_table("u").create()).unwrap();
+        assert_eq!(
+            s.state
+                .catalog
+                .get_table("default", "u", false)
+                .unwrap()
+                .provider,
+            "csv"
+        );
+        run(&s, "DROP TABLE u");
+        run(&s, "DROP TABLE src");
     }
 }
