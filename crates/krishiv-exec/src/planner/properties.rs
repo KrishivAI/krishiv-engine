@@ -31,9 +31,10 @@
 //! how an aggregate or join on the same keys below avoids a second
 //! shuffle (Spark's co-partitioning, ADR 0010's bucketed joins).
 //!
-//! Every hash exchange of a plan hashes with the same function and the
-//! same partition count (chosen per query by the task, I5), so equal hash
-//! keys mean equal placement.
+//! Every hash exchange of a plan hashes with the same function, named in
+//! the plan ([`HashScheme::KeyGroupV1`]: key-group ranges of the routing
+//! hash `H_kg`), and the same partition count (chosen per query by the
+//! task, I5), so equal hash keys mean equal placement.
 
 use std::sync::Arc;
 
@@ -43,7 +44,7 @@ use super::build::{Planned, Planner};
 use super::explain::ExplainNode;
 use crate::error::Result;
 use crate::operators::SortKey;
-use crate::physical::{ExchangeId, ExchangePlan, Partitioning, PhysNode};
+use crate::physical::{ExchangeId, ExchangePlan, HashScheme, Partitioning, PhysNode};
 
 /// A sort key of a range placement, by attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +274,7 @@ impl Planner<'_> {
                     .iter()
                     .map(|a| input.column(*a))
                     .collect::<Result<_>>()?,
+                scheme: HashScheme::KeyGroupV1,
             },
             Distribution::Ordered(keys) => Partitioning::Range {
                 keys: keys
@@ -329,6 +331,7 @@ impl Planner<'_> {
         let hash = |p: &Planned, keys: &[AttrId]| -> Result<Partitioning> {
             Ok(Partitioning::Hash {
                 keys: keys.iter().map(|a| p.column(*a)).collect::<Result<_>>()?,
+                scheme: HashScheme::KeyGroupV1,
             })
         };
         if let Some(at) = probe_at.first() {
@@ -382,7 +385,7 @@ fn describe(
         }
     };
     Ok(match partitioning {
-        Partitioning::Hash { keys } => {
+        Partitioning::Hash { keys, .. } => {
             let names = keys.iter().map(|&c| name(c)).collect::<Result<Vec<_>>>()?;
             let attrs =
                 keys.iter()
@@ -585,7 +588,10 @@ mod tests {
         let layout = a(&[5, 6]);
         let d = |p: &Partitioning| describe(p, &schema, &layout).unwrap();
         assert_eq!(
-            d(&Partitioning::Hash { keys: vec![1, 0] }),
+            d(&Partitioning::Hash {
+                keys: vec![1, 0],
+                scheme: HashScheme::KeyGroupV1
+            }),
             (
                 "Exchange",
                 "hashpartitioning(y#6, x#5)".to_owned(),
@@ -626,7 +632,10 @@ mod tests {
             ])
         );
         for bad in [
-            Partitioning::Hash { keys: vec![2] },
+            Partitioning::Hash {
+                keys: vec![2],
+                scheme: HashScheme::KeyGroupV1,
+            },
             Partitioning::Range {
                 keys: vec![SortKey::asc(2)],
             },

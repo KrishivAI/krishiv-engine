@@ -1,0 +1,78 @@
+{
+  "entries": [
+    {
+      "id": "elt#48f1636d3e8d/ansi_on",
+      "reason": "SELECT elt(1, 'scala', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "elt#48f1636d3e8d/ansi_off",
+      "reason": "SELECT elt(1, 'scala', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "elt#55f6a49adeb2/ansi_on",
+      "reason": "SELECT elt(1, INTERVAL '1-2' YEAR TO MONTH, 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "elt#55f6a49adeb2/ansi_off",
+      "reason": "SELECT elt(1, INTERVAL '1-2' YEAR TO MONTH, 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "elt#66ed2b35d9f6/ansi_on",
+      "reason": "SELECT elt(INTERVAL '1 02:03:04' DAY TO SECOND, 'scala', 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#66ed2b35d9f6/ansi_off",
+      "reason": "SELECT elt(INTERVAL '1 02:03:04' DAY TO SECOND, 'scala', 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#74374fa93e05/ansi_on",
+      "reason": "SELECT elt(INTERVAL '1-2' YEAR TO MONTH, 'scala', 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#74374fa93e05/ansi_off",
+      "reason": "SELECT elt(INTERVAL '1-2' YEAR TO MONTH, 'scala', 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#a5032d6ca00a/ansi_on",
+      "reason": "SELECT elt(1, INTERVAL '1 02:03:04' DAY TO SECOND, 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "elt#a5032d6ca00a/ansi_off",
+      "reason": "SELECT elt(1, INTERVAL '1 02:03:04' DAY TO SECOND, 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "elt#b4eaf5559af2/ansi_on",
+      "reason": "SELECT elt(map('a', 1), 'scala', 'java') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#b4eaf5559af2/ansi_off",
+      "reason": "SELECT elt(map('a', 1), 'scala', 'java') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#c38603756666/ansi_on",
+      "reason": "SELECT elt(1, 'scala', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#c38603756666/ansi_off",
+      "reason": "SELECT elt(1, 'scala', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#ca50194da446/ansi_on",
+      "reason": "SELECT elt(1, 'scala', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "elt#ca50194da446/ansi_off",
+      "reason": "SELECT elt(1, 'scala', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "elt#f20a314e8e06/ansi_on",
+      "reason": "SELECT elt(1, map('a', 1), 'java') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "elt#f20a314e8e06/ansi_off",
+      "reason": "SELECT elt(1, map('a', 1), 'java') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "elt"
+}

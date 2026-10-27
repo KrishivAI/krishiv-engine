@@ -15,26 +15,30 @@
 //! nested deeper than [`INLINE_NESTING`] brackets parses on a thread whose
 //! stack fits that depth.
 
+mod ddl;
 mod expr;
 mod types;
 
 use std::collections::HashMap;
 
 use crate::ast::{
-    Alias, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
+    Alias, BucketOn, BucketSpec, ColumnConstraint, ColumnConstraintKind, ColumnDef, ColumnName,
     ConstraintCharacteristic, CreateNamespace, CreateTable, CreateTableLike, CreateView, Cte,
     DataTypeSpec, DdlName, DeclareVariable, DropBehavior, DropNamespace, DropTable, DropVariable,
     DropView, DynamicName, Explain, ExplainMode, Expr, ExprKind, FileFormat, FileFormatKind,
     ForeignKeyConstraint, ForeignKeyRef, FromClause, FromStatement, GeneratedColumn, GeneratedKind,
     GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Hint, Ident, IdentityColumn,
     IdentityHow, Join, JoinConstraint, JoinKind, LateralView, Limit, Literal, NamedWindow,
-    NamespaceKind, NumKind, ObjectName, OptionKey, OrderedIdent, PartitionColumn, PartitionField,
-    PartitionFieldKind, PartitionTransform, Pivot, Query, Relation, RelationExt, Reset,
-    RowDelimited, RowFormat, RowFormatKind, RowSerde, Select, SelectItem, Set, SetAssignment,
-    SetExpr, SetExprKind, SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind,
-    SkewSpec, SortItem, Span, Statement, StructField, TableAlias, TableConstraint,
-    TableConstraintKind, TableElement, TableFactor, TableFactorKind, TableOption, TemporalClause,
-    TemporalKind, TimeZone, Unpivot, UnpivotColumns, Use, Values, ViewColumn, With,
+    NamespaceKind, NearestBy, NearestDirection, NumKind, ObjectName, OptionKey, OrderedIdent,
+    PartitionColumn, PartitionField, PartitionFieldKind, PartitionTransform, Pipe, PipeAggregate,
+    PipeAssignment, PipeOp, PipeOpKind, PipeSelect, PipeWhere, Pivot, Query, QueryOrganization,
+    Relation, RelationExt, Reset, RowDelimited, RowFormat, RowFormatKind, RowSerde, SampleMethod,
+    SampleMethodKind, SampleType, Select, SelectItem, Set, SetAssignment, SetExpr, SetExprKind,
+    SetKind, SetOperator, SetQuantifier, SetVariable, SetVariableKind, SkewSpec, SortItem, Span,
+    Statement, StructField, TableAlias, TableConstraint, TableConstraintKind, TableElement,
+    TableFactor, TableFactorKind, TableOption, TableSample, TemporalClause, TemporalKind, TimeZone,
+    TransformKind, TransformOutput, TransformSelect, Unpivot, UnpivotColumns, Use, Values,
+    ViewColumn, With,
 };
 use crate::error::{self, ParseError};
 use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
@@ -63,6 +67,16 @@ const CREATE_TABLE_CLAUSES: [&str; 10] = [
     "CLUSTERED BY",
     "CLUSTER BY",
     "LOCATION",
+];
+
+/// The `CREATE TABLE ... LIKE` clauses Spark rejects when written twice,
+/// in the order it checks them (it calls `USING` `PROVIDER` here).
+const CREATE_TABLE_LIKE_CLAUSES: [&str; 5] = [
+    "PROVIDER",
+    "STORED AS/BY",
+    "ROW FORMAT",
+    "LOCATION",
+    "TBLPROPERTIES",
 ];
 
 struct Checkpoint {
@@ -117,6 +131,9 @@ pub(crate) struct Parser<'s> {
     failed_queries: HashMap<usize, usize>,
     /// For each token, the first token at or after it that is not `(`.
     after_parens: Vec<usize>,
+    /// For each `(` token, the position of its matching `)`; `usize::MAX`
+    /// for any other token and for an unclosed `(`.
+    closers: Vec<usize>,
     /// Token positions of the `?` parameter markers, in order.
     markers: Vec<usize>,
     /// The first error Spark raises after parsing (in `AstBuilder`) that
@@ -126,6 +143,9 @@ pub(crate) struct Parser<'s> {
     cast_types: Vec<usize>,
     /// A complex type keyword after `::` to read as a bare type.
     force_bare: Option<usize>,
+    /// Reading the bodies of a multi-table insert: `INSERT INTO|OVERWRITE`
+    /// starts the next clause, never an implicit alias.
+    insert_bodies: bool,
 }
 
 /// Parses one query statement (`query ;* EOF`).
@@ -589,6 +609,19 @@ impl<'s> Parser<'s> {
             }
             after_parens[i] = next;
         }
+        let mut closers = vec![usize::MAX; toks.len()];
+        let mut open = Vec::new();
+        for (i, t) in toks.iter().enumerate() {
+            match t.kind {
+                TokenKind::Sym(Sym::LParen) => open.push(i),
+                TokenKind::Sym(Sym::RParen) => {
+                    if let Some(o) = open.pop() {
+                        closers[o] = i;
+                    }
+                }
+                _ => {}
+            }
+        }
         let markers = (0..toks.len())
             .filter(|&i| toks[i].kind == TokenKind::Sym(Sym::Question))
             .collect();
@@ -606,10 +639,12 @@ impl<'s> Parser<'s> {
             peak: 0,
             failed_queries: HashMap::new(),
             after_parens,
+            closers,
             markers,
             deferred: None,
             cast_types: vec![],
             force_bare,
+            insert_bodies: false,
         }
     }
 
@@ -1019,6 +1054,15 @@ impl<'s> Parser<'s> {
     /// keyword (a position where only an identifier fits) unless keywords
     /// are enforced.
     fn ident_at(&self, n: usize, strong: bool) -> Option<Ident> {
+        if self.identifier_literal_at(n) {
+            let (first, last) = (self.tok(n)?, self.tok(n + 3)?);
+            let literal = self.tok(n + 2)?.span.text(self.src);
+            return Some(Ident {
+                value: unescape_string(literal, !self.opts.escaped_string_literals),
+                quoted: true,
+                span: first.span.to(last.span),
+            });
+        }
         let t = self.tok(n)?;
         let text = t.span.text(self.src);
         let (value, quoted) = match t.kind {
@@ -1045,6 +1089,42 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// Whether `IDENTIFIER('name')` starts at token `n`: an identifier
+    /// literal (not with only the legacy function syntax on).
+    fn identifier_literal_at(&self, n: usize) -> bool {
+        !self.opts.legacy_identifier_clause
+            && self.kw_at(n, "IDENTIFIER")
+            && self.sym_at(n + 1, Sym::LParen)
+            && self.single_string_at(n + 2)
+            && self.sym_at(n + 3, Sym::RParen)
+    }
+
+    /// Spark parses the string of an identifier literal as a name when it
+    /// builds the tree: it must be a name (not empty), of `parts` parts at
+    /// most (`1` for a position taking one identifier). The first problem
+    /// is deferred; the name is returned when there is none.
+    fn check_identifier_literal(
+        &mut self,
+        text: &str,
+        span: Span,
+        parts: usize,
+    ) -> Option<ObjectName> {
+        match parse_multipart_identifier(text, self.opts) {
+            Err(e) => self.defer(ParseError { span, ..e }),
+            Ok(name) if name.parts.len() > parts => {
+                let identifier: Vec<String> =
+                    name.parts.iter().map(|p| quote_ident(&p.value)).collect();
+                self.defer(error::identifier_too_many_name_parts(
+                    identifier.join("."),
+                    parts,
+                    span,
+                ));
+            }
+            Ok(name) => return Some(name),
+        }
+        None
+    }
+
     /// Whether token `n` is an identifier ([`Self::ident_at`] without
     /// building it).
     fn is_ident_at(&self, n: usize, strong: bool) -> bool {
@@ -1064,6 +1144,18 @@ impl<'s> Parser<'s> {
         let Some(id) = self.ident_at(0, strong) else {
             return self.fail();
         };
+        if self.identifier_literal_at(0) {
+            let mut id = id;
+            // A name that is not one part is an error already; one part
+            // is the identifier.
+            if let Some(name) = self.check_identifier_literal(&id.value, id.span, 1)
+                && let [part] = name.parts.as_slice()
+            {
+                id.value.clone_from(&part.value);
+            }
+            self.pos += 4;
+            return Ok(id);
+        }
         // Spark's `exitUnquotedIdentifier`: only ASCII letters, digits, `_`.
         if !id.quoted
             && !id
@@ -1120,7 +1212,14 @@ impl<'s> Parser<'s> {
     fn table_name(&mut self) -> PR<ObjectName> {
         let start = self.start();
         let mut parts = vec![self.name_part(true)?];
-        while self.sym_at(0, Sym::Dot) && self.is_ident_at(1, true) {
+        // With only the legacy function syntax, `IDENTIFIER(` is never a
+        // later part of a name.
+        while self.sym_at(0, Sym::Dot)
+            && self.is_ident_at(1, true)
+            && !(self.opts.legacy_identifier_clause
+                && self.kw_at(1, "IDENTIFIER")
+                && self.sym_at(2, Sym::LParen))
+        {
             self.bump();
             parts.push(self.name_part(true)?);
         }
@@ -1187,6 +1286,16 @@ impl<'s> Parser<'s> {
     /// ANTLR reads it); `strict` admits the strict-non-reserved words
     /// (`UNION`, `JOIN`, ...), which only a column alias may be.
     fn implicit_alias(&mut self, strict: bool) -> PR<Option<Ident>> {
+        // `APPROX NEAREST ...` after a join's relation is its ranking clause.
+        if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
+            return Ok(None);
+        }
+        if self.insert_bodies
+            && self.kw_at(0, "INSERT")
+            && (self.kw_at(1, "INTO") || self.kw_at(1, "OVERWRITE"))
+        {
+            return Ok(None);
+        }
         let keyword = !self.opts.enforce_reserved_keywords
             && self.kind(0) == Some(TokenKind::Word)
             && self.item_end_at(1)
@@ -1311,6 +1420,45 @@ impl<'s> Parser<'s> {
             self.drop_command()?
         } else if self.kw_at(0, "USE") {
             self.use_command()?
+        } else if self.any_kw_at(
+            0,
+            &[
+                "ALTER", "SHOW", "DESC", "DESCRIBE", "INSERT", "DELETE", "UPDATE", "MERGE",
+                "TRUNCATE", "CACHE", "UNCACHE", "CLEAR", "REFRESH", "ANALYZE", "MSCK", "REPAIR",
+                "ADD", "LIST",
+            ],
+        ) {
+            self.command_statement()?
+        } else if self.kw_at(0, "FROM") {
+            // A multi-table insert, or a `FROM ... SELECT` query. The
+            // query runs first; only its syntax failure reads as an
+            // insert (a fatal error is the query's own). When both fail,
+            // the farther failure is reported.
+            let save = self.checkpoint();
+            match self.statement() {
+                Ok(query) => {
+                    self.commit(save);
+                    Statement::Query(Box::new(query))
+                }
+                Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                Err(Fail::Syntax) => {
+                    let (far, extra, missing, matched) =
+                        (self.far, self.extra, self.missing, self.matched);
+                    self.restore(save);
+                    match self.multi_insert_command() {
+                        Ok(statement) => statement,
+                        Err(Fail::Fatal(e)) => return Err(Fail::Fatal(e)),
+                        Err(Fail::Syntax) if self.far >= far => return self.fail(),
+                        Err(Fail::Syntax) => {
+                            self.far = far;
+                            self.extra = extra;
+                            self.missing = missing;
+                            self.matched = matched;
+                            return self.fail();
+                        }
+                    }
+                }
+            }
         } else {
             Statement::Query(Box::new(self.statement()?))
         };
@@ -1756,6 +1904,45 @@ impl<'s> Parser<'s> {
     /// a namespace. Anything else (`CREATE VIEW`, `CREATE FUNCTION`,
     /// `CREATE GLOBAL ...`, ...) fails where it stands, as in Spark.
     fn create_command(&mut self) -> PR<Statement> {
+        // The legacy shapes first (temporary views, tables, namespaces);
+        // a view-shaped statement the legacy reading rejects reads as a
+        // full view statement instead (a fatal error is the legacy
+        // reading's own).
+        if !self.create_is_view_shaped() {
+            return self.create_command_inner();
+        }
+        let start = self.start();
+        let save = self.checkpoint();
+        match self.create_command_inner() {
+            Ok(statement) => {
+                self.commit(save);
+                Ok(statement)
+            }
+            Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
+            Err(Fail::Syntax) => {
+                self.restore(save);
+                self.create_full_view_command(start)
+            }
+        }
+    }
+
+    /// Whether the statement at `CREATE` reads `CREATE [OR REPLACE]
+    /// [GLOBAL] [TEMP|TEMPORARY] VIEW`.
+    fn create_is_view_shaped(&self) -> bool {
+        let mut n = 1;
+        if self.kw_at(n, "OR") && self.kw_at(n + 1, "REPLACE") {
+            n += 2;
+        }
+        if self.kw_at(n, "GLOBAL") {
+            n += 1;
+        }
+        if self.kw_at(n, "TEMP") || self.kw_at(n, "TEMPORARY") {
+            n += 1;
+        }
+        self.kw_at(n, "VIEW")
+    }
+
+    fn create_command_inner(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("CREATE")?;
         let or_replace = if self.kw_at(0, "OR") && self.kw_at(1, "REPLACE") {
@@ -1790,70 +1977,45 @@ impl<'s> Parser<'s> {
         self.fail()
     }
 
-    /// `CREATE [OR REPLACE] TEMPORARY VIEW [IF NOT EXISTS] name
-    /// [(column [COMMENT '...'], ...)] AS query` (`TEMP` for `TEMPORARY`),
-    /// after the `CREATE [OR REPLACE] TEMPORARY` at `start`. A qualified
-    /// name parses and fails with `INVALID_TEMP_OBJ_QUALIFIER`;
-    /// `OR REPLACE` with `IF NOT EXISTS` parses and fails with
-    /// `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`, and `IF NOT EXISTS`
-    /// without `OR REPLACE` parses and fails with `_LEGACY_ERROR_TEMP_0053`,
-    /// as in Spark. The flag checks run here, on the parsed statement, so
-    /// they come before the post-parse checks of the view's query and
-    /// before execution (an `EXPLAIN` of such a statement fails too).
+    /// `CREATE [OR REPLACE] TEMPORARY VIEW name [(column [COMMENT '...'],
+    /// ...)] [DEFAULT COLLATION name] AS query` (`TEMP` for `TEMPORARY`),
+    /// after the `CREATE [OR REPLACE] TEMPORARY` at `start`. `IF NOT
+    /// EXISTS` or a qualified name fails here, so the statement reads as a
+    /// full view statement ([`Parser::create_full_view_command`]), whose
+    /// `CREATE_VIEW_WITH_IF_NOT_EXISTS_AND_REPLACE`, `_LEGACY_ERROR_TEMP_0053`
+    /// and `INVALID_TEMP_OBJ_QUALIFIER` validation raises in Spark's order.
     fn create_temp_view_command(&mut self, start: usize, or_replace: bool) -> PR<Statement> {
         self.expect_kw("VIEW")?;
-        let if_not_exists =
-            if self.kw_at(0, "IF") && self.kw_at(1, "NOT") && self.kw_at(2, "EXISTS") {
-                self.pos += 3;
-                true
-            } else {
-                false
-            };
-        // Temporary views take one name part; more parts fail after the
-        // statement parsed, where the name is complete.
+        // `IF NOT EXISTS` and a qualified name read as the full view
+        // statement, whose checks run after parsing in Spark's order.
+        if self.kw_at(0, "IF") {
+            return self.fail();
+        }
         let first = self.any_ident()?;
-        let mut extra = Vec::new();
-        while self.eat_sym(Sym::Dot) {
-            extra.push(self.any_ident()?);
+        if self.sym_at(0, Sym::Dot) {
+            return self.fail();
         }
         let columns = if self.sym_at(0, Sym::LParen) {
             self.paren_list(Self::view_column)?
         } else {
             Vec::new()
         };
+        let collation = if self.kw_at(0, "DEFAULT") && self.kw_at(1, "COLLATION") {
+            self.pos += 2;
+            Some(self.name_part(true)?)
+        } else {
+            None
+        };
         self.expect_kw("AS")?;
         let query = Box::new(self.query()?);
         let span = self.span_from(start);
         self.command_end()?;
-        if !extra.is_empty() {
-            let mut parts = vec![&first];
-            parts.extend(extra.iter());
-            let object_name: Vec<String> = parts.iter().map(|p| quote_ident(&p.value)).collect();
-            let qualifier: Vec<String> = parts[..parts.len() - 1]
-                .iter()
-                .map(|p| quote_ident(&p.value))
-                .collect();
-            return Self::fatal(error::invalid_temp_obj_qualifier(
-                "view",
-                object_name.join("."),
-                qualifier.join("."),
-                span,
-            ));
-        }
-        if if_not_exists && or_replace {
-            return Self::fatal(error::create_view_with_if_not_exists_and_replace(
-                quote_ident(&first.value),
-                span,
-            ));
-        }
-        if if_not_exists && !or_replace {
-            return Self::fatal(error::temp_view_if_not_exists(span));
-        }
         Ok(Statement::CreateView(CreateView {
             or_replace,
-            if_not_exists,
+            if_not_exists: false,
             name: first,
             columns,
+            collation,
             query,
             span,
         }))
@@ -1879,8 +2041,31 @@ impl<'s> Parser<'s> {
     }
 
     /// `DROP ...`: a view, a table, a namespace, or a temporary variable.
-    /// Anything else fails where it stands, as in Spark.
+    /// Anything else fails where it stands, as in Spark. A `DROP VIEW`
+    /// the legacy reading rejects reads as a full view statement instead.
     fn drop_command(&mut self) -> PR<Statement> {
+        if !self.kw_at(1, "VIEW") {
+            return self.drop_command_inner();
+        }
+        let start = self.start();
+        let save = self.checkpoint();
+        match self.drop_command_inner() {
+            Ok(statement) => {
+                self.commit(save);
+                Ok(statement)
+            }
+            Err(Fail::Fatal(e)) => Err(Fail::Fatal(e)),
+            Err(Fail::Syntax) => {
+                self.restore(save);
+                self.expect_kw("DROP")?;
+                self.drop_full_view_command(start)
+            }
+        }
+    }
+
+    /// `DROP ...`: a view, a table, a namespace, or a temporary variable.
+    /// Anything else fails where it stands, as in Spark.
+    fn drop_command_inner(&mut self) -> PR<Statement> {
         let start = self.start();
         self.expect_kw("DROP")?;
         if self.kw_at(0, "VIEW") {
@@ -1945,7 +2130,15 @@ impl<'s> Parser<'s> {
     /// both identifier modes.
     fn ddl_name(&mut self) -> PR<DdlName> {
         if self.kw_at(0, "IDENTIFIER") && self.sym_at(1, Sym::LParen) {
-            return self.identifier_name().map(DdlName::Dynamic);
+            let at = self.checkpoint();
+            let name = self.identifier_name()?;
+            // `IDENTIFIER('a').b` is a dotted name whose first part is an
+            // identifier literal, unless only the legacy function syntax is on.
+            if !self.sym_at(0, Sym::Dot) || self.opts.legacy_identifier_clause {
+                self.commit(at);
+                return Ok(DdlName::Dynamic(name));
+            }
+            self.restore(at);
         }
         self.table_name().map(DdlName::Parts)
     }
@@ -1961,6 +2154,19 @@ impl<'s> Parser<'s> {
             return self.identifier_name().map(ColumnName::Dynamic);
         }
         self.name_part(true).map(ColumnName::Ident)
+    }
+
+    /// The name `IDENTIFIER` as written at `word`: what a function named by
+    /// `IDENTIFIER(expr)` holds as its name.
+    pub(crate) fn identifier_word(&self, word: Span) -> ObjectName {
+        ObjectName {
+            parts: vec![Ident {
+                value: word.text(self.src).to_owned(),
+                quoted: false,
+                span: word,
+            }],
+            span: word,
+        }
     }
 
     /// `IDENTIFIER(expr)`.
@@ -2032,23 +2238,39 @@ impl<'s> Parser<'s> {
                     file_format: None,
                     location: None,
                     tblproperties: Vec::new(),
+                    duplicate_clause: None,
                     span: Span::new(start, start),
                 };
+                // Occurrences per clause, in Spark's duplicate-check order.
+                let mut seen = [0_usize; CREATE_TABLE_LIKE_CLAUSES.len()];
                 loop {
-                    if p.eat_kw("USING") {
+                    let clause = if p.eat_kw("USING") {
                         like.using = Some(p.table_name()?);
+                        "PROVIDER"
                     } else if p.kw_at(0, "ROW") && p.kw_at(1, "FORMAT") {
                         like.row_format = Some(p.row_format()?);
+                        "ROW FORMAT"
                     } else if p.kw_at(0, "STORED") {
                         like.file_format = Some(p.file_format()?);
+                        "STORED AS/BY"
                     } else if p.eat_kw("LOCATION") {
                         like.location = Some(p.string_after()?);
+                        "LOCATION"
                     } else if p.eat_kw("TBLPROPERTIES") {
                         like.tblproperties.extend(p.property_list(false)?);
+                        "TBLPROPERTIES"
                     } else {
                         break;
+                    };
+                    if let Some(i) = CREATE_TABLE_LIKE_CLAUSES.iter().position(|k| *k == clause) {
+                        seen[i] += 1;
                     }
                 }
+                like.duplicate_clause = CREATE_TABLE_LIKE_CLAUSES
+                    .iter()
+                    .zip(seen)
+                    .find(|(_, n)| *n > 1)
+                    .map(|(c, _)| *c);
                 like.span = p.span_from(start);
                 p.command_end()?;
                 return Ok(Statement::CreateTableLike(Box::new(like)));
@@ -3020,18 +3242,45 @@ impl<'s> Parser<'s> {
         }
     }
 
-    /// `queryOrganization`.
-    #[inline(never)]
+    /// `queryOrganization`, onto `q`.
     fn organization(&mut self, q: &mut Query) -> PR<()> {
+        let o = self.query_organization()?;
+        q.order_by = o.order_by;
+        q.order_span = o.order_span;
+        q.cluster_by = o.cluster_by;
+        q.distribute_by = o.distribute_by;
+        q.sort_by = o.sort_by;
+        q.windows = o.windows;
+        q.limit = o.limit;
+        q.offset = o.offset;
+        Ok(())
+    }
+
+    /// `queryOrganization`: every clause is optional, so it may be empty
+    /// (its span then is the empty range at the current token).
+    #[inline(never)]
+    fn query_organization(&mut self) -> PR<QueryOrganization> {
+        let begin = self.start();
+        let mut o = QueryOrganization {
+            order_by: vec![],
+            order_span: None,
+            cluster_by: vec![],
+            distribute_by: vec![],
+            sort_by: vec![],
+            windows: vec![],
+            limit: None,
+            offset: None,
+            span: Span::default(),
+        };
         if self.kw_at(0, "ORDER") && self.kw_at(1, "BY") {
             let start = self.start();
             self.pos += 2;
-            q.order_by = self.comma_sep(|p| p.sort_item(true))?;
-            q.order_span = Some(self.span_from(start));
+            o.order_by = self.comma_sep(|p| p.sort_item(true))?;
+            o.order_span = Some(self.span_from(start));
         }
         for (kw, list) in [
-            ("CLUSTER", &mut q.cluster_by),
-            ("DISTRIBUTE", &mut q.distribute_by),
+            ("CLUSTER", &mut o.cluster_by),
+            ("DISTRIBUTE", &mut o.distribute_by),
         ] {
             if self.kw_at(0, kw) && self.kw_at(1, "BY") {
                 self.pos += 2;
@@ -3040,9 +3289,9 @@ impl<'s> Parser<'s> {
         }
         if self.kw_at(0, "SORT") && self.kw_at(1, "BY") {
             self.pos += 2;
-            q.sort_by = self.comma_sep(|p| p.sort_item(false))?;
+            o.sort_by = self.comma_sep(|p| p.sort_item(false))?;
         }
-        q.windows = self.window_clause()?;
+        o.windows = self.window_clause()?;
         let start = self.start();
         if self.eat_kw("LIMIT") {
             let value = if self.eat_kw("ALL") {
@@ -3050,15 +3299,16 @@ impl<'s> Parser<'s> {
             } else {
                 Some(self.expr()?)
             };
-            q.limit = Some(Limit {
+            o.limit = Some(Limit {
                 value,
                 span: self.span_from(start),
             });
         }
         if self.eat_kw("OFFSET") {
-            q.offset = Some(self.expr()?);
+            o.offset = Some(self.expr()?);
         }
-        Ok(())
+        o.span = self.span_from(begin);
+        Ok(o)
     }
 
     #[inline(never)]
@@ -3112,6 +3362,26 @@ impl<'s> Parser<'s> {
     fn set_ops(&mut self, min_prec: u8) -> PR<SetExpr> {
         let (mut left, mut height) = self.measured(Self::query_primary)?;
         loop {
+            if min_prec == 0 && self.pipe_follows() {
+                let op = self.pipe_op()?;
+                if let SetExprKind::Pipe(pipe) = &mut left.kind {
+                    left.span = left.span.to(op.span);
+                    pipe.span = left.span;
+                    pipe.ops.push(op);
+                } else {
+                    height += 1;
+                    self.grow(height)?;
+                    let span = left.span.to(op.span);
+                    let input = Box::new(left);
+                    let kind = SetExprKind::Pipe(Pipe {
+                        input,
+                        ops: vec![op],
+                        span,
+                    });
+                    left = SetExpr { kind, span };
+                }
+                continue;
+            }
             let (op, prec) = if self.kw_at(0, "INTERSECT") {
                 (SetOperator::Intersect, 2)
             } else if self.kw_at(0, "UNION") {
@@ -3148,6 +3418,231 @@ impl<'s> Parser<'s> {
         Ok(left)
     }
 
+    /// Whether a pipe operator starts here: `|>`, or `|` before a word that
+    /// starts one (Spark's `isOperatorPipeStart`), unless the single
+    /// character form is off.
+    pub(crate) fn pipe_follows(&self) -> bool {
+        self.sym_at(0, Sym::PipeGt) || (self.sym_at(0, Sym::Pipe) && self.single_pipe_word_at(1))
+    }
+
+    /// Whether `|` before token `n` is the pipe operator, not a bitwise or.
+    pub(crate) fn single_pipe_word_at(&self, n: usize) -> bool {
+        self.opts.single_character_pipe_operator
+            && self.any_kw_at(
+                n,
+                &[
+                    "SELECT",
+                    "EXTEND",
+                    "SET",
+                    "DROP",
+                    "AS",
+                    "WHERE",
+                    "PIVOT",
+                    "UNPIVOT",
+                    "TABLESAMPLE",
+                    "INNER",
+                    "CROSS",
+                    "LEFT",
+                    "RIGHT",
+                    "FULL",
+                    "NATURAL",
+                    "SEMI",
+                    "ANTI",
+                    "JOIN",
+                    "UNION",
+                    "EXCEPT",
+                    "MINUS",
+                    "INTERSECT",
+                    "ORDER",
+                    "CLUSTER",
+                    "DISTRIBUTE",
+                    "SORT",
+                    "LIMIT",
+                    "OFFSET",
+                    "AGGREGATE",
+                    "WINDOW",
+                    "LATERAL",
+                ],
+            )
+    }
+
+    /// One pipe operator, from its `|>` (or `|`).
+    #[inline(never)]
+    fn pipe_op(&mut self) -> PR<PipeOp> {
+        let start = self.start();
+        let pipe_span = self.tok(0).map_or_else(Span::default, |t| t.span);
+        self.bump();
+        let kind = if self.kw_at(0, "SELECT") {
+            let begin = self.start();
+            let (hints, quantifier, projection) = self.select_head()?;
+            let group_by = if self.kw_at(0, "GROUP") && self.kw_at(1, "BY") {
+                Some(self.group_by()?)
+            } else {
+                None
+            };
+            let windows = self.window_clause()?;
+            PipeOpKind::Select(Box::new(PipeSelect {
+                hints,
+                quantifier,
+                projection,
+                group_by,
+                windows,
+                span: self.span_from(begin),
+            }))
+        } else if self.eat_kw("EXTEND") {
+            PipeOpKind::Extend(self.comma_sep(Self::select_item)?)
+        } else if self.eat_kw("SET") {
+            PipeOpKind::Set(self.comma_sep(|p| {
+                let start = p.start();
+                let mut key = vec![p.name_part(true)?];
+                while p.eat_sym(Sym::Dot) {
+                    key.push(p.name_part(true)?);
+                }
+                p.expect_sym(Sym::Eq)?;
+                Ok(PipeAssignment {
+                    key,
+                    value: p.expr()?,
+                    span: p.span_from(start),
+                })
+            })?)
+        } else if self.eat_kw("DROP") {
+            PipeOpKind::Drop(self.comma_sep(Self::table_name)?)
+        } else if self.eat_kw("AS") {
+            PipeOpKind::As(self.name_part(true)?)
+        } else if self.kw_at(0, "WHERE") {
+            let begin = self.start();
+            self.bump();
+            let condition = self.expr()?;
+            let windows = self.window_clause()?;
+            PipeOpKind::Where(PipeWhere {
+                condition,
+                windows,
+                span: self.span_from(begin),
+            })
+        } else if self.kw_at(0, "PIVOT") {
+            let pivot = Box::new(self.pivot()?);
+            let unpivot = if self.unpivot_follows() {
+                Some(Box::new(self.unpivot()?))
+            } else {
+                None
+            };
+            PipeOpKind::Pivot(pivot, unpivot)
+        } else if self.unpivot_follows() {
+            let unpivot = Box::new(self.unpivot()?);
+            let pivot = if self.kw_at(0, "PIVOT") {
+                Some(Box::new(self.pivot()?))
+            } else {
+                None
+            };
+            PipeOpKind::Unpivot(unpivot, pivot)
+        } else if self.kw_at(0, "TABLESAMPLE") {
+            PipeOpKind::Sample(self.table_sample()?)
+        } else if self.any_kw_at(0, &["UNION", "EXCEPT", "MINUS", "INTERSECT"]) {
+            let op = if self.kw_at(0, "UNION") {
+                SetOperator::Union
+            } else if self.kw_at(0, "INTERSECT") {
+                SetOperator::Intersect
+            } else {
+                SetOperator::Except
+            };
+            self.bump();
+            let quantifier = self.set_quantifier();
+            let right = Box::new(self.nested(Self::query_primary)?);
+            PipeOpKind::SetOp {
+                op,
+                quantifier,
+                right,
+            }
+        } else if self.kw_at(0, "AGGREGATE") {
+            let begin = self.start();
+            self.bump();
+            // `AGGREGATE group by` with nothing after `by` reads `group` as
+            // an aggregate named `by`, as Spark does.
+            let group_follows =
+                self.kw_at(0, "GROUP") && self.kw_at(1, "BY") && self.expr_may_start_at(2);
+            let aggregates = if group_follows || !self.expr_may_start_at(0) {
+                vec![]
+            } else if self.kw_at(0, "GROUP")
+                && self.kw_at(1, "BY")
+                && !self.opts.enforce_reserved_keywords
+            {
+                let item_start = self.start();
+                let column = self.keyword_ident();
+                let expr = Expr {
+                    span: column.span,
+                    kind: ExprKind::Column(vec![column]),
+                };
+                let alias = Some(Alias::Name(self.any_ident()?));
+                let mut items = vec![SelectItem {
+                    expr,
+                    alias,
+                    span: self.span_from(item_start),
+                }];
+                while self.eat_sym(Sym::Comma) {
+                    items.push(self.select_item()?);
+                }
+                items
+            } else {
+                self.comma_sep(Self::select_item)?
+            };
+            let group_by = if self.kw_at(0, "GROUP") && self.kw_at(1, "BY") {
+                Some(self.group_by_with(true)?)
+            } else {
+                None
+            };
+            PipeOpKind::Aggregate(Box::new(PipeAggregate {
+                aggregates,
+                group_by,
+                span: self.span_from(begin),
+            }))
+        } else if let Some(join) = self.join()? {
+            PipeOpKind::Join(Box::new(join))
+        } else {
+            let mut o = self.query_organization()?;
+            if o.span.start == o.span.end {
+                o.span = pipe_span;
+            }
+            PipeOpKind::Organization(o)
+        };
+        Ok(PipeOp {
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
+    fn unpivot_follows(&self) -> bool {
+        self.kw_at(0, "UNPIVOT")
+            && (self.sym_at(1, Sym::LParen) || self.any_kw_at(1, &["INCLUDE", "EXCLUDE"]))
+    }
+
+    /// Whether an expression can start at token `n` (not the end of the
+    /// operator: a closing bracket, a pipe or a query clause).
+    fn expr_may_start_at(&self, n: usize) -> bool {
+        match self.kind(n) {
+            None
+            | Some(TokenKind::Sym(
+                Sym::RParen | Sym::RBracket | Sym::Semi | Sym::Comma | Sym::PipeGt,
+            )) => false,
+            Some(TokenKind::Sym(Sym::Pipe)) => !self.single_pipe_word_at(n + 1),
+            _ => !self.any_kw_at(
+                n,
+                &[
+                    "ORDER",
+                    "UNION",
+                    "EXCEPT",
+                    "MINUS",
+                    "INTERSECT",
+                    "LIMIT",
+                    "OFFSET",
+                    "WINDOW",
+                    "CLUSTER",
+                    "DISTRIBUTE",
+                    "SORT",
+                ],
+            ),
+        }
+    }
+
     fn set_quantifier(&mut self) -> Option<SetQuantifier> {
         if self.eat_kw("DISTINCT") {
             Some(SetQuantifier::Distinct)
@@ -3160,14 +3655,17 @@ impl<'s> Parser<'s> {
 
     fn query_primary(&mut self) -> PR<SetExpr> {
         let start = self.start();
-        let kind = if self.kw_at(0, "SELECT") {
-            SetExprKind::Select(Box::new(self.select(start, true)?))
+        let kind = if self.any_kw_at(0, &["SELECT", "MAP", "REDUCE"]) {
+            return self.select_kind(start, true);
         } else if self.kw_at(0, "FROM") {
             return self.query_from_first();
         } else if self.kw_at(0, "VALUES") {
             SetExprKind::Values(self.values()?)
         } else if self.eat_kw("TABLE") {
-            SetExprKind::Table(self.object_name()?)
+            match self.ddl_name()? {
+                DdlName::Parts(name) => SetExprKind::Table(name),
+                DdlName::Dynamic(name) => SetExprKind::DynamicTable(name),
+            }
         } else if self.eat_sym(Sym::LParen) {
             let q = self.query()?;
             self.expect_sym(Sym::RParen)?;
@@ -3201,17 +3699,10 @@ impl<'s> Parser<'s> {
         let start = self.start();
         let from = self.clause_from()?;
         let mut bodies = vec![];
-        while self.kw_at(0, "SELECT") {
+        while self.any_kw_at(0, &["SELECT", "MAP", "REDUCE"]) {
             let body_start = self.start();
-            let select = self.select(body_start, false)?;
-            let span = select.span;
-            let mut q = Self::bare_query(
-                SetExpr {
-                    kind: SetExprKind::Select(Box::new(select)),
-                    span,
-                },
-                body_start,
-            );
+            let body = self.select_kind(body_start, false)?;
+            let mut q = Self::bare_query(body, body_start);
             self.organization(&mut q)?;
             q.span = self.span_from(body_start);
             bodies.push(q);
@@ -3249,9 +3740,8 @@ impl<'s> Parser<'s> {
         })
     }
 
-    /// A query specification from `SELECT` on; `with_from` reads a `FROM`
-    /// clause (a body of a `FROM ... SELECT` statement has none).
-    fn select(&mut self, start: usize, with_from: bool) -> PR<Select> {
+    /// `SELECT [hints] [DISTINCT | ALL] items`.
+    fn select_head(&mut self) -> PR<(Vec<Hint>, Option<SetQuantifier>, Vec<SelectItem>)> {
         self.expect_kw("SELECT")?;
         let mut hints = vec![];
         while self.kind(0) == Some(TokenKind::HintStart) {
@@ -3266,6 +3756,45 @@ impl<'s> Parser<'s> {
             self.set_quantifier()
         };
         let projection = self.comma_sep(Self::select_item)?;
+        Ok((hints, quantifier, projection))
+    }
+
+    /// A query specification from `SELECT` on; `with_from` reads a `FROM`
+    /// clause (a body of a `FROM ... SELECT` statement has none).
+    /// A `SELECT` body: a query specification, or a `TRANSFORM` when its
+    /// parentheses are followed by what only a transform has.
+    fn select_kind(&mut self, start: usize, with_from: bool) -> PR<SetExpr> {
+        if self.any_kw_at(0, &["MAP", "REDUCE"]) || self.transform_follows() {
+            let t = self.transform_select(start, with_from)?;
+            let span = t.span;
+            return Ok(SetExpr {
+                kind: SetExprKind::Transform(Box::new(t)),
+                span,
+            });
+        }
+        let select = self.select(start, with_from)?;
+        let span = select.span;
+        Ok(SetExpr {
+            kind: SetExprKind::Select(Box::new(select)),
+            span,
+        })
+    }
+
+    fn select(&mut self, start: usize, with_from: bool) -> PR<Select> {
+        let (hints, quantifier, projection) = self.select_head()?;
+        self.select_tail(start, with_from, (hints, quantifier, projection), true)
+    }
+
+    /// The clauses of a query specification after its select list;
+    /// `qualify` admits `QUALIFY` (a transform has none).
+    fn select_tail(
+        &mut self,
+        start: usize,
+        with_from: bool,
+        head: (Vec<Hint>, Option<SetQuantifier>, Vec<SelectItem>),
+        qualify: bool,
+    ) -> PR<Select> {
+        let (hints, quantifier, projection) = head;
         let from = if with_from && self.kw_at(0, "FROM") {
             Some(self.clause_from()?)
         } else {
@@ -3280,7 +3809,11 @@ impl<'s> Parser<'s> {
         };
         let having = self.opt_clause("HAVING")?;
         let windows = self.window_clause()?;
-        let qualify = self.opt_clause("QUALIFY")?;
+        let qualify = if qualify {
+            self.opt_clause("QUALIFY")?
+        } else {
+            None
+        };
         Ok(Select {
             hints,
             quantifier,
@@ -3294,6 +3827,165 @@ impl<'s> Parser<'s> {
             qualify,
             span: self.span_from(start),
         })
+    }
+
+    /// Whether the `SELECT` here starts a `TRANSFORM`: `TRANSFORM (...)`
+    /// followed by a row format, a record writer or `USING` (else it calls
+    /// the function `transform`).
+    fn transform_follows(&self) -> bool {
+        if !(self.kw_at(0, "SELECT") && self.kw_at(1, "TRANSFORM") && self.sym_at(2, Sym::LParen)) {
+            return false;
+        }
+        // The token after the parenthesis that opens at `pos + 2`.
+        let close = self.closers[self.pos + 2];
+        if close == usize::MAX {
+            return false;
+        }
+        let n = close + 1 - self.pos;
+        self.kw_at(n, "USING")
+            || self.kw_at(n, "RECORDWRITER")
+            || self.kw_at(n, "ROW") && self.kw_at(n + 1, "FORMAT")
+    }
+
+    /// `SELECT TRANSFORM (inputs)`, `MAP inputs` or `REDUCE inputs`, the
+    /// script clauses, and the clauses of a query specification.
+    #[inline(never)]
+    fn transform_select(&mut self, start: usize, with_from: bool) -> PR<TransformSelect> {
+        let (kind, quantifier, inputs) = if self.eat_kw("SELECT") {
+            self.expect_kw("TRANSFORM")?;
+            self.expect_sym(Sym::LParen)?;
+            let quantifier = self.set_quantifier();
+            let inputs = self.comma_sep(Self::expr)?;
+            self.expect_sym(Sym::RParen)?;
+            (TransformKind::SelectTransform, quantifier, inputs)
+        } else {
+            let kind = if self.kw_at(0, "MAP") {
+                TransformKind::Map
+            } else {
+                TransformKind::Reduce
+            };
+            self.bump();
+            let quantifier = self.set_quantifier();
+            (kind, quantifier, self.comma_sep(Self::expr)?)
+        };
+        let input_format = self.opt_script_row_format()?;
+        let record_writer = self.opt_record_class("RECORDWRITER")?;
+        self.expect_kw("USING")?;
+        let script = self.string_after()?;
+        let output = if self.eat_kw("AS") {
+            Some(self.transform_output()?)
+        } else {
+            None
+        };
+        let output_format = self.opt_script_row_format()?;
+        let record_reader = self.opt_record_class("RECORDREADER")?;
+        let projection = inputs
+            .into_iter()
+            .map(|expr| SelectItem {
+                span: expr.span,
+                expr,
+                alias: None,
+            })
+            .collect();
+        let select = self.select_tail(start, with_from, (vec![], None, projection), false)?;
+        Ok(TransformSelect {
+            kind,
+            quantifier,
+            input_format,
+            record_writer,
+            script,
+            output,
+            output_format,
+            record_reader,
+            select,
+            span: self.span_from(start),
+        })
+    }
+
+    fn opt_script_row_format(&mut self) -> PR<Option<RowFormat>> {
+        if self.kw_at(0, "ROW") && self.kw_at(1, "FORMAT") {
+            self.row_format().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// `RECORDWRITER 'class'` or `RECORDREADER 'class'`.
+    fn opt_record_class(&mut self, kw: &str) -> PR<Option<String>> {
+        if self.eat_kw(kw) {
+            self.string_after().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// The `AS` of a transform: names or typed columns, with or without
+    /// parentheses.
+    fn transform_output(&mut self) -> PR<TransformOutput> {
+        let paren = self.eat_sym(Sym::LParen);
+        let mut names = vec![];
+        let mut columns: Vec<StructField> = vec![];
+        loop {
+            let start = self.start();
+            let name = self.name_part(true)?;
+            // A type follows unless the clause ends or goes on.
+            let typed = self.kind(0) == Some(TokenKind::Word)
+                && !(self.kw_at(0, "ROW") && self.kw_at(1, "FORMAT"))
+                && !self.any_kw_at(
+                    0,
+                    &[
+                        "FROM",
+                        "WHERE",
+                        "GROUP",
+                        "HAVING",
+                        "WINDOW",
+                        "LATERAL",
+                        "RECORDREADER",
+                        "UNION",
+                        "EXCEPT",
+                        "MINUS",
+                        "INTERSECT",
+                        "ORDER",
+                        "LIMIT",
+                        "OFFSET",
+                        "CLUSTER",
+                        "DISTRIBUTE",
+                        "SORT",
+                    ],
+                );
+            if typed {
+                let data_type = self.data_type()?;
+                let not_null = self.kw_at(0, "NOT") && self.kw_at(1, "NULL");
+                self.pos += 2 * usize::from(not_null);
+                let comment = if self.eat_kw("COMMENT") {
+                    Some(self.string_after()?)
+                } else {
+                    None
+                };
+                columns.push(StructField {
+                    name,
+                    data_type,
+                    not_null,
+                    comment,
+                    span: self.span_from(start),
+                });
+            } else {
+                names.push(name);
+            }
+            if !self.eat_sym(Sym::Comma) {
+                break;
+            }
+        }
+        if paren {
+            self.expect_sym(Sym::RParen)?;
+        }
+        if names.is_empty() {
+            Ok(TransformOutput::Columns(columns))
+        } else if columns.is_empty() {
+            Ok(TransformOutput::Names(names))
+        } else {
+            self.fail()
+        }
     }
 
     fn opt_clause(&mut self, kw: &str) -> PR<Option<Expr>> {
@@ -3310,7 +4002,19 @@ impl<'s> Parser<'s> {
         self.bump();
         loop {
             let start = self.start();
-            let name = self.any_ident()?;
+            // A hint name is a plain word: `IDENTIFIER('x')` is the hint
+            // `IDENTIFIER` with the parameter `'x'`.
+            let name = if self.identifier_literal_at(0) {
+                let span = self.tok(0).map_or_else(Span::default, |t| t.span);
+                self.bump();
+                Ident {
+                    value: span.text(self.src).to_owned(),
+                    quoted: false,
+                    span,
+                }
+            } else {
+                self.any_ident()?
+            };
             let params = if self.sym_at(0, Sym::LParen) {
                 self.paren_list(Self::primary_expr)?
             } else {
@@ -3333,7 +4037,17 @@ impl<'s> Parser<'s> {
     fn select_item(&mut self) -> PR<SelectItem> {
         let start = self.start();
         let expr = self.expr()?;
-        let alias = if !self.item_end_at(1) && self.eat_kw("AS") {
+        let alias = self.select_alias()?;
+        Ok(SelectItem {
+            expr,
+            alias,
+            span: self.span_from(start),
+        })
+    }
+
+    /// The `[AS] alias` after a select item's expression.
+    fn select_alias(&mut self) -> PR<Option<Alias>> {
+        Ok(if !self.item_end_at(1) && self.eat_kw("AS") {
             Some(if self.sym_at(0, Sym::LParen) {
                 Alias::List(self.ident_list()?)
             } else {
@@ -3343,11 +4057,6 @@ impl<'s> Parser<'s> {
             Some(Alias::List(self.ident_list()?))
         } else {
             self.implicit_alias(true)?.map(Alias::Name)
-        };
-        Ok(SelectItem {
-            expr,
-            alias,
-            span: self.span_from(start),
         })
     }
 
@@ -3401,11 +4110,17 @@ impl<'s> Parser<'s> {
 
     // ---- GROUP BY -------------------------------------------------------
 
-    #[inline(never)]
     fn group_by(&mut self) -> PR<GroupBy> {
+        self.group_by_with(false)
+    }
+
+    /// `GROUP BY items`; `named` lets an item carry an alias, as in the
+    /// pipe operator `AGGREGATE`.
+    #[inline(never)]
+    fn group_by_with(&mut self, named: bool) -> PR<GroupBy> {
         let start = self.start();
         self.pos += 2;
-        let items = self.comma_sep(Self::group_item)?;
+        let items = self.comma_sep(|p| p.group_item_with(named))?;
         let with = if self.kw_at(0, "WITH") && self.any_kw_at(1, &["ROLLUP", "CUBE"]) {
             let rollup = self.kw_at(1, "ROLLUP");
             self.pos += 2;
@@ -3430,6 +4145,10 @@ impl<'s> Parser<'s> {
     }
 
     fn group_item(&mut self) -> PR<GroupItem> {
+        self.group_item_with(false)
+    }
+
+    fn group_item_with(&mut self, named: bool) -> PR<GroupItem> {
         let start = self.start();
         let kind = if self.any_kw_at(0, &["ROLLUP", "CUBE"]) && self.sym_at(1, Sym::LParen) {
             let rollup = self.kw_at(0, "ROLLUP");
@@ -3461,6 +4180,20 @@ impl<'s> Parser<'s> {
             && !self.sym_at(1, Sym::LParen)
         {
             GroupItemKind::Expr(self.column_named_all())
+        } else if named {
+            let expr = self.expr()?;
+            // `GROUPING SETS` after the items is no alias (`GROUPING`).
+            let alias = if self.kw_at(0, "GROUPING") && self.kw_at(1, "SETS") {
+                None
+            } else {
+                self.select_alias()?
+            };
+            if alias.is_some() {
+                let span = self.span_from(start);
+                GroupItemKind::Named(SelectItem { expr, alias, span })
+            } else {
+                GroupItemKind::Expr(expr)
+            }
         } else {
             GroupItemKind::Expr(self.expr()?)
         };
@@ -3562,6 +4295,7 @@ impl<'s> Parser<'s> {
         let at = self.pos + n;
         let after = self.after_parens.get(at).copied().unwrap_or(at);
         self.any_kw_at(after - self.pos, QUERY_START)
+            || self.any_kw_at(after - self.pos, &["MAP", "REDUCE"])
     }
 
     fn table_alias(&mut self) -> PR<Option<TableAlias>> {
@@ -3598,6 +4332,7 @@ impl<'s> Parser<'s> {
             let values = self.values()?;
             return Ok(TableFactor {
                 kind: TableFactorKind::Values(values.rows),
+                sample: None,
                 alias: values.alias,
                 span: values.span,
             });
@@ -3627,26 +4362,153 @@ impl<'s> Parser<'s> {
                 }
             }
         } else {
-            let name = self.table_name()?;
+            let name = self.ddl_name()?;
             if self.sym_at(0, Sym::LParen) {
                 self.bump();
-                let args = self.function_args()?;
+                let args = self.function_args(true)?;
                 self.expect_sym(Sym::RParen)?;
-                TableFactorKind::TableFunction { name, args }
+                let (name, dynamic_name) = match name {
+                    DdlName::Parts(name) => (name, None),
+                    DdlName::Dynamic(d) => {
+                        let word = Span::new(d.span.start, d.span.start + "IDENTIFIER".len());
+                        (self.identifier_word(word), Some(d))
+                    }
+                };
+                TableFactorKind::TableFunction {
+                    name,
+                    dynamic_name,
+                    args,
+                }
             } else {
                 let temporal = self.temporal_clause()?;
                 let options = self.table_options()?;
-                TableFactorKind::Table {
-                    name,
-                    temporal,
-                    options,
+                match name {
+                    DdlName::Parts(name) => TableFactorKind::Table {
+                        name,
+                        temporal,
+                        options,
+                    },
+                    DdlName::Dynamic(name) => TableFactorKind::DynamicTable {
+                        name,
+                        temporal,
+                        options,
+                    },
                 }
             }
+        };
+        let sample = if self.kw_at(0, "TABLESAMPLE")
+            && matches!(
+                kind,
+                TableFactorKind::Table { .. }
+                    | TableFactorKind::Subquery(_)
+                    | TableFactorKind::Nested(_)
+            ) {
+            Some(self.table_sample()?)
+        } else {
+            None
         };
         let alias = self.table_alias()?;
         Ok(TableFactor {
             kind,
+            sample,
             alias,
+            span: self.span_from(start),
+        })
+    }
+
+    /// `TABLESAMPLE [SYSTEM | BERNOULLI] ([method]) [REPEATABLE (seed)]`.
+    #[inline(never)]
+    fn table_sample(&mut self) -> PR<TableSample> {
+        let start = self.start();
+        self.expect_kw("TABLESAMPLE")?;
+        let sample_type = if self.eat_kw("SYSTEM") {
+            Some(SampleType::System)
+        } else if self.eat_kw("BERNOULLI") {
+            Some(SampleType::Bernoulli)
+        } else {
+            None
+        };
+        self.expect_sym(Sym::LParen)?;
+        let method = if self.sym_at(0, Sym::RParen) {
+            None
+        } else {
+            Some(self.sample_method()?)
+        };
+        self.expect_sym(Sym::RParen)?;
+        let mut seed = None;
+        if self.kw_at(0, "REPEATABLE") && self.sym_at(1, Sym::LParen) {
+            self.pos += 2;
+            seed = Some(self.integer_text()?);
+            self.expect_sym(Sym::RParen)?;
+        }
+        Ok(TableSample {
+            sample_type,
+            method,
+            seed,
+            span: self.span_from(start),
+        })
+    }
+
+    /// An integer literal's text (`integerValue`).
+    fn integer_text(&mut self) -> PR<String> {
+        if self.kind(0) != Some(TokenKind::Number(NumKind::Int)) {
+            return self.fail();
+        }
+        let text = self.text(0).to_owned();
+        self.bump();
+        Ok(text)
+    }
+
+    fn sample_method(&mut self) -> PR<SampleMethod> {
+        let start = self.start();
+        let negative = self.sym_at(0, Sym::Minus);
+        let n = usize::from(negative);
+        let kind = if self.kw_at(0, "BUCKET")
+            && self.kind(1) == Some(TokenKind::Number(NumKind::Int))
+            && self.kw_at(2, "OUT")
+            && self.kw_at(3, "OF")
+        {
+            self.bump();
+            let numerator = self.integer_text()?;
+            self.pos += 2;
+            let denominator = self.integer_text()?;
+            let on = if self.eat_kw("ON") {
+                let name = self.table_name()?;
+                Some(if self.eat_sym(Sym::LParen) {
+                    self.expect_sym(Sym::RParen)?;
+                    BucketOn::Function(name)
+                } else if let [ident] = &name.parts[..] {
+                    BucketOn::Column(ident.clone())
+                } else {
+                    return self.fail();
+                })
+            } else {
+                None
+            };
+            SampleMethodKind::Bucket {
+                numerator,
+                denominator,
+                on,
+            }
+        } else if matches!(
+            self.kind(n),
+            Some(TokenKind::Number(NumKind::Int | NumKind::Decimal))
+        ) && self.kw_at(n + 1, "PERCENT")
+        {
+            self.pos += n;
+            let value = self.text(0).to_owned();
+            self.pos += 2;
+            SampleMethodKind::Percent { negative, value }
+        } else {
+            let e = self.expr()?;
+            if self.eat_kw("ROWS") {
+                SampleMethodKind::Rows(e)
+            } else {
+                SampleMethodKind::Bytes(e)
+            }
+        };
+        Ok(SampleMethod {
+            kind,
             span: self.span_from(start),
         })
     }
@@ -3801,6 +4663,8 @@ impl<'s> Parser<'s> {
             JoinConstraint::On(self.expr()?)
         } else if self.eat_kw("USING") {
             JoinConstraint::Using(self.ident_list()?)
+        } else if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
+            JoinConstraint::NearestBy(self.nearest_by()?)
         } else {
             JoinConstraint::None
         };
@@ -3812,6 +4676,34 @@ impl<'s> Parser<'s> {
             constraint,
             span: self.span_from(start),
         }))
+    }
+
+    /// `(APPROX | EXACT) NEAREST [k] BY (DISTANCE | SIMILARITY) expr`.
+    fn nearest_by(&mut self) -> PR<NearestBy> {
+        let start = self.start();
+        let approx = self.kw_at(0, "APPROX");
+        self.pos += 2;
+        let num_results = if self.kind(0) == Some(TokenKind::Number(NumKind::Int)) {
+            Some(self.integer_text()?)
+        } else {
+            None
+        };
+        self.expect_kw("BY")?;
+        let direction = if self.eat_kw("DISTANCE") {
+            NearestDirection::Distance
+        } else if self.eat_kw("SIMILARITY") {
+            NearestDirection::Similarity
+        } else {
+            return self.fail();
+        };
+        let ranking = self.expr()?;
+        Ok(NearestBy {
+            approx,
+            num_results,
+            direction,
+            ranking,
+            span: self.span_from(start),
+        })
     }
 
     #[inline(never)]

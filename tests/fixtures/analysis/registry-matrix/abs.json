@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "abs#23a3b7c1c876/ansi_on",
+      "reason": "SELECT abs(CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "abs#23a3b7c1c876/ansi_off",
+      "reason": "SELECT abs(CAST(NULL AS interval year to month)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "abs#259f8171392f/ansi_on",
+      "reason": "SELECT abs(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "abs#259f8171392f/ansi_off",
+      "reason": "SELECT abs(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "abs#5095fc57b734/ansi_on",
+      "reason": "SELECT abs(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "abs#5095fc57b734/ansi_off",
+      "reason": "SELECT abs(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "abs#9fc7640777fa/ansi_on",
+      "reason": "SELECT abs(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "abs#9fc7640777fa/ansi_off",
+      "reason": "SELECT abs(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "abs#e54cb1129864/ansi_on",
+      "reason": "SELECT abs(INTERVAL -'1-1' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "abs#e54cb1129864/ansi_off",
+      "reason": "SELECT abs(INTERVAL -'1-1' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "abs"
+}

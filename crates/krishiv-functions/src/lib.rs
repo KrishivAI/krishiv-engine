@@ -9,6 +9,9 @@
 //!   [`scalar::ScalarFunction`] over the `krishiv-kernels` kernels, which
 //!   the physical planner calls once per batch.
 //!
+//! - `uniform`: the `uniform` result-type rule both layers share (not a
+//!   layer: the analyzer and the executor map their own types to its kinds).
+//!
 //! Aggregates are executed by `krishiv-exec`; the canonical operators and
 //! `CAST` by the expression evaluator.
 
@@ -19,3 +22,4 @@ mod python_wrappers;
 pub mod registry;
 pub mod scalar;
 pub mod signature;
+pub(crate) mod uniform;

@@ -6,12 +6,16 @@
 //! Spark's analysis error class; a case Spark fails only at run time must
 //! analyze (to Spark's type, when Spark reported one). The cases that do
 //! not pass are listed, each with a reason, in
-//! `tests/fixtures/analysis/registry-matrix-manifest.json`; the list must
-//! match exactly, so a fix shrinks it and a regression fails.
+//! `tests/fixtures/analysis/registry-matrix/`, one file per function name;
+//! the listed failures must match exactly, so a fix shrinks them and a
+//! regression fails. Totals are computed from the run, never stored.
 //!
-//! `KRISHIV_UPDATE_MANIFEST=1` rewrites the manifest from the failures.
+//! `KRISHIV_UPDATE_MANIFEST=1` rewrites only the per-function files whose
+//! content changed and deletes the files of functions with no failures left.
+#![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use krishiv_functions::registry::{Lookup, builtins};
 use krishiv_functions::signature::SparkProfile;
@@ -22,10 +26,54 @@ use krishiv_plan::analyzer::{
 };
 use krishiv_sql::{ParserOptions, parse_and_lower};
 use krishiv_testkit::fn_matrix::{Expected, Field, FnMatrix, MatrixCase, Mode};
+use krishiv_testkit::manifest_dir::{
+    decode_file_name, encode_file_name, read_json_dir, sync_json_dir,
+};
 use krishiv_types::DataType;
 use serde_json::{Value, json};
 
-const MANIFEST: &str = "fixtures/analysis/registry-matrix-manifest.json";
+/// One file per function name under `tests/fixtures/analysis/`.
+const MANIFEST_DIR: &str = "fixtures/analysis/registry-matrix";
+
+/// Manifest file format version this test reads and writes.
+const FORMAT_VERSION: u64 = 1;
+
+/// The listed failures (`id -> reason`) across the per-function files.
+/// Each file holds `{"format_version", "function", "entries": [{id, reason}]}`;
+/// the file name is the [`encode_file_name`] encoding of the function.
+fn load_listed(dir: &Path) -> BTreeMap<String, String> {
+    let mut listed = BTreeMap::new();
+    for (rel, text) in read_json_dir(dir).unwrap() {
+        let stem = rel
+            .to_str()
+            .unwrap()
+            .strip_suffix(".json")
+            .unwrap_or_default();
+        let file: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            file["format_version"].as_u64(),
+            Some(FORMAT_VERSION),
+            "{}: bad format_version",
+            rel.display()
+        );
+        let function = file["function"].as_str().unwrap().to_owned();
+        assert_eq!(
+            decode_file_name(stem).as_deref(),
+            Some(function.as_str()),
+            "{}: file name does not match its function",
+            rel.display()
+        );
+        for e in file["entries"].as_array().unwrap() {
+            let id = e["id"].as_str().unwrap().to_owned();
+            let reason = e["reason"].as_str().unwrap().to_owned();
+            assert!(
+                listed.insert(id.clone(), reason).is_none(),
+                "case {id} is listed twice"
+            );
+        }
+    }
+    listed
+}
 
 /// Whether `sql` has a `FROM` clause at the top level (outside brackets
 /// and quotes: `extract(YEAR FROM d)` is not one).
@@ -158,40 +206,53 @@ fn registered_functions_analyze_as_spark_does() {
     let (total, passed) = per_function
         .values()
         .fold((0, 0), |(t, p), (ct, cp)| (t + ct, p + cp));
-    let path = krishiv_testkit::tests_dir().join(MANIFEST);
-    if std::env::var_os("KRISHIV_UPDATE_MANIFEST").is_some() {
-        let functions: Vec<Value> = per_function
-            .iter()
-            .map(|(f, (t, p))| json!({"function": f, "cases": t, "pass": p}))
-            .collect();
-        let entries: Vec<Value> = failures
-            .iter()
-            .map(|(id, reason)| json!({"id": id, "reason": reason}))
-            .collect();
-        let doc = json!({
-            "format_version": 1,
-            "cases": total,
-            "pass": passed,
-            "functions": functions,
-            "entries": entries,
-        });
-        std::fs::write(&path, serde_json::to_string_pretty(&doc).unwrap() + "\n").unwrap();
-    }
-    let manifest: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-    let listed: BTreeMap<String, String> = manifest["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| {
-            let text = |k: &str| e[k].as_str().unwrap().to_owned();
-            (text("id"), text("reason"))
-        })
-        .collect();
+    // The tally walks the same registered cases it counts, and every case
+    // lands in exactly one of the two buckets; totals are computed here,
+    // never stored.
     assert_eq!(
-        (manifest["cases"].as_u64(), manifest["pass"].as_u64()),
-        (Some(total as u64), Some(passed as u64)),
-        "case totals changed: run with KRISHIV_UPDATE_MANIFEST=1 and review the diff"
+        total,
+        matrix
+            .cases
+            .iter()
+            .filter(|c| registered(&c.function))
+            .count(),
+        "the tally slipped a case"
     );
+    assert_eq!(
+        passed + failures.len(),
+        total,
+        "a case passed and failed, or neither"
+    );
+    let dir = krishiv_testkit::tests_dir().join(MANIFEST_DIR);
+    if std::env::var_os("KRISHIV_UPDATE_MANIFEST").is_some() {
+        let mut by_function: BTreeMap<&str, Vec<(String, String)>> = BTreeMap::new();
+        for case in matrix.cases.iter().filter(|c| registered(&c.function)) {
+            if let Some(why) = failures.get(&case.id) {
+                by_function
+                    .entry(case.function.as_str())
+                    .or_default()
+                    .push((case.id.clone(), why.clone()));
+            }
+        }
+        let mut wanted: BTreeMap<PathBuf, String> = BTreeMap::new();
+        for (function, rows) in &by_function {
+            let entries: Vec<Value> = rows
+                .iter()
+                .map(|(id, reason)| json!({"id": id, "reason": reason}))
+                .collect();
+            let doc = json!({
+                "format_version": FORMAT_VERSION,
+                "function": function,
+                "entries": entries,
+            });
+            wanted.insert(
+                PathBuf::from(format!("{}.json", encode_file_name(function))),
+                serde_json::to_string_pretty(&doc).unwrap() + "\n",
+            );
+        }
+        sync_json_dir(&dir, &wanted).unwrap();
+    }
+    let listed = load_listed(&dir);
     let differ: Vec<_> = failures
         .iter()
         .filter(|(id, why)| listed.get(*id) != Some(*why))

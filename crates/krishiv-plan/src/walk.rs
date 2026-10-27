@@ -137,11 +137,13 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::WithColumns { .. }
                 | PlanNode::Hint { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Pivot { .. }
+                | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
                 | PlanNode::Distinct { .. } => false,
                 PlanNode::Union { by_name, .. } => !by_name,
                 PlanNode::Join { condition, .. } => match condition {
-                    JoinCondition::Using(_) => false,
+                    JoinCondition::Natural | JoinCondition::Using(_) => false,
                     JoinCondition::None | JoinCondition::On(_) => true,
                 },
                 PlanNode::Scan(_)
@@ -166,6 +168,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | ExprNode::Star(_)
                 | ExprNode::TypedLiteral { .. }
                 | ExprNode::Function(_)
+                | ExprNode::Field { .. }
                 | ExprNode::Alias { .. } => false,
                 ExprNode::Cast { mode, .. } => match mode {
                     CastMode::Default => false,
@@ -177,7 +180,12 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                     &w.window,
                     crate::WindowSpecRef::Spec(crate::WindowSpec { frame: Some(_), .. })
                 ),
-                ExprNode::Literal(_) | ExprNode::Subquery { .. } | ExprNode::Resolved(_) => true,
+                // A lambda is resolved once its body is (visited on its
+                // own); its parameters are plain names.
+                ExprNode::Lambda { .. }
+                | ExprNode::Literal(_)
+                | ExprNode::Subquery { .. }
+                | ExprNode::Resolved(_) => true,
             },
         };
         if resolved {
@@ -275,6 +283,25 @@ impl Teardown {
                 self.plans.push(input);
                 self.exprs.extend(projections.into_iter().flatten());
             }
+            PlanNode::Pivot {
+                input,
+                pivot_columns,
+                values,
+                aggregates,
+            } => {
+                self.plans.push(input);
+                self.exprs.extend(pivot_columns);
+                self.exprs
+                    .extend(values.into_iter().flat_map(|v| v.exprs.into_iter()));
+                self.exprs.extend(aggregates);
+            }
+            PlanNode::Unpivot {
+                input, column_sets, ..
+            } => {
+                self.plans.push(input);
+                self.exprs
+                    .extend(column_sets.into_iter().flat_map(|s| s.columns.into_iter()));
+            }
             PlanNode::InlineTable { rows, .. } => {
                 self.exprs.extend(rows.into_iter().flatten());
             }
@@ -304,7 +331,7 @@ impl Teardown {
                 self.plans.extend([left, right]);
                 match condition {
                     JoinCondition::On(e) => self.exprs.push(e),
-                    JoinCondition::None | JoinCondition::Using(_) => {}
+                    JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
                 }
             }
             PlanNode::Sort { input, order, .. } => {
@@ -350,7 +377,9 @@ impl Teardown {
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
-            | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
+            ) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })
             | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
@@ -360,7 +389,11 @@ impl Teardown {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
-            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => self.exprs.push(expr),
+            | ExprNode::Lambda { body: expr, .. }
+            | ExprNode::Field { base: expr, .. }
+            | ExprNode::Resolved(
+                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+            ) => self.exprs.push(expr),
             ExprNode::Subquery { kind, plan } => {
                 self.plans.push(plan);
                 match kind {

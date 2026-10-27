@@ -6,7 +6,7 @@ name: OSV-Scanner
 # arguments, so a listed lock file that a pull request adds does not exist
 # there and fails the base scan ("failed to resolve path"), whatever it holds.
 # Pull requests fail only on vulnerabilities they introduce (base vs head);
-# main and the weekly schedule scan everything and upload SARIF to code
+# the weekly schedule scans everything and uploads SARIF to code
 # scanning. The scan runs in Google's reusable workflows, so its jobs cannot
 # take a Harden-Runner step of ours.
 
@@ -15,8 +15,6 @@ on:
     types: [opened, synchronize, reopened]
   merge_group:
     types: [checks_requested]
-  push:
-    branches: [main]
   schedule:
     - cron: "17 6 * * 1"
 

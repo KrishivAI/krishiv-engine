@@ -43,6 +43,8 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
         PlanNode::Expand { .. } => "PlanNode::Expand",
+        PlanNode::Pivot { .. } => "PlanNode::Pivot",
+        PlanNode::Unpivot { .. } => "PlanNode::Unpivot",
         PlanNode::InlineTable { .. } => "PlanNode::InlineTable",
         PlanNode::Window { .. } => "PlanNode::Window",
     });
@@ -57,14 +59,18 @@ fn expr_kinds(expr: &Expr, out: &mut BTreeSet<&'static str>) {
         ExprNode::TypedLiteral { .. } => "ExprNode::TypedLiteral",
         ExprNode::Star(_) => "ExprNode::Star",
         ExprNode::Function(_) => "ExprNode::Function",
+        ExprNode::Field { .. } => "ExprNode::Field",
         ExprNode::Cast { .. } => "ExprNode::Cast",
         ExprNode::Alias { .. } => "ExprNode::Alias",
         ExprNode::Subquery { .. } => "ExprNode::Subquery",
         ExprNode::Window(_) => "ExprNode::Window",
+        ExprNode::Lambda { .. } => "ExprNode::Lambda",
         ExprNode::Resolved(ResolvedExpr::Column(_)) => "ResolvedExpr::Column",
         ExprNode::Resolved(ResolvedExpr::OuterColumn(_)) => "ResolvedExpr::OuterColumn",
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(_)) => "ResolvedExpr::LambdaVar",
         ExprNode::Resolved(ResolvedExpr::Function(_)) => "ResolvedExpr::Function",
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => "ResolvedExpr::Alias",
+        ExprNode::Resolved(ResolvedExpr::Field { .. }) => "ResolvedExpr::Field",
     });
     if let ExprNode::Subquery { plan, .. } = &expr.node {
         kinds(plan, out);
@@ -137,6 +143,7 @@ fn df(id: i64) -> LogicalPlan {
 fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
     let star = Expr::new(ExprNode::Star(Star {
         qualifier: Vec::new(),
+        except: Vec::new(),
         plan_id: None,
     }));
     let df_col = Expr::new(ExprNode::Column(ColumnRef {

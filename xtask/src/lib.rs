@@ -5,6 +5,7 @@
 
 pub mod budgets;
 pub mod ci;
+pub mod codeql_proxy;
 pub mod coverage;
 pub mod dev;
 pub mod docs;
@@ -12,5 +13,6 @@ pub mod layering;
 pub mod lint;
 pub mod policy;
 pub mod precheck;
+pub mod profile;
 pub mod registry_coverage;
 pub mod wheels;

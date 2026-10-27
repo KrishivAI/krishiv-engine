@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "try_multiply#0a188b342bda/ansi_on",
+      "reason": "SELECT try_multiply(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#0a188b342bda/ansi_off",
+      "reason": "SELECT try_multiply(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#31933e3dbf90/ansi_on",
+      "reason": "SELECT try_multiply(CAST(NULL AS interval year), 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_multiply#31933e3dbf90/ansi_off",
+      "reason": "SELECT try_multiply(CAST(NULL AS interval year), 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "try_multiply#420e775113c8/ansi_on",
+      "reason": "SELECT try_multiply(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#420e775113c8/ansi_off",
+      "reason": "SELECT try_multiply(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#44bf4c417400/ansi_on",
+      "reason": "SELECT try_multiply(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_multiply#44bf4c417400/ansi_off",
+      "reason": "SELECT try_multiply(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_multiply#4ad5e706ba92/ansi_on",
+      "reason": "SELECT try_multiply(2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_multiply#4ad5e706ba92/ansi_off",
+      "reason": "SELECT try_multiply(2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
+    },
+    {
+      "id": "try_multiply#602e46974789/ansi_on",
+      "reason": "SELECT try_multiply(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#602e46974789/ansi_off",
+      "reason": "SELECT try_multiply(2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#66d96b95f6e8/ansi_on",
+      "reason": "SELECT try_multiply(2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#66d96b95f6e8/ansi_off",
+      "reason": "SELECT try_multiply(2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#74eb39d686d6/ansi_off",
+      "reason": "SELECT try_multiply(2, '1') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_multiply#79b07d4183ba/ansi_on",
+      "reason": "SELECT try_multiply(interval 2 year, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#79b07d4183ba/ansi_off",
+      "reason": "SELECT try_multiply(interval 2 year, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "try_multiply#843ba876fb60/ansi_off",
+      "reason": "SELECT try_multiply(2, 'abc') | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_multiply#aaf5bd990a45/ansi_off",
+      "reason": "SELECT try_multiply('1', 3) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    },
+    {
+      "id": "try_multiply#f8aceea556aa/ansi_off",
+      "reason": "SELECT try_multiply('abc', 3) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
+    }
+  ],
+  "format_version": 1,
+  "function": "try_multiply"
+}

@@ -24,8 +24,9 @@
 //!
 //! # Hashes (P2-T157 Appendix C)
 //! - `h`, stored at the start of the row, is seedless: the row layout's
-//!   column-wise hash with seed 0, the same for every operator instance and
-//!   worker. Radix partitions are its top bits; the per-partition [`Hll`]
+//!   column-wise hash, the same for every operator instance and worker
+//!   (not the routing hash `H_kg`, which only exchanges and key groups
+//!   use). Radix partitions are its top bits; the per-partition [`Hll`]
 //!   sketches are over it, so they merge across tables.
 //! - The index and spill partitions use `g = fin(h ^ seed)`, one folded
 //!   multiply with the operator's seed, so crafted keys cannot be aimed at
@@ -621,8 +622,8 @@ impl RowTable {
                 })
                 .collect::<Result<_>>()?
         };
-        // Seed 0: `h` is seedless (Appendix C).
-        let keys = layout(&self.core)?.encode(&keys, 0)?;
+        // `h` is seedless (Appendix C).
+        let keys = layout(&self.core)?.encode(&keys)?;
         let mut counts = [0; PARTS];
         let mut heap_counts = Vec::new();
         // One partition (a narrow table) needs no per-row pass: all rows,
@@ -1161,7 +1162,7 @@ impl RowTable {
             .columns()
             .get(..self.core.spec.group_by.len())
             .ok_or_else(|| internal("state batch without its keys".to_owned()))?;
-        let keys = layout(&self.core)?.encode(keys, 0)?;
+        let keys = layout(&self.core)?.encode(keys)?;
         let mut parts = vec![Vec::new(); PARTITIONS];
         for (i, &h) in (0u32..).zip(keys.hashes()) {
             parts[spill_partition(fin(h, self.gseed), level)].push(i);
@@ -1481,7 +1482,7 @@ fn new_accs(core: &AggCore) -> Result<Vec<Accumulator>> {
     core.spec
         .aggregates
         .iter()
-        .map(|a| Accumulator::new(a, core.spec.ansi))
+        .map(|a| core.accumulator(a))
         .collect()
 }
 
@@ -1713,6 +1714,7 @@ mod tests {
             ansi: true,
             spill: None,
             require_unit_weights: false,
+            legacy_statistical: false,
         };
         Arc::new(AggCore::new(spec).unwrap())
     }
@@ -1746,6 +1748,7 @@ mod tests {
             ansi: true,
             spill: None,
             require_unit_weights: false,
+            legacy_statistical: false,
         };
         Arc::new(AggCore::new(spec).unwrap())
     }
@@ -2206,6 +2209,7 @@ mod tests {
             ansi: true,
             spill: None,
             require_unit_weights: false,
+            legacy_statistical: false,
         };
         let core = Arc::new(AggCore::new(spec).unwrap());
         let seed = HashSeed::new(Some(6));

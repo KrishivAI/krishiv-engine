@@ -1,0 +1,78 @@
+{
+  "entries": [
+    {
+      "id": "ceiling#3d5f6ac925b9/ansi_on",
+      "reason": "SELECT ceiling(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#3d5f6ac925b9/ansi_off",
+      "reason": "SELECT ceiling(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#523bf03f299a/ansi_on",
+      "reason": "SELECT ceiling(3.1411, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceiling#523bf03f299a/ansi_off",
+      "reason": "SELECT ceiling(3.1411, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceiling#6bd7751202b6/ansi_on",
+      "reason": "SELECT ceiling(3.1411, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceiling#6bd7751202b6/ansi_off",
+      "reason": "SELECT ceiling(3.1411, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceiling#8dd6b92218cd/ansi_on",
+      "reason": "SELECT ceiling(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#8dd6b92218cd/ansi_off",
+      "reason": "SELECT ceiling(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#a881960ea852/ansi_on",
+      "reason": "SELECT ceiling(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#a881960ea852/ansi_off",
+      "reason": "SELECT ceiling(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#c2037689a057/ansi_on",
+      "reason": "SELECT ceiling(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#c2037689a057/ansi_off",
+      "reason": "SELECT ceiling(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#f4a8508a15c7/ansi_on",
+      "reason": "SELECT ceiling(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#f4a8508a15c7/ansi_off",
+      "reason": "SELECT ceiling(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#f4f85323d8de/ansi_on",
+      "reason": "SELECT ceiling(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#f4f85323d8de/ansi_off",
+      "reason": "SELECT ceiling(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceiling#fd0ba838e40f/ansi_on",
+      "reason": "SELECT ceiling(3.1411, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceiling#fd0ba838e40f/ansi_off",
+      "reason": "SELECT ceiling(3.1411, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    }
+  ],
+  "format_version": 1,
+  "function": "ceiling"
+}

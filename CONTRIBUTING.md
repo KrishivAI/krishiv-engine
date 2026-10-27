@@ -90,22 +90,80 @@ prints one table of pass, fail or skipped (with the reason) per check. It exits 
 should pass CI on its first run.
 
 ```text
-cargo xtask precheck [--base origin/main] [--fast] [--full] [--memory-cap 12G]
+cargo xtask precheck [--base origin/main] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap 12G]
 ```
 
+The default is the full gate. `--fast` is the quick loop (no coverage, budgets or Python wheel tests).
+
+- `base-fresh`: fails when your branch lacks the newest commits of the base. CI tests the merge of the PR with
+  `main`, so a stale branch can pass locally and fail there (registry coverage, `ty`, Python tests). Merge the base
+  and re-run; `--allow-stale` skips the check.
 - Rust checks run on the touched crates (tests also on their dependents); a change to `Cargo.toml`, `Cargo.lock`, the
   toolchain or lint config runs the whole workspace.
-- `--fast` skips coverage and budgets for quick iteration. Budgets also run only when a manifest changed, or with `--full`.
-- `--memory-cap SIZE` puts the heavy steps (clippy, doc, tests, coverage, budgets) under a `systemd-run` memory cap.
-  Putting the whole command under `systemd-run --user --scope -p MemoryMax=...` works too.
+- `diff-coverage` runs `cargo llvm-cov nextest` on the touched crates only, in a dedicated target directory
+  (`$CARGO_TARGET_DIR-precheck-cov`, or `target/precheck-cov`) that precheck deletes afterwards, then applies CI's
+  90% gate to the changed lines. Tests in dependent crates also cover lines in CI: if only those cover your lines, add
+  `--coverage-dependents` (slower), or better, a test in the crate itself.
+- `policy` runs everything CI's policy job runs: SPDX, source guard, registry coverage, large files, DCO, the
+  AI-attribution ban (your commits; the PR title and body are checked in CI) and the PR size cap, plus `workflow-lint`.
+- Python: `python-quality` (ruff check, ruff format, ty) and `python-tests` (bench) run when their directories change;
+  `python-wheel-tests` builds the extension with `maturin develop` into a throwaway venv and runs `python/tests` when
+  `python/` changed or `krishiv-python` depends on a touched crate (needs `uv` and network).
+- `codeql-proxy` is a cheap stand-in for the one CodeQL query that has failed PRs (`rust/cleartext-logging`: a
+  variable named `secret`, `password`, ... in a log, print, panic or assert message, also across lines and in untracked files). **CodeQL itself stays CI-only.**
+- `--memory-cap SIZE` puts the heavy steps (clippy, doc, tests, coverage, budgets, wheel tests) under a `systemd-run`
+  memory cap. Putting the whole command under `systemd-run --user --scope -p MemoryMax=...` works too.
+- Budgets run only when a manifest changed, or with `--full`.
 - A tool that is not installed (`cargo-nextest`, `cargo-llvm-cov`, `zizmor`, `typos`, `taplo`, `uv`, ...) is reported as
   `not installed`, never skipped silently. Full logs are in `target/precheck/<check>.log`.
-- Checks CI runs elsewhere (`hack`, `msrv`, the wheel matrix, `wheel-sizes`, `dependency-review`, CodSpeed, OSV) are
-  not run locally. Python tests of `python/` need the wheel build and run only in CI; `bench/` tests run locally.
+- Checks CI runs elsewhere (`hack`, `msrv`, the wheel matrix, `wheel-sizes`, `dependency-review`, CodeQL, CodSpeed,
+  OSV) are not run locally.
 
 The mapping from each required CI check to a precheck step is in `xtask/src/precheck.rs`; a policy test in
 `xtask/tests/precheck.rs` fails when a required check has no mapping. When branch protection gains a required check,
 add it to `REQUIRED_CI_CHECKS` and map it.
+
+## Profiling a query
+
+`cargo xtask profile` builds the release CLI with line tables, records the query profile as JSON, and samples
+a second run for a flamegraph:
+
+```text
+cargo xtask profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph]
+```
+
+`<QUERY>` is SQL text, or a file with `-f`. `--table` registers a Parquet file or directory as a temp view
+(repeatable); `--conf` sets a session entry (repeatable). Pass a single statement: the CLI prints one JSON
+line per statement and the summary reads one document. The out directory defaults to
+`target/xtask-profile/<UTC milliseconds>` and is never overwritten; pass `--out DIR` to choose it.
+
+The sampler is chosen by `--tool` (`auto` by default): `perf` runs
+`perf record -F 999 -g --call-graph dwarf` and pipes `perf script` through `inferno-collapse-perf` and
+`inferno-flamegraph`; `samply` runs `samply record --save-only`. `auto` prefers `perf` when `perf` and both
+inferno binaries are on `PATH`, and otherwise uses `samply` when it is installed (when neither combination
+is available the command reports the profile JSON as done and then fails with the install hints). Install
+what is missing with the
+distribution's `linux-tools` package (for `perf`), `cargo install inferno` (for the two inferno binaries) or
+`cargo install samply`. When no sampler is installed the command reports the profile JSON as done and then
+fails with the install hints.
+
+Output files are `<out>/profile.json` (the query profile, one JSON line, as printed by
+`krishiv sql --explain-analyze --json`) and, with `samply`, `<out>/profile.json.gz` in samply's own format
+alongside it; with `perf`, `<out>/perf.data` with `<out>/flamegraph.svg`. `--no-flamegraph` skips the
+sampling run. The sampling run re-runs the same `krishiv sql --explain-analyze --json` command, so the
+flamegraph profiles the instrumented query (profiling overhead included), not a plain run; that is
+intended, keeping one command line for both artifacts.
+The command ends with a summary: the output paths, the query wall time and the three slowest operators by
+compute time.
+
+The profile JSON (`format` `krishiv.query-profile`, version 1) holds the query wall time, per-pipeline driver
+counts and the per-operator counters (rows in and out, compute time, blocked time, spills, peak memory);
+the schema is `docs/reference/query-profile-v1.schema.json`. The SVG shows where the sampled run spent time;
+wide boxes are the functions to look at first.
+
+`perf record` needs the kernel to allow unprivileged profiling. When it refuses, the command prints the
+`perf_event_paranoid` note: a privileged user lowers the setting (for example
+`sysctl kernel.perf_event_paranoid=1`). xtask never changes the setting and never runs `sudo`.
 
 ## Python quality
 

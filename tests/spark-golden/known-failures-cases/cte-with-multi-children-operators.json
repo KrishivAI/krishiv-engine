@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "depends-on-command": [
+      5,
+      12
+    ]
+  },
+  "file": "cte-with-multi-children-operators",
+  "format_version": 1
+}
