@@ -192,6 +192,46 @@ fn repo_sources_pass_the_source_guard() {
 }
 
 #[test]
+fn source_guard_rejects_blocking_calls_in_exec() {
+    let dir = tmp("guard-blocking");
+    write(&dir, "crates/krishiv-exec/src/lib.rs", "fn ok() {}\n");
+    assert!(
+        xtask(&["source-guard", dir.to_str().unwrap()])
+            .status
+            .success()
+    );
+    write(
+        &dir,
+        "crates/krishiv-exec/src/worker.rs",
+        "fn idle() { std::thread::sleep(d); }\n",
+    );
+    let out = xtask(&["source-guard", dir.to_str().unwrap()]);
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("worker.rs:1"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Test-only code is exempt: a `#[cfg(test)]` module and a `tests.rs`
+    // file may block (they never run on a compute worker).
+    write(
+        &dir,
+        "crates/krishiv-exec/src/worker.rs",
+        "#[cfg(test)]\nmod tests { fn idle(rt: &Runtime) { rt.block_on(run()); } }\n",
+    );
+    write(
+        &dir,
+        "crates/krishiv-exec/src/tests.rs",
+        "fn idle() { std::fs::read_to_string(p); }\n",
+    );
+    assert!(
+        xtask(&["source-guard", dir.to_str().unwrap()])
+            .status
+            .success()
+    );
+}
+
+#[test]
 fn dco_check_on_a_real_repo() {
     let dir = init_repo("dco");
     let repo = dir.to_str().unwrap();

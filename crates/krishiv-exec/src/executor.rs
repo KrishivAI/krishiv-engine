@@ -357,6 +357,10 @@ impl Executor for TokioExecutor {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing and sleeps; never runs on a compute worker"
+)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;

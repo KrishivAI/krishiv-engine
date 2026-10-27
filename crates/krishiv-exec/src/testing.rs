@@ -619,6 +619,10 @@ impl Sink for Buffer {
         Ok(())
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the sleep stands in for blocking work and runs on the bounded blocking pool through run_blocking, never on a compute worker"
+    )]
     fn finalize<'a>(
         &'a self,
         _global: &'a GlobalState,

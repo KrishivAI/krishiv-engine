@@ -7,6 +7,10 @@
 //! countdown; check-before-listen in the wait loop, in `blocking_done` and
 //! in `Barrier::wait`; `drop_receiver` not waking senders).
 //! `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release loom_model::`.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "loom's own deterministic block_on inside models; never runs on a compute worker"
+)]
 
 use std::sync::Arc;
 

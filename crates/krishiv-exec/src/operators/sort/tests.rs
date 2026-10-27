@@ -2,6 +2,10 @@
 //! Unit tests of the sort internals: key canonicalization, per-batch order,
 //! the merge's tie-break, weights through `interleave_batches`, and the
 //! global spill driven directly.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test-only temp-dir cleanup; never runs on a compute worker"
+)]
 
 use std::path::PathBuf;
 use std::sync::Arc;
