@@ -93,7 +93,7 @@ impl PhysExpr for When {
             || self.branches.iter().any(|(_, v)| v.nullable())
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let rows = batch.num_rows();
         // `rest`: the rows no branch took yet, as a batch and their row
         // numbers in `batch`.
@@ -106,7 +106,7 @@ impl PhysExpr for When {
             if rest_rows.is_empty() {
                 break;
             }
-            let c = cond.eval(&rest)?.into_array(rest.num_rows())?;
+            let c = cond.eval(&rest, partition)?.into_array(rest.num_rows())?;
             let c = c
                 .as_boolean_opt()
                 .ok_or_else(|| internal("CASE condition"))?;
@@ -121,7 +121,9 @@ impl PhysExpr for When {
             let mask = BooleanArray::new(taken.clone(), None);
             let chosen = filter_record_batch(&rest, &mask).map_err(|e| internal(&e.to_string()))?;
             let v = cast_null(
-                value.eval(&chosen)?.into_array(chosen.num_rows())?,
+                value
+                    .eval(&chosen, partition)?
+                    .into_array(chosen.num_rows())?,
                 &self.out,
             );
             let part = parts.len();
@@ -143,7 +145,10 @@ impl PhysExpr for When {
         }
         if !rest_rows.is_empty() {
             let v = match &self.otherwise {
-                Some(e) => cast_null(e.eval(&rest)?.into_array(rest.num_rows())?, &self.out),
+                Some(e) => cast_null(
+                    e.eval(&rest, partition)?.into_array(rest.num_rows())?,
+                    &self.out,
+                ),
                 None => new_null_array(&self.out, rest_rows.len()),
             };
             let part = parts.len();
@@ -262,12 +267,12 @@ impl PhysExpr for NullIf {
         true
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let rows = batch.num_rows();
         // `value` is evaluated once: the comparison casts its array, the
         // result keeps its values.
-        let a = self.value.eval(batch)?;
-        let b = self.other.eval(batch)?;
+        let a = self.value.eval(batch, partition)?;
+        let b = self.other.eval(batch, partition)?;
         let scalar = a.is_scalar() && b.is_scalar();
         let n = if scalar { 1 } else { rows };
         let a_full = a.into_array(n)?;
@@ -348,10 +353,10 @@ impl PhysExpr for Nanvl {
         self.a.nullable() || self.b.nullable()
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let rows = batch.num_rows();
         // `a` is evaluated once; NULL is not NaN.
-        let a = self.a.eval(batch)?.into_array(rows)?;
+        let a = self.a.eval(batch, partition)?.into_array(rows)?;
         let nan = match a.data_type() {
             ArrowType::Float32 => BooleanBuffer::from_iter(
                 a.as_primitive::<Float32Type>()
@@ -369,7 +374,7 @@ impl PhysExpr for Nanvl {
             return Ok(Value::Array(a));
         }
         // `b` sees only the NaN rows, so `nanvl(1, 1 / 0)` never raises.
-        let b = super::eval_where(self.b.as_ref(), batch, &nan)?;
+        let b = super::eval_where(self.b.as_ref(), batch, &nan, partition)?;
         let out =
             zip(&BooleanArray::new(nan, None), &b, &a).map_err(|e| internal(&e.to_string()))?;
         Ok(Value::Array(out))
@@ -457,7 +462,10 @@ mod tests {
 
     /// Evaluates `e` over `batch` as a column of `batch.num_rows()` rows.
     fn values(e: &Arc<dyn PhysExpr>, batch: &RecordBatch) -> ArrayRef {
-        e.eval(batch).unwrap().into_array(batch.num_rows()).unwrap()
+        e.eval(batch, 0)
+            .unwrap()
+            .into_array(batch.num_rows())
+            .unwrap()
     }
 
     /// `1 / 0`: `NULL` without ANSI, `DIVIDE_BY_ZERO` with it.
@@ -529,7 +537,7 @@ mod tests {
             );
             let e = coalesce(&f, vec![one_over_zero(&env), lit(&Literal::Double(1.0))]).unwrap();
             if ansi {
-                let err = e.eval(&batch).unwrap_err();
+                let err = e.eval(&batch, 0).unwrap_err();
                 assert_eq!(err.error_class(), ErrorClass::DivideByZero);
             } else {
                 assert_eq!(
@@ -666,7 +674,7 @@ mod tests {
             .unwrap();
             match want {
                 None => {
-                    let err = e.eval(&batch).unwrap_err();
+                    let err = e.eval(&batch, 0).unwrap_err();
                     assert_eq!(err.error_class(), ErrorClass::CastInvalidInput);
                     assert_eq!(err.sql_state(), Some("22018"));
                 }
@@ -736,9 +744,9 @@ mod tests {
             self.inner.nullable()
         }
 
-        fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+        fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
             self.n.fetch_add(1, Ordering::SeqCst);
-            self.inner.eval(batch)
+            self.inner.eval(batch, partition)
         }
     }
 
@@ -868,7 +876,7 @@ mod tests {
             )
             .unwrap();
             if ansi {
-                let err = e.eval(&batch).unwrap_err();
+                let err = e.eval(&batch, 0).unwrap_err();
                 assert_eq!(err.error_class(), ErrorClass::DivideByZero);
             } else {
                 assert!(values(&e, &batch).as_primitive::<Float64Type>().is_null(0));

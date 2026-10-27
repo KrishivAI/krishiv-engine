@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     AmbiguousReference, AssignmentArityMismatch, DatatypeMismatchFilterNotBoolean,
-    FailedToParseTooComplex, GroupByAggregate, GroupByPosAggregate, GroupByPosOutOfRange,
-    InvalidLimitLikeExpressionDataType, InvalidWhereCondition, JoinConditionIsNotBooleanType,
-    MissingAggregation, MissingGroupBy, OrderByPosOutOfRange, QualifyAggregateNotAllowed,
-    QualifyRequiresWindowFunction, StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt,
-    TableOrViewNotFound, UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin,
-    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    DatatypeMismatchInvalidOrderingType, FailedToParseTooComplex, GroupByAggregate,
+    GroupByPosAggregate, GroupByPosOutOfRange, InvalidLimitLikeExpressionDataType,
+    InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
+    OrderByPosOutOfRange, QualifyAggregateNotAllowed, QualifyRequiresWindowFunction,
+    StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UnresolvedAllInGroupBy,
+    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy,
 };
 
@@ -1912,6 +1912,8 @@ impl Resolver<'_> {
         let call = Arc::new(
             Expr::new(ExprNode::Function(FunctionCall {
                 name: name.to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args,
                 distinct: false,
                 filter: None,
@@ -2212,6 +2214,32 @@ impl Resolver<'_> {
                 Err(e) => return Err(e),
             }
         };
+        // A map does not order (`INVALID_ORDERING_TYPE`, as `SortOrder`).
+        for (o, b) in order.iter().zip(&bounds) {
+            if let Some(t) =
+                b.ty.data_type
+                    .as_ref()
+                    .filter(|t| !super::coerce::orderable(t))
+            {
+                let direction = match o.direction {
+                    crate::SortDirection::Ascending => "ASC",
+                    crate::SortDirection::Descending => "DESC",
+                };
+                let nulls = match o.nulls {
+                    crate::NullOrdering::NullsFirst => "NULLS FIRST",
+                    crate::NullOrdering::NullsLast => "NULLS LAST",
+                };
+                let zone = self.ctx.conf.session_zone;
+                return Err(AnalysisError::new(
+                    DatatypeMismatchInvalidOrderingType {
+                        sql_expr: format!("\"{} {direction} {nulls}\"", pretty(&b.shown(), zone)),
+                        function_name: "`sortorder`".to_owned(),
+                        data_type: quoted_type(Some(t)),
+                    },
+                    o.expr.origin,
+                ));
+            }
+        }
         let node = PlanNode::Sort {
             input: Arc::clone(&below.plan),
             order: sorted(bounds.into_iter().map(|b| b.expr).collect()),

@@ -213,6 +213,32 @@ fn replace_with_and_without_replacement() {
 }
 
 #[test]
+fn mask_replaces_each_class() {
+    assert!(scalar_names().contains(&"mask"));
+    let s = strs(&[Some("Ab1-"), None]);
+    let q = strs(&[Some("Q"), Some("Q")]);
+    let qq = strs(&[Some("q"), Some("q")]);
+    let d = strs(&[Some("d"), Some("d")]);
+    let o = strs(&[Some("o"), Some("o")]);
+    let nulls = strs(&[None, None]);
+    assert_eq!(
+        text(&run("mask", &[&s, &q, &qq, &d, &o])),
+        owned(&[Some("Qqdo"), None])
+    );
+    assert_eq!(
+        text(&run("mask", &[&s, &q, &qq, &d, &nulls])),
+        owned(&[Some("Qqd-"), None])
+    );
+    // A NULL input is NULL whatever the replacements.
+    assert_eq!(
+        text(&run("mask", &[&nulls, &q, &qq, &d, &o])),
+        owned(&[None, None])
+    );
+    // Any other arity is rejected at bind time.
+    assert!(bind_scalar("mask", &[DataType::Utf8.into()], &BindOptions::new(),).is_err());
+}
+
+#[test]
 fn pads_on_strings_and_bytes() {
     let s = strs(&[Some("hi"), None]);
     let n = ints(&[Some(5), Some(5)]);
@@ -555,6 +581,7 @@ fn results_are_checked_against_the_binding() {
         types: vec![],
         return_type: DataType::Int32,
         body: Box::new(|_| Ok(Arc::new(StringArray::from(vec!["x"])) as ArrayRef)),
+        partitioned: None,
     };
     let err = wrong.invoke(&[], 1).unwrap_err();
     assert_eq!(class(&err), ErrorClass::InternalError);
@@ -564,8 +591,13 @@ fn results_are_checked_against_the_binding() {
 mod bitwise;
 mod calendar;
 mod families;
+mod misc;
 mod number;
 mod predicate;
+mod random;
+mod r#struct;
+mod text;
+mod url;
 
 #[test]
 fn session_user_and_local_clock() {
@@ -579,7 +611,7 @@ fn session_user_and_local_clock() {
         let out: Vec<_> = out.as_string::<i32>().iter().collect();
         assert_eq!(out, [Some("etl"), Some("etl"), Some("etl")]);
     }
-    assert!(bind_scalar("current_user", &[BindArg::Column(DataType::Int32)], &opts).is_err());
+    assert!(bind_scalar("current_user", &[DataType::Int32.into()], &opts).is_err());
     // `localtimestamp` is the wall clock of the session zone, without a zone.
     let micros = 1_700_000_000_123_456;
     let opts = BindOptions::new()

@@ -70,7 +70,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 5;
+pub const ENCODING_VERSION: u16 = 7;
 
 /// A 128-bit structural key of a plan or subtree: XXH3-128 over the
 /// canonical encoding (see the module docs). Equal plans, ignoring origins,
@@ -977,12 +977,25 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }
             ExprNode::Function(FunctionCall {
                 name,
+                qualifier,
                 args,
+                arg_names,
                 distinct,
                 filter,
             }) => {
                 self.u8(4);
                 self.str(name);
+                self.strs(qualifier);
+                self.len(arg_names.len());
+                for n in arg_names {
+                    match n {
+                        None => self.u8(0),
+                        Some(n) => {
+                            self.u8(1);
+                            self.str(n);
+                        }
+                    }
+                }
                 self.call(args, *distinct, filter.as_ref());
             }
             ExprNode::Cast { expr, to, mode } => {
@@ -1054,6 +1067,16 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.bound(output);
                 self.expr(expr);
             }
+            ExprNode::Lambda { params, body } => {
+                self.u8(15);
+                self.len(params.len());
+                params.iter().for_each(|c| self.bound(c));
+                self.expr(body);
+            }
+            ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => {
+                self.u8(16);
+                self.bound(c);
+            }
             ExprNode::Window(crate::WindowExpr { function, window }) => {
                 self.u8(12);
                 self.expr(function);
@@ -1089,6 +1112,25 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     crate::TypedLiteralKind::TimestampLtz => 4,
                 });
                 self.str(value);
+            }
+            ExprNode::Field { base, name } => {
+                self.u8(14);
+                self.str(name);
+                self.expr(base);
+            }
+            ExprNode::Resolved(ResolvedExpr::Field {
+                base,
+                ordinal,
+                name,
+                data_type,
+                nullable,
+            }) => {
+                self.u8(15);
+                self.str(name);
+                self.len(*ordinal);
+                self.data_type(data_type);
+                self.bool(*nullable);
+                self.expr(base);
             }
         }
     }

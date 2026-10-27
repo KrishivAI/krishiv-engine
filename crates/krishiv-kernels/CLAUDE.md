@@ -31,17 +31,31 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   the code points of `string/case_table.rs`, generated from the Spark 4.2 fixture by `tests/scripts/gen_case_table.py`, so a
   toolchain with newer Unicode data does not change the output),
   `char_length`/`byte_length`, `trim` (spaces only by default), `match_str`/`match_binary` (`startswith`/`endswith`/
-  `contains`), `replace`, `pad`/`pad_binary`, `substring`/`substring_binary`, `concat`, `like` (`string/like.rs`:
+  `contains`), `replace`, `mask` (classes `Lu`/`Ll`/`Nd` from the generated `string/mask_table.rs`, `tests/scripts/gen_mask_table.py`; a supplementary scalar is two other units, as in Spark), `pad`/`pad_binary`, `substring`/`substring_binary`, `concat`, `like` (`string/like.rs`:
   literal-shaped patterns take string comparisons, the rest a linear backtracking matcher; errors only on non-NULL rows)
   and `split_literal` (`string/split.rs`: delimiters without regex metacharacters; a regex delimiter is
   `KRISHIV_UNSUPPORTED_FEATURE` until the regex engine). Operands are columns or literals (`StrOperand`, `BinOperand`,
   `Operand<Int32Type>`); NULL rows are skipped, so these kernels have no has-nulls axis. Output offsets are checked.
+  `string/chars.rs` adds the character-level functions (`ascii`, `chr`, `right`, `repeat`, `space`, `reverse`, `initcap`, `translate`,
+  `locate`, `substring_index`, `split_part`, `find_in_set`, `overlay`, `levenshtein`, `soundex`, `luhn_check`, `mask`, `quote`, `elt`,
+  `concat_ws`, `bit_length`) and `string/codec.rs` the encodings (`base64`/`unbase64` as Java's MIME codec, `to_binary`, `encode`/`decode`
+  for Spark's seven default charsets, the UTF-8 validators of `binary`, `url_encode`/`url_decode`); a kernel needs a column operand, the
+  binding repeats an all-literal call over one row.
+  Known approximations (Spark's defaults apply; the switches are not read): `initcap`/`mask` use the toolchain's Unicode data
+  (pinned by `toolchain_unicode_is_pinned`), `encode`/`decode` ignore the legacy charset/coding switches, `base64` always chunks,
+  `split_part`/`substring_index` with `Int.MIN` return the algorithm's value where the JVM raises, and `unbase64` of rejected text is
+  `KRISHIV_INVALID_BASE64_INPUT`.
 - `hash` (P2-T027): `hash` (Murmur3 x86_32, seed 42; the tail bytes are mixed one sign-extended byte at a time, as Spark does), `xxhash64`
   (XXH64, seed 42; `hashInt`/`hashLong` written out), `md5`/`sha1`/`sha2`/`crc32` (`hash/digest.rs`; CRC table in-house, digests from
   RustCrypto). `hash`/`xxhash64` take any number of columns of any type and chain per row (NULL leaves the hash unchanged; arrays hash
   their elements, structs their fields, maps each key then value). A column is resolved to a `Col` plan once, rows only match on the variant. The
   analyzer's MAP rejection (`DATATYPE_MISMATCH.HASH_MAP_TYPE` without `spark.sql.legacy.allowHashOnMapType`) is the caller's check.
   Unsupported types (dictionary, 256-bit decimal, time of day, month-day-nano interval) are `KRISHIV_UNSUPPORTED_FEATURE`.
+  `hash/routing.rs` (P2-T175) is not a Spark function: the engine's seedless routing hash `H_kg` version 1 (XXH64 seed 0 of
+  the normalized little-endian key bytes, folded over several columns from `FOLD_INIT`; carrier-independent: dictionary,
+  view, offset and narrow-decimal carriers hash as their values), key groups (top 12 bits) and key-group-range
+  partitioning (`partition_of`, `key_group_range`, `radix`). It is a format: `tests/routing.rs` pins golden vectors, and a
+  change is a new version and a new plan-codec feature, never an edit.
 - `datetime` (P2-T025a): `date_add`/`date_sub`/`date_diff` (ANSI: `ARITHMETIC_OVERFLOW` past the `int` range, a documented divergence from Spark; legacy: Java `int` wrap; `try_*`: NULL),
   field extraction (`DatePart`: `year`, `month`, `day`, `extract`/`date_part` incl. ISO week and `SECOND` as
   `decimal(8,6)`), `date`/`timestamp` ± interval (`date_add_months` clamps the day; `timestamp_add_day_time` adds whole
@@ -76,7 +90,7 @@ Paths are relative to this crate.
 - `src/dispatch.rs` `Target` and `KernelCtx`; `src/unsafe_dispatch.rs` the only `unsafe` module
 - `src/integer.rs`, `src/decimal.rs`, `src/float.rs` arithmetic kernels; `src/compare.rs` comparisons
 - `src/cast.rs` Spark CAST on Arrow carriers; `src/string.rs` string kernels
-- `src/hash.rs` and `src/hash/murmur3.rs` Murmur3 (seed 42), `src/hash/xxh64.rs` xxhash64
+- `src/hash.rs` and `src/hash/murmur3.rs` Murmur3 (seed 42), `src/hash/xxh64.rs` xxhash64, `src/hash/routing.rs` `H_kg`
 - `src/datetime.rs` date and timestamp kernels; `src/math.rs` double functions, `src/math/fdlibm.rs` ports
 - `src/reference.rs` row-at-a-time oracle for property tests
 

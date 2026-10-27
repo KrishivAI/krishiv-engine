@@ -16,6 +16,11 @@
 //!
 //! - A null-aware anti join (`NOT IN`) is never reoriented: it reads
 //!   whether the whole subquery side holds a NULL key.
+//! - Existence joins are never reoriented: their output is one row per
+//!   probe row (DuckDB's mark join has no inverse either).
+//! - A single-match left outer join (a scalar subquery) is never
+//!   reoriented: its at-most-one-match check counts the matches of each
+//!   probe row, which a build-side outer join does not see.
 //! - Inner joins keep the join orderer's choice.
 //! - A build the planner would broadcast (at most
 //!   [`BROADCAST_MAX_BYTES`](super::join::BROADCAST_MAX_BYTES)) stays.
@@ -71,14 +76,19 @@ impl InputStats {
 }
 
 /// The join a hash join with a right build becomes when it builds its left
-/// input instead, if it can.
-pub(crate) fn flipped(t: JoinType) -> Option<JoinType> {
+/// input instead, if it can; `single_match` is
+/// [`HashJoinPlan::single_match`](crate::physical::HashJoinPlan::single_match).
+pub(crate) fn flipped(t: JoinType, single_match: bool) -> Option<JoinType> {
+    if single_match {
+        return None;
+    }
     match t {
         JoinType::LeftSemi => Some(JoinType::RightSemi),
         JoinType::LeftAnti => Some(JoinType::RightAnti),
         JoinType::LeftOuter => Some(JoinType::RightOuter),
         JoinType::Inner
         | JoinType::NullAwareAnti
+        | JoinType::Existence
         | JoinType::RightSemi
         | JoinType::RightAnti
         | JoinType::RightOuter => None,
@@ -88,8 +98,13 @@ pub(crate) fn flipped(t: JoinType) -> Option<JoinType> {
 /// The join type of a hash join whose right input builds by default, given
 /// its inputs: `join_type` itself (build right), or the variant that builds
 /// the left input.
-pub(crate) fn orient(join_type: JoinType, left: &InputStats, right: &InputStats) -> JoinType {
-    let Some(other) = flipped(join_type) else {
+pub(crate) fn orient(
+    join_type: JoinType,
+    single_match: bool,
+    left: &InputStats,
+    right: &InputStats,
+) -> JoinType {
+    let Some(other) = flipped(join_type, single_match) else {
         return join_type;
     };
     if right.bytes <= BROADCAST_MAX_BYTES {
@@ -135,9 +150,9 @@ mod tests {
             (JoinType::LeftAnti, JoinType::RightAnti),
             (JoinType::LeftOuter, JoinType::RightOuter),
         ] {
-            assert_eq!(orient(t, &small, &large), want, "{t:?}");
+            assert_eq!(orient(t, false, &small, &large), want, "{t:?}");
             // The other way round keeps the right build.
-            assert_eq!(orient(t, &large, &small), t, "{t:?}");
+            assert_eq!(orient(t, false, &large, &small), t, "{t:?}");
         }
     }
 
@@ -147,24 +162,52 @@ mod tests {
         for t in [
             JoinType::Inner,
             JoinType::NullAwareAnti,
+            JoinType::Existence,
             JoinType::RightSemi,
             JoinType::RightAnti,
             JoinType::RightOuter,
         ] {
-            assert_eq!(orient(t, &small, &large), t, "{t:?}");
-            assert_eq!(flipped(t), None, "{t:?}");
+            assert_eq!(orient(t, false, &small, &large), t, "{t:?}");
+            assert_eq!(flipped(t, false), None, "{t:?}");
         }
+    }
+
+    /// A single-match left outer join (a scalar subquery) keeps its right
+    /// build however lopsided its inputs: a right outer join cannot check
+    /// that each probe row matches at most once.
+    #[test]
+    fn a_single_match_left_outer_join_keeps_its_build() {
+        let (small, large) = (known(1.0 * MIB), known(5000.0 * MIB));
+        assert_eq!(
+            orient(JoinType::LeftOuter, false, &small, &large),
+            JoinType::RightOuter
+        );
+        assert_eq!(
+            orient(JoinType::LeftOuter, true, &small, &large),
+            JoinType::LeftOuter
+        );
+        assert_eq!(flipped(JoinType::LeftOuter, true), None);
     }
 
     #[test]
     fn a_broadcastable_right_input_stays_the_build() {
         let left = known(1.0);
         assert_eq!(
-            orient(JoinType::LeftSemi, &left, &known(BROADCAST_MAX_BYTES)),
+            orient(
+                JoinType::LeftSemi,
+                false,
+                &left,
+                &known(BROADCAST_MAX_BYTES)
+            ),
             JoinType::LeftSemi
         );
         assert_eq!(
-            orient(JoinType::LeftSemi, &left, &known(BROADCAST_MAX_BYTES + 1.0)),
+            orient(
+                JoinType::LeftSemi,
+                false,
+                &left,
+                &known(BROADCAST_MAX_BYTES + 1.0)
+            ),
             JoinType::RightSemi
         );
     }
@@ -174,11 +217,11 @@ mod tests {
         let right = known(100.0 * MIB);
         // Exactly the factor is a tie: the right input stays the build.
         assert_eq!(
-            orient(JoinType::LeftAnti, &known(50.0 * MIB), &right),
+            orient(JoinType::LeftAnti, false, &known(50.0 * MIB), &right),
             JoinType::LeftAnti
         );
         assert_eq!(
-            orient(JoinType::LeftAnti, &known(49.0 * MIB), &right),
+            orient(JoinType::LeftAnti, false, &known(49.0 * MIB), &right),
             JoinType::RightAnti
         );
         // A default estimate on either side needs a ratio above 8.
@@ -188,11 +231,11 @@ mod tests {
         ] {
             let right = stats(100.0 * MIB, r);
             assert_eq!(
-                orient(JoinType::LeftSemi, &stats(20.0 * MIB, l), &right),
+                orient(JoinType::LeftSemi, false, &stats(20.0 * MIB, l), &right),
                 JoinType::LeftSemi
             );
             assert_eq!(
-                orient(JoinType::LeftSemi, &stats(12.0 * MIB, l), &right),
+                orient(JoinType::LeftSemi, false, &stats(12.0 * MIB, l), &right),
                 JoinType::RightSemi
             );
         }
@@ -203,12 +246,12 @@ mod tests {
         for bad in [f64::NAN, f64::INFINITY] {
             let left = known(bad);
             assert_eq!(
-                orient(JoinType::LeftSemi, &left, &known(100.0 * MIB)),
+                orient(JoinType::LeftSemi, false, &left, &known(100.0 * MIB)),
                 JoinType::LeftSemi
             );
         }
         assert_eq!(
-            orient(JoinType::LeftSemi, &known(1.0), &known(f64::NAN)),
+            orient(JoinType::LeftSemi, false, &known(1.0), &known(f64::NAN)),
             JoinType::LeftSemi
         );
     }
@@ -239,11 +282,14 @@ mod tests {
             let r = stats(b, sources[(i / 2) % 2]);
             cases.push((t, l, r));
         }
-        let first: Vec<_> = cases.iter().map(|(t, l, r)| orient(*t, l, r)).collect();
+        let first: Vec<_> = cases
+            .iter()
+            .map(|(t, l, r)| orient(*t, false, l, r))
+            .collect();
         let reversed: Vec<_> = cases
             .iter()
             .rev()
-            .map(|(t, l, r)| orient(*t, l, r))
+            .map(|(t, l, r)| orient(*t, false, l, r))
             .collect();
         assert!(first.iter().eq(reversed.iter().rev()));
         assert!(first.iter().any(|t| matches!(

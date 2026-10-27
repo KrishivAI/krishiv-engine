@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "upper#22f819e17e9b/ansi_on",
+      "reason": "SELECT upper(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "upper#22f819e17e9b/ansi_off",
+      "reason": "SELECT upper(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "upper#753d2b0105f9/ansi_on",
+      "reason": "SELECT upper(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "upper#753d2b0105f9/ansi_off",
+      "reason": "SELECT upper(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "upper#a8ece98a87b6/ansi_on",
+      "reason": "SELECT upper(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "upper#a8ece98a87b6/ansi_off",
+      "reason": "SELECT upper(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "upper"
+}

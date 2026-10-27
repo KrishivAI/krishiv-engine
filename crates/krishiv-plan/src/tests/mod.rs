@@ -11,6 +11,7 @@ mod display_more;
 mod dsl;
 mod encode;
 mod files;
+mod function_call_forms;
 mod inventory;
 mod nodes;
 mod pivot;

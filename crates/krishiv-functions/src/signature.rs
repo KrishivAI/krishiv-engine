@@ -135,6 +135,7 @@ pub struct CallTypes<'a> {
     sql: Option<&'a dyn Fn(usize) -> Option<String>>,
     ansi: bool,
     decimal_loss: bool,
+    case_sensitive: bool,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -145,6 +146,7 @@ impl fmt::Debug for CallTypes<'_> {
             .field("literals", &self.literals)
             .field("ansi", &self.ansi)
             .field("decimal_loss", &self.decimal_loss)
+            .field("case_sensitive", &self.case_sensitive)
             .finish_non_exhaustive()
     }
 }
@@ -161,6 +163,7 @@ impl<'a> CallTypes<'a> {
             sql: None,
             ansi: true,
             decimal_loss: true,
+            case_sensitive: false,
         }
     }
 
@@ -199,6 +202,20 @@ impl<'a> CallTypes<'a> {
     #[must_use]
     pub const fn decimal_loss(&self) -> bool {
         self.decimal_loss
+    }
+
+    /// With `spark.sql.caseSensitive` (default off): struct field names
+    /// match by case when nested types meet.
+    #[must_use]
+    pub const fn with_case_sensitive(mut self, case_sensitive: bool) -> Self {
+        self.case_sensitive = case_sensitive;
+        self
+    }
+
+    /// `spark.sql.caseSensitive`.
+    #[must_use]
+    pub const fn case_sensitive(&self) -> bool {
+        self.case_sensitive
     }
 
     /// With `sql(i)` rendering argument `i` as Spark's errors quote it
@@ -243,6 +260,15 @@ impl<'a> CallTypes<'a> {
             Some(plain) => *plain && self.constant(i).is_some(),
             None => self.constant(i).is_some(),
         }
+    }
+
+    /// Whether argument `i` is a plain literal, whether or not it folds to
+    /// a [`Constant`] (a timestamp or binary literal has no constant, but
+    /// Spark still folds it): what `schema_of_csv` needs to tell an
+    /// unfoldable literal from a non-foldable expression.
+    #[must_use]
+    pub fn is_plain_literal(&self, i: usize) -> bool {
+        self.literals.get(i).is_some_and(|plain| *plain)
     }
 
     /// Whether any argument may be null.

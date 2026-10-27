@@ -16,8 +16,9 @@ use krishiv_exec::planner::{
     DefaultPlanner, ExplainNode, MemoryTable, PhysicalPlanner as _, PlanningContext, TableProvider,
     TableProviderResolver,
 };
+use krishiv_exec::values::{LocalValues, ValueId, ValueService};
 use krishiv_exec::{FilterPushdown, JoinType, PushedFilter, ScanPushdown, ScanPushdowns, Source};
-use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
+use krishiv_io::{ColumnPath, FilterId, FilterSnapshot, KeyFilterOptions};
 
 use super::{Runnable, env, run, table};
 
@@ -163,6 +164,7 @@ fn instantiation_checks_the_tables_still_match_the_plan() {
 fn env_data() -> ExprEnv {
     ExprEnv {
         ansi: true,
+        legacy_statistical_aggregate: false,
         zone: Some(0),
         query_start_micros: 0,
         user: Arc::from("u"),
@@ -222,6 +224,8 @@ fn inconsistent_plans_are_internal_errors() {
             build_keys: vec![0],
             null_safe: vec![false],
             residual: None,
+            single_match: false,
+            distinct_build: false,
             runtime_filters: vec![JoinFilterPlan {
                 id: FilterId(id),
                 key: 0,
@@ -336,4 +340,170 @@ fn submit_instantiates_inside_its_future() {
     });
     assert_eq!(rows, 10);
     assert_eq!(counting.1.load(Ordering::SeqCst), 1);
+}
+
+/// The runtime filters the scans of `plan` read.
+fn filter_ids(plan: &PhysicalPlan) -> Vec<FilterId> {
+    nodes(plan.root())
+        .into_iter()
+        .filter_map(|n| match n {
+            PhysNode::Scan(s) => Some(s.runtime_filters.iter().map(|f| f.id)),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// A join whose build, behind a broadcast exchange, has fewer keys than its
+/// probe and publishes a runtime filter to the probe's scan.
+const FILTERED: &str = "SELECT x.a, x.b FROM t AS x JOIN (SELECT a FROM t WHERE b < 30) AS y \
+                        ON x.a = y.a";
+
+#[test]
+fn instantiations_never_share_values() {
+    let env = env();
+    let plan = env.plan(FILTERED).unwrap();
+    let ids = filter_ids(&plan);
+    assert!(!ids.is_empty(), "{plan}");
+    // Each instantiation of one context gets values of its own.
+    let worker = WorkerContext::new(Arc::clone(&env.tables) as _);
+    instantiate(&plan, &worker).unwrap();
+    instantiate(&plan, &worker).unwrap();
+    // A service set on the context serves one instantiation: it holds that
+    // instantiation's cells, and a second one cannot declare them again.
+    let (a, b) = (Arc::new(LocalValues::new()), Arc::new(LocalValues::new()));
+    let on = |v: &Arc<LocalValues>| worker.clone().with_values(Arc::clone(v) as _);
+    instantiate(&plan, &on(&a)).unwrap();
+    instantiate(&plan, &on(&b)).unwrap();
+    for id in &ids {
+        assert!(!Arc::ptr_eq(
+            &a.filter(*id).unwrap(),
+            &b.filter(*id).unwrap()
+        ));
+    }
+    let e = instantiate(&plan, &on(&a)).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+    assert!(e.to_string().contains("declared twice"), "{e}");
+}
+
+#[test]
+fn a_filter_of_an_incomplete_value_applies_nothing() {
+    let env = env();
+    let plan = env.plan(FILTERED).unwrap();
+    let ids = filter_ids(&plan);
+    assert!(!ids.is_empty(), "{plan}");
+    let expected = sorted(&env.plan(FILTERED).unwrap());
+    assert_eq!(expected.len(), 3, "{expected:?}");
+    let run_with = |values: &Arc<LocalValues>| {
+        let runnable = env
+            .plan(FILTERED)
+            .unwrap()
+            .with_worker(|w| w.with_values(Arc::clone(values) as _));
+        sorted(&runnable)
+    };
+    // One producer partition: the join's filter is published to the scan.
+    let one = Arc::new(LocalValues::new());
+    assert_eq!(run_with(&one), expected);
+    for id in &ids {
+        let snapshot = one.filter(*id).unwrap().published().snapshot.clone();
+        assert!(matches!(snapshot, FilterSnapshot::Final(_)), "{snapshot:?}");
+        assert!(
+            one.subscribe(ValueId::Filter(*id))
+                .unwrap()
+                .current()
+                .is_some()
+        );
+    }
+    // Two: this run publishes one partition's filter only, which would
+    // drop the other partition's keys. The scan's filter stays pending, it
+    // keeps every row, and the result is the same.
+    let two = Arc::new(
+        LocalValues::with_producers(ids.iter().map(|id| (ValueId::Filter(*id), 2)).collect())
+            .unwrap(),
+    );
+    assert_eq!(run_with(&two), expected);
+    for id in &ids {
+        let cell = two.filter(*id).unwrap();
+        assert!(matches!(cell.published().snapshot, FilterSnapshot::Pending));
+        assert_eq!(cell.stats().counts().rows_dropped, 0);
+        assert!(
+            two.subscribe(ValueId::Filter(*id))
+                .unwrap()
+                .current()
+                .is_none()
+        );
+    }
+}
+
+/// A broadcast build that is itself a join publishing a runtime filter:
+/// its operators hold the instantiation's value service.
+const NESTED: &str = "SELECT x.a FROM t AS x JOIN (SELECT y.a FROM t AS y JOIN \
+                      (SELECT a FROM t WHERE b < 30) AS z ON y.a = z.a) AS w ON x.a = w.a";
+
+#[test]
+fn a_dropped_instantiation_frees_its_operators_and_values() {
+    use krishiv_exec::physical::Partitioning;
+    let env = env();
+    let plan = env.plan(NESTED).unwrap();
+    let broadcast_over_join = nodes(plan.root()).into_iter().any(|n| match n {
+        PhysNode::Exchange(e) => {
+            matches!(e.partitioning, Partitioning::Broadcast)
+                && nodes(&e.input)
+                    .into_iter()
+                    .any(|n| matches!(n, PhysNode::HashJoin(_)))
+        }
+        _ => false,
+    });
+    assert!(broadcast_over_join, "{plan}");
+    let values = Arc::new(LocalValues::new());
+    let worker =
+        WorkerContext::new(Arc::clone(&env.tables) as _).with_values(Arc::clone(&values) as _);
+    let root = instantiate(&plan, &worker).unwrap();
+    drop(worker);
+    let (root_weak, values_weak) = (Arc::downgrade(&root), Arc::downgrade(&values));
+    drop((root, values));
+    // The service names the broadcast input without owning it: no cycle
+    // through the join that publishes into it.
+    assert!(root_weak.upgrade().is_none());
+    assert!(values_weak.upgrade().is_none());
+}
+
+/// A hash exchange routes by the function its plan names: `KeyGroupV1`
+/// sends each row to the partition owning its key group under the routing
+/// hash, the same on every worker; an `Unpinned` exchange (a plan written
+/// before the function was fixed) refuses to route at all.
+#[test]
+fn hash_exchanges_route_by_the_named_function() {
+    use arrow_array::{Array, Int64Array, StringArray};
+    use krishiv_exec::physical::HashScheme;
+    use krishiv_kernels::hash::routing;
+
+    let a = Int64Array::from_iter_values(0..1000);
+    let b = StringArray::from_iter_values((0..1000).map(|i| format!("k{}", i % 13)));
+    let keys: [&dyn Array; 2] = [&a, &b];
+    let mut h = Vec::new();
+    routing::hash_columns(&keys, &mut h).unwrap_or_else(|e| panic!("{e}"));
+    let mut out = vec![7];
+    for n in [1, 3, 64, 4096] {
+        HashScheme::KeyGroupV1
+            .partitions(&keys, n, &mut out)
+            .unwrap_or_else(|e| panic!("{e}"));
+        let want: Vec<u32> = h.iter().map(|&h| routing::partition_of(h, n)).collect();
+        assert_eq!(out, want, "{n} partitions");
+        assert!(out.iter().all(|&p| p < n));
+    }
+    let err = HashScheme::Unpinned
+        .partitions(&keys, 4, &mut out)
+        .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InternalError, "{err}");
+    let unsupported: [&dyn Array; 1] = [&arrow_array::ListArray::from_iter_primitive::<
+        arrow_array::types::Int32Type,
+        _,
+        _,
+    >(vec![Some(vec![Some(1)])])];
+    assert!(
+        HashScheme::KeyGroupV1
+            .partitions(&unsupported, 4, &mut out)
+            .is_err()
+    );
 }

@@ -22,10 +22,19 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("bool_and", "no PySpark function"),
     ("bool_or", "no PySpark function"),
     ("count_if", "no PySpark function"),
+    ("random", "an alias of `rand`; no PySpark function"),
+    ("chr", "no PySpark function; use `char`"),
     ("every", "no PySpark function"),
+    ("len", "no PySpark function; use `length`"),
+    ("luhn_check", "no PySpark function"),
     ("max_by", "no PySpark function"),
     ("min_by", "no PySpark function"),
     ("some", "no PySpark function"),
+    (
+        "schema_of_csv",
+        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
+    ),
+    ("space", "no PySpark function"),
     (
         "mean",
         "an alias of `avg`; the exported `mean` is a row that sends `avg`",
@@ -33,6 +42,22 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     (
         "pow",
         "an alias of `power`; the exported `pow` is a row that sends `power`",
+    ),
+    (
+        "transform",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "filter",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "exists",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
+    ),
+    (
+        "forall",
+        "takes a lambda; the Python `Column` API cannot build lambdas yet",
     ),
 ];
 
@@ -55,19 +80,28 @@ pub(super) fn rows() -> Vec<Row> {
     for name in [
         "cume_dist",
         "curdate",
+        "current_catalog",
+        "current_database",
         "current_date",
+        "current_schema",
         "current_timestamp",
         "current_user",
         "dense_rank",
         "e",
+        "input_file_block_length",
+        "input_file_block_start",
+        "input_file_name",
         "localtimestamp",
+        "monotonically_increasing_id",
         "now",
         "percent_rank",
         "pi",
         "rank",
         "row_number",
         "session_user",
+        "spark_partition_id",
         "user",
+        "version",
     ] {
         rows.push(Row::new(name, ""));
     }
@@ -75,14 +109,18 @@ pub(super) fn rows() -> Vec<Row> {
         "abs",
         "acos",
         "acosh",
+        "ascii",
         "asin",
         "asinh",
         "atan",
         "atanh",
         "avg",
+        "base64",
         "bin",
         "bit_count",
+        "bit_length",
         "cbrt",
+        "char",
         "cos",
         "cosh",
         "cot",
@@ -98,9 +136,11 @@ pub(super) fn rows() -> Vec<Row> {
         "expm1",
         "hex",
         "hour",
+        "initcap",
         "isnan",
         "isnotnull",
         "isnull",
+        "kurtosis",
         "length",
         "ln",
         "log10",
@@ -115,9 +155,12 @@ pub(super) fn rows() -> Vec<Row> {
         "monthname",
         "negative",
         "nullifzero",
+        "octet_length",
         "positive",
         "quarter",
+        "quote",
         "radians",
+        "reverse",
         "rint",
         "sec",
         "second",
@@ -127,13 +170,23 @@ pub(super) fn rows() -> Vec<Row> {
         "signum",
         "sin",
         "sinh",
+        "skewness",
+        "soundex",
         "sqrt",
+        "std",
+        "stddev",
+        "stddev_pop",
+        "stddev_samp",
         "sum",
         "tan",
         "tanh",
+        "unbase64",
         "unhex",
         "unix_date",
         "upper",
+        "var_pop",
+        "var_samp",
+        "variance",
         "weekday",
         "weekofyear",
         "year",
@@ -144,10 +197,30 @@ pub(super) fn rows() -> Vec<Row> {
     for name in ["char_length", "character_length", "lcase", "ucase"] {
         rows.push(Row::new(name, S));
     }
+    for name in [
+        "is_valid_utf8",
+        "make_valid_utf8",
+        "try_url_decode",
+        "try_validate_utf8",
+        "url_decode",
+        "url_encode",
+        "validate_utf8",
+    ] {
+        rows.push(Row::new(name, S));
+    }
     for name in ["bit_get", "getbit"] {
         rows.push(Row::new(name, "col: ColumnOrName, pos: ColumnOrName"));
     }
-    for name in ["equal_null", "ifnull", "nanvl", "nullif", "nvl"] {
+    for name in [
+        "corr",
+        "covar_pop",
+        "covar_samp",
+        "equal_null",
+        "ifnull",
+        "nanvl",
+        "nullif",
+        "nvl",
+    ] {
         rows.push(Row::new(name, "col1: ColumnOrName, col2: ColumnOrName"));
     }
     for name in ["to_char", "to_number", "to_varchar", "try_to_number"] {
@@ -207,7 +280,14 @@ pub(super) fn rows() -> Vec<Row> {
             "col: ColumnOrName, ignoreNulls: bool | Column = None",
         ));
     }
-    for name in ["coalesce", "hash", "xxhash64"] {
+    for name in [
+        "array",
+        "coalesce",
+        "hash",
+        "named_struct",
+        "struct",
+        "xxhash64",
+    ] {
         rows.push(Row::new(name, "*cols: ColumnOrName"));
     }
     for name in ["lpad", "rpad"] {
@@ -228,13 +308,37 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("bitwise_not", C).to("~"),
         Row::new("mean", C).to("avg"),
         Row::new("btrim", "str: ColumnOrName, trim: ColumnOrName = None"),
+        Row::new(
+            "parse_url",
+            "url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName = None",
+        ),
+        Row::new(
+            "try_parse_url",
+            "url: ColumnOrName, partToExtract: ColumnOrName, key: ColumnOrName = None",
+        ),
         Row::new("contains", "left: ColumnOrName, right: ColumnOrName"),
         Row::new("conv", "col: ColumnOrName, fromBase: int, toBase: int"),
         Row::new("endswith", "str: ColumnOrName, suffix: ColumnOrName"),
         Row::new("format_number", "col: ColumnOrName, d: int"),
         Row::new("greatest", "*cols: ColumnOrName").at_least(2),
         Row::new("least", "*cols: ColumnOrName").at_least(2),
+        Row::new(
+            "mask",
+            "col: ColumnOrName, upperChar: ColumnOrName = None, lowerChar: ColumnOrName = None, digitChar: ColumnOrName = None, otherChar: ColumnOrName = None",
+        ),
         Row::new("ntile", "n: int"),
+        Row::new("rand", "seed: int = None"),
+        Row::new("randn", "seed: int = None"),
+        Row::new(
+            "randstr",
+            "length: int | Column, seed: int | Column = None",
+        ),
+        Row::new("typeof", "col: ColumnOrName"),
+        Row::new(
+            "uniform",
+            "min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Column = None",
+        ),
+        Row::new("uuid", "seed: int | Column = None"),
         Row::new(
             "nth_value",
             "col: ColumnOrName, offset: int, ignoreNulls: bool = False",
@@ -271,6 +375,51 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("sha2", "col: ColumnOrName, numBits: int")
             .one_of("numBits", &[0, 224, 256, 384, 512]),
         Row::new("startswith", "str: ColumnOrName, prefix: ColumnOrName"),
+        Row::new(
+            "concat_ws",
+            "sep: str, *cols: ColumnOrName",
+        ),
+        Row::new("decode", "col: ColumnOrName, charset: str"),
+        Row::new("elt", "*inputs: ColumnOrName"),
+        Row::new("encode", "col: ColumnOrName, charset: str"),
+        Row::new("find_in_set", "str: ColumnOrName, str_array: ColumnOrName"),
+        Row::new("instr", "str: ColumnOrName, substr: str | Column"),
+        Row::new("left", "str: ColumnOrName, len: ColumnOrName"),
+        Row::new(
+            "levenshtein",
+            "left: ColumnOrName, right: ColumnOrName, threshold: int | Column = None",
+        ),
+        Row::new("locate", "substr: str, str: ColumnOrName, pos: int = 1"),
+        Row::new(
+            "overlay",
+            "src: ColumnOrName, replace: ColumnOrName, pos: ColumnOrName | int, len: ColumnOrName | int = -1",
+        ),
+        Row::new(
+            "position",
+            "substr: ColumnOrName, str: ColumnOrName, start: ColumnOrName = None",
+        ),
+        Row::new("repeat", "col: ColumnOrName, n: ColumnOrName | int"),
+        Row::new("right", "str: ColumnOrName, len: ColumnOrName"),
+        Row::new(
+            "split_part",
+            "src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName",
+        ),
+        Row::new(
+            "substring_index",
+            "str: ColumnOrName, delim: str, count: int",
+        ),
+        Row::new(
+            "to_binary",
+            "col: ColumnOrName, format: ColumnOrName = None",
+        ),
+        Row::new(
+            "translate",
+            "srcCol: ColumnOrName, matching: str, replace: str",
+        ),
+        Row::new(
+            "try_to_binary",
+            "col: ColumnOrName, format: ColumnOrName = None",
+        ),
         Row::new(
             "substr",
             "str: ColumnOrName, pos: ColumnOrName, len: ColumnOrName = None",

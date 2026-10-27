@@ -105,7 +105,7 @@ pub(super) fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Integer, c)
 }
 
-fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Boolean, c)
 }
 
@@ -163,7 +163,7 @@ fn date_sub(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// The type of the first (cast) argument: `binary` or `string` overloads.
-fn first_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn first_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = c.data_type(0).cloned().unwrap_or(DataType::String);
     typed(t, c)
 }
@@ -204,7 +204,7 @@ fn user(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 // ---- strings ----
 
-fn is_binary(c: &CallTypes<'_>, i: usize) -> bool {
+pub(super) fn is_binary(c: &CallTypes<'_>, i: usize) -> bool {
     c.data_type(i) == Some(&DataType::Binary)
 }
 
@@ -236,7 +236,7 @@ fn strings() -> Vec<Spec> {
     let text_or_bytes = InputType::OneOf(vec![DataType::String, DataType::Binary]);
     let mut out = scalar(&["upper", "ucase", "lower", "lcase"], &text, string);
     out.extend(scalar(
-        &["length", "char_length", "character_length"],
+        &["length", "len", "char_length", "character_length"],
         &Inputs::Expects(vec![text_or_bytes.clone()]),
         int,
     ));
@@ -306,6 +306,17 @@ fn strings() -> Vec<Spec> {
             exact(DataType::Integer),
         ]),
         first_type,
+    ));
+    out.extend(scalar(
+        &["mask"],
+        &Inputs::Expects(vec![
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+        ]),
+        string,
     ));
     out
 }
@@ -602,6 +613,12 @@ fn any_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     pick(c, "any_value")
 }
 
+/// The moment aggregates (`CentralMomentAgg`, `Covariance`, `Corr`): every
+/// argument is cast to `DOUBLE`; the result is a nullable `DOUBLE`.
+fn moment(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Double, true))
+}
+
 /// `bool_and`, `bool_or` and their aliases: `boolean`, NULL for no non-NULL
 /// input.
 fn nullable_boolean(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -624,6 +641,7 @@ fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
+    let doubles = || Inputs::Expects(vec![exact(DataType::Double)]);
     vec![
         aggregate("count", Inputs::Any, count, Aggregate::Count),
         aggregate("sum", numeric(), sum, Aggregate::Sum),
@@ -636,6 +654,18 @@ fn aggregates() -> Vec<Spec> {
         aggregate("last", Inputs::Any, last, Aggregate::Last),
         aggregate("last_value", Inputs::Any, last, Aggregate::Last),
         aggregate("any_value", Inputs::Any, any_value, Aggregate::AnyValue),
+        aggregate("stddev", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("std", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("stddev_samp", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("stddev_pop", doubles(), moment, Aggregate::StddevPop),
+        aggregate("variance", doubles(), moment, Aggregate::VarSamp),
+        aggregate("var_samp", doubles(), moment, Aggregate::VarSamp),
+        aggregate("var_pop", doubles(), moment, Aggregate::VarPop),
+        aggregate("skewness", doubles(), moment, Aggregate::Skewness),
+        aggregate("kurtosis", doubles(), moment, Aggregate::Kurtosis),
+        aggregate("corr", doubles(), moment, Aggregate::Corr),
+        aggregate("covar_samp", doubles(), moment, Aggregate::CovarSamp),
+        aggregate("covar_pop", doubles(), moment, Aggregate::CovarPop),
         // Spark runs these as `count`, `min` and `max` of a rewritten argument.
         aggregate("count_if", boolean_arg(), count, Aggregate::Count),
         aggregate("bool_and", boolean_arg(), nullable_boolean, Aggregate::Min),
@@ -818,5 +848,11 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::bitwise::specs());
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
+    out.extend(super::misc::specs());
+    out.extend(super::url::specs());
+    out.extend(super::csv::specs());
+    out.extend(super::text::specs());
+    out.extend(super::hof::specs());
+    out.extend(super::r#struct::specs());
     out
 }

@@ -1,0 +1,16 @@
+{
+  "cases": {
+    "depends-on-command": [
+      2,
+      3,
+      8
+    ],
+    "test-udfs": [
+      4,
+      9,
+      10
+    ]
+  },
+  "file": "udf/udf-union",
+  "format_version": 1
+}

@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "make_valid_utf8#6ebcc233980a/ansi_on",
+      "reason": "SELECT make_valid_utf8(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "make_valid_utf8#6ebcc233980a/ansi_off",
+      "reason": "SELECT make_valid_utf8(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "make_valid_utf8#a80f6474b021/ansi_on",
+      "reason": "SELECT make_valid_utf8(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "make_valid_utf8#a80f6474b021/ansi_off",
+      "reason": "SELECT make_valid_utf8(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "make_valid_utf8#a999163e1d68/ansi_on",
+      "reason": "SELECT make_valid_utf8(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "make_valid_utf8#a999163e1d68/ansi_off",
+      "reason": "SELECT make_valid_utf8(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "make_valid_utf8"
+}

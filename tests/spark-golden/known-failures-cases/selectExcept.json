@@ -1,0 +1,28 @@
+{
+  "cases": {
+    "depends-on-command": [
+      6,
+      7,
+      8,
+      9,
+      14,
+      15,
+      16,
+      17,
+      18,
+      33,
+      38,
+      40,
+      41
+    ],
+    "query-features": [
+      36
+    ],
+    "sql-commands": [
+      1,
+      13
+    ]
+  },
+  "file": "selectExcept",
+  "format_version": 1
+}

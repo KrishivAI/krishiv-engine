@@ -169,7 +169,7 @@ impl Gen<'_> {
 
     fn expr(&mut self, depth: u8) -> Expr {
         let origin = self.origin();
-        let kinds = if depth == 0 { 5 } else { 12 };
+        let kinds = if depth == 0 { 5 } else { 16 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => ExprNode::Column(ColumnRef {
@@ -189,7 +189,9 @@ impl Gen<'_> {
                 let (args, distinct, filter) = self.args(d);
                 ExprNode::Function(FunctionCall {
                     name,
+                    qualifier: Vec::new(),
                     args,
+                    arg_names: Vec::new(),
                     distinct,
                     filter,
                 })
@@ -210,7 +212,11 @@ impl Gen<'_> {
             },
             8 => {
                 let id = if self.flag() {
-                    FunctionId::Builtin(Builtin::ALL[usize::from(self.pick(25))])
+                    FunctionId::Builtin(
+                        Builtin::ALL[usize::from(
+                            self.pick(u8::try_from(Builtin::ALL.len()).unwrap_or(u8::MAX)),
+                        )],
+                    )
                 } else {
                     FunctionId::Registry {
                         name: self.name(),
@@ -239,6 +245,21 @@ impl Gen<'_> {
                 expr: Arc::new(self.expr(d)),
                 output: self.bound(),
             }),
+            10 => ExprNode::Lambda {
+                params: vec![self.bound()],
+                body: Arc::new(self.expr(d)),
+            },
+            13 => ExprNode::Field {
+                base: Arc::new(self.expr(d)),
+                name: self.name(),
+            },
+            14 => ExprNode::Resolved(ResolvedExpr::Field {
+                base: Arc::new(self.expr(d)),
+                ordinal: usize::from(self.pick(9)),
+                name: self.name(),
+                data_type: self.data_type(),
+                nullable: self.flag(),
+            }),
             11 => ExprNode::Window(WindowExpr {
                 function: Arc::new(self.expr(d)),
                 window: if self.flag() {
@@ -259,6 +280,7 @@ impl Gen<'_> {
                     })
                 },
             }),
+            12 => ExprNode::Resolved(ResolvedExpr::LambdaVar(self.bound())),
             _ => ExprNode::Subquery {
                 kind: match self.pick(3) {
                     0 => SubqueryKind::Scalar,
@@ -563,6 +585,20 @@ fn m_string(s: &mut String, w: &mut Walk) -> bool {
     false
 }
 
+/// Names the last of `nargs` arguments, the rest positional. Skipped when
+/// there are no arguments: `arg_names` is empty then, and any entry would
+/// break the empty-or-as-long-as-`args` invariant.
+fn m_arg_names(v: &mut Vec<Option<String>>, nargs: usize, w: &mut Walk) -> bool {
+    if nargs == 0 {
+        return false;
+    }
+    site!(w, {
+        *v = vec![None; nargs];
+        v[nargs - 1] = Some("x".to_owned());
+    });
+    false
+}
+
 /// Rewrites one element, or pushes one.
 fn m_strings(v: &mut Vec<String>, w: &mut Walk) -> bool {
     site!(w, v.push("x".to_owned()));
@@ -708,19 +744,37 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
         }) => m_strings(qualifier, w) || except.iter_mut().any(|path| m_strings(path, w)),
         ExprNode::Function(FunctionCall {
             name,
+            qualifier,
             args,
+            arg_names,
             distinct,
             filter,
         }) => {
             site!(w, name.push('x'));
             site!(w, *distinct = !*distinct);
-            m_exprs(args, w) || m_filter(filter, w)
+            m_strings(qualifier, w)
+                || m_arg_names(arg_names, args.len(), w)
+                || m_exprs(args, w)
+                || m_filter(filter, w)
         }
         ExprNode::Cast { expr, to, mode } => {
             site!(w, flip(mode, CastMode::Try, CastMode::Ansi));
             m_type(to, w) || m_expr(expr, w)
         }
         ExprNode::Alias { expr, name } => m_string(name, w) || m_expr(expr, w),
+        ExprNode::Lambda { params, body } => {
+            site!(
+                w,
+                params.push(BoundColumn {
+                    id: AttrId(99),
+                    name: "x".to_owned(),
+                    data_type: DataType::Integer,
+                    nullable: false,
+                })
+            );
+            params.iter_mut().any(|p| m_bound(p, w)) || m_expr(body, w)
+        }
+        ExprNode::Field { base, name } => m_string(name, w) || m_expr(base, w),
         ExprNode::Subquery { kind, plan } => {
             let other = match kind {
                 SubqueryKind::Scalar => SubqueryKind::Exists,
@@ -750,7 +804,9 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
             inside || m_expr(function, w)
         }
         ExprNode::Resolved(r) => match r {
-            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) => m_bound(c, w),
+            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c) => {
+                m_bound(c, w)
+            }
             ResolvedExpr::Function(ResolvedFunction {
                 id,
                 kind,
@@ -776,6 +832,17 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                 m_type(data_type, w) || m_exprs(args, w) || m_filter(filter, w)
             }
             ResolvedExpr::Alias { expr, output } => m_bound(output, w) || m_expr(expr, w),
+            ResolvedExpr::Field {
+                base,
+                ordinal,
+                name,
+                data_type,
+                nullable,
+            } => {
+                site!(w, *ordinal = ordinal.wrapping_add(1));
+                site!(w, *nullable = !*nullable);
+                m_string(name, w) || m_type(data_type, w) || m_expr(base, w)
+            }
         },
     }
 }
