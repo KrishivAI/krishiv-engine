@@ -264,7 +264,7 @@ fn a_batch_split_without_a_relation_store_is_an_internal_error() {
             id,
             ScanSplits::Batches {
                 relation: krishiv_memory::RelationRef {
-                    hash: krishiv_memory::RelationHash::from_bytes([7; 16]),
+                    hash: krishiv_memory::RelationHash::from_bytes([7; 32]),
                 },
                 range: 0..1,
             },
@@ -597,4 +597,40 @@ fn splits_of_the_wrong_kind_are_rejected() {
         e.to_string().contains("does not read in-memory batches"),
         "{e}"
     );
+}
+
+#[test]
+fn two_scans_of_the_same_memory_table_share_the_buffers() {
+    use arrow_array::Array as _;
+    let store = RelationStore::new();
+    let schema = int_schema();
+    let batches = int_batches(&schema, &[1, 2, 3, 4, 5, 6]);
+    let lease = store.insert(&schema, &batches).unwrap();
+    // The table holds only the lease: both scans read the stored batches.
+    let table = MemoryTable::from_lease(
+        Arc::clone(&schema),
+        batches.iter().map(|b| b.num_rows() as u64).sum(),
+        lease.clone(),
+    );
+    let _first_scan = table
+        .scan()
+        .unwrap_or_else(|e| panic!("first scan builds: {e}"));
+    let _second_scan = table
+        .scan()
+        .unwrap_or_else(|e| panic!("second scan builds: {e}"));
+    let first = store.resolve(&lease.hash(), 0..lease.batches()).unwrap();
+    let second = store.resolve(&lease.hash(), 0..lease.batches()).unwrap();
+    assert_eq!(first.len(), second.len());
+    for (a, b) in first.iter().zip(second.iter()) {
+        let a_ptr = a.data().column(0).to_data().buffers()[0]
+            .as_slice()
+            .as_ptr();
+        let b_ptr = b.data().column(0).to_data().buffers()[0]
+            .as_slice()
+            .as_ptr();
+        assert_eq!(
+            a_ptr, b_ptr,
+            "two scans share the stored arrays instead of decoding per scan"
+        );
+    }
 }

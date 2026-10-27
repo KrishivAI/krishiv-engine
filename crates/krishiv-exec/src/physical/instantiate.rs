@@ -592,18 +592,7 @@ impl Instantiation<'_> {
                         "a batch split without a relation store".to_owned(),
                     ));
                 };
-                let resolved = store.resolve(&relation.hash)?;
-                let batches = resolved
-                    .get(range.clone())
-                    .ok_or_else(|| {
-                        internal(format!(
-                            "a batch split of {}..{} over {} batches",
-                            range.start,
-                            range.end,
-                            resolved.len()
-                        ))
-                    })?
-                    .to_vec();
+                let batches = store.resolve(&relation.hash, range.clone())?;
                 factory.with_memory_batches(batches)
             }
         }

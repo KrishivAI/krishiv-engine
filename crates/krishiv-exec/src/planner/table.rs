@@ -127,11 +127,12 @@ impl MemoryTable {
 impl TableProvider for MemoryTable {
     fn scan(&self) -> Result<Arc<dyn ScanPushdown>> {
         // A leased table's batches live in the relation store: resolve
-        // them through it, so scans read the stored copy. Anything else
-        // reads the held batches.
+        // the shared batches through it, so scans read the stored copy
+        // with no decode and no copy. Anything else reads the held
+        // batches.
         if let Some(lease) = &self.relation {
             let store = lease.store();
-            let batches = store.resolve(&lease.hash())?;
+            let batches = store.resolve(&lease.hash(), 0..lease.batches())?;
             return Ok(Arc::new(MemoryScan::try_new(
                 Arc::clone(&self.schema),
                 batches,

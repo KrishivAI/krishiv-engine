@@ -3,52 +3,62 @@
 //! workers.
 //!
 //! A [`RelationStore`] holds the batches of the session's in-memory tables
-//! as Arrow IPC, keyed by a content hash ([`RelationHash`]): registering the
-//! same batches twice shares one entry, and different batches hash
-//! differently. Workers resolve a [`RelationRef`] through the store and
-//! read a batch range of it, so task splits name batches without ever
-//! inlining rows into plan bytes.
+//! decoded, shared ([`Arc<[Batch]>`]): registering the same batches twice
+//! shares one entry, and different batches hash differently. Workers resolve
+//! a [`RelationRef`] through the store and read a batch range of it, so task
+//! splits name batches without ever inlining rows into plan bytes.
 //!
-//! The bytes are memory-accounted: each entry holds a [`Reservation`] grown
-//! by its size, from a consumer the store registers on its own pool. The
-//! store's pool is unbounded: table bytes were never charged against the
-//! query pool's budget (tight-limit spill tests register large tables), so
-//! holding them must not consume it either. Entries are reference-counted
-//! ([`RelationLease`]): an entry lives while a table (or a snapshot pin of
-//! one) holds its lease, and its bytes are released when the last lease is
-//! dropped.
+//! The batches are memory-accounted: each entry holds a [`Reservation`]
+//! grown by the batches' array memory plus their weights, from a consumer
+//! the store registers on its own pool. The store's pool is unbounded: table
+//! bytes were never charged against the query pool's budget (tight-limit
+//! spill tests register large tables), so holding them must not consume it
+//! either. Entries are reference-counted ([`RelationLease`]): an entry lives
+//! while a table (or a snapshot pin of one) holds its lease, and its bytes
+//! are released with the last lease.
+//!
+//! Arrow IPC is the wire form: [`RelationStore::encode_ipc`] encodes an
+//! entry's batches on demand, and [`RelationStore::insert_ipc`] decodes wire
+//! bytes (unweighted memory tables) back into the store, re-hashing them
+//! through [`RelationStore::insert`]. Scans with no task-split entry read
+//! the shared batches directly through [`RelationStore::resolve`]: cloning
+//! a [`Batch`] only bumps refcounts, so the in-process path pays no copy.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Cursor;
+use std::ops::Range;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use arrow_array::Int64Array;
+use arrow_array::RecordBatch;
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
 use arrow_schema::SchemaRef;
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_types::batch::{Batch, Weights};
+use sha2::{Digest, Sha256};
 
 use crate::{ConsumerHandle, MemoryConfig, MemoryPool, Reservation, TreePool};
 
-/// The content hash of a relation's batches: 128 bits of FNV-1a over the
-/// relation's Arrow IPC bytes and its weights.
+/// The content hash of a relation's batches: SHA-256 over the relation's
+/// canonical bytes (its Arrow IPC bytes, which carry the schema and the
+/// values, plus its weights).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RelationHash([u8; 16]);
+pub struct RelationHash([u8; 32]);
 
 impl RelationHash {
     /// A hash of these bytes (tests name relations the store never held).
     #[must_use]
-    pub fn from_bytes(bytes: [u8; 16]) -> Self {
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
-    /// The hash as 32 hexadecimal characters.
+    /// The hash as 64 hexadecimal characters (as Spark Connect addresses its
+    /// cached local relations).
     #[must_use]
     pub fn hex(self) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut out = String::with_capacity(32);
+        let mut out = String::with_capacity(64);
         for b in self.0 {
             out.push(HEX[usize::from(b >> 4)] as char);
             out.push(HEX[usize::from(b & 0xF)] as char);
@@ -95,27 +105,6 @@ impl StoredWeights {
         }
     }
 
-    /// The weights of a batch of `rows` rows.
-    ///
-    /// # Errors
-    /// `INTERNAL_ERROR` if a column has a value per row missing (a caller
-    /// bug: entries are only built by [`StoredWeights::of`]).
-    fn weights(&self, rows: usize) -> Result<Weights, KrishivError> {
-        match self {
-            Self::Const(c) => Ok(Weights::Const(*c)),
-            Self::Column(values) => {
-                if values.len() != rows {
-                    return Err(internal(format!(
-                        "a stored weight column has {} values for {rows} rows",
-                        values.len()
-                    )));
-                }
-                // Built from values, so it has no nulls.
-                Ok(Weights::Column(Int64Array::from(values.clone())))
-            }
-        }
-    }
-
     /// The bytes hashed with the data: the constant, or the values.
     fn hash_bytes(&self, out: &mut Vec<u8>) {
         match self {
@@ -134,10 +123,10 @@ impl StoredWeights {
     }
 }
 
-/// One stored relation: its IPC bytes and its weights.
+/// One stored relation: its schema and its batches, shared.
 struct Entry {
-    ipc: Arc<[u8]>,
-    weights: Arc<[StoredWeights]>,
+    schema: SchemaRef,
+    batches: Arc<[Batch]>,
     /// The bytes, held against the pool while the entry lives.
     _reservation: Reservation,
 }
@@ -209,8 +198,9 @@ impl RelationStore {
     }
 
     /// Stores `batches` (of `schema`) and returns its lease: the content
-    /// hash, shared with an identical registration. The bytes are held
-    /// against the store's pool while a lease lives.
+    /// hash, shared with an identical registration. The batches are held
+    /// decoded and shared, memory-accounted by their array memory plus
+    /// their weights; the lease releases the entry with the last lease.
     ///
     /// # Errors
     /// `UNABLE_TO_ACQUIRE_MEMORY` if the pool cannot grant the bytes (the
@@ -222,13 +212,13 @@ impl RelationStore {
         batches: &[Batch],
     ) -> Result<RelationLease, KrishivError> {
         let ipc = encode(schema, batches)?;
-        let weights: Vec<StoredWeights> = batches.iter().map(StoredWeights::of).collect();
-        let hash = hash_relation(&ipc, &weights);
+        let stored: Vec<StoredWeights> = batches.iter().map(StoredWeights::of).collect();
+        let hash = hash_relation(&ipc, &stored);
         let mut reservation = self.consumer.reservation();
-        reservation.try_grow(entry_bytes(&ipc, &weights))?;
+        reservation.try_grow(decoded_bytes(batches))?;
         let entry = Entry {
-            ipc: Arc::from(ipc),
-            weights: Arc::from(weights),
+            schema: Arc::clone(schema),
+            batches: Arc::from(batches.to_vec()),
             _reservation: reservation,
         };
         let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
@@ -247,23 +237,73 @@ impl RelationStore {
         })
     }
 
-    /// The batches of `hash`, decoded.
+    /// The requested batch range of `hash`, sharing the stored batches:
+    /// cloning a [`Batch`] only bumps refcounts, so scans pay no copy and
+    /// no decode. A scan with no task-split entry resolves its whole range
+    /// this way.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for an unknown hash (a coordinator bug: every hash
-    /// in a task was registered by the session) or an undecodable entry.
-    pub fn resolve(&self, hash: &RelationHash) -> Result<Vec<Batch>, KrishivError> {
-        // Clone under the lock; decode outside it.
-        let (ipc, weights) = {
+    /// in a task was registered by the session) or a range past the
+    /// relation's batches.
+    pub fn resolve(
+        &self,
+        hash: &RelationHash,
+        range: Range<usize>,
+    ) -> Result<Vec<Batch>, KrishivError> {
+        // Clone the shared batches under the lock; cloning out of the range
+        // afterwards only bumps refcounts.
+        let batches = {
             let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
             let Some((entry, _)) = entries.map.get(hash) else {
                 return Err(internal(format!(
                     "a relation {hash} the store does not hold"
                 )));
             };
-            (Arc::clone(&entry.ipc), Arc::clone(&entry.weights))
+            Arc::clone(&entry.batches)
         };
-        decode(&ipc, &weights)
+        if range.start > range.end || range.end > batches.len() {
+            return Err(internal(format!(
+                "a batch range {}..{} over {} batches",
+                range.start,
+                range.end,
+                batches.len()
+            )));
+        }
+        Ok(batches[range].to_vec())
+    }
+
+    /// The batches of `hash` as Arrow IPC bytes (the wire form): a remote
+    /// worker decodes them with [`Self::insert_ipc`].
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for an unknown hash or an Arrow encoding failure.
+    pub fn encode_ipc(&self, hash: &RelationHash) -> Result<Vec<u8>, KrishivError> {
+        let (schema, batches) = {
+            let entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some((entry, _)) = entries.map.get(hash) else {
+                return Err(internal(format!(
+                    "a relation {hash} the store does not hold"
+                )));
+            };
+            (Arc::clone(&entry.schema), Arc::clone(&entry.batches))
+        };
+        encode(&schema, &batches)
+    }
+
+    /// Stores wire bytes from [`Self::encode_ipc`] and returns its lease.
+    /// The bytes are decoded (memory tables are unweighted, so every batch
+    /// gets weight 1) and re-hashed through [`Self::insert`], which shares
+    /// an identical registration; the returned lease's hash is the content
+    /// hash of the decoded batches.
+    ///
+    /// # Errors
+    /// `UNABLE_TO_ACQUIRE_MEMORY` if the pool cannot grant the bytes;
+    /// `INTERNAL_ERROR` for undecodable bytes.
+    pub fn insert_ipc(self: &Arc<Self>, ipc: &[u8]) -> Result<RelationLease, KrishivError> {
+        let (schema, records) = decode_records(ipc)?;
+        let batches: Vec<Batch> = records.into_iter().map(Batch::new).collect();
+        self.insert(&schema, &batches)
     }
 
     /// Releases one owner of `hash`, dropping its entry (and its bytes)
@@ -353,17 +393,20 @@ impl fmt::Debug for RelationLease {
     }
 }
 
-/// The accounted bytes of an entry: its IPC and its weights.
-fn entry_bytes(ipc: &[u8], weights: &[StoredWeights]) -> usize {
-    ipc.len().saturating_add(
-        weights
-            .iter()
-            .map(|w| match w {
-                StoredWeights::Const(_) => 8,
-                StoredWeights::Column(values) => values.len().saturating_mul(8),
-            })
-            .sum::<usize>(),
-    )
+/// The accounted bytes of stored `batches`: their array memory plus their
+/// weights.
+fn decoded_bytes(batches: &[Batch]) -> usize {
+    batches
+        .iter()
+        .map(|b| {
+            b.data()
+                .get_array_memory_size()
+                .saturating_add(match b.weights() {
+                    Weights::Const(_) => 8,
+                    Weights::Column(column) => column.len().saturating_mul(8),
+                })
+        })
+        .sum()
 }
 
 /// `batches` (of `schema`) as one Arrow IPC stream.
@@ -382,60 +425,33 @@ fn encode(schema: &SchemaRef, batches: &[Batch]) -> Result<Vec<u8>, KrishivError
     Ok(ipc)
 }
 
-/// The batches of one IPC stream with `weights`.
-fn decode(ipc: &[u8], weights: &[StoredWeights]) -> Result<Vec<Batch>, KrishivError> {
+/// The schema and record batches of one IPC stream (unweighted: every batch
+/// gets weight 1 at the caller's [`Batch::new`]).
+fn decode_records(ipc: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), KrishivError> {
     let mut reader = StreamReader::try_new(Cursor::new(ipc), None)
         .map_err(|e| internal(format!("cannot read a stored relation: {e}")))?;
+    let schema = reader.schema();
     let mut out = Vec::new();
     for batch in &mut reader {
         let data = batch.map_err(|e| internal(format!("cannot read a stored relation: {e}")))?;
-        let rows = data.num_rows();
-        let w = weights
-            .get(out.len())
-            .ok_or_else(|| {
-                internal("a stored relation with fewer weights than batches".to_owned())
-            })?
-            .weights(rows)?;
-        out.push(
-            Batch::with_weights(data, w)
-                .map_err(|e| internal(format!("a stored relation with invalid weights: {e}")))?,
-        );
+        out.push(data);
     }
-    if out.len() != weights.len() {
-        return Err(internal(format!(
-            "a stored relation of {} batches with {} weights",
-            out.len(),
-            weights.len()
-        )));
-    }
-    Ok(out)
+    Ok((schema, out))
 }
 
-/// The content hash: FNV-1a over the IPC bytes and the weights, in two
-/// lanes with different bases.
+/// The content hash: SHA-256 over the IPC bytes (which carry the schema and
+/// the values) plus the weights.
 fn hash_relation(ipc: &[u8], weights: &[StoredWeights]) -> RelationHash {
-    const OFFSET_A: u64 = 0xcbf2_9ce4_8422_2325;
-    const OFFSET_B: u64 = 0x8422_2325_cbf2_9ce4;
-    const PRIME: u64 = 0x100_0000_01b3;
-    let mut a = OFFSET_A;
-    let mut b = OFFSET_B;
-    for byte in ipc {
-        a = (a ^ u64::from(*byte)).wrapping_mul(PRIME);
-        b = (b.wrapping_add(u64::from(*byte))).wrapping_mul(PRIME);
-        b ^= b >> 29;
-    }
+    let mut hasher = Sha256::new();
+    hasher.update(ipc);
     let mut w = Vec::new();
     for weight in weights {
         weight.hash_bytes(&mut w);
     }
-    for byte in w {
-        a = (a ^ u64::from(byte)).wrapping_mul(PRIME);
-        b = (b.wrapping_add(u64::from(byte))).wrapping_mul(PRIME);
-        b ^= b >> 29;
-    }
-    let mut hash = [0_u8; 16];
-    hash[..8].copy_from_slice(&a.to_le_bytes());
-    hash[8..].copy_from_slice(&b.to_le_bytes());
+    hasher.update(&w);
+    let digest = hasher.finalize();
+    let mut hash = [0_u8; 32];
+    hash.copy_from_slice(&digest);
     RelationHash(hash)
 }
 
@@ -447,7 +463,7 @@ fn internal(message: String) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::{Int32Array, RecordBatch, StringViewArray};
+    use arrow_array::{Int32Array, Int64Array, RecordBatch, StringViewArray};
     use arrow_schema::{DataType, Field, Schema};
 
     fn schema() -> SchemaRef {
@@ -492,14 +508,19 @@ mod tests {
         ];
         let lease = store.insert(&schema, &batches).expect("insert stores");
         assert_eq!(lease.batches(), 2);
-        let got = store.resolve(&lease.hash()).expect("resolve reads");
+        let got = store
+            .resolve(&lease.hash(), 0..lease.batches())
+            .expect("resolve reads");
         assert_eq!(got, batches);
+        // A range reads only its batches, sharing the stored arrays.
+        let one = store.resolve(&lease.hash(), 1..2).expect("range reads");
+        assert_eq!(one, batches[1..]);
         // No batches at all still round-trips its schema.
         let empty = store.insert(&schema, &[]).expect("empty insert stores");
         assert_eq!(empty.batches(), 0);
         assert!(
             store
-                .resolve(&empty.hash())
+                .resolve(&empty.hash(), 0..0)
                 .expect("empty resolves")
                 .is_empty()
         );
@@ -541,6 +562,96 @@ mod tests {
     }
 
     #[test]
+    fn the_hash_is_sha256_hex() {
+        let store = store();
+        let schema = schema();
+        let lease = store
+            .insert(&schema, &[batch(&schema, &[1, 2])])
+            .expect("insert stores");
+        // 32 bytes as 64 hex characters, as Spark Connect addresses its
+        // cached local relations.
+        assert_eq!(lease.hash().hex().len(), 64);
+        assert!(
+            lease.hash().hex().chars().all(|c| c.is_ascii_hexdigit()),
+            "{}",
+            lease.hash().hex()
+        );
+        assert_eq!(format!("{hash}", hash = lease.hash()), lease.hash().hex());
+        assert_eq!(
+            format!("{hash:?}", hash = lease.hash()),
+            format!("RelationHash({})", lease.hash().hex())
+        );
+    }
+
+    #[test]
+    fn ipc_wire_bytes_round_trip_between_stores() {
+        let first = store();
+        let schema = schema();
+        let batches = vec![batch(&schema, &[1, 2, 3]), batch(&schema, &[4])];
+        let lease = first.insert(&schema, &batches).expect("insert stores");
+        let wire = first.encode_ipc(&lease.hash()).expect("encode reads");
+        assert!(!wire.is_empty(), "the wire carries the batches");
+        // A remote worker inserts the wire bytes: the same content hash,
+        // the same rows.
+        let second = store();
+        let remote = second.insert_ipc(&wire).expect("wire inserts");
+        assert_eq!(remote.hash(), lease.hash());
+        assert_eq!(
+            second
+                .resolve(&remote.hash(), 0..remote.batches())
+                .expect("remote resolves"),
+            batches
+        );
+        // Undecodable bytes are an internal error, not a panic.
+        assert!(second.insert_ipc(b"not ipc").is_err());
+    }
+
+    #[test]
+    fn resolves_share_the_underlying_buffers() {
+        let store = store();
+        let schema = schema();
+        let batches = vec![batch(&schema, &[1, 2, 3])];
+        let lease = store.insert(&schema, &batches).expect("insert stores");
+        let first = store
+            .resolve(&lease.hash(), 0..1)
+            .expect("first scan reads");
+        let second = store
+            .resolve(&lease.hash(), 0..1)
+            .expect("second scan reads");
+        let first_ptr = first[0].data().column(0).to_data().buffers()[0]
+            .as_slice()
+            .as_ptr();
+        let second_ptr = second[0].data().column(0).to_data().buffers()[0]
+            .as_slice()
+            .as_ptr();
+        assert_eq!(
+            first_ptr, second_ptr,
+            "two scans share the stored arrays instead of decoding per scan"
+        );
+    }
+
+    #[test]
+    fn a_range_past_the_batches_is_an_internal_error() {
+        let store = store();
+        let schema = schema();
+        let batches = vec![batch(&schema, &[1])];
+        let lease = store.insert(&schema, &batches).expect("insert stores");
+        for range in [0..2_usize, 1..2_usize, 2..3_usize] {
+            let e = store
+                .resolve(&lease.hash(), range.clone())
+                .expect_err("past the batches");
+            assert_eq!(e.error_class().name(), "INTERNAL_ERROR", "{range:?}: {e}");
+        }
+        // An empty range at the end reads nothing.
+        assert!(
+            store
+                .resolve(&lease.hash(), 1..1)
+                .expect("empty reads")
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn the_last_lease_releases_the_entry() {
         let store = store();
         let schema = schema();
@@ -552,11 +663,16 @@ mod tests {
         assert_eq!(store.len(), 1);
         drop(first);
         // One lease left: still resolvable.
-        assert_eq!(store.resolve(&hash).expect("shared entry lives"), batches);
+        assert_eq!(
+            store.resolve(&hash, 0..1).expect("shared entry lives"),
+            batches
+        );
         assert_eq!(store.len(), 1);
         drop(second);
         assert!(store.is_empty());
-        let e = store.resolve(&hash).expect_err("released entry is gone");
+        let e = store
+            .resolve(&hash, 0..1)
+            .expect_err("released entry is gone");
         assert_eq!(
             e.error_class().name(),
             "INTERNAL_ERROR",
@@ -568,12 +684,17 @@ mod tests {
     fn an_unknown_hash_is_an_internal_error() {
         let store = store();
         let e = store
-            .resolve(&RelationHash::from_bytes([9; 16]))
+            .resolve(&RelationHash::from_bytes([9; 32]), 0..0)
             .expect_err("nothing stored");
         assert_eq!(e.error_class().name(), "INTERNAL_ERROR", "{e}");
         assert!(
             e.to_string()
-                .contains(&RelationHash::from_bytes([9; 16]).hex())
+                .contains(&RelationHash::from_bytes([9; 32]).hex())
+        );
+        assert!(
+            store
+                .encode_ipc(&RelationHash::from_bytes([9; 32]))
+                .is_err()
         );
     }
 

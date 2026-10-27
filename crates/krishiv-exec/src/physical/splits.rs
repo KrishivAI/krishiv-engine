@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn assigned_batch_ranges_cover_every_batch_exactly_once() {
         let relation = krishiv_memory::RelationRef {
-            hash: krishiv_memory::RelationHash::from_bytes([1; 16]),
+            hash: krishiv_memory::RelationHash::from_bytes([1; 32]),
         };
         for (batches, tasks) in [(0, 3), (1, 4), (9, 4)] {
             let assigned = assign_batch_splits(relation, batches, tasks);
@@ -373,7 +373,7 @@ mod tests {
     fn splits_of_the_wrong_kind_are_an_internal_error() {
         let batches = ScanSplits::Batches {
             relation: krishiv_memory::RelationRef {
-                hash: krishiv_memory::RelationHash::from_bytes([2; 16]),
+                hash: krishiv_memory::RelationHash::from_bytes([2; 32]),
             },
             range: 0..1,
         };
