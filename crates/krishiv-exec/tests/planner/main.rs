@@ -98,7 +98,7 @@ impl Runnable {
     }
 
     /// The same plan resolving a write's format against `formats`.
-    pub(crate) fn with_formats(mut self, formats: Vec<Arc<dyn krishiv_io::FileFormat>>) -> Self {
+    pub(crate) fn with_formats(mut self, formats: Arc<krishiv_io::FormatRegistry>) -> Self {
         self.worker = self.worker.with_formats(formats);
         self
     }

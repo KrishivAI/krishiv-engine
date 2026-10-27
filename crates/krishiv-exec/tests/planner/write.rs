@@ -12,8 +12,8 @@ use krishiv_exec::physical::{PhysNode, TaskSpec, WorkerContext, instantiate};
 use krishiv_exec::planner::MemoryTables;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
-    DirectoryWrite, FileFormat, FileStatistics, FormatOptions, IoConfig, IoScheduler, Precision,
-    SaveMode, StoreId, WrittenFileInfo,
+    DirectoryWrite, FileFormat, FileStatistics, FormatOptions, FormatRegistry, IoConfig,
+    IoScheduler, Precision, SaveMode, StoreId, WrittenFileInfo,
 };
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
@@ -64,7 +64,7 @@ fn query_results_are_written_committed_and_read_back() {
             target_file_bytes: 0,
         })
         .with_io(io.clone())
-        .with_formats(vec![Arc::clone(&format)])
+        .with_formats(Arc::new(FormatRegistry::with_defaults()))
         .with_config(Arc::new(Config::new()));
     assert!(
         write
@@ -138,10 +138,11 @@ fn query_results_are_written_committed_and_read_back() {
     let e = instantiate(&plan, &worker).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     assert!(e.to_string().contains("I/O context"), "{e}");
-    // So is a worker without the format.
+    // So is a worker without the format (an empty registry): Spark's
+    // built-in source without an implementation is unsupported.
     let worker = WorkerContext::new(Arc::new(MemoryTables::new())).with_io(io.clone());
     let e = instantiate(&plan, &worker).unwrap_err();
-    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     assert!(e.to_string().contains("parquet"), "{e}");
     // An unknown format option fails when the write instantiates.
     let bad = krishiv_exec::physical::WritePlan {
@@ -173,7 +174,7 @@ fn query_results_are_written_committed_and_read_back() {
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
         .with_io(io.clone())
-        .with_formats(vec![Arc::clone(&format)])
+        .with_formats(Arc::new(FormatRegistry::with_defaults()))
         .with_config(Arc::new(Config::new()));
     let e = krishiv_exec::physical::instantiate_task(&bad_plan, &worker, &TaskSpec::whole())
         .unwrap_err();
@@ -184,7 +185,7 @@ fn query_results_are_written_committed_and_read_back() {
     // Another task's files name its partition.
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
         .with_io(io.clone())
-        .with_formats(vec![format])
+        .with_formats(Arc::new(FormatRegistry::with_defaults()))
         .with_config(Arc::new(Config::new()));
     let task = TaskSpec {
         partition: 3,
@@ -295,7 +296,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
             .with_io(io.clone())
-            .with_formats(vec![Arc::clone(&format)])
+            .with_formats(Arc::new(FormatRegistry::with_defaults()))
             .with_config(Arc::clone(&config));
         let task = TaskSpec {
             partition,
@@ -471,7 +472,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
             .with_io(io.clone())
-            .with_formats(vec![Arc::clone(&format)])
+            .with_formats(Arc::new(FormatRegistry::with_defaults()))
             .with_config(Arc::clone(&config));
         let task = TaskSpec {
             attempt,
@@ -663,7 +664,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
             .with_io(io.clone())
-            .with_formats(vec![Arc::clone(&format)])
+            .with_formats(Arc::new(FormatRegistry::with_defaults()))
             .with_config(Arc::clone(&config));
         let task = TaskSpec {
             partition,
@@ -760,7 +761,6 @@ fn a_write_without_a_configuration_is_refused() {
     let id = StoreId::new("file://out");
     sched.register_store(id, Arc::clone(&store) as Arc<dyn ObjectStore>);
     let io = sched.context();
-    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
     let plan = krishiv_exec::physical::PhysicalPlan::new(
         PhysNode::WriteFiles {
             input: Box::new(PhysNode::OneRow),
@@ -786,7 +786,7 @@ fn a_write_without_a_configuration_is_refused() {
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
         .with_io(io)
-        .with_formats(vec![format]);
+        .with_formats(Arc::new(FormatRegistry::with_defaults()));
     let e = instantiate(&plan, &worker).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     assert!(

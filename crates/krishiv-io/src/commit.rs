@@ -222,9 +222,16 @@ impl DirectoryWrite {
             let Some(name) = meta.location.filename() else {
                 continue;
             };
-            // Data files of this write; `_SUCCESS` and other writes' files
-            // never contain the job UUID.
-            if name.starts_with("part-") && name.contains(self.job_uuid.as_str()) {
+            // Data files of this write (`part-<task>-<job>-c<n>...`, or
+            // `part-<task>-<job>_<attempt>-c<n>...` for a retry); `_SUCCESS`
+            // and other writes' files never carry this job in that slot.
+            // A bare `contains(job)` over-matches single-letter test jobs
+            // (`part-` and `-c000` contain `a` and `c`), so match the job
+            // segment with its dashes.
+            if name.starts_with("part-")
+                && (name.contains(&format!("-{}-c", self.job_uuid))
+                    || name.contains(&format!("-{}_", self.job_uuid)))
+            {
                 orphans.push(meta.location.clone());
             }
         }

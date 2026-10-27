@@ -998,7 +998,7 @@ impl Session {
             config: Arc::clone(&env.config),
         }))
         .with_io(self.state.io.context())
-        .with_formats(self.state.formats.clone())
+        .with_formats(Arc::clone(&self.state.formats))
         .with_config(Arc::clone(&env.config))
     }
 }
