@@ -14,9 +14,10 @@
 //!    operators from a plan on the worker that runs it, with the
 //!    resources of that worker ([`WorkerContext`]): table providers and
 //!    their scan factories, the spill scope, the write sink. Expressions
-//!    are compiled for the worker's kernels; runtime-filter cells and
-//!    subquery value cells are created here, one set per instantiation, so
-//!    a plan can be instantiated any number of times.
+//!    are compiled for the worker's kernels; runtime filters, subquery
+//!    results and broadcast builds are published and read through the
+//!    worker's [`ValueService`](crate::values::ValueService), one per
+//!    instantiation, so a plan can be instantiated any number of times.
 //!
 //! A [`Scheduler`](crate::Scheduler) takes a [`PhysicalPlan`]; the
 //! in-process [`QueryRunner`](crate::QueryRunner) instantiates it and runs
@@ -27,10 +28,11 @@
 //!   node holding a service handle, a lock, an atomic or a cell does not
 //!   compile.
 //! - Ids are assigned by the planner and are plan data: [`ScanId`],
-//!   [`FilterId`], [`SubqueryId`]. A runtime filter is described twice:
-//!   the scan it filters lists it ([`ScanRuntimeFilter`]: column and key
-//!   type), and the join that produces it lists it ([`JoinFilterPlan`]: key
-//!   and options); instantiation connects the two through one cell per id.
+//!   [`FilterId`], [`SubqueryId`], [`ExchangeId`]; [`ValueId`] names the
+//!   values among them. A runtime filter is described twice: the scan it
+//!   filters lists it ([`ScanRuntimeFilter`]: column and key type), and
+//!   the join that produces it lists it ([`JoinFilterPlan`]: key and
+//!   options); instantiation connects the two through the value service.
 //! - A subquery's value is read by the expressions of the node that lists
 //!   it ([`SubqueryPlan`]) as the column of attribute [`SubqueryId::attr`].
 //! - Data moves between partitions only at [`PhysNode::Exchange`] nodes,
@@ -46,8 +48,10 @@ mod instantiate;
 use std::fmt;
 use std::sync::Arc;
 
+use arrow_array::Array;
 use arrow_schema::{DataType, SchemaRef};
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
+use krishiv_kernels::hash::routing;
 use krishiv_plan::{AttrId, Expr, Scan};
 
 use data::plan_data;
@@ -90,20 +94,60 @@ impl SubqueryId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExchangeId(pub u64);
 
+/// A value computed while a plan runs and read by other operators of the
+/// plan: a runtime filter, a subquery's result or a broadcast exchange's
+/// build (design P2-T171, I3). Its producers publish partials of it, one
+/// per producer partition, and its consumers read it once every producer
+/// partition published ([`crate::values`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ValueId {
+    /// The runtime filter a join's build publishes.
+    Filter(FilterId),
+    /// A subquery's result.
+    Subquery(SubqueryId),
+    /// The rows of a broadcast exchange.
+    Broadcast(ExchangeId),
+}
+
+impl fmt::Display for ValueId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Filter(id) => write!(f, "runtime filter {id}"),
+            Self::Subquery(id) => write!(f, "subquery #{}", id.0),
+            Self::Broadcast(id) => write!(f, "broadcast exchange #{}", id.0),
+        }
+    }
+}
+
+/// The version of a value: the epoch its producers computed it at. A
+/// batch query has one, [`Version::BATCH`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Version {
+    /// The epoch.
+    pub epoch: u64,
+}
+
+impl Version {
+    /// The only version of a batch query's values (epoch 0).
+    pub const BATCH: Self = Self { epoch: 0 };
+}
+
 /// How an [`PhysNode::Exchange`] places its input's rows into partitions.
 /// Columns are indices into the exchange's input (and output: an exchange
 /// keeps its input's columns).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Partitioning {
     /// By the routing hash `h` of the key columns: a row goes to the
-    /// partition its top bits name (design P2-T171 §5.1, T157 Appendix
-    /// C). `h` is seedless, so equal keys meet in one partition in every
-    /// process; partition counts are powers of two, so a partition nests
-    /// in a key group and a radix partition of a breaker is a union of
-    /// partitions.
+    /// partition that owns its key group (design P2-T171 §5.1 and §7.2,
+    /// T157 Appendix C). `h` is seedless, so equal keys meet in one
+    /// partition in every process; a partition owns a contiguous range of
+    /// key groups, so for `2^k` partitions it is the top `k` bits of `h`,
+    /// and a radix partition of a breaker is a union of partitions.
     Hash {
         /// The key columns, in hash order.
         keys: Vec<usize>,
+        /// The routing function.
+        scheme: HashScheme,
     },
     /// Every row in one partition (a gather). Partitions are read in
     /// partition order, so a range-partitioned sorted input stays sorted.
@@ -121,6 +165,46 @@ pub enum Partitioning {
         /// The sort keys.
         keys: Vec<SortKey>,
     },
+}
+
+/// The function a [`Partitioning::Hash`] exchange routes rows by. It is
+/// part of the plan, so every worker that runs a fragment of a query routes
+/// a key to the same partition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HashScheme {
+    /// No function named: a plan written before the routing hash was
+    /// fixed. Its exchanges are only ever lowered on one worker, where no
+    /// row is routed; such a plan cannot be split across workers.
+    Unpinned,
+    /// Key-group ranges of the routing hash `H_kg` version 1
+    /// (`krishiv_kernels::hash::routing`): XXH64, seed 0, of the normalized
+    /// key bytes, folded over several key columns. Every exchange the
+    /// planner places uses it.
+    KeyGroupV1,
+}
+
+impl HashScheme {
+    /// The partition of `n` that each row of `keys` (the key columns, in
+    /// hash order) goes to, written to `out` (cleared first).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for [`Unpinned`](Self::Unpinned), which names no
+    /// function to route by; `KRISHIV_UNSUPPORTED_FEATURE` for a key type
+    /// the routing hash does not cover.
+    pub fn partitions(self, keys: &[&dyn Array], n: u32, out: &mut Vec<u32>) -> Result<()> {
+        match self {
+            Self::Unpinned => Err(crate::error::internal(
+                "an exchange without a routing function cannot route rows".to_owned(),
+            )),
+            Self::KeyGroupV1 => {
+                let mut h = Vec::new();
+                routing::hash_columns(keys, &mut h)?;
+                out.clear();
+                out.extend(h.iter().map(|&h| routing::partition_of(h, n)));
+                Ok(())
+            }
+        }
+    }
 }
 
 /// An exchange: `input`'s rows placed into partitions by `partitioning`.
@@ -150,6 +234,9 @@ pub enum JoinDistribution {
 pub struct ExprEnv {
     /// `spark.sql.ansi.enabled`.
     pub ansi: bool,
+    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
+    /// give NaN instead of NULL where Spark divides by zero.
+    pub legacy_statistical_aggregate: bool,
     /// The session time zone as a fixed offset in seconds, when it is one.
     pub zone: Option<i32>,
     /// The query's clock (microseconds since the epoch, UTC), read once at
@@ -433,10 +520,34 @@ pub struct HashJoinPlan {
     pub null_safe: Vec<bool>,
     /// The non-equality conditions.
     pub residual: Option<Residual>,
+    /// A left outer join that fails when a probe row matches more than
+    /// once (a correlated scalar subquery without an aggregate). Only
+    /// `LeftOuter` joins set it.
+    pub single_match: bool,
+    /// The build's rows are never output and the join reads nothing of
+    /// them but their keys (a left semi, left anti or existence join
+    /// without a residual condition), so the build may keep each key once
+    /// (design P2-T166 §3.2). An executor that ignores it stores every row
+    /// and returns the same result; this one does so for now.
+    pub distinct_build: bool,
     /// The runtime filters the build publishes.
     pub runtime_filters: Vec<JoinFilterPlan>,
     /// Broadcast or partitioned.
     pub distribution: JoinDistribution,
+}
+
+impl HashJoinPlan {
+    /// Whether [`distinct_build`](Self::distinct_build) may be set: the
+    /// join outputs no build rows and reads no build column but the keys
+    /// (a left semi, left anti or existence join without a residual).
+    #[must_use]
+    pub fn distinct_build_allowed(&self) -> bool {
+        self.residual.is_none()
+            && matches!(
+                self.join_type,
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::Existence
+            )
+    }
 }
 
 /// A nested-loop join over every pair of rows.
@@ -455,8 +566,22 @@ pub struct NestedLoopPlan {
 plan_data!(tuple ScanId(id));
 plan_data!(tuple SubqueryId(id));
 plan_data!(tuple ExchangeId(id));
+plan_data!(
+    enum ValueId {
+        Filter(id),
+        Subquery(id),
+        Broadcast(id),
+    }
+);
+plan_data!(struct Version { epoch });
+plan_data!(
+    enum HashScheme {
+        Unpinned,
+        KeyGroupV1,
+    }
+);
 plan_data!(enum Partitioning {
-    Hash { keys },
+    Hash { keys, scheme },
     Single,
     Broadcast,
     RoundRobin,
@@ -469,7 +594,7 @@ plan_data!(
         Partitioned,
     }
 );
-plan_data!(struct ExprEnv { ansi, zone, query_start_micros, user });
+plan_data!(struct ExprEnv { ansi, legacy_statistical_aggregate, zone, query_start_micros, user });
 plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,
@@ -504,8 +629,8 @@ plan_data!(struct SubqueryPlan { id, kind, data_type, plan });
 plan_data!(struct AggregatePlan { group_by, aggregates, distinct, output });
 plan_data!(struct Residual { layout, conjuncts });
 plan_data!(struct HashJoinPlan {
-    probe, build, join_type, probe_keys, build_keys, null_safe, residual, runtime_filters,
-    distribution
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match,
+    distinct_build, runtime_filters, distribution
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, schema, explain, warnings, env });

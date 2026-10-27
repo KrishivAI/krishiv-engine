@@ -47,6 +47,7 @@ mod command;
 mod conf;
 mod dataframe;
 mod explain;
+mod explain_graph;
 pub mod functions;
 mod profile;
 mod session;
@@ -57,6 +58,9 @@ pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType,
+};
+pub use explain_graph::{
+    GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
 };
 pub use krishiv_exec::profile::{QueryProfile, TextOptions};
 pub use krishiv_udf_sdk::{

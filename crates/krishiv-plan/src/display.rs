@@ -229,6 +229,7 @@ impl Display for NodeLine<'_> {
                     JoinCondition::None => Ok(()),
                     JoinCondition::On(e) => write!(f, ", {}", Text(e)),
                     JoinCondition::Using(cols) => write!(f, ", USING ({})", cols.join(", ")),
+                    JoinCondition::Natural => write!(f, ", NATURAL"),
                 }
             }
             PlanNode::Sort { order, global, .. } => {
@@ -328,6 +329,58 @@ impl Display for NodeLine<'_> {
                     write!(f, "{}{}", sep(i), c.name)?;
                 }
                 f.write_str("]")
+            }
+            PlanNode::Pivot {
+                pivot_columns,
+                values,
+                aggregates,
+                ..
+            } => {
+                f.write_str("Pivot [")?;
+                for (i, e) in pivot_columns.iter().enumerate() {
+                    write!(f, "{}{}", sep(i), Text(e))?;
+                }
+                f.write_str("], [")?;
+                for (i, v) in values.iter().enumerate() {
+                    write!(f, "{}[", sep(i))?;
+                    for (j, e) in v.exprs.iter().enumerate() {
+                        write!(f, "{}{}", sep(j), Text(e))?;
+                    }
+                    if let Some(alias) = &v.alias {
+                        write!(f, " AS {alias}")?;
+                    }
+                    f.write_str("]")?;
+                }
+                f.write_str("], [")?;
+                for (i, e) in aggregates.iter().enumerate() {
+                    write!(f, "{}{}", sep(i), Text(e))?;
+                }
+                f.write_str("]")
+            }
+            PlanNode::Unpivot {
+                value_columns,
+                name_column,
+                column_sets,
+                include_nulls,
+                ..
+            } => {
+                if *include_nulls {
+                    f.write_str("UnpivotIncludeNulls ")?;
+                } else {
+                    f.write_str("Unpivot ")?;
+                }
+                write!(f, "[{} FOR {name_column} IN (", value_columns.join(", "))?;
+                for (i, s) in column_sets.iter().enumerate() {
+                    write!(f, "{}[", sep(i))?;
+                    for (j, e) in s.columns.iter().enumerate() {
+                        write!(f, "{}{}", sep(j), Text(e))?;
+                    }
+                    if let Some(alias) = &s.alias {
+                        write!(f, " AS {alias}")?;
+                    }
+                    f.write_str("]")?;
+                }
+                f.write_str(")]")
             }
             // Spark's `LocalRelation [col1, col2]`, which an inline table
             // becomes; the row count tells single-row tables apart.
@@ -514,6 +567,24 @@ fn list<'a>(args: &'a [std::sync::Arc<Expr>], out: &mut Vec<Piece<'a>>) {
     }
 }
 
+/// Appends `args` separated by `, `, each with its `name => ` prefix when
+/// `arg_names[i]` is one.
+fn named_list<'a>(
+    args: &'a [std::sync::Arc<Expr>],
+    arg_names: &'a [Option<String>],
+    out: &mut Vec<Piece<'a>>,
+) {
+    for (i, e) in args.iter().enumerate() {
+        if i > 0 {
+            out.push(Piece::Str(", "));
+        }
+        if let Some(n) = arg_names.get(i).and_then(Option::as_ref) {
+            out.push(Piece::Owned(format!("{n} => ")));
+        }
+        out.push(Piece::Expr(e));
+    }
+}
+
 /// Appends the pieces of one expression node, its children as
 /// `Piece::Expr`.
 fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
@@ -539,21 +610,32 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 format!("{}.", Name(&s.qualifier))
             };
             let id = s.plan_id.map(|id| format!("@plan{id}")).unwrap_or_default();
-            out.push(Piece::Owned(format!("{q}*{id}")));
+            let mut text = format!("{q}*{id}");
+            if !s.except.is_empty() {
+                let cols: Vec<String> =
+                    s.except.iter().map(|path| Name(path).to_string()).collect();
+                text.push_str(&format!(" EXCEPT ({})", cols.join(", ")));
+            }
+            out.push(Piece::Owned(text));
         }
         ExprNode::Function(FunctionCall {
             name,
+            qualifier,
             args,
+            arg_names,
             distinct,
             filter,
         }) => {
-            let dotted = name.join(".");
-            // Operators are never qualified, so a dotted name matches no
-            // canonical operator.
+            let qualified = if qualifier.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{name}", Name(qualifier))
+            };
             call(
-                &dotted,
-                Builtin::from_name(&dotted),
+                &qualified,
+                Builtin::from_name(name),
                 args,
+                arg_names,
                 *distinct,
                 filter.as_deref(),
                 out,
@@ -570,7 +652,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 FunctionId::Builtin(b) => Some(*b),
                 FunctionId::Registry { .. } | FunctionId::Udf { .. } => None,
             };
-            call(id.name(), op, args, *distinct, filter.as_deref(), out);
+            call(id.name(), op, args, &[], *distinct, filter.as_deref(), out);
         }
         ExprNode::Cast { expr, to, mode } => {
             out.push(Piece::Str(match mode {
@@ -587,6 +669,25 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 Name(std::slice::from_ref(name))
             )));
         }
+        ExprNode::Field { base, name } => {
+            out.push(Piece::Expr(base));
+            out.push(Piece::Owned(format!(
+                ".{}",
+                Name(std::slice::from_ref(name))
+            )));
+        }
+        ExprNode::Resolved(ResolvedExpr::Field {
+            base,
+            name,
+            ordinal,
+            ..
+        }) => {
+            out.push(Piece::Expr(base));
+            out.push(Piece::Owned(format!(
+                ".{}#{ordinal}",
+                Name(std::slice::from_ref(name))
+            )));
+        }
         ExprNode::Subquery { kind, .. } => match kind {
             SubqueryKind::Scalar => out.push(Piece::Str("scalar-subquery")),
             SubqueryKind::Exists => out.push(Piece::Str("exists")),
@@ -596,11 +697,16 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 out.push(Piece::Str(") IN (list-query))"));
             }
         },
-        ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+        ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::LambdaVar(c)) => {
             out.push(Piece::Owned(format!("{}#{}", c.name, c.id.0)));
         }
         ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
             out.push(Piece::Owned(format!("outer({}#{})", c.name, c.id.0)));
+        }
+        ExprNode::Lambda { params, body } => {
+            let names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+            out.push(Piece::Owned(format!("({}) -> ", names.join(", "))));
+            out.push(Piece::Expr(body));
         }
         ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
             out.push(Piece::Expr(expr));
@@ -684,11 +790,13 @@ const fn order_suffix(o: &SortOrder) -> &'static str {
 }
 
 /// Appends a call: operators infix or in their SQL form, others as
-/// `name(args)`.
+/// `name(args)`. A named argument prints as `name => value`; a quantified
+/// `LIKE`/`ILIKE` prints in its SQL form (`a LIKE ANY (p, ...)`).
 fn call<'a>(
     name: &str,
     op: Option<Builtin>,
     args: &'a [std::sync::Arc<Expr>],
+    arg_names: &'a [Option<String>],
     distinct: bool,
     filter: Option<&'a Expr>,
     out: &mut Vec<Piece<'a>>,
@@ -701,7 +809,18 @@ fn call<'a>(
     } else {
         name
     };
+    // `a [NOT] LIKE|ILIKE ANY|SOME|ALL (p, ...)`, as Spark writes the form.
     match (op, args.len()) {
+        (Some(op), n) if n >= 1 && op.quantified_like().is_some() => {
+            let q = op.quantified_like().unwrap_or_default();
+            out.extend([arg(0), Piece::Str(if q.negated { " NOT " } else { " " })]);
+            out.extend([
+                Piece::Str(if q.insensitive { "ILIKE " } else { "LIKE " }),
+                Piece::Str(if q.all { "ALL (" } else { "ANY (" }),
+            ]);
+            list(&args[1..], out);
+            out.push(Piece::Str(")"));
+        }
         (Some(op), 2) if is_infix(op) && !distinct => {
             out.extend([Piece::Str("("), arg(0), Piece::Str(" ")]);
             out.extend([
@@ -766,7 +885,7 @@ fn call<'a>(
             if distinct {
                 out.push(Piece::Str("DISTINCT "));
             }
-            list(args, out);
+            named_list(args, arg_names, out);
             out.push(Piece::Str(")"));
         }
     }

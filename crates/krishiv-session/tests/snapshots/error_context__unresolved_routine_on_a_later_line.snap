@@ -1,0 +1,8 @@
+---
+source: crates/krishiv-session/tests/error_context.rs
+expression: "render_with_context(&e, sql)"
+---
+[UNRESOLVED_ROUTINE] Cannot resolve routine `not_exist` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]. SQLSTATE: 42883
+== SQL (line 2, position 3) ==
+  not_exist(2)
+  ^^^^^^^^^^^^

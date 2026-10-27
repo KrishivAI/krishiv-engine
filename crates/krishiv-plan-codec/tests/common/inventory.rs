@@ -11,7 +11,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, AggregateOutput};
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, JoinDistribution,
+    AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
     SubqueryValueKind,
@@ -28,11 +28,12 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DecimalType, parse_data_type};
 
 pub(crate) fn env() -> ExprEnv {
     ExprEnv {
         ansi: true,
+        legacy_statistical_aggregate: false,
         zone: Some(-28_800),
         query_start_micros: 1_760_000_000_123_456,
         user: Arc::from("analyst"),
@@ -369,6 +370,8 @@ fn join(join_type: JoinType) -> HashJoinPlan {
         build_keys: vec![1, 0],
         null_safe: vec![false, true],
         residual: Some(residual()),
+        single_match: false,
+        distinct_build: false,
         runtime_filters: vec![JoinFilterPlan {
             id: FilterId(3),
             key: 0,
@@ -382,6 +385,25 @@ fn join(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_fpp: 0.05,
             },
         }],
+        distribution: JoinDistribution::Broadcast,
+    }
+}
+
+/// An existence or single-match join over one key, without a residual
+/// condition or runtime filters (the single-match flag rides on a plain
+/// left outer join).
+fn subquery_join(join_type: JoinType) -> HashJoinPlan {
+    HashJoinPlan {
+        probe: boxed(scan()),
+        build: boxed(PhysNode::Scan(file_scan())),
+        join_type,
+        probe_keys: vec![0],
+        build_keys: vec![1],
+        null_safe: vec![false],
+        residual: None,
+        single_match: false,
+        distinct_build: false,
+        runtime_filters: Vec::new(),
         distribution: JoinDistribution::Broadcast,
     }
 }
@@ -653,6 +675,29 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             }),
         ),
         (
+            "hash_join_existence",
+            PhysNode::HashJoin(HashJoinPlan {
+                distinct_build: true,
+                ..subquery_join(JoinType::Existence)
+            }),
+        ),
+        (
+            "hash_join_single_match",
+            PhysNode::HashJoin(HashJoinPlan {
+                single_match: true,
+                ..subquery_join(JoinType::LeftOuter)
+            }),
+        ),
+        (
+            "nested_loop_existence",
+            PhysNode::NestedLoopJoin(NestedLoopPlan {
+                probe: boxed(scan()),
+                build: boxed(PhysNode::OneRow),
+                join_type: JoinType::Existence,
+                residual: Some(residual()),
+            }),
+        ),
+        (
             "nested_loop_join",
             PhysNode::NestedLoopJoin(NestedLoopPlan {
                 probe: boxed(scan()),
@@ -678,7 +723,22 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             PhysNode::Exchange(ExchangePlan {
                 id: ExchangeId(11),
                 input: boxed(scan()),
-                partitioning: Partitioning::Hash { keys: vec![0, 1] },
+                // A plan from before the routing hash was named.
+                partitioning: Partitioning::Hash {
+                    keys: vec![0, 1],
+                    scheme: HashScheme::Unpinned,
+                },
+            }),
+        ),
+        (
+            "exchange_hash_key_group",
+            PhysNode::Exchange(ExchangePlan {
+                id: ExchangeId(16),
+                input: boxed(scan()),
+                partitioning: Partitioning::Hash {
+                    keys: vec![1, 0],
+                    scheme: HashScheme::KeyGroupV1,
+                },
             }),
         ),
         (
@@ -720,6 +780,13 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
 
 /// A plan of `root`, with a two-level explain tree and a warning.
 pub(crate) fn plan_of(root: PhysNode) -> PhysicalPlan {
+    plan_of_env(root, env())
+}
+
+/// [`plan_of`] with `env`: the golden for the
+/// `legacy_statistical_aggregate` feature sets the flag the wire now
+/// carries.
+pub(crate) fn plan_of_env(root: PhysNode, env: ExprEnv) -> PhysicalPlan {
     let explain = ExplainNode::new(
         "Root",
         "details",
@@ -728,8 +795,7 @@ pub(crate) fn plan_of(root: PhysNode) -> PhysicalPlan {
             ExplainNode::new("Right", "", vec![ExplainNode::leaf("Leaf", "x")]),
         ],
     );
-    PhysicalPlan::new(root, schema(), explain, env())
-        .with_warnings(vec!["a hint was ignored".into()])
+    PhysicalPlan::new(root, schema(), explain, env).with_warnings(vec!["a hint was ignored".into()])
 }
 
 /// Every kind of expression and literal, in one projection.
@@ -876,6 +942,104 @@ pub(crate) fn udf_call() -> PhysNode {
     }
 }
 
+/// Lambda expressions and variables: a `transform` over an array column
+/// (`transform(xs, x -> x * 2)`). The array type needs `nested_types` too.
+pub(crate) fn lambda_functions() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let array = t("array<int>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(3, "xs", array.clone(), true));
+    }
+    let xs = col(3, "xs", array.clone());
+    let var = || {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(
+            column(11, "x", DataType::Integer, true),
+        ))))
+    };
+    let doubled = call(
+        Builtin::Multiply,
+        vec![var(), lit(Literal::Integer(2))],
+        DataType::Integer,
+    );
+    let transform = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            // The codec passes ids through; this is not the registry's.
+            id: FunctionId::Registry {
+                name: "transform".to_owned(),
+                id: 0,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![
+                xs,
+                Arc::new(Expr::new(ExprNode::Lambda {
+                    params: vec![column(11, "x", DataType::Integer, true)],
+                    body: doubled,
+                })),
+            ],
+            distinct: false,
+            filter: None,
+            data_type: array,
+            nullable: true,
+            deterministic: true,
+        },
+    ))));
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "doubled".to_owned(),
+            expr: transform,
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+/// Array, map and struct types (depth 4, nullability, a comment) in a
+/// scan column, a cast, a typed NULL, a function and an alias.
+pub(crate) fn nested_types() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let deep = t("array<struct<a:int not null comment 'c',b:map<string,array<double>>>>");
+    let map = t("map<string,struct<a:array<map<int,struct<b:timestamp_ntz>>>>>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(3, "n", deep.clone(), true));
+    }
+    let n = col(3, "n", deep.clone());
+    let items = vec![
+        ProjectItemPlan::Expr {
+            name: "cast".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&n),
+                to: t("array<struct<a:bigint,b:map<string,array<double>>>>"),
+                mode: CastMode::Ansi,
+            })),
+        },
+        ProjectItemPlan::Expr {
+            name: "null".to_owned(),
+            expr: lit(Literal::Null(Some(map))),
+        },
+        ProjectItemPlan::Expr {
+            name: "f".to_owned(),
+            expr: call(Builtin::Concat, vec![Arc::clone(&n)], deep),
+        },
+        ProjectItemPlan::Expr {
+            name: "alias".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: n,
+                output: column(11, "alias", t("struct<>"), true),
+            }))),
+        },
+    ];
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3)],
+        items,
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// The named plans the inventory test, the error tests and the golden
 /// files share.
 pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
@@ -885,5 +1049,47 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
     out.push(("rust_udf".to_owned(), plan_of(udf_call())));
+    // The expression environment flag the `legacy_statistical_aggregate`
+    // feature is about: the same root as `one_row`, under a session with
+    // `spark.sql.legacy.statisticalAggregate` set. With no moment aggregate
+    // in the plan it lists no feature, so readers without it keep reading
+    // the plan; the flag itself still travels on the wire.
+    let mut legacy = env();
+    legacy.legacy_statistical_aggregate = true;
+    out.push((
+        "one_row_legacy_statistical_aggregate".to_owned(),
+        plan_of_env(PhysNode::OneRow, legacy),
+    ));
+    out.push(("nested_types".to_owned(), plan_of(nested_types())));
+    out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
+    out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out
+}
+
+/// A struct field access (`GetStructField`): the `b` of a struct column.
+pub(crate) fn struct_field() -> PhysNode {
+    let t = |s: &str| parse_data_type(s).unwrap();
+    let st = t("struct<a:int,b:string>");
+    let mut scan = scan();
+    if let PhysNode::Scan(s) = &mut scan {
+        s.scan.output.push(column(4, "st", st.clone(), false));
+    }
+    let base = col(4, "st", st);
+    let field = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+        base,
+        ordinal: 1,
+        name: "b".to_owned(),
+        data_type: DataType::String,
+        nullable: true,
+    })));
+    PhysNode::Project {
+        input: boxed(scan),
+        layout: vec![AttrId(1), AttrId(2), AttrId(3), AttrId(4)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "b".to_owned(),
+            expr: field,
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
 }

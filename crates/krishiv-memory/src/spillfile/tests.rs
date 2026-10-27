@@ -1402,6 +1402,7 @@ fn config_keys_drive_the_spill_config() {
         ("krishiv.spill.maxBytes", "10g"),
         ("krishiv.spill.compression", "ZSTD"),
         ("krishiv.spill.zstd.level", "7"),
+        ("krishiv.spill.dropBehindBytes", "0"),
     ])
     .unwrap();
     let c = SpillConfig::from_config(&config);
@@ -1409,6 +1410,8 @@ fn config_keys_drive_the_spill_config() {
     assert_eq!(c.max_bytes, 10 << 30);
     assert_eq!(c.codec, SpillCodec::Zstd);
     assert_eq!(c.zstd_level, 7);
+    assert_eq!(c.drop_behind, 0);
+    assert_eq!(SpillConfig::default().drop_behind, 8 << 20);
 
     assert_eq!(SpillCodec::from_name("none"), Some(SpillCodec::None));
     assert_eq!(SpillCodec::from_name("lz4"), Some(SpillCodec::Lz4));
@@ -1649,4 +1652,39 @@ fn ids_are_unique_across_threads() {
     let unique: std::collections::HashSet<&String> = all.iter().collect();
     assert_eq!(unique.len(), all.len());
     assert!(all.iter().all(|id| super::dir::valid_id(id)));
+}
+
+#[test]
+fn a_lock_not_yet_published_is_never_reclaimed_and_a_dead_one_is() {
+    let dir = TestDir::new();
+    dir.create();
+    // A start in progress holds its unpublished lock: another start must not
+    // touch it (the race that let concurrent starts exhaust their ids).
+    let held = dir.0.join(".krishiv-spill-new-1-a-0-0");
+    let held_file = fs::File::create(&held).unwrap();
+    held_file.lock().unwrap();
+    // One whose process died, and one that is not ours.
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for name in [".krishiv-spill-new-2-a-0-0", ".krishiv-spill-new-NOT_AN_ID"] {
+        let f = fs::File::create(dir.0.join(name)).unwrap();
+        f.set_modified(old).unwrap();
+    }
+    // And a fresh unlocked one: its creator may be about to lock it.
+    fs::write(dir.0.join(".krishiv-spill-new-3-a-0-0"), b"").unwrap();
+
+    let manager = SpillManager::open(&dir.config(SpillCodec::Lz4)).unwrap();
+    let names = entries(&dir.0);
+    assert!(names.contains(&".krishiv-spill-new-1-a-0-0".to_owned()));
+    assert!(names.contains(&".krishiv-spill-new-NOT_AN_ID".to_owned()));
+    assert!(names.contains(&".krishiv-spill-new-3-a-0-0".to_owned()));
+    assert!(!names.contains(&".krishiv-spill-new-2-a-0-0".to_owned()));
+    // Opening leaves no unpublished lock of its own behind.
+    assert_eq!(
+        names
+            .iter()
+            .filter(|n| n.starts_with(".krishiv-spill-new-"))
+            .count(),
+        3
+    );
+    drop(manager);
 }

@@ -67,6 +67,30 @@ pub enum ExprNode {
     Star(Star),
     /// An unresolved function call, operators included.
     Function(FunctionCall),
+    /// `x -> body` or `(x, y) -> body`: a lambda, bound by the analyzer
+    /// only as a direct argument of a higher-order function (`transform`,
+    /// `filter`, `exists`, `forall`, ...), where its variables take the
+    /// argument's element types (Spark's `NamedLambdaVariable`). The node
+    /// stays in place when bound: its `params` are then the variables
+    /// themselves (with stable [`AttrId`] identities), and its body holds
+    /// [`ResolvedExpr::LambdaVar`] leaves reading them.
+    Lambda {
+        /// The variables, in parameter order (with their stable identities
+        /// once bound; placeholders before).
+        params: Vec<BoundColumn>,
+        /// The body, resolved against the variables and the enclosing
+        /// query's columns.
+        body: Arc<Expr>,
+    },
+    /// An unresolved `expr.field`: the field `name` of the struct `base`
+    /// (Spark's `GetStructField`). A `Column` base lowers to a longer
+    /// [`ColumnRef`] instead; anything else becomes this node.
+    Field {
+        /// The struct value.
+        base: Arc<Expr>,
+        /// The field name, as written.
+        name: String,
+    },
     /// `CAST(expr AS to)`; `TRY_CAST` is [`CastMode::Try`].
     Cast {
         /// The value to cast.
@@ -119,6 +143,10 @@ pub struct ColumnRef {
 pub struct Star {
     /// The qualifier parts; empty for a bare `*`.
     pub qualifier: Vec<String>,
+    /// `* EXCEPT (cols)`: excluded column paths, each as written (a
+    /// top-level column like `id`, or qualified like `t.id`; longer paths
+    /// name nested struct fields and are rejected by the analyzer).
+    pub except: Vec<Vec<String>>,
     /// The DataFrame the star expands, for PySpark's `df["*"]`; resolved
     /// as for [`ColumnRef::plan_id`].
     pub plan_id: Option<PlanId>,
@@ -127,12 +155,21 @@ pub struct Star {
 /// An unresolved function call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionCall {
-    /// The function name parts as written (`["upper"]`, or
-    /// `["system", "builtin", "upper"]` for a qualified call); operators
-    /// use their canonical names, always unqualified.
-    pub name: Vec<String>,
+    /// The function name; operators use their canonical names.
+    pub name: String,
+    /// The qualifier parts (`builtin` in `builtin.abs(x)`), outermost
+    /// first; empty for an unqualified call. The analyzer resolves
+    /// `builtin.` / `system.builtin.` (case-insensitively) to the builtin
+    /// function, `session.` / `system.session.` to a session UDF, and
+    /// reports any other qualifier as an unresolved routine.
+    pub qualifier: Vec<String>,
     /// The arguments.
     pub args: Vec<Arc<Expr>>,
+    /// The parameter name of each argument (`name => value`), if written;
+    /// `None` for a positional argument. Empty when every argument is
+    /// positional (as every front end but SQL lowering writes); otherwise
+    /// as long as [`Self::args`].
+    pub arg_names: Vec<Option<String>>,
     /// `f(DISTINCT ...)`.
     pub distinct: bool,
     /// `f(...) FILTER (WHERE filter)`.
@@ -140,14 +177,11 @@ pub struct FunctionCall {
 }
 
 impl FunctionCall {
-    /// The name when it is unqualified (a single part), as operators and
+    /// The name when it is unqualified (no qualifier), as operators and
     /// the name-based function checks require.
     #[must_use]
     pub fn unqualified(&self) -> Option<&str> {
-        match self.name.as_slice() {
-            [name] => Some(name),
-            _ => None,
-        }
+        self.qualifier.is_empty().then_some(&self.name)
     }
 }
 
@@ -382,8 +416,27 @@ pub enum ResolvedExpr {
     Column(BoundColumn),
     /// A column of an enclosing query, inside a correlated subquery.
     OuterColumn(BoundColumn),
+    /// A lambda variable, bound by the analyzer to one of the enclosing
+    /// [`ExprNode::Lambda`] node's parameters (Spark's
+    /// `NamedLambdaVariable`). It is not an output attribute: only the
+    /// higher-order function compiled around the lambda reads it.
+    LambdaVar(BoundColumn),
     /// A function bound to its identity and result type.
     Function(ResolvedFunction),
+    /// The field `name` (position `ordinal`) of the struct `base` (Spark's
+    /// `GetStructField`), resolved under `spark.sql.caseSensitive`.
+    Field {
+        /// The struct value.
+        base: Arc<Expr>,
+        /// The field's position in the struct.
+        ordinal: usize,
+        /// The field's name.
+        name: String,
+        /// The field's type.
+        data_type: DataType,
+        /// Whether the field (or the struct) may be null.
+        nullable: bool,
+    },
     /// `expr AS name`, producing a new attribute.
     Alias {
         /// The aliased expression.
@@ -429,11 +482,32 @@ impl Expr {
     #[must_use]
     pub fn function(name: impl Into<String>, args: Vec<Self>) -> Self {
         Self::new(ExprNode::Function(FunctionCall {
-            name: vec![name.into()],
+            name: name.into(),
+            qualifier: Vec::new(),
             args: args.into_iter().map(Arc::new).collect(),
+            arg_names: Vec::new(),
             distinct: false,
             filter: None,
         }))
+    }
+
+    /// An unresolved `params -> body` lambda. Parameter identities are
+    /// placeholders (`AttrId(u64::MAX)`) until the analyzer binds them;
+    /// passes that reserve fresh ids (see `first_free_id`) skip them.
+    #[must_use]
+    pub fn lambda(params: Vec<String>, body: Self) -> Self {
+        Self::new(ExprNode::Lambda {
+            params: params
+                .into_iter()
+                .map(|name| BoundColumn {
+                    id: AttrId(u64::MAX),
+                    name,
+                    data_type: DataType::Null,
+                    nullable: true,
+                })
+                .collect(),
+            body: Arc::new(body),
+        })
     }
 
     /// An unresolved call of a canonical operator.
@@ -485,7 +559,9 @@ impl Expr {
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
-            | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
+            ) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })
             | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
@@ -495,7 +571,11 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
-            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => f(expr),
+            | ExprNode::Lambda { body: expr, .. }
+            | ExprNode::Field { base: expr, .. }
+            | ExprNode::Resolved(
+                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+            ) => f(expr),
             ExprNode::Subquery { kind, .. } => match kind {
                 SubqueryKind::In(values) => values.iter().for_each(f),
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}
@@ -525,7 +605,9 @@ impl Expr {
             | ExprNode::Literal(_)
             | ExprNode::TypedLiteral { .. }
             | ExprNode::Star(_)
-            | ExprNode::Resolved(ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_)) => {}
+            | ExprNode::Resolved(
+                ResolvedExpr::Column(_) | ResolvedExpr::OuterColumn(_) | ResolvedExpr::LambdaVar(_),
+            ) => {}
             ExprNode::Function(FunctionCall { args, filter, .. })
             | ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
                 args, filter, ..
@@ -535,7 +617,11 @@ impl Expr {
             }
             ExprNode::Cast { expr, .. }
             | ExprNode::Alias { expr, .. }
-            | ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => f(expr),
+            | ExprNode::Lambda { body: expr, .. }
+            | ExprNode::Field { base: expr, .. }
+            | ExprNode::Resolved(
+                ResolvedExpr::Alias { expr, .. } | ResolvedExpr::Field { base: expr, .. },
+            ) => f(expr),
             ExprNode::Subquery { kind, .. } => match kind {
                 SubqueryKind::In(values) => values.iter_mut().for_each(f),
                 SubqueryKind::Scalar | SubqueryKind::Exists => {}

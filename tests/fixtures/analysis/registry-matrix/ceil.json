@@ -1,0 +1,78 @@
+{
+  "entries": [
+    {
+      "id": "ceil#4ca9bc16d90d/ansi_on",
+      "reason": "SELECT ceil(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#4ca9bc16d90d/ansi_off",
+      "reason": "SELECT ceil(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#4dce47b6e5a6/ansi_on",
+      "reason": "SELECT ceil(3.1411, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceil#4dce47b6e5a6/ansi_off",
+      "reason": "SELECT ceil(3.1411, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceil#5b3a37a449f4/ansi_on",
+      "reason": "SELECT ceil(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#5b3a37a449f4/ansi_off",
+      "reason": "SELECT ceil(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#bb23a5bd68bf/ansi_on",
+      "reason": "SELECT ceil(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#bb23a5bd68bf/ansi_off",
+      "reason": "SELECT ceil(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#c7baf502834a/ansi_on",
+      "reason": "SELECT ceil(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#c7baf502834a/ansi_off",
+      "reason": "SELECT ceil(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#ca364ac004a2/ansi_on",
+      "reason": "SELECT ceil(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#ca364ac004a2/ansi_off",
+      "reason": "SELECT ceil(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#ead4d6922dcb/ansi_on",
+      "reason": "SELECT ceil(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#ead4d6922dcb/ansi_off",
+      "reason": "SELECT ceil(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "ceil#ed407430737b/ansi_on",
+      "reason": "SELECT ceil(3.1411, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceil#ed407430737b/ansi_off",
+      "reason": "SELECT ceil(3.1411, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceil#ef22c7d14e9b/ansi_on",
+      "reason": "SELECT ceil(3.1411, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "ceil#ef22c7d14e9b/ansi_off",
+      "reason": "SELECT ceil(3.1411, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has NON_FOLDABLE_ARGUMENT"
+    }
+  ],
+  "format_version": 1,
+  "function": "ceil"
+}

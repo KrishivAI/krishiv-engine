@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "positive#66e665f762a8/ansi_on",
+      "reason": "SELECT positive(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "positive#66e665f762a8/ansi_off",
+      "reason": "SELECT positive(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "positive#800db4352ef6/ansi_on",
+      "reason": "SELECT positive(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "positive#800db4352ef6/ansi_off",
+      "reason": "SELECT positive(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "positive#871141615963/ansi_on",
+      "reason": "SELECT positive(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "positive#871141615963/ansi_off",
+      "reason": "SELECT positive(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "positive"
+}

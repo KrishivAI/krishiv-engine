@@ -19,12 +19,59 @@
 use krishiv_common::error::{
     CreateViewWithIfNotExistsAndReplace, FailedToParseTooComplex, IdentifierTooManyNameParts,
     InvalidIdentifier, InvalidResetCommandFormat, InvalidSetSyntax, InvalidStatementOrClause,
-    InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0053,
-    ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
+    InvalidTempObjQualifier, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp0035,
+    LegacyErrorTemp0053, ParseEmptyStatement, ParseSyntaxError, SyntaxDiscontinuedBangEqualsNot,
     UnclosedBracketedComment,
 };
 
 use crate::ast::Span;
+
+/// The `ParseException` suffix for `error` over the (redacted) text `sql`
+/// (`""` when `error` is not what parsing `sql` raises): Spark shows a
+/// parse error as its `ParseException` does: ` (line N, pos M)` (0-based
+/// position) after the message, then the complete command with a `-` padded
+/// `^^^` marker under the offending line, not
+/// with a query-context summary (Spark's golden `PARSE_*` entries carry no
+/// `queryContext`). Both user surfaces (the `krishiv sql` command and the
+/// text of Python exceptions from `spark.sql`) use this for parse errors
+/// and [`krishiv_common::error::render_with_context`] otherwise, so the two
+/// agree and match PySpark.
+///
+/// The statement is parsed again here to recover the span, also when it is
+/// empty (a syntax error at the end of the input), which a query context
+/// does not show. The suffix is `""` unless re-parsing `sql` raises the
+/// same error class, so every parser error class (including
+/// `FAILED_TO_PARSE_TOO_COMPLEX`, whose span is the whole statement) takes
+/// this layout without a class-prefix list to maintain. `line_offset` is
+/// the number of input lines before `sql` (a multi-statement input counts
+/// lines from its start on every surface).
+#[must_use]
+pub fn parse_exception_suffix(sql: &str, line_offset: usize, error: &KrishivError) -> String {
+    let Err(parse) = crate::parse_statement(sql, &crate::ParserOptions::default()) else {
+        return String::new();
+    };
+    if parse.error.error_class() != error.error_class() {
+        return String::new();
+    };
+    let start = parse.span.start.min(sql.len());
+    let before = &sql[..sql.floor_char_boundary(start)];
+    let in_sql_line = before.matches('\n').count() + 1;
+    let line_no = line_offset + in_sql_line;
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    let col = before[line_start..].chars().count();
+    // Spark's layout: the position after the message, then the complete
+    // command with a `-` padded `^^^` marker under the offending line.
+    let mut out = format!(" (line {line_no}, pos {col})\n\n== SQL ==\n");
+    for (i, line) in sql.split('\n').enumerate() {
+        out.push_str(line);
+        out.push('\n');
+        if i + 1 == in_sql_line {
+            out.push_str(&"-".repeat(col));
+            out.push_str("^^^\n");
+        }
+    }
+    out
+}
 
 /// A statement Spark's parser would reject.
 #[derive(Debug, Clone, Eq, thiserror::Error)]
@@ -190,4 +237,10 @@ pub(crate) fn unsupported_set_time_zone(form: &str, span: Span) -> ParseError {
         },
         span,
     )
+}
+
+/// `_LEGACY_ERROR_TEMP_0035`: a bare `ALTER TABLE ... CHANGE column`
+/// (Spark's message names what the change needs).
+pub(crate) fn legacy_error_temp_0035(message: String, span: Span) -> ParseError {
+    at(LegacyErrorTemp0035 { message }, span)
 }

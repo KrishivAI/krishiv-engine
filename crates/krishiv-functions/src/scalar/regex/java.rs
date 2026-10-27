@@ -4,12 +4,12 @@
 use std::fmt::Write;
 
 /// A translated pattern.
-pub(super) struct Translated {
+pub(crate) struct Translated {
     /// The pattern in `fancy_regex` syntax.
-    pub(super) text: String,
+    pub(crate) text: String,
     /// Whether the source has a `$` whose meaning depends on a final line
     /// terminator (so [`translate`] has a second form for those inputs).
-    pub(super) has_dollar: bool,
+    pub(crate) has_dollar: bool,
 }
 
 /// Java's line terminators other than `\n` and `\r`, as regex escapes.
@@ -89,7 +89,7 @@ impl Flags {
 /// Translates the Java pattern `src`. With `terminated`, a `$` also
 /// matches before a final line terminator (the form for inputs that end
 /// with one; without it `$` is `\z`).
-pub(super) fn translate(src: &str, terminated: bool) -> Result<Translated, String> {
+pub(crate) fn translate(src: &str, terminated: bool) -> Result<Translated, String> {
     if src.chars().count() > MAX_PATTERN_LEN {
         return Err("pattern too large".to_owned());
     }

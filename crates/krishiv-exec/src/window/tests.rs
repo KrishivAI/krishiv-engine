@@ -479,7 +479,16 @@ fn reference(
                         }
                         AggregateFunction::AnyValue { .. }
                         | AggregateFunction::MaxBy
-                        | AggregateFunction::MinBy => {
+                        | AggregateFunction::MinBy
+                        | AggregateFunction::StddevSamp
+                        | AggregateFunction::StddevPop
+                        | AggregateFunction::VarSamp
+                        | AggregateFunction::VarPop
+                        | AggregateFunction::Skewness
+                        | AggregateFunction::Kurtosis
+                        | AggregateFunction::Corr
+                        | AggregateFunction::CovarSamp
+                        | AggregateFunction::CovarPop => {
                             unreachable!("no window test aggregates with this function")
                         }
                     }

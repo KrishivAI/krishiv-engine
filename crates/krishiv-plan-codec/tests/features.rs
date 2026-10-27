@@ -15,7 +15,7 @@ use krishiv_plan_codec::{
 };
 use prost::Message as _;
 
-use inventory::{cases, plan_of};
+use inventory::{cases, plan_of, plan_of_env};
 
 fn message(name: &str) -> pb::PhysicalPlan {
     let (_, plan) = cases().into_iter().find(|(n, _)| n == name).unwrap();
@@ -34,6 +34,11 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert_eq!(m.epoch, EPOCH);
     assert_eq!(message("limit_offset").features, ["limit_offset"]);
     assert!(message("limit").features.is_empty());
+    // A lambda over arrays needs both features.
+    assert_eq!(
+        message("lambda_functions").features,
+        ["lambda_functions", "nested_types"]
+    );
     assert_eq!(
         message("window_frames").features,
         ["window", "window_frame_offsets"]
@@ -42,7 +47,6 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("window_offset_values").features,
         ["window", "window_frame_offsets", "window_offset_functions"]
     );
-    assert_eq!(message("rust_udf").features, ["rust_udf"]);
     // An offset of zero is the baseline `Limit`.
     let zero = plan_of(PhysNode::Limit {
         input: Box::new(PhysNode::OneRow),
@@ -50,8 +54,15 @@ fn the_header_lists_exactly_the_features_in_use() {
         limit: 1,
     });
     assert!(plan_features(&zero).is_empty());
-    // Every registered feature occurs in some inventory case.
+    // Every registered feature occurs in some inventory case, except
+    // `legacy_statistical_aggregate`: it fires only around a moment
+    // aggregate, and the encoder refuses every moment aggregate (pinned by
+    // the TPC-DS ratchet), so no encodable case can use it. The test below
+    // pins its `plan_features` rule on plans that are never encoded.
     for f in Feature::ALL {
+        if *f == Feature::LegacyStatisticalAggregate {
+            continue;
+        }
         assert!(
             cases().iter().any(|(_, p)| plan_features(p).contains(f)),
             "{f}: no inventory case uses it"
@@ -81,6 +92,123 @@ fn a_feature_in_a_subquery_plan_counts() {
     assert_eq!(decode(&encode(&plan).unwrap()).unwrap(), plan);
 }
 
+/// `legacy_statistical_aggregate` fires only for a plan that sets the flag
+/// around a moment aggregate. The flag alone changes nothing the encoder
+/// can write (it refuses every moment aggregate), so such plans list no
+/// feature: a reader without it keeps reading them, and the flag itself
+/// still round-trips.
+#[test]
+fn legacy_statistical_aggregate_needs_a_moment_aggregate() {
+    use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, AggregateOutput};
+    use krishiv_exec::physical::{AggregatePlan, SubqueryPlan};
+    use krishiv_exec::window::{
+        FrameUnits, WindowFrame, WindowFunction, WindowFunctionPlan, WindowPlan,
+    };
+
+    let moment = || {
+        AggregateExpr::new(
+            AggregateFunction::StddevSamp,
+            0,
+            arrow_schema::DataType::Float64,
+            "s",
+        )
+    };
+    let aggregate_node = || PhysNode::Aggregate {
+        input: Box::new(inventory::scan()),
+        aggregate: AggregatePlan {
+            group_by: Vec::new(),
+            aggregates: vec![moment()],
+            distinct: vec![false],
+            output: AggregateOutput::Final,
+        },
+    };
+    let legacy = || {
+        let mut env = inventory::env();
+        env.legacy_statistical_aggregate = true;
+        env
+    };
+
+    // The flag alone lists no feature.
+    let (_, flag_only) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "one_row_legacy_statistical_aggregate")
+        .unwrap();
+    assert!(plan_features(&flag_only).is_empty());
+    assert!(to_message(&flag_only).unwrap().features.is_empty());
+    // A reader without the feature still reads such a plan, flag included.
+    let bytes = encode(&flag_only).unwrap();
+    let without = ReaderFeatures::only([]);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &without).unwrap(),
+        flag_only
+    );
+    // A moment aggregate without the flag lists none either.
+    assert!(plan_features(&plan_of(aggregate_node())).is_empty());
+    // Both together list the feature: in an aggregate node, ...
+    let with_both = plan_of_env(aggregate_node(), legacy());
+    assert_eq!(
+        plan_features(&with_both).into_iter().collect::<Vec<_>>(),
+        [Feature::LegacyStatisticalAggregate]
+    );
+    // ... in a window function, ...
+    let window = plan_of_env(
+        PhysNode::Window {
+            input: Box::new(inventory::scan()),
+            window: WindowPlan {
+                partition_by: Vec::new(),
+                order_by: Vec::new(),
+                functions: vec![WindowFunctionPlan {
+                    function: WindowFunction::Aggregate(moment()),
+                    frame: WindowFrame::whole(FrameUnits::Rows),
+                    filter: None,
+                    name: "w".to_owned(),
+                }],
+            },
+        },
+        legacy(),
+    );
+    assert_eq!(
+        plan_features(&window).into_iter().collect::<Vec<_>>(),
+        [Feature::LegacyStatisticalAggregate, Feature::Window]
+    );
+    // ... and in a subquery plan ...
+    let subquery = plan_of_env(
+        PhysNode::Filter {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            predicate: inventory::predicate(),
+            subqueries: vec![SubqueryPlan {
+                plan: aggregate_node(),
+                ..inventory::subquery()
+            }],
+        },
+        legacy(),
+    );
+    assert_eq!(
+        plan_features(&subquery).into_iter().collect::<Vec<_>>(),
+        [Feature::LegacyStatisticalAggregate]
+    );
+    // ... but never for another aggregate under the flag.
+    let plain = plan_of_env(
+        PhysNode::Aggregate {
+            input: Box::new(inventory::scan()),
+            aggregate: AggregatePlan {
+                group_by: Vec::new(),
+                aggregates: vec![AggregateExpr::new(
+                    AggregateFunction::Sum,
+                    0,
+                    arrow_schema::DataType::Float64,
+                    "s",
+                )],
+                distinct: vec![false],
+                output: AggregateOutput::Final,
+            },
+        },
+        legacy(),
+    );
+    assert!(plan_features(&plain).is_empty());
+}
+
 #[test]
 fn constructs_map_to_one_feature_or_the_baseline() {
     let (_, window) = cases()
@@ -91,6 +219,11 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         feature_of(Construct::Node(window.root())),
         Some(Feature::Window)
     );
+    assert_eq!(
+        feature_of(Construct::Lambda),
+        Some(Feature::LambdaFunctions)
+    );
+    assert_eq!(Feature::LambdaFunctions.kind(), FeatureKind::Semantic);
     assert_eq!(feature_of(Construct::Node(&PhysNode::OneRow)), None);
     let null_of = krishiv_exec::physical::ProjectItemPlan::NullOf {
         index: 0,
@@ -102,11 +235,62 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         None
     );
     assert_eq!(
+        feature_of(Construct::Join(krishiv_exec::JoinType::Existence)),
+        Some(Feature::ExistenceJoin)
+    );
+    // The single-match flag is a property of the hash join node: a plain
+    // left outer join is the baseline, a single-match one needs the
+    // feature. `distinct_build` needs none: a reader that ignores it builds
+    // every row and returns the same result.
+    let join = |single_match, distinct_build, join_type| {
+        let (_, plan) = cases()
+            .into_iter()
+            .find(|(n, _)| n == "hash_join_single_match")
+            .unwrap();
+        match plan.root() {
+            PhysNode::HashJoin(join) => feature_of(Construct::Node(&PhysNode::HashJoin(
+                krishiv_exec::physical::HashJoinPlan {
+                    single_match,
+                    distinct_build,
+                    join_type,
+                    ..join.clone()
+                },
+            ))),
+            _ => None,
+        }
+    };
+    let (outer, semi) = (
+        krishiv_exec::JoinType::LeftOuter,
+        krishiv_exec::JoinType::LeftSemi,
+    );
+    assert_eq!(join(false, false, outer), None);
+    assert_eq!(join(true, false, outer), Some(Feature::JoinSingleMatch));
+    assert_eq!(join(false, true, semi), None);
+    assert_eq!(Feature::ExistenceJoin.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::JoinSingleMatch.kind(), FeatureKind::Semantic);
+    assert_eq!(
         feature_of(Construct::Partitioning(
             &krishiv_exec::physical::Partitioning::Single
         )),
         None
     );
+    for (scheme, feature) in [
+        (krishiv_exec::physical::HashScheme::Unpinned, None),
+        (
+            krishiv_exec::physical::HashScheme::KeyGroupV1,
+            Some(Feature::KeyGroupHash),
+        ),
+    ] {
+        assert_eq!(
+            feature_of(Construct::Partitioning(
+                &krishiv_exec::physical::Partitioning::Hash {
+                    keys: vec![0],
+                    scheme
+                }
+            )),
+            feature
+        );
+    }
     assert_eq!(
         feature_of(Construct::Window(
             &krishiv_exec::window::WindowFunction::RowNumber
@@ -118,26 +302,6 @@ fn constructs_map_to_one_feature_or_the_baseline() {
             krishiv_exec::aggregate::AggregateFunction::Sum
         )),
         None
-    );
-    assert_eq!(
-        feature_of(Construct::Function(&krishiv_plan::FunctionId::Builtin(
-            krishiv_plan::Builtin::Add
-        ))),
-        None
-    );
-    assert_eq!(
-        feature_of(Construct::Function(&krishiv_plan::FunctionId::Registry {
-            name: "upper".to_owned(),
-            id: 1,
-        })),
-        None
-    );
-    assert_eq!(
-        feature_of(Construct::Function(&krishiv_plan::FunctionId::Udf {
-            name: "my_udf".to_owned(),
-            version: 7,
-        })),
-        Some(Feature::RustUdf)
     );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
@@ -178,8 +342,6 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         Some(Feature::WindowOffsetFunctions)
     );
     assert_eq!(Feature::Window.kind(), FeatureKind::Semantic);
-    assert_eq!(Feature::RustUdf.kind(), FeatureKind::Semantic);
-    assert_eq!(Feature::RustUdf.to_string(), "rust_udf");
     assert_eq!(Feature::WindowFrameOffsets.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::WindowOffsetFunctions.kind(), FeatureKind::Semantic);
     assert_eq!(Feature::LimitOffset.to_string(), "limit_offset");
@@ -224,24 +386,25 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
             missing: vec!["window".to_owned()]
         }
     );
-    // A reader without `rust_udf` refuses the plan naming it.
-    let udf_bytes = encode(
+    assert_eq!(ReaderFeatures::default(), ReaderFeatures::all());
+    // A reader without `lambda_functions` refuses the lambda plan naming
+    // the feature, even though it knows `nested_types`.
+    let bytes = encode(
         &cases()
             .into_iter()
-            .find(|(n, _)| n == "rust_udf")
+            .find(|(n, _)| n == "lambda_functions")
             .unwrap()
             .1,
     )
     .unwrap();
-    let err = decode_with(&udf_bytes, &Limits::default(), &reader).unwrap_err();
+    let reader = ReaderFeatures::only([Feature::NestedTypes]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
     assert_eq!(
         err,
         CodecError::UnsupportedFeatures {
-            missing: vec!["rust_udf".to_owned()]
+            missing: vec!["lambda_functions".to_owned()]
         }
     );
-    assert!(ReaderFeatures::default().contains(Feature::RustUdf));
-    assert_eq!(ReaderFeatures::default(), ReaderFeatures::all());
 }
 
 #[test]
@@ -407,9 +570,199 @@ fn only_udf_plans_need_rust_udf_and_every_expression_position_counts() {
             build_keys: Vec::new(),
             null_safe: Vec::new(),
             residual: Some(residual),
+            single_match: false,
+            distinct_build: false,
             runtime_filters: Vec::new(),
             distribution: krishiv_exec::physical::JoinDistribution::Broadcast,
         }));
         assert_eq!(plan_features(&plan).contains(&Feature::RustUdf), wants);
     }
+}
+
+#[test]
+fn nested_types_need_their_feature() {
+    let m = message("nested_types");
+    assert_eq!(m.features, ["nested_types"]);
+    let bytes = m.encode_to_vec();
+    // A reader without the feature refuses the plan before reading a node,
+    // naming it; one with it reads the plan back.
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::NestedTypes),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["nested_types".to_owned()]
+        }
+    );
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "nested_types")
+        .unwrap();
+    assert_eq!(decode(&bytes).unwrap(), plan);
+    assert_eq!(Feature::NestedTypes.kind(), FeatureKind::Semantic);
+    // The header cannot hide it.
+    let mut hidden = m;
+    hidden.features.clear();
+    hidden.min_reader_version = 2;
+    corrupt(
+        &hidden,
+        "the feature header does not match the plan's constructs",
+    );
+}
+
+#[test]
+fn a_malformed_nested_type_is_corrupt() {
+    let m = message("nested_types");
+    let nested = pb::data_type::Kind::Nested as i32;
+    let with_type = |edit: &dyn Fn(&mut pb::DataType)| {
+        let mut m = m.clone();
+        let mut done = false;
+        for e in &mut m.exprs {
+            if let Some(pb::expr::Kind::Cast(c)) = &mut e.kind
+                && let Some(t) = c.to.as_mut().filter(|t| t.kind == nested)
+            {
+                edit(t);
+                done = true;
+            }
+        }
+        assert!(done, "no nested cast in the case");
+        m
+    };
+    for json in ["", "not json", r#""integer""#, &"[".repeat(10_000)] {
+        corrupt(
+            &with_type(&|t| t.json = json.to_owned()),
+            "an invalid nested type",
+        );
+    }
+    // Only the canonical form (the encoder's) decodes.
+    corrupt(
+        &with_type(&|t| t.json = t.json.replace(':', ": ")),
+        "an invalid nested type",
+    );
+    let deep = format!(
+        "{}\"integer\"{}",
+        r#"{"type":"array","elementType":"#.repeat(40),
+        r#","containsNull":true}"#.repeat(40)
+    );
+    corrupt(
+        &with_type(&|t| t.json = deep.clone()),
+        "an invalid nested type",
+    );
+    corrupt(
+        &with_type(&|t| {
+            t.kind = pb::data_type::Kind::Integer as i32;
+        }),
+        "a JSON form on a type that is not nested",
+    );
+}
+
+#[test]
+fn a_type_too_deep_for_readers_does_not_encode() {
+    use krishiv_types::{ArrayType, DataType};
+    let mut t = DataType::Integer;
+    for _ in 0..=DataType::MAX_NESTING_DEPTH {
+        t = ArrayType::new(t, true).into();
+    }
+    let plan = plan_of(PhysNode::Project {
+        input: Box::new(PhysNode::OneRow),
+        layout: Vec::new(),
+        items: vec![krishiv_exec::physical::ProjectItemPlan::Expr {
+            name: "x".to_owned(),
+            expr: inventory::lit(krishiv_plan::Literal::Null(Some(t))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    });
+    assert!(matches!(encode(&plan), Err(CodecError::Unsupported(_))));
+}
+
+/// An Arrow type holding an array, a map or a struct.
+fn arrow_list() -> arrow_schema::DataType {
+    use arrow_schema::{DataType as A, Field};
+    A::List(std::sync::Arc::new(Field::new("item", A::Int32, true)))
+}
+
+#[test]
+fn a_nested_type_only_in_an_arrow_field_needs_the_feature() {
+    use arrow_schema::{DataType as A, Field, Fields};
+    use krishiv_exec::physical::{AggregatePlan, SubqueryPlan};
+    let aggregate = {
+        let mut a = inventory::aggregate_exprs().remove(1);
+        a.arg_type = arrow_list();
+        a
+    };
+    let struct_type = A::Struct(Fields::from(vec![Field::new("a", A::Int32, true)]));
+    let with_schema = |t: A| {
+        let plan = plan_of(PhysNode::OneRow);
+        krishiv_exec::physical::PhysicalPlan::new(
+            plan.root().clone(),
+            std::sync::Arc::new(arrow_schema::Schema::new(vec![Field::new("c", t, true)])),
+            plan.explain().clone(),
+            plan.env().clone(),
+        )
+    };
+    let plans = [
+        // A subquery's value type.
+        plan_of(PhysNode::Filter {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            predicate: inventory::predicate(),
+            subqueries: vec![SubqueryPlan {
+                data_type: arrow_list(),
+                ..inventory::subquery()
+            }],
+        }),
+        // An aggregate's argument type.
+        plan_of(PhysNode::Aggregate {
+            input: Box::new(PhysNode::OneRow),
+            aggregate: AggregatePlan {
+                group_by: Vec::new(),
+                distinct: vec![false],
+                aggregates: vec![aggregate],
+                output: krishiv_exec::aggregate::AggregateOutput::Partial,
+            },
+        }),
+        // The plan's output schema.
+        with_schema(struct_type),
+    ];
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::NestedTypes),
+    );
+    for plan in plans {
+        assert!(plan_features(&plan).contains(&Feature::NestedTypes));
+        let bytes = encode(&plan).unwrap();
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["nested_types".to_owned()]
+            }
+        );
+        assert_eq!(decode(&bytes).unwrap(), plan);
+    }
+}
+
+/// A hash exchange naming a routing function this reader does not know is
+/// corrupt: it is never routed by some other function.
+#[test]
+fn an_unknown_hash_scheme_is_corrupt() {
+    let mut m = message("exchange_hash_key_group");
+    let mut hashed = 0;
+    for n in &mut m.nodes {
+        if let Some(pb::node::Kind::Exchange(e)) = &mut n.kind
+            && let Some(pb::partitioning::Kind::Hash(h)) =
+                e.partitioning.as_mut().and_then(|p| p.kind.as_mut())
+        {
+            h.scheme = 99;
+            hashed += 1;
+        }
+    }
+    assert_eq!(hashed, 1);
+    corrupt(&m, "an unknown hash scheme");
 }

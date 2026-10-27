@@ -9,7 +9,8 @@ the `SQLQueryTestSuite` golden runner over `tests/spark-golden/<tag>/` (`.sql.ou
 three-number report, exclusion manifest `tests/spark-golden/exclusions.json`; `cargo xtask golden` writes
 `target/golden-report.json`; `--engine sql-parse` measures the `krishiv-sql` parser on the DQL statements,
 `golden::sql_parse`; `--engine session` runs every statement through `krishiv-session`, `golden::session_engine`),
-the frozen statement-level baseline `tests/spark-golden/known-failures.json` (`golden::known_failures`: every failing
+the frozen statement-level baseline `tests/spark-golden/known-failures.json` (categories and classification rules) with
+one file per golden input file under `tests/spark-golden/known-failures-cases/` (`golden::known_failures`: every failing
 statement with a category — unsupported feature with its plan task, divergence with ADR 0023, or bug with its owner;
 classification rules in the same file, `golden::classify`) and its CI ratchet (test `golden_ratchet`: a newly failing
 statement fails, a listed statement that passes must be removed; refresh with
@@ -34,7 +35,8 @@ layer has one), and the fixtures `cast-timestamp-differential`, `dst-transitions
 `tpch-date-predicates` (tests `cast_timestamp_differential`, `dst_transitions`, `tpch_date_predicates`).
 `registry_matrix` (P2-T153) analyzes every matrix case of a registered built-in function with the production registry
 (type, nullability or analysis error class vs Spark, both ANSI modes); failures are listed with reasons in
-`tests/fixtures/analysis/registry-matrix-manifest.json` (`KRISHIV_UPDATE_MANIFEST=1` rewrites it).
+`tests/fixtures/analysis/registry-matrix/`, one file per function name (`KRISHIV_UPDATE_MANIFEST=1` rewrites
+only the changed files).
 The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
 `file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it, directly and
 through the executor (`file_format::drive::ThroughExecutor`, P2-T117b). `file_format::parquet::ParquetFixture`

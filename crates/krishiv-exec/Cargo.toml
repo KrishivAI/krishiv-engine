@@ -82,6 +82,10 @@ name = "hash_join"
 harness = false
 
 [[bench]]
+name = "routing_hash"
+harness = false
+
+[[bench]]
 name = "row_table"
 harness = false
 required-features = ["row-table-prototype"]

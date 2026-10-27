@@ -15,6 +15,8 @@ arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common" }
 # The built-in function registry and the signature types it shares.
 krishiv-functions = { path = "../krishiv-functions" }
+# The CSV literal inference `schema_of_csv` resolves with (layer L2).
+krishiv-io = { path = "../krishiv-io" }
 # Spark's decimal result types, shared with the kernels that compute them.
 krishiv-kernels = { path = "../krishiv-kernels" }
 # Session UDFs, for constant folding through the registry.

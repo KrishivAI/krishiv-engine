@@ -25,21 +25,29 @@
 
 mod args;
 mod arith;
+mod array;
 mod bitwise;
+mod chars;
+mod codec;
 mod datetime;
 mod hash;
 mod math;
+mod misc;
 mod number;
 mod predicate;
+mod random;
 mod regex;
 mod session;
 mod string;
+mod r#struct;
 mod udf;
+mod url;
 
 pub use regex::{extract_all_pieces, split_regex};
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use arrow_array::ArrayRef;
 use arrow_schema::DataType;
@@ -55,8 +63,14 @@ pub use udf::{bind_udf, failed_execute};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum BindArg {
-    /// A value computed per row, of this type.
-    Column(DataType),
+    /// A value computed per row, of this type; `nullable` whether it may be
+    /// null (struct construction copies it into its fields).
+    Column {
+        /// The argument's Arrow type.
+        ty: DataType,
+        /// Whether the argument may be null.
+        nullable: bool,
+    },
     /// A literal, as a one-row array. Some functions need the value to
     /// bind (the field of `extract`); others treat it as a column.
     Literal(ArrayRef),
@@ -67,15 +81,27 @@ impl BindArg {
     #[must_use]
     pub fn data_type(&self) -> DataType {
         match self {
-            Self::Column(t) => t.clone(),
+            Self::Column { ty, .. } => ty.clone(),
             Self::Literal(a) => a.data_type().clone(),
+        }
+    }
+
+    /// Whether the argument may be null: the column flag, or a null literal.
+    #[must_use]
+    pub fn nullable(&self) -> bool {
+        match self {
+            Self::Column { nullable, .. } => *nullable,
+            Self::Literal(a) => a.logical_null_count() > 0,
         }
     }
 }
 
 impl From<DataType> for BindArg {
     fn from(t: DataType) -> Self {
-        Self::Column(t)
+        Self::Column {
+            ty: t,
+            nullable: true,
+        }
     }
 }
 
@@ -101,6 +127,11 @@ pub struct BindOptions {
     pub decimal_precision_loss: bool,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
+    /// Counts the unseeded random binds of one plan instantiation, in
+    /// compilation order: each draws its own query-seeded stream (Spark's
+    /// `ResolveRandomSeed` assigns each its own seed), while one plan
+    /// always draws the same streams.
+    pub seed_salt: Arc<AtomicU64>,
 }
 
 impl BindOptions {
@@ -115,6 +146,7 @@ impl BindOptions {
             query_start_micros: 0,
             decimal_precision_loss: true,
             user: Arc::from("unknown"),
+            seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -153,6 +185,14 @@ impl BindOptions {
         self
     }
 
+    /// With this counter of unseeded random binds (see
+    /// [`Self::seed_salt`]).
+    #[must_use]
+    pub fn with_seed_salt(mut self, seed_salt: Arc<AtomicU64>) -> Self {
+        self.seed_salt = seed_salt;
+        self
+    }
+
     /// With this query start instant (microseconds since the epoch, UTC).
     #[must_use]
     pub fn with_query_start(mut self, micros: i64) -> Self {
@@ -182,11 +222,37 @@ pub trait ScalarFunction: Send + Sync + fmt::Debug {
     /// The function's Spark errors (`ARITHMETIC_OVERFLOW` under ANSI, ...),
     /// and `INTERNAL_ERROR` for arguments that do not match the binding.
     fn invoke(&self, args: &[Arg], rows: usize) -> Result<ArrayRef, KrishivError>;
+    /// As [`Self::invoke`], in the executing partition `partition` (Spark's
+    /// partition index): a stateful function (`rand`, `uuid`,
+    /// `monotonically_increasing_id`, ...) owns one value stream per
+    /// partition, and this evaluates the next `rows` values of that
+    /// stream. The default runs [`Self::invoke`], for the stateless
+    /// functions.
+    ///
+    /// # Errors
+    /// As [`Self::invoke`].
+    fn invoke_in(
+        &self,
+        args: &[Arg],
+        rows: usize,
+        partition: u32,
+    ) -> Result<ArrayRef, KrishivError> {
+        let _ = partition;
+        self.invoke(args, rows)
+    }
 }
 
 /// The body of a bound function: computes over [`Inputs`] that hold at
 /// least one column when `rows > 1`.
 type Body = Box<dyn Fn(&Inputs<'_>) -> Result<ArrayRef, KrishivError> + Send + Sync>;
+
+/// The body of a stateful bound function: computes over [`Inputs`] in the
+/// executing partition `partition`, advancing that partition's stream once
+/// per row it produces. A stateful body always computes every row (never
+/// the one-row broadcast of [`Body`]), so the stream advances with the
+/// rows even when every argument is a literal.
+type PartitionedBody =
+    Box<dyn Fn(&Inputs<'_>, u32) -> Result<ArrayRef, KrishivError> + Send + Sync>;
 
 /// The one [`ScalarFunction`] implementation: a name, a type and a body.
 struct Bound {
@@ -194,6 +260,7 @@ struct Bound {
     types: Vec<DataType>,
     return_type: DataType,
     body: Body,
+    partitioned: Option<PartitionedBody>,
 }
 
 impl fmt::Debug for Bound {
@@ -216,6 +283,23 @@ impl ScalarFunction for Bound {
     }
 
     fn invoke(&self, args: &[Arg], rows: usize) -> Result<ArrayRef, KrishivError> {
+        self.run(args, rows, 0)
+    }
+
+    fn invoke_in(
+        &self,
+        args: &[Arg],
+        rows: usize,
+        partition: u32,
+    ) -> Result<ArrayRef, KrishivError> {
+        self.run(args, rows, partition)
+    }
+}
+
+impl Bound {
+    /// Checks `args` against the binding, then computes `rows` values in
+    /// `partition`.
+    fn run(&self, args: &[Arg], rows: usize, partition: u32) -> Result<ArrayRef, KrishivError> {
         if args.len() != self.types.len() {
             return Err(internal(format!(
                 "{} bound to {} arguments called with {}",
@@ -231,9 +315,13 @@ impl ScalarFunction for Bound {
         if rows == 0 {
             return Ok(arrow_array::new_empty_array(&self.return_type));
         }
-        // Every argument a literal: compute one row, then repeat it.
-        let all_literal = args.iter().all(|a| matches!(a, Arg::Scalar(_)));
-        let out = if all_literal {
+        let out = if let Some(run) = &self.partitioned {
+            // A stateful body always computes every row, in partition
+            // `partition`: the one-row broadcast below would repeat one
+            // value instead of advancing the partition's stream.
+            run(&Inputs::new(args, rows), partition)?
+        } else if args.iter().all(|a| matches!(a, Arg::Scalar(_))) {
+            // Every argument a literal: compute one row, then repeat it.
             let one: Vec<Arg> = args.iter().map(Arg::as_column).collect();
             let row = (self.body)(&Inputs::new(&one, 1))?;
             if rows == 1 {
@@ -262,6 +350,7 @@ impl ScalarFunction for Bound {
 struct Binding {
     return_type: DataType,
     body: Body,
+    partitioned: Option<PartitionedBody>,
 }
 
 impl Binding {
@@ -272,6 +361,24 @@ impl Binding {
         Self {
             return_type,
             body: Box::new(body),
+            partitioned: None,
+        }
+    }
+
+    /// A stateful binding: `body` computes every row in the executing
+    /// partition (see [`PartitionedBody`]).
+    fn partitioned(
+        return_type: DataType,
+        body: impl Fn(&Inputs<'_>, u32) -> Result<ArrayRef, KrishivError> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            return_type,
+            body: Box::new(|_: &Inputs<'_>| {
+                Err(internal(
+                    "a stateful function evaluated without a partition".to_owned(),
+                ))
+            }),
+            partitioned: Some(Box::new(body)),
         }
     }
 }
@@ -285,7 +392,8 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 10] = [
+const FAMILIES: [(&[&str], Binder); 17] = [
+    (array::NAMES, array::bind),
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
     (math::NAMES, math::bind),
@@ -296,6 +404,12 @@ const FAMILIES: [(&[&str], Binder); 10] = [
     (bitwise::NAMES, bitwise::bind),
     (predicate::NAMES, predicate::bind),
     (number::NAMES, number::bind),
+    (misc::NAMES, misc::bind),
+    (random::NAMES, random::bind),
+    (chars::NAMES, chars::bind),
+    (codec::NAMES, codec::bind),
+    (r#struct::NAMES, r#struct::bind),
+    (url::NAMES, url::bind),
 ];
 
 /// The name of every scalar function [`bind_scalar`] binds, aliases
@@ -311,16 +425,24 @@ pub fn scalar_names() -> Vec<&'static str> {
 }
 
 /// Whether the result of the scalar function `name` depends only on its
-/// arguments and `spark.sql.ansi.enabled`: the string, math and arithmetic
-/// families. The datetime, session and hash families read the session time
-/// zone, the user or the query start, so a caller that evaluates a call
-/// before execution (constant folding) must not evaluate those.
+/// arguments and `spark.sql.ansi.enabled`: the string (with its character and
+/// encoding families), math, arithmetic and struct families. The datetime, session and
+/// hash families read the session time zone, the user or the query start, so a
+/// caller that evaluates a call before execution (constant folding) must not
+/// evaluate those.
 #[must_use]
 pub fn is_argument_pure(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    [string::NAMES, math::NAMES, arith::NAMES]
-        .iter()
-        .any(|names| names.contains(&lower.as_str()))
+    [
+        string::NAMES,
+        chars::NAMES,
+        codec::NAMES,
+        math::NAMES,
+        arith::NAMES,
+        r#struct::NAMES,
+    ]
+    .iter()
+    .any(|names| names.contains(&lower.as_str()))
 }
 
 /// Binds the scalar function `name` (ASCII case-insensitive) to `args`.
@@ -357,6 +479,7 @@ pub fn bind_scalar(
         types: args.iter().map(BindArg::data_type).collect(),
         return_type: binding.return_type,
         body: binding.body,
+        partitioned: binding.partitioned,
     }))
 }
 

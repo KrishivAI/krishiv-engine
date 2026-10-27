@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
-use krishiv_plan::{Plan, PlanNode, SourceId};
+use krishiv_plan::{ExprNode, Grouping, JoinCondition, JoinKind, Plan, PlanNode, SourceId};
 use krishiv_sql::{ParserOptions, parse_and_lower};
 
 fn lower(sql: &str) -> Result<Plan, krishiv_sql::ParseError> {
@@ -91,7 +91,6 @@ fn constructs_lower_or_are_named_as_unsupported() {
         "SELECT f(x => 1) FROM t",
         "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM t",
         "SELECT sum(a) IGNORE NULLS FROM t",
-        "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
         "SELECT * FROM t WITH (k = x)",
         "FROM t SELECT a SELECT b",
         "SELECT * FROM parquet.`s3a://k:Canary-7f3a9c@b/p` WITH ('password' = 'Canary-7f3a9c')",
@@ -107,13 +106,148 @@ fn constructs_lower_or_are_named_as_unsupported() {
         "FROM t SELECT a UNION SELECT b",
         "WITH RECURSIVE c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c",
         "SELECT explode(a) AS (x, y) FROM t",
-        "SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))",
         "SELECT * FROM t JOIN LATERAL (SELECT a) s",
         "SELECT * FROM t WITH (k = true, n = 2) RIGHT JOIN (SELECT a FROM u) USING (a)",
         "SELECT -a, a % 2, a IS NULL, NULL FROM t ORDER BY a DESC NULLS FIRST, b NULLS LAST",
         "SELECT (t.a).b, ((a)).c.d FROM t",
         "SELECT 1BD, 1e3BD FROM t",
     ]));
+}
+
+/// `PIVOT` and `UNPIVOT` lower over the relation they follow (per
+/// relation and at the `FROM`-clause level); the alias becomes a
+/// `SubqueryAlias`. A `FROM` clause with both is rejected, as Spark's
+/// parser rejects it, as is one relation carrying both (Spark's
+/// `NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`).
+#[test]
+fn pivot_and_unpivot_lower_over_the_relation_they_follow() {
+    insta::assert_snapshot!(report(&[
+        "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
+        "SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))",
+        "SELECT * FROM t PIVOT (sum(a) AS s, avg(b) FOR (c, d) IN ((1, 2) AS one, (3, 4) two)) p",
+        "SELECT * FROM t UNPIVOT INCLUDE NULLS (v FOR n IN (a AS x, b)) AS u",
+        "SELECT * FROM t UNPIVOT EXCLUDE NULLS ((v1, v2) FOR n IN ((a, b) AS ab, (c, d)))",
+        "SELECT * FROM t JOIN u ON t.a = u.a PIVOT (count(*) FOR a IN ('x')) p JOIN v ON true",
+        "SELECT * FROM t PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))",
+        "SELECT * FROM t, u PIVOT (sum(a) FOR b IN (1)) UNPIVOT (x FOR y IN (z))",
+    ]));
+}
+
+/// The parser attaches `PIVOT` to the relation, but the `FROM` clause can
+/// carry one too (after `LATERAL VIEW`, which lowering rejects): moving a
+/// parsed pivot there must lower the same plan, and a clause with both a
+/// pivot and an unpivot is rejected, as Spark's parser rejects it.
+#[test]
+fn from_clause_level_pivot_lowers_over_the_comma_join() {
+    use krishiv_plan::SourceId;
+    use krishiv_sql::ast::{Pivot, RelationExt, SetExprKind, Unpivot};
+    use krishiv_sql::{ParserOptions, lower, parse_query};
+    let mut q = parse_query(
+        "SELECT a FROM t, u PIVOT (sum(a) FOR b IN (1))",
+        &ParserOptions::default(),
+    )
+    .unwrap();
+    let krishiv_sql::ast::SetExprKind::Select(select) = &mut q.body.kind else {
+        panic!("a SELECT query");
+    };
+    let from = select.from.as_mut().unwrap();
+    assert!(from.pivot.is_none());
+    let relation = &mut from.relations[1];
+    let Some(RelationExt::Pivot(pivot)) = relation.extensions.pop() else {
+        panic!("a pivot extension");
+    };
+    assert!(relation.extensions.is_empty());
+    from.pivot = Some(pivot);
+    let plan = lower(&q, SourceId(0)).unwrap();
+    assert_eq!(
+        plan.root().to_string().replace('\n', " | "),
+        "Project [a] | +- Pivot [b], [[1]], [sum(a)] |    +- Join Inner |       :- Read t |       +- Read u | "
+    );
+    // Both at once is `NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT`.
+    let mut q = parse_query("SELECT a FROM t", &ParserOptions::default()).unwrap();
+    let SetExprKind::Select(select) = &mut q.body.kind else {
+        panic!("a SELECT query");
+    };
+    let from = select.from.as_mut().unwrap();
+    let pivot: Pivot = parse_query(
+        "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
+        &ParserOptions::default(),
+    )
+    .map(|mut p| {
+        let SetExprKind::Select(s) = &mut p.body.kind else {
+            panic!("a SELECT query");
+        };
+        let Some(RelationExt::Pivot(pivot)) =
+            s.from.as_mut().unwrap().relations[0].extensions.pop()
+        else {
+            panic!("a pivot extension");
+        };
+        pivot
+    })
+    .unwrap();
+    let unpivot: Unpivot = parse_query(
+        "SELECT a FROM t UNPIVOT (x FOR y IN (z))",
+        &ParserOptions::default(),
+    )
+    .map(|mut p| {
+        let SetExprKind::Select(s) = &mut p.body.kind else {
+            panic!("a SELECT query");
+        };
+        let Some(RelationExt::Unpivot(unpivot)) =
+            s.from.as_mut().unwrap().relations[0].extensions.pop()
+        else {
+            panic!("an unpivot extension");
+        };
+        unpivot
+    })
+    .unwrap();
+    from.pivot = Some(pivot);
+    from.unpivot = Some(unpivot);
+    let e = lower(&q, SourceId(0)).unwrap_err();
+    assert_eq!(
+        e.error.error_class().name(),
+        "NOT_ALLOWED_IN_FROM.UNPIVOT_WITH_PIVOT"
+    );
+    // A `FROM`-clause unpivot lowers over the comma join too.
+    let mut q = parse_query(
+        "SELECT a FROM t, u UNPIVOT (x FOR y IN (z))",
+        &ParserOptions::default(),
+    )
+    .unwrap();
+    let SetExprKind::Select(select) = &mut q.body.kind else {
+        panic!("a SELECT query");
+    };
+    let from = select.from.as_mut().unwrap();
+    let relation = &mut from.relations[1];
+    let Some(RelationExt::Unpivot(unpivot)) = relation.extensions.pop() else {
+        panic!("an unpivot extension");
+    };
+    assert!(relation.extensions.is_empty());
+    from.unpivot = Some(unpivot);
+    let plan = lower(&q, SourceId(0)).unwrap();
+    assert_eq!(
+        plan.root().to_string().replace('\n', " | "),
+        "Project [a] | +- Unpivot [x FOR y IN ([z])] |    +- Join Inner |       :- Read t |       +- Read u | "
+    );
+    // A pivot value with a column-list alias is rejected, like any other
+    // multi-name alias.
+    let mut q = parse_query(
+        "SELECT a FROM t PIVOT (sum(a) FOR b IN (1))",
+        &ParserOptions::default(),
+    )
+    .unwrap();
+    let SetExprKind::Select(select) = &mut q.body.kind else {
+        panic!("a SELECT query");
+    };
+    let from = select.from.as_mut().unwrap();
+    let relation = &mut from.relations[0];
+    let Some(RelationExt::Pivot(mut pivot)) = relation.extensions.pop() else {
+        panic!("a pivot extension");
+    };
+    pivot.values[0].alias = Some(krishiv_sql::ast::Alias::List(vec![]));
+    from.pivot = Some(pivot);
+    let e = lower(&q, SourceId(0)).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
 /// `first(x) IGNORE NULLS` is `first(x, true)`; `RESPECT NULLS` is `false`,
@@ -252,6 +386,127 @@ fn nested_grouping_sets_cap_counts_inside_the_loop() {
     );
 }
 
+/// `GROUP BY ALL` lowers to a lone `all` key carrying the whole clause's
+/// span (the analyzer expands it, or resolves the column); any case goes.
+#[test]
+fn group_by_all_lowers_to_a_clause_spanned_all_key() {
+    for (sql, clause) in [
+        ("SELECT a, COUNT(*) FROM t GROUP BY ALL", "GROUP BY ALL"),
+        ("SELECT a, COUNT(*) FROM t GROUP BY aLl", "GROUP BY aLl"),
+    ] {
+        let plan = lower(sql).unwrap();
+        let PlanNode::Aggregate { grouping, .. } = &plan.root().node else {
+            panic!("{sql}: expected an Aggregate, got {}", plan.root());
+        };
+        let Grouping::GroupBy(keys) = grouping else {
+            panic!("{sql}: expected GROUP BY, got {grouping:?}");
+        };
+        assert_eq!(keys.len(), 1, "{sql}");
+        let ExprNode::Column(c) = &keys[0].node else {
+            panic!("{sql}: expected a column key, got {}", keys[0]);
+        };
+        assert!(
+            c.name.len() == 1 && c.name[0].eq_ignore_ascii_case("all"),
+            "{sql}: {c:?}"
+        );
+        let (source, span) = keys[0].origin.sql.expect("a SQL span");
+        assert_eq!(source, SourceId(0), "{sql}");
+        let at = sql.find(clause).expect("the clause");
+        assert_eq!(
+            (span.start, span.end),
+            (
+                u32::try_from(at).unwrap(),
+                u32::try_from(at + clause.len()).unwrap()
+            ),
+            "{sql}: the key cites the clause, not the column"
+        );
+    }
+}
+
+/// `NATURAL` joins lower with a marker condition (the analyzer computes
+/// the common columns); `ORDER BY ALL` lowers as a plain `all` key (the
+/// analyzer expands it).
+#[test]
+fn natural_join_lowers_to_a_marker_condition() {
+    for (sql, kind) in [
+        ("SELECT * FROM t NATURAL JOIN u", JoinKind::Inner),
+        ("SELECT * FROM t NATURAL LEFT JOIN u", JoinKind::LeftOuter),
+    ] {
+        let plan = lower(sql).unwrap();
+        let PlanNode::Project { input, .. } = &plan.root().node else {
+            panic!("{sql}: expected a Project, got {}", plan.root());
+        };
+        let PlanNode::Join {
+            kind: got,
+            condition,
+            ..
+        } = &input.node
+        else {
+            panic!("{sql}: expected a Join, got {input}");
+        };
+        assert_eq!(*got, kind, "{sql}");
+        assert!(
+            matches!(condition, JoinCondition::Natural),
+            "{sql}: expected a NATURAL marker, got {condition:?}"
+        );
+    }
+    let plan = lower("SELECT * FROM t ORDER BY ALL").unwrap();
+    let PlanNode::Sort { order, .. } = &plan.root().node else {
+        panic!("expected a Sort, got {}", plan.root());
+    };
+    assert_eq!(order.len(), 1);
+    assert!(
+        matches!(&order[0].expr.node, ExprNode::Column(_)),
+        "ORDER BY ALL stays a column for the analyzer, got {}",
+        order[0].expr
+    );
+}
+
+/// `QUALIFY` lowers to a filter with a wrapped predicate (the analyzer
+/// tells it apart from `WHERE` and `HAVING` by the wrapper).
+#[test]
+fn qualify_lowers_to_a_wrapped_filter() {
+    let plan = lower("SELECT a, RANK() OVER (ORDER BY b) AS r FROM t QUALIFY r > 1").unwrap();
+    let PlanNode::Filter { predicate, .. } = &plan.root().node else {
+        panic!("expected a Filter, got {}", plan.root());
+    };
+    let ExprNode::Function(f) = &predicate.node else {
+        panic!("expected the qualify wrapper, got {predicate}");
+    };
+    assert_eq!((f.name.as_str(), f.args.len()), ("qualify", 1));
+}
+
+/// `* EXCEPT` lowers onto the star: bare and qualified entries, including
+/// nested paths (the analyzer drops the former and refuses the latter).
+#[test]
+fn star_except_lowers_onto_the_star() {
+    for (sql, qualifier, except) in [
+        (
+            "SELECT * EXCEPT (a, b) FROM t",
+            Vec::new(),
+            vec![vec!["a".to_owned()], vec!["b".to_owned()]],
+        ),
+        (
+            "SELECT t.* EXCEPT (t.a, b.c) FROM t",
+            vec!["t".to_owned()],
+            vec![
+                vec!["t".to_owned(), "a".to_owned()],
+                vec!["b".to_owned(), "c".to_owned()],
+            ],
+        ),
+    ] {
+        let plan = lower(sql).unwrap();
+        let PlanNode::Project { exprs, .. } = &plan.root().node else {
+            panic!("{sql}: expected a Project, got {}", plan.root());
+        };
+        assert_eq!(exprs.len(), 1, "{sql}");
+        let ExprNode::Star(s) = &exprs[0].node else {
+            panic!("{sql}: expected a star, got {}", exprs[0]);
+        };
+        assert_eq!(s.qualifier, qualifier, "{sql}");
+        assert_eq!(s.except, except, "{sql}");
+    }
+}
 /// The inline table of `sql`: the first `PlanNode::InlineTable` under its
 /// root, with the alias above it unwrapped.
 fn inline_table(sql: &str) -> Option<(Vec<String>, Vec<Vec<String>>)> {

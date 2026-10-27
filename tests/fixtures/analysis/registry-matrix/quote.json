@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "quote#0e01dfbe0415/ansi_on",
+      "reason": "SELECT quote(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "quote#0e01dfbe0415/ansi_off",
+      "reason": "SELECT quote(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "quote#45b899b5afde/ansi_on",
+      "reason": "SELECT quote(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "quote#45b899b5afde/ansi_off",
+      "reason": "SELECT quote(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "quote#e072b999e0ab/ansi_on",
+      "reason": "SELECT quote(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "quote#e072b999e0ab/ansi_off",
+      "reason": "SELECT quote(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "quote"
+}

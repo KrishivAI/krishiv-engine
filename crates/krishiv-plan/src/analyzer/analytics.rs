@@ -289,7 +289,9 @@ impl Resolver<'_> {
             ));
         }
         let call = FunctionCall {
-            name: vec![which.name().to_owned()],
+            name: which.name().to_owned(),
+            qualifier: Vec::new(),
+            arg_names: Vec::new(),
             args: kids.iter().map(|k| Arc::clone(&k.expr)).collect(),
             distinct: false,
             filter: None,
@@ -683,15 +685,18 @@ impl Resolver<'_> {
                 // built-ins rebind bare, as before. Without the qualifier
                 // `SELECT session.upper(s) ... GROUP BY ROLLUP(s)` would
                 // silently run the built-in `upper` over the copy.
-                let name = match &f.id {
-                    FunctionId::Udf { name, .. } => {
-                        vec!["system".to_owned(), "session".to_owned(), name.clone()]
-                    }
-                    _ => vec![f.id.name().to_owned()],
+                let (name, qualifier) = match &f.id {
+                    FunctionId::Udf { name, .. } => (
+                        name.clone(),
+                        vec!["system".to_owned(), "session".to_owned()],
+                    ),
+                    _ => (f.id.name().to_owned(), Vec::new()),
                 };
                 let call = Arc::new(
                     Expr::new(ExprNode::Function(FunctionCall {
                         name,
+                        qualifier,
+                        arg_names: Vec::new(),
                         args: f.args.clone(),
                         distinct: f.distinct,
                         filter: f.filter.clone(),

@@ -516,8 +516,9 @@ async fn reverse(
     let hashing = hashing.clone();
     let handle = Arc::clone(ctx.consumer().consumer());
     let query = Arc::clone(ctx.query());
+    let partition = ctx.partition();
     let out = ctx
-        .run_blocking(move || reverse_blocking(&shared, &hashing, task, &handle, &query))
+        .run_blocking(move || reverse_blocking(&shared, &hashing, task, &handle, &query, partition))
         .await;
     ctx.consumer().consumer().release_credit();
     out
@@ -536,6 +537,7 @@ fn reverse_blocking(
     task: Task,
     handle: &Arc<ConsumerHandle>,
     query: &QueryContext,
+    partition: u32,
 ) -> Result<Reversed> {
     // Everything the join holds is reserved before it is allocated, and the
     // reversal declines while it still can (before the build stream starts):
@@ -628,8 +630,8 @@ fn reverse_blocking(
         let arena = RowArena::concat(schema, std::slice::from_ref(&chunk))?;
         let rows =
             u32::try_from(arena.len()).map_err(|_| internal("build chunk too large".to_owned()))?;
-        // Payloads borrowed from this chunk, evaluated before it is dropped.
-        let mut pairs: Vec<(u32, &[u8])> = Vec::new();
+        // (probe row, build row of this chunk), evaluated before it is dropped.
+        let mut pairs: Vec<(u32, u32)> = Vec::new();
         for r in 0..rows {
             let Some(candidates) = index.get(&arena.hash(r)) else {
                 continue;
@@ -642,16 +644,32 @@ fn reverse_blocking(
                     continue;
                 }
                 if shared.filter.is_some() {
-                    pairs.push((p, arena.payload(r)));
+                    pairs.push((p, r));
                 } else {
                     matched[p as usize] = true;
                 }
             }
             if pairs.len() >= PAIR_BATCH {
-                mark_pairs(shared, &probe, &mut pairs, &mut matched)?;
+                mark_pairs(
+                    shared,
+                    hashing,
+                    &probe,
+                    &arena,
+                    &mut pairs,
+                    &mut matched,
+                    partition,
+                )?;
             }
         }
-        mark_pairs(shared, &probe, &mut pairs, &mut matched)
+        mark_pairs(
+            shared,
+            hashing,
+            &probe,
+            &arena,
+            &mut pairs,
+            &mut matched,
+            partition,
+        )
     };
     for_each(
         build,
@@ -677,13 +695,18 @@ fn reverse_blocking(
     Ok(Reversed::Joined(Some(out)))
 }
 
-/// Applies the residual condition to candidate pairs (probe row, build
-/// payload) and marks the probe rows of those that hold.
+/// Applies the residual condition to candidate pairs (probe row, row of the
+/// build chunk `arena`) and marks the probe rows of those that hold. The
+/// build columns are decoded in the arena's payload format: payload rows
+/// in the row layout, arrow rows otherwise.
 fn mark_pairs(
     shared: &Shared,
+    hashing: &Hashing,
     probe: &Batch,
-    pairs: &mut Vec<(u32, &[u8])>,
+    arena: &RowArena,
+    pairs: &mut Vec<(u32, u32)>,
     matched: &mut [bool],
+    partition: u32,
 ) -> Result<()> {
     let Some(filter) = &shared.filter else {
         pairs.clear();
@@ -696,12 +719,13 @@ fn mark_pairs(
     }
     let idx: Vec<u32> = pairs.iter().map(|(p, _)| *p).collect();
     let taken = take_batch(probe, &UInt32Array::from(idx.clone()))?;
-    let build_cols = shared.decode(pairs.iter().map(|(_, b)| *b))?;
+    let build: Vec<(usize, u32)> = pairs.iter().map(|&(_, r)| (0, r)).collect();
+    let build_cols = shared.build_columns(hashing.rows(), &build, |_| Some(arena))?;
     let m = idx.len();
     let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
     columns.extend(build_cols);
     let candidates = super::record(&shared.filter_schema, columns, m)?;
-    let mask = filter.evaluate(&candidates)?;
+    let mask = filter.evaluate_in(&candidates, partition)?;
     if mask.len() != m {
         return Err(internal(
             "a join filter returned the wrong row count".to_owned(),
@@ -770,10 +794,11 @@ pub(crate) async fn step(
         .get()
         .ok_or_else(|| internal("hash join probed before its build".to_owned()))?;
     let limit = ctx.query().config().batch_size.max(1);
+    let partition = ctx.partition();
     if let Some(a) = &mut st.active {
         if let Some(c) = &mut a.cursor {
             let tables = Tables::Single(&a.table);
-            let (out, done) = c.next(shared, &tables, limit)?;
+            let (out, done) = c.next(shared, &tables, limit, partition)?;
             if done {
                 a.cursor = None;
             }
@@ -1642,6 +1667,7 @@ mod tests {
             build_keys: vec![0],
             null_safe: vec![false],
             filter: None,
+            single_match: false,
             spill: Some(scope.clone()),
         })
         .unwrap();
@@ -1675,9 +1701,14 @@ mod tests {
         let mut filler = krishiv_memory::Reservation::new(Arc::clone(&other), id);
         filler.try_grow(LIMIT - root.reserved()).unwrap();
         let handle = Arc::clone(ctx.consumer().consumer());
-        let Ok(Reversed::Declined(task)) =
-            reverse_blocking(shared, &hashing, task, &handle, ctx.query())
-        else {
+        let Ok(Reversed::Declined(task)) = reverse_blocking(
+            shared,
+            &hashing,
+            task,
+            &handle,
+            ctx.query(),
+            ctx.partition(),
+        ) else {
             panic!("the probe rows cannot fit");
         };
         assert_eq!(task.probe.files.len(), files, "nothing was consumed");
@@ -1685,15 +1716,145 @@ mod tests {
         // With room, the same task joins: a semi join with no build rows
         // emits nothing, and the probe files are gone with the task.
         drop(filler);
-        let Ok(Reversed::Joined(out)) =
-            reverse_blocking(shared, &hashing, task, &handle, ctx.query())
-        else {
+        let Ok(Reversed::Joined(out)) = reverse_blocking(
+            shared,
+            &hashing,
+            task,
+            &handle,
+            ctx.query(),
+            ctx.partition(),
+        ) else {
             panic!("the probe rows fit now");
         };
         assert!(out.is_none());
         ctx.consumer().consumer().release_credit();
         assert_eq!(root.reserved(), 0);
         assert_eq!(manager.used_bytes(), 0);
+    }
+
+    /// A reversed semi join with a residual condition decodes the build
+    /// columns in the arena's payload format: payload rows when
+    /// `krishiv.exec.join.rowLayout` is on (it read the arrow-row payload,
+    /// empty in that layout, and panicked decoding it), arrow rows
+    /// otherwise. Both give the same rows.
+    #[tokio::test]
+    async fn a_reversal_with_a_condition_decodes_the_build_rows_of_either_layout() {
+        use arrow_array::BooleanArray;
+        use arrow_array::types::Int64Type;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let batch = |k: Vec<i64>, v: Vec<i64>| {
+            Batch::new(
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int64Array::from(k)), Arc::new(Int64Array::from(v))],
+                )
+                .unwrap(),
+            )
+        };
+        // probe.k = build.k AND build.v > probe.v
+        let filter: Arc<dyn crate::Predicate> = Arc::new(crate::FnPredicate(|b: &RecordBatch| {
+            let probe = b.column(1).as_primitive::<Int64Type>();
+            let build = b.column(3).as_primitive::<Int64Type>();
+            Ok(probe
+                .iter()
+                .zip(build.iter())
+                .map(|(p, b)| Some(b? > p?))
+                .collect::<BooleanArray>())
+        }));
+        for row_layout in [false, true] {
+            let root = TreePool::new(&MemoryConfig::default());
+            let config = ExecConfig {
+                join_row_layout: row_layout,
+                ..ExecConfig::default()
+            };
+            let query = QueryContext::new(
+                QueryId(1),
+                WorkloadClass::Interactive,
+                config.clone(),
+                root.child("q", None),
+            );
+            let exec = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+            let ctx = TaskContext::new(query, exec, SpillOwner::new(), OperatorId(1), "probe");
+            let join = super::super::HashJoin::try_new(super::super::JoinSpec {
+                join_type: super::super::JoinType::LeftSemi,
+                probe_schema: Arc::clone(&schema),
+                build_schema: Arc::clone(&schema),
+                probe_keys: vec![0],
+                build_keys: vec![0],
+                null_safe: vec![false],
+                filter: Some(Arc::clone(&filter)),
+                single_match: false,
+                spill: None,
+            })
+            .unwrap();
+            let shared = &join.0;
+            let hashing = shared.hashing(&config);
+            assert_eq!(hashing.rows(), row_layout);
+
+            // Probe rows k = v = 0..100; build rows k = 0..100 with v = k + 1
+            // for odd k and v = k for even k: odd probe rows match.
+            let probe = batch((0..100).collect(), (0..100).collect());
+            let build = batch((0..100).collect(), (0..100).map(|k| k + (k % 2)).collect());
+            let key_cols = vec![Arc::clone(build.data().column(0))];
+            let keys = shared.keys.encode(&key_cols, &hashing).unwrap();
+            let columns = build.data().columns();
+            let payload = match (shared.row_payload(hashing.rows()), &shared.payload) {
+                (Some(layout), _) => {
+                    super::super::build::Payload::Rows(layout.encode(columns).unwrap())
+                }
+                (None, Some((conv, _))) => {
+                    super::super::build::Payload::Arrow(conv.convert_columns(columns).unwrap())
+                }
+                (None, None) => panic!("the condition reads build columns"),
+            };
+            let all: Vec<usize> = (0..100).collect();
+            let chunk = super::super::build::arena_chunk(
+                shared,
+                &hashing,
+                &keys,
+                Some(&payload),
+                build.weights(),
+                &all,
+            )
+            .unwrap();
+            let mut build_part = vec![Part::with_memory(ctx.consumer().reservation())];
+            reserve_chunks(&mut build_part, &[(0, chunk.clone())]).unwrap();
+            build_part[0].chunks.push(chunk);
+            let mut probe_part = vec![Part::with_memory(ctx.consumer().reservation())];
+            reserve_chunks(&mut probe_part, &[(0, probe.clone())]).unwrap();
+            probe_part[0].chunks.push(probe);
+            let task = Task {
+                depth: 0,
+                build: build_part.remove(0),
+                probe: probe_part.remove(0),
+            };
+            let handle = Arc::clone(ctx.consumer().consumer());
+            let Ok(Reversed::Joined(Some(out))) = reverse_blocking(
+                shared,
+                &hashing,
+                task,
+                &handle,
+                ctx.query(),
+                ctx.partition(),
+            ) else {
+                panic!("the reversal joins (row layout {row_layout})");
+            };
+            let mut got = out
+                .data()
+                .column(0)
+                .as_primitive::<Int64Type>()
+                .values()
+                .to_vec();
+            got.sort_unstable();
+            let want: Vec<i64> = (0..100).filter(|k| k % 2 == 1).collect();
+            assert_eq!(got, want, "row layout {row_layout}");
+            drop(out);
+            assert_eq!(root.reserved(), 0);
+        }
     }
 
     /// A spill whose rows and the pool's free memory cannot fund its

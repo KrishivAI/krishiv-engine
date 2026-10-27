@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use arrow_array::{
     ArrayRef, Date32Array, Decimal128Array, Int32Array, Int64Array, RecordBatch, StringArray,
+    StringViewArray,
 };
 use arrow_schema::{DataType as T, Field, Schema};
 use krishiv_session::Session;
@@ -201,12 +202,17 @@ fn column(table: &str, col: &str, ty: &T, rows: usize, n: usize) -> ArrayRef {
             .with_precision_and_scale(*p, *s)
             .unwrap(),
         ),
-        T::Utf8 => Arc::new(StringArray::from_iter_values((0..rows).map(
-            |i| match cell(table, col, i, n) {
+        T::Utf8 | T::Utf8View => {
+            let values = (0..rows).map(|i| match cell(table, col, i, n) {
                 V::Text(t) if !t.is_empty() => t,
                 _ => format!("{col}{}", i % 7),
-            },
-        ))),
+            });
+            if matches!(ty, T::Utf8View) {
+                Arc::new(StringViewArray::from_iter_values(values))
+            } else {
+                Arc::new(StringArray::from_iter_values(values))
+            }
+        }
         other => panic!("no generator for {other}"),
     }
 }
@@ -214,6 +220,16 @@ fn column(table: &str, col: &str, ty: &T, rows: usize, n: usize) -> ArrayRef {
 /// Registers the eight TPC-H tables in `s`: empty for `orders == 0`, else a
 /// data set of `orders` orders (a multiple of 8, at least 8).
 pub(crate) fn register(s: &Session, orders: usize) {
+    register_with(s, orders, false);
+}
+
+/// As [`register`], with `Utf8View` string columns (the type the engine's
+/// string literals have) when `view_strings`. String equality (`=`) does not
+/// run on the `Utf8` tables: the physical planner rejects a comparison of
+/// `Utf8` with `Utf8View`, which most TPC-H queries need. Profiles do not
+/// depend on the string representation, so the profile tests use
+/// `view_strings`.
+pub(crate) fn register_with(s: &Session, orders: usize, view_strings: bool) {
     assert!(
         orders.is_multiple_of(8),
         "the data set is built in groups of 8 orders"
@@ -221,7 +237,14 @@ pub(crate) fn register(s: &Session, orders: usize) {
     for (name, cols) in TPCH {
         let fields: Vec<_> = cols
             .iter()
-            .map(|(n, t)| Field::new(*n, t.clone(), true))
+            .map(|(n, t)| {
+                let t = if view_strings && matches!(t, T::Utf8) {
+                    T::Utf8View
+                } else {
+                    t.clone()
+                };
+                Field::new(*n, t, true)
+            })
             .collect();
         let schema = Arc::new(Schema::new(fields));
         let rows = match name {
@@ -238,7 +261,14 @@ pub(crate) fn register(s: &Session, orders: usize) {
         } else {
             let arrays = cols
                 .iter()
-                .map(|(c, t)| column(name, c, t, rows, orders))
+                .map(|(c, t)| {
+                    let t = if view_strings && matches!(t, T::Utf8) {
+                        &T::Utf8View
+                    } else {
+                        t
+                    };
+                    column(name, c, t, rows, orders)
+                })
                 .collect();
             vec![RecordBatch::try_new(Arc::clone(&schema), arrays).unwrap()]
         };

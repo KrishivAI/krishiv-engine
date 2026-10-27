@@ -71,12 +71,16 @@ mod exprs;
 mod fold;
 mod fold_ops;
 mod hints;
+mod hof;
 mod ops;
+mod pivot;
 mod resolve;
 mod setops;
 mod subquery;
+mod suggest;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod unpivot;
 mod variables;
 mod windows;
 

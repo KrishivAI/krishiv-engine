@@ -34,6 +34,7 @@ tokio = { workspace = true, features = ["rt", "sync"] }
 object_store = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
+arrow-buffer.workspace = true
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 insta.workspace = true

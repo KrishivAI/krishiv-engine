@@ -6,11 +6,24 @@
 //! forms `TIMESTAMP WITH LOCAL TIME ZONE` and `TIMESTAMP WITHOUT TIME ZONE`.
 //! The lexer follows Spark's: case-insensitive keywords, Unicode whitespace,
 //! `--` and nested `/* */` comments, backquoted identifiers and numeric
-//! literal tokens. Nested, interval, char/varchar, variant, time and
-//! collated string types are recognized and rejected with
-//! `KRISHIV_UNSUPPORTED_FEATURE`.
+//! literal tokens, string literals (for field comments), and Spark's
+//! multi-character operators (`<>`; `>>` only outside a complex type).
+//!
+//! Nested types: `ARRAY<t>`, `MAP<k, v>` and `STRUCT<name [:] t [NOT NULL]
+//! [COMMENT 'c'], ...>` (also `STRUCT<>`), nested at most
+//! [`DataType::MAX_NESTING_DEPTH`] deep. As Spark's ANTLR parser does, a
+//! syntax error anywhere inside a complex type is reported at the
+//! outermost `<`, a bare `ARRAY` / `MAP` / `STRUCT` is
+//! `INCOMPLETE_TYPE_DEFINITION.*`, and a single token after a complete
+//! complex type is "extra input".
+//!
+//! Interval, char/varchar, variant, time and collated string types are
+//! recognized and rejected with `KRISHIV_UNSUPPORTED_FEATURE`.
+
+use krishiv_common::error::ErrorClass;
 
 use crate::error::{self, Result};
+use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
 use crate::{DataType, DecimalType};
 
 /// Parses a Spark DDL type string such as `int`, `DECIMAL(10, 2)` or
@@ -32,14 +45,30 @@ use crate::{DataType, DecimalType};
 /// unknown type and `KRISHIV_UNSUPPORTED_FEATURE` for a Spark type not
 /// supported yet (see [`crate::error`]).
 pub fn parse_data_type(input: &str) -> Result<DataType> {
-    let tokens = Lexer { src: input, pos: 0 }.tokens()?;
+    let tokens = Lexer {
+        src: input,
+        pos: 0,
+        complex_level: 0,
+    }
+    .tokens()?;
     if tokens.is_empty() {
         return Err(error::empty_statement());
     }
-    let mut p = Parser { tokens, pos: 0 };
-    let data_type = p.data_type()?;
+    let mut p = Parser {
+        tokens,
+        pos: 0,
+        deferred: None,
+    };
+    let data_type = p.data_type(0)?;
+    let left = p.tokens.len().saturating_sub(p.pos);
     match p.next() {
-        None => Ok(data_type),
+        // Spark checks names and arguments only once the whole string
+        // parses (`AstBuilder` runs after the parser).
+        None => p.deferred.map_or(Ok(data_type), Err),
+        // ANTLR deletes a single extra token after a complex type.
+        Some(tok) if data_type.is_nested() && left == 1 => {
+            Err(error::extra_input(&format!("'{}'", tok.raw)))
+        }
         Some(tok) => Err(tok.syntax_error()),
     }
 }
@@ -53,6 +82,10 @@ enum Kind {
     Integer,
     /// A single punctuation character.
     Punct(char),
+    /// A multi-character operator Spark lexes as one token (`<>`, `>>`).
+    Op,
+    /// A string literal (`'...'`, `"..."`, `r'...'`); `text` is its value.
+    Str,
     /// Any other token (a numeric literal, an unknown character).
     Other,
 }
@@ -109,6 +142,10 @@ fn is_word_char(c: char) -> bool {
 struct Lexer<'a> {
     src: &'a str,
     pos: usize,
+    /// Spark's `complex_type_level_counter`: raised by each `ARRAY`, `MAP`
+    /// and `STRUCT` keyword, lowered by each `>`; while it is above zero,
+    /// `>>` is two tokens (closing two levels), not a shift operator.
+    complex_level: usize,
 }
 
 impl<'a> Lexer<'a> {
@@ -180,22 +217,81 @@ impl<'a> Lexer<'a> {
         let rest = self.rest();
         let mut chars = rest.chars();
         let c = chars.next().unwrap_or(' ');
+        let second = chars.next();
         let starts_number =
-            c.is_ascii_digit() || (c == '.' && chars.next().is_some_and(|d| d.is_ascii_digit()));
+            c.is_ascii_digit() || (c == '.' && second.is_some_and(|d| d.is_ascii_digit()));
         if starts_number {
             self.number()
+        } else if matches!(c, 'r' | 'R') && matches!(second, Some('\'' | '"')) {
+            self.string(1)
         } else if is_word_char(c) {
-            self.take(self.span(0, is_word_char), Kind::Word { quoted: false })
+            let t = self.take(self.span(0, is_word_char), Kind::Word { quoted: false });
+            if ["array", "map", "struct"]
+                .iter()
+                .any(|k| t.text.eq_ignore_ascii_case(k))
+            {
+                self.complex_level += 1;
+            }
+            t
         } else if c == '`' {
             self.quoted()
+        } else if matches!(c, '\'' | '"') {
+            self.string(0)
+        } else if let Some(op) = self.operator() {
+            self.take(op, Kind::Op)
         } else {
             let kind = if c.is_ascii_punctuation() {
                 Kind::Punct(c)
             } else {
                 Kind::Other
             };
+            if c == '>' {
+                self.complex_level = self.complex_level.saturating_sub(1);
+            }
             self.take(c.len_utf8(), kind)
         }
+    }
+
+    /// The length of a multi-character operator at the cursor, if any:
+    /// the ones Spark's lexer has, `>>` and `>>>` only outside a complex
+    /// type.
+    fn operator(&self) -> Option<usize> {
+        let rest = self.rest();
+        if self.complex_level == 0 {
+            for op in [">>>", ">>"] {
+                if rest.starts_with(op) {
+                    return Some(op.len());
+                }
+            }
+        }
+        [
+            "<=>", "<>", "<=", ">=", "!=", "==", "<<", "::", "->", "=>", "||", "|>",
+        ]
+        .into_iter()
+        .find(|op| rest.starts_with(op))
+        .map(str::len)
+    }
+
+    /// A string literal `prefix` bytes after the cursor (1 for a raw
+    /// string's `r`). Unterminated, its quote is a token of its own.
+    fn string(&mut self, prefix: usize) -> Token<'a> {
+        let rest = self.rest();
+        let bytes = rest.as_bytes();
+        let quote = bytes.get(prefix).copied().unwrap_or(b'\'');
+        let raw = prefix > 0;
+        let mut i = prefix + 1;
+        loop {
+            match bytes.get(i) {
+                None => return self.take(prefix + 1, Kind::Other),
+                Some(&b) if b == quote && !raw && bytes.get(i + 1) == Some(&quote) => i += 2,
+                Some(&b) if b == quote => break,
+                Some(b'\\') if !raw => i += 2,
+                Some(_) => i += 1,
+            }
+        }
+        let mut t = self.take(i + 1, Kind::Str);
+        t.text = unescape_string(t.raw);
+        t
     }
 
     /// Spark's numeric tokens: `INTEGER_VALUE`, decimal and exponent
@@ -261,6 +357,9 @@ impl<'a> Lexer<'a> {
 struct Parser<'a> {
     tokens: Vec<Token<'a>>,
     pos: usize,
+    /// The first error that is not a syntax error, raised once the whole
+    /// string has parsed.
+    deferred: Option<krishiv_common::error::KrishivError>,
 }
 
 impl<'a> Parser<'a> {
@@ -315,7 +414,8 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn data_type(&mut self) -> Result<DataType> {
+    /// A type inside `depth` enclosing complex types.
+    fn data_type(&mut self, depth: usize) -> Result<DataType> {
         let name = self.expect(|t| matches!(t.kind, Kind::Word { .. }))?;
         let quoted = name.kind == (Kind::Word { quoted: true });
         let lower = if quoted {
@@ -328,8 +428,24 @@ impl<'a> Parser<'a> {
             folded.to_ascii_lowercase()
         };
         if !quoted {
+            if matches!(lower.as_str(), "array" | "map" | "struct") {
+                match self.peek() {
+                    Some(t) if matches!(t.kind, Kind::Punct('<')) || t.raw == "<>" => {
+                        return self.complex(&lower, depth);
+                    }
+                    // `ARRAY(...)`: the arguments of no type.
+                    Some(t) if t.kind == Kind::Punct('(') => return Err(t.syntax_error()),
+                    _ => {}
+                }
+            }
             if let Some(feature) = self.unsupported_type(&lower) {
-                return Err(error::unsupported(feature));
+                self.skip_type_tail();
+                if depth == 0
+                    && let Some(tok) = self.peek()
+                {
+                    return Err(self.unexpected(tok));
+                }
+                return Ok(self.defer(error::unsupported(feature)));
             }
             if lower == "timestamp" {
                 let lead = self.peek().cloned();
@@ -347,20 +463,159 @@ impl<'a> Parser<'a> {
             }
         }
         let args = self.type_arguments()?;
-        if let Some(tok) = self.peek() {
+        if depth == 0
+            && let Some(tok) = self.peek()
+        {
             return Err(self.unexpected(tok));
         }
-        let unsupported = || Err(unsupported_data_type(&lower, &args));
-        if quoted {
-            return unsupported();
+        let resolved = if quoted {
+            None
+        } else if let Some(e) = error::incomplete_type(&lower) {
+            Some(Err(e))
+        } else {
+            resolve(&lower, &args)
+        };
+        Ok(
+            match resolved.unwrap_or_else(|| Err(unsupported_data_type(&lower, &args))) {
+                Ok(t) => t,
+                Err(e) => self.defer(e),
+            },
+        )
+    }
+
+    /// Records `e` unless an earlier error is recorded; a placeholder type.
+    fn defer(&mut self, e: krishiv_common::error::KrishivError) -> DataType {
+        self.deferred.get_or_insert(e);
+        DataType::Null
+    }
+
+    /// Skips the rest of a type Krishiv does not support (its words and a
+    /// parenthesized argument list), so the type around it still parses.
+    fn skip_type_tail(&mut self) {
+        while let Some(t) = self.peek() {
+            match t.kind {
+                Kind::Word { .. } if !t.is_keyword("not") && !t.is_keyword("comment") => {
+                    self.next();
+                }
+                Kind::Punct('(') => {
+                    while let Some(t) = self.next() {
+                        if t.kind == Kind::Punct(')') {
+                            break;
+                        }
+                    }
+                }
+                _ => break,
+            }
         }
-        resolve(&lower, &args).unwrap_or_else(unsupported)
+    }
+
+    /// `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` (`kind`) at the `<` (or
+    /// `<>`) after the keyword. A syntax error inside is reported at that
+    /// `<`; an enclosing complex type moves it to its own.
+    fn complex(&mut self, kind: &str, depth: usize) -> Result<DataType> {
+        if depth >= DataType::MAX_NESTING_DEPTH {
+            return Err(error::too_deep());
+        }
+        let Some(lt) = self.next() else {
+            return Err(error::syntax_error("end of input"));
+        };
+        if lt.raw == "<>" {
+            return if kind == "struct" {
+                Ok(StructType::new([]).into())
+            } else {
+                Err(lt.syntax_error())
+            };
+        }
+        let body = match kind {
+            "array" => self
+                .data_type(depth + 1)
+                .map(|e| ArrayType::new(e, true).into()),
+            "map" => self.map_body(depth),
+            _ => self.struct_body(depth),
+        };
+        let body = body.and_then(|t| self.expect(|t| t.kind == Kind::Punct('>')).map(|_| t));
+        body.map_err(|e| {
+            if e.error_class() == ErrorClass::ParseSyntaxError {
+                lt.syntax_error()
+            } else {
+                e
+            }
+        })
+    }
+
+    /// `k , v` of a map.
+    fn map_body(&mut self, depth: usize) -> Result<DataType> {
+        let key = self.data_type(depth + 1)?;
+        self.expect(|t| t.kind == Kind::Punct(','))?;
+        let value = self.data_type(depth + 1)?;
+        Ok(MapType::new(key, value, true).into())
+    }
+
+    /// The fields of a struct, up to (not including) its `>`.
+    fn struct_body(&mut self, depth: usize) -> Result<DataType> {
+        let mut fields = Vec::new();
+        if self.peek().is_some_and(|t| t.kind == Kind::Punct('>')) {
+            return Ok(StructType::new(fields).into());
+        }
+        loop {
+            fields.push(self.struct_field(depth)?);
+            if !self.peek().is_some_and(|t| t.kind == Kind::Punct(',')) {
+                return Ok(StructType::new(fields).into());
+            }
+            self.next();
+        }
+    }
+
+    /// `name [:] type [NOT NULL] [COMMENT 'c' ...]`.
+    fn struct_field(&mut self, depth: usize) -> Result<StructField> {
+        let name = self.expect(|t| matches!(t.kind, Kind::Word { .. }))?;
+        if name.kind == (Kind::Word { quoted: false }) && !name.text.is_ascii() {
+            return Err(error::invalid_identifier(name.raw));
+        }
+        // Spark's `errorCapturingIdentifier`: `a-b` is an invalid name.
+        let mut dashed = name.text.clone();
+        while self.peek().is_some_and(|t| t.kind == Kind::Punct('-'))
+            && self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|t| matches!(t.kind, Kind::Word { .. }))
+        {
+            self.next();
+            if let Some(part) = self.next() {
+                dashed.push('-');
+                dashed.push_str(&part.text);
+            }
+        }
+        if dashed != name.text {
+            self.defer(error::invalid_identifier(&dashed));
+        }
+        if self.peek().is_some_and(|t| t.kind == Kind::Punct(':')) {
+            self.next();
+        }
+        let data_type = self.data_type(depth + 1)?;
+        let mut nullable = true;
+        if self.peek().is_some_and(|t| t.is_keyword("not")) {
+            self.next();
+            self.expect(|t| t.is_keyword("null"))?;
+            nullable = false;
+        }
+        let mut field = StructField::new(name.text, data_type, nullable);
+        if self.peek().is_some_and(|t| t.is_keyword("comment")) {
+            self.next();
+            let mut comment = self.expect(|t| t.kind == Kind::Str)?.text;
+            while self.peek().is_some_and(|t| t.kind == Kind::Str) {
+                if let Some(t) = self.next() {
+                    comment.push_str(&t.text);
+                }
+            }
+            field = field.with_metadata(Metadata::with_comment(comment));
+        }
+        Ok(field)
     }
 
     /// Recognized types that are not represented yet.
     fn unsupported_type(&self, lower: &str) -> Option<String> {
         let what = match lower {
-            "array" | "map" | "struct" => "nested data types",
             "interval" => "interval data types",
             "char" | "character" | "varchar" => "char/varchar data types",
             "variant" => "the variant data type",
@@ -442,4 +697,78 @@ fn unsupported_data_type(name: &str, args: &[String]) -> krishiv_common::error::
         s.push(')');
     }
     error::unsupported_data_type(&s)
+}
+
+/// The value of a string literal token, as Spark's `unescapeSQLString`
+/// decodes it: a raw string as written; otherwise backslash escapes
+/// (`\n`, `\uXXXX`, octal `\101`, ...) and doubled quotes.
+fn unescape_string(raw: &str) -> String {
+    if let Some(body) = raw
+        .strip_prefix(['r', 'R'])
+        .and_then(|r| r.get(1..r.len().saturating_sub(1)))
+    {
+        return body.to_owned();
+    }
+    let quote = raw.chars().next().unwrap_or('\'');
+    let body: Vec<char> = raw
+        .get(1..raw.len().saturating_sub(1))
+        .unwrap_or_default()
+        .chars()
+        .collect();
+    // Java strings are UTF-16: an escaped lone surrogate becomes U+FFFD.
+    let mut out: Vec<u16> = Vec::with_capacity(body.len());
+    let mut buf = [0_u16; 2];
+    let push = |out: &mut Vec<u16>, c: char, buf: &mut [u16; 2]| {
+        out.extend_from_slice(c.encode_utf16(buf));
+    };
+    let hex = |from: usize, n: usize| -> Option<u32> {
+        let s: String = body.get(from..from + n)?.iter().collect();
+        s.chars()
+            .all(|c| c.is_ascii_hexdigit())
+            .then(|| u32::from_str_radix(&s, 16).ok())?
+    };
+    let octal = |at: usize| -> Option<u16> {
+        let d = |i: usize| body.get(at + i).and_then(|c| c.to_digit(8));
+        let (a, b, c) = (d(0)?, d(1)?, d(2)?);
+        (a <= 1).then(|| u16::try_from(a * 64 + b * 8 + c).unwrap_or(0xFFFD))
+    };
+    let mut i = 0;
+    while let Some(&c) = body.get(i) {
+        let next = body.get(i + 1).copied();
+        if c == quote && next == Some(quote) {
+            push(&mut out, c, &mut buf);
+            i += 2;
+        } else if c != '\\' || next.is_none() {
+            push(&mut out, c, &mut buf);
+            i += 1;
+        } else if let (Some('u'), Some(v)) = (next, hex(i + 2, 4)) {
+            out.push(u16::try_from(v).unwrap_or(0xFFFD));
+            i += 6;
+        } else if let (Some('U'), Some(v)) = (next, hex(i + 2, 8)) {
+            match char::from_u32(v) {
+                Some(ch) => push(&mut out, ch, &mut buf),
+                None => out.push(0xFFFD),
+            }
+            i += 10;
+        } else if let Some(v) = octal(i + 1) {
+            out.push(v);
+            i += 4;
+        } else {
+            match next.unwrap_or('\\') {
+                '0' => out.push(0),
+                'b' => out.push(8),
+                'n' => push(&mut out, '\n', &mut buf),
+                'r' => push(&mut out, '\r', &mut buf),
+                't' => push(&mut out, '\t', &mut buf),
+                'Z' => out.push(0x1A),
+                n @ ('%' | '_') => {
+                    push(&mut out, '\\', &mut buf);
+                    push(&mut out, n, &mut buf);
+                }
+                n => push(&mut out, n, &mut buf),
+            }
+            i += 2;
+        }
+    }
+    String::from_utf16_lossy(&out)
 }

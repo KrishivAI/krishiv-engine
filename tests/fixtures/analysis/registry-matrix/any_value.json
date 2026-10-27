@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "any_value#04ba50b0a41d/ansi_on",
+      "reason": "SELECT any_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#04ba50b0a41d/ansi_off",
+      "reason": "SELECT any_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#6188e23671f4/ansi_on",
+      "reason": "SELECT any_value(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#6188e23671f4/ansi_off",
+      "reason": "SELECT any_value(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#ba624a02fb3a/ansi_on",
+      "reason": "SELECT any_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "any_value#ba624a02fb3a/ansi_off",
+      "reason": "SELECT any_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    }
+  ],
+  "format_version": 1,
+  "function": "any_value"
+}

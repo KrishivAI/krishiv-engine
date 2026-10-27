@@ -1449,6 +1449,7 @@ dependencies = [
  "krishiv-sql",
  "libmimalloc-sys",
  "mimalloc",
+ "serde_json",
  "tempfile",
 ]
 
@@ -1589,6 +1590,7 @@ dependencies = [
  "arrow-array",
  "arrow-buffer",
  "arrow-schema",
+ "arrow-select",
  "codspeed-criterion-compat",
  "krishiv-common",
  "libm",
@@ -1617,9 +1619,11 @@ dependencies = [
  "krishiv-types",
  "loom",
  "proptest",
+ "rustix",
  "tempfile",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1651,6 +1655,7 @@ dependencies = [
  "insta",
  "krishiv-common",
  "krishiv-functions",
+ "krishiv-io",
  "krishiv-kernels",
  "krishiv-types",
  "krishiv-udf-sdk",
@@ -1691,6 +1696,7 @@ dependencies = [
  "futures",
  "krishiv-common",
  "krishiv-session",
+ "krishiv-sql",
  "krishiv-types",
  "mimalloc",
  "pyo3",
@@ -1714,6 +1720,7 @@ name = "krishiv-session"
 version = "0.1.0-alpha"
 dependencies = [
  "arrow-array",
+ "arrow-buffer",
  "arrow-schema",
  "arrow-select",
  "futures",

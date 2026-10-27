@@ -23,6 +23,7 @@ mod scan_row_drop;
 mod semantics;
 mod sum_rewrite;
 mod tpch;
+mod union;
 mod union_order;
 mod window;
 mod write;
@@ -67,6 +68,12 @@ impl Runnable {
             plan,
             worker: WorkerContext::new(tables),
         }
+    }
+
+    /// The same plan run with the worker context `f` makes of its own.
+    pub(crate) fn with_worker(mut self, f: impl FnOnce(WorkerContext) -> WorkerContext) -> Self {
+        self.worker = f(self.worker);
+        self
     }
 
     /// The same plan spilling into `scope`.

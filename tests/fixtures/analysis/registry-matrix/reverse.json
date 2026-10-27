@@ -1,0 +1,70 @@
+{
+  "entries": [
+    {
+      "id": "reverse#1eeb8d128702/ansi_on",
+      "reason": "SELECT reverse(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#1eeb8d128702/ansi_off",
+      "reason": "SELECT reverse(array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#27d73e6b9b7a/ansi_on",
+      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#27d73e6b9b7a/ansi_off",
+      "reason": "SELECT reverse(CAST(array(NULL) AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#58b4d7850388/ansi_on",
+      "reason": "SELECT reverse(array(2, 1, 4, 3)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#58b4d7850388/ansi_off",
+      "reason": "SELECT reverse(array(2, 1, 4, 3)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#61dbbe3b92fa/ansi_on",
+      "reason": "SELECT reverse(CAST(NULL AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#61dbbe3b92fa/ansi_off",
+      "reason": "SELECT reverse(CAST(NULL AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#6d11d9d7634a/ansi_on",
+      "reason": "SELECT reverse(CAST(array() AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#6d11d9d7634a/ansi_off",
+      "reason": "SELECT reverse(CAST(array() AS array<int>)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#b32c7db50969/ansi_on",
+      "reason": "SELECT reverse(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "reverse#b32c7db50969/ansi_off",
+      "reason": "SELECT reverse(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "reverse#bd5605d2bf87/ansi_on",
+      "reason": "SELECT reverse(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#bd5605d2bf87/ansi_off",
+      "reason": "SELECT reverse(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "reverse#c0dc5ee20538/ansi_on",
+      "reason": "SELECT reverse(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "reverse#c0dc5ee20538/ansi_off",
+      "reason": "SELECT reverse(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "reverse"
+}

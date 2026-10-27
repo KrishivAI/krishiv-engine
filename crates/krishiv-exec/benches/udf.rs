@@ -74,7 +74,10 @@ fn batch() -> ArrayRef {
 fn bound_abs() -> Arc<dyn ScalarFunction> {
     bind_scalar(
         "abs",
-        &[BindArg::Column(DataType::Int32)],
+        &[BindArg::Column {
+            ty: DataType::Int32,
+            nullable: true,
+        }],
         &BindOptions::new(),
     )
     .expect("abs(int)")

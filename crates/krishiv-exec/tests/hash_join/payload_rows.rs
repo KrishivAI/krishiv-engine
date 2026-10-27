@@ -125,6 +125,7 @@ async fn run_join(
         build_keys: vec![0],
         null_safe: vec![false],
         filter: None,
+        single_match: false,
         spill: Some(scope.clone()),
     };
     let plan = join(

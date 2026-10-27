@@ -106,7 +106,7 @@ fn operators_get_their_canonical_names() {
         ("concat", "concat"),
     ] {
         let e = translate_expression(&func(sent, vec![a(), b()]), &conf()).unwrap();
-        assert_eq!(function(&e).name, vec![canonical.to_owned()], "{sent}");
+        assert_eq!(function(&e).name, canonical, "{sent}");
         assert_eq!(function(&e).args.len(), 2);
     }
 }
@@ -115,11 +115,11 @@ fn operators_get_their_canonical_names() {
 fn not_equal_is_not_of_equal() {
     for spelling in ["!=", "<>"] {
         let e = translate_expression(&func(spelling, vec![attr("a"), attr("b")]), &conf()).unwrap();
-        assert_eq!(function(&e).name, vec!["not".to_owned()], "{spelling}");
+        assert_eq!(function(&e).name, "not", "{spelling}");
         let [inner] = function(&e).args.as_slice() else {
             panic!("one argument")
         };
-        assert_eq!(function(inner).name, vec!["==".to_owned()]);
+        assert_eq!(function(inner).name, "==");
         assert_eq!(e.to_string(), "(NOT (a == b))");
     }
 }
@@ -137,8 +137,8 @@ fn other_functions_keep_their_name_and_distinct_flag() {
     let e = translate_expression(&sum, &conf()).unwrap();
     let call = function(&e);
     assert_eq!(
-        (call.name.join("."), call.distinct, call.filter.is_none()),
-        ("Sum".to_owned(), true, true)
+        (call.name.as_str(), call.distinct, call.filter.is_none()),
+        ("Sum", true, true)
     );
     assert_eq!(
         text(&func(
@@ -298,7 +298,7 @@ fn cast_errors() {
         err(&cast(None, 0)).error_class(),
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
     );
-    let e = err(&cast(Some(CastToType::TypeStr("array<int>".into())), 0));
+    let e = err(&cast(Some(CastToType::TypeStr("array<char(3)>".into())), 0));
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     let e = err(&cast(Some(CastToType::TypeStr("notatype".into())), 0));
     assert_eq!(e.error_class(), ErrorClass::UnsupportedDatatype);

@@ -29,6 +29,12 @@
     ],
     "sqlState" : "22000"
   },
+  "KRISHIV_INVALID_BASE64_INPUT" : {
+    "message" : [
+      "The input is not valid base64: <reason>. Spark raises a Java `IllegalArgumentException` here without an error class."
+    ],
+    "sqlState" : "22018"
+  },
   "KRISHIV_INVALID_CONFIG_VALUE" : {
     "message" : [
       "The value <value> for config <key> is invalid: <reason>."
