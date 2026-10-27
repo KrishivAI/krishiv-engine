@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "elt#088805bde507/ansi_on",
-      "reason": "SELECT elt(1, array(1, 2), 'java') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#088805bde507/ansi_off",
-      "reason": "SELECT elt(1, array(1, 2), 'java') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "elt#48f1636d3e8d/ansi_on",
       "reason": "SELECT elt(1, 'scala', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -25,14 +17,6 @@
       "reason": "SELECT elt(1, INTERVAL '1-2' YEAR TO MONTH, 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "elt#66be35451d54/ansi_on",
-      "reason": "SELECT elt(array(1, 2), 'scala', 'java') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#66be35451d54/ansi_off",
-      "reason": "SELECT elt(array(1, 2), 'scala', 'java') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "elt#66ed2b35d9f6/ansi_on",
       "reason": "SELECT elt(INTERVAL '1 02:03:04' DAY TO SECOND, 'scala', 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -47,14 +31,6 @@
     {
       "id": "elt#74374fa93e05/ansi_off",
       "reason": "SELECT elt(INTERVAL '1-2' YEAR TO MONTH, 'scala', 'java') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#9e38830aad17/ansi_on",
-      "reason": "SELECT elt(1, 'scala', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "elt#9e38830aad17/ansi_off",
-      "reason": "SELECT elt(1, 'scala', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "elt#a5032d6ca00a/ansi_on",

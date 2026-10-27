@@ -15,14 +15,6 @@
     {
       "id": "unhex#4fe2346478a2/ansi_off",
       "reason": "SELECT decode(unhex(INTERVAL '1 02:03:04' DAY TO SECOND), 'UTF-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "unhex#b822eace082b/ansi_on",
-      "reason": "SELECT decode(unhex(array(1, 2)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "unhex#b822eace082b/ansi_off",
-      "reason": "SELECT decode(unhex(array(1, 2)), 'UTF-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

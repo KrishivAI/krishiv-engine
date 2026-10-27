@@ -28,9 +28,6 @@
       27,
       28,
       29
-    ],
-    "sql-commands": [
-      2
     ]
   },
   "file": "udf/udf-pivot",

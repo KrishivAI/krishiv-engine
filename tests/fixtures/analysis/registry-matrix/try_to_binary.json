@@ -34,11 +34,11 @@
     },
     {
       "id": "try_to_binary#1bcae11a717a/ansi_on",
-      "reason": "SELECT try_to_binary('abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT try_to_binary('abc', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "try_to_binary#1bcae11a717a/ansi_off",
-      "reason": "SELECT try_to_binary('abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT try_to_binary('abc', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "try_to_binary#2c59e7e42dfd/ansi_on",
@@ -119,14 +119,6 @@
     {
       "id": "try_to_binary#b50b91b76ee5/ansi_off",
       "reason": "SELECT try_to_binary('abc', DATE'2024-02-29') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "try_to_binary#cc59cfaeb480/ansi_on",
-      "reason": "SELECT try_to_binary(array(1, 2), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "try_to_binary#cc59cfaeb480/ansi_off",
-      "reason": "SELECT try_to_binary(array(1, 2), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "try_to_binary#e1d6e9aec2fc/ansi_on",

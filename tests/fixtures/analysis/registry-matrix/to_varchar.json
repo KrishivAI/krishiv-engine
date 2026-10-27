@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "to_varchar#0bac32cbaaef/ansi_on",
-      "reason": "SELECT to_varchar(array(1, 2), '999') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_varchar#0bac32cbaaef/ansi_off",
-      "reason": "SELECT to_varchar(array(1, 2), '999') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "to_varchar#36f98b6cd322/ansi_on",
       "reason": "SELECT to_varchar(454, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_FORMAT.WRONG_NUM_DIGIT"
     },
@@ -47,14 +39,6 @@
     {
       "id": "to_varchar#9f23b08b45e0/ansi_off",
       "reason": "SELECT to_varchar(INTERVAL '1-2' YEAR TO MONTH, '999') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_varchar#cce983c75f34/ansi_on",
-      "reason": "SELECT to_varchar(454, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_varchar#cce983c75f34/ansi_off",
-      "reason": "SELECT to_varchar(454, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "to_varchar#f1b538d4cc40/ansi_on",

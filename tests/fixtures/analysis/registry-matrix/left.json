@@ -1,22 +1,6 @@
 {
   "entries": [
     {
-      "id": "left#1b40b06bf9ee/ansi_on",
-      "reason": "SELECT left('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "left#1b40b06bf9ee/ansi_off",
-      "reason": "SELECT left('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "left#24b0544fefb4/ansi_on",
-      "reason": "SELECT left(array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "left#24b0544fefb4/ansi_off",
-      "reason": "SELECT left(array(1, 2), 3) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "left#4d174cea6a96/ansi_on",
       "reason": "SELECT left(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

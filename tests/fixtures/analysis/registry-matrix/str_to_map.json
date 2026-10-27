@@ -33,14 +33,6 @@
       "reason": "SELECT str_to_map(INTERVAL '1-2' YEAR TO MONTH, ',', ':') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "str_to_map#52e3717ff96d/ansi_on",
-      "reason": "SELECT str_to_map(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "str_to_map#52e3717ff96d/ansi_off",
-      "reason": "SELECT str_to_map(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "str_to_map#786c26e75a65/ansi_on",
       "reason": "SELECT str_to_map('a:1,b:2,c:3', ',', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -57,36 +49,12 @@
       "reason": "SELECT str_to_map('a:1,b:2,c:3', INTERVAL '1-2' YEAR TO MONTH, ':') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "str_to_map#92dc4535c715/ansi_on",
-      "reason": "SELECT str_to_map('a:1,b:2,c:3', ',', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "str_to_map#92dc4535c715/ansi_off",
-      "reason": "SELECT str_to_map('a:1,b:2,c:3', ',', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "str_to_map#a1b187e22590/ansi_on",
       "reason": "SELECT str_to_map(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "str_to_map#a1b187e22590/ansi_off",
       "reason": "SELECT str_to_map(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "str_to_map#b582448cfd41/ansi_on",
-      "reason": "SELECT str_to_map('a:1,b:2,c:3', array(1, 2), ':') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "str_to_map#b582448cfd41/ansi_off",
-      "reason": "SELECT str_to_map('a:1,b:2,c:3', array(1, 2), ':') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "str_to_map#dc9fda0b6d23/ansi_on",
-      "reason": "SELECT str_to_map(array(1, 2), ',', ':') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "str_to_map#dc9fda0b6d23/ansi_off",
-      "reason": "SELECT str_to_map(array(1, 2), ',', ':') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "str_to_map#e70b2a346402/ansi_on",

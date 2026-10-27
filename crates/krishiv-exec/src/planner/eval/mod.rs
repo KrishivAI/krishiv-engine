@@ -27,12 +27,14 @@ mod cast;
 mod cond;
 mod field;
 mod func;
+mod hof;
 mod logic;
 mod nested_cast;
 mod strings;
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, UInt32Array, new_null_array};
@@ -42,7 +44,7 @@ use krishiv_common::config::{
 };
 use krishiv_kernels::KernelCtx;
 use krishiv_plan::{
-    AttrId, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
     ResolvedFunction,
 };
 
@@ -94,11 +96,13 @@ pub(crate) fn broadcast(s: &ArrayRef, rows: usize) -> Result<ArrayRef> {
 
 /// `e` over the rows of `batch` selected by `mask`, as a column of every
 /// row (NULL where not selected): `e` sees only the selected rows, so it
-/// raises only for them.
+/// raises only for them. `partition` is the executing partition's index
+/// (see [`PhysExpr::eval`]).
 pub(crate) fn eval_where(
     e: &dyn PhysExpr,
     batch: &RecordBatch,
     mask: &arrow_buffer::BooleanBuffer,
+    partition: u32,
 ) -> Result<ArrayRef> {
     let rows = batch.num_rows();
     let selected = mask.count_set_bits();
@@ -108,7 +112,7 @@ pub(crate) fn eval_where(
     let chosen =
         arrow_select::filter::filter_record_batch(batch, &BooleanArray::new(mask.clone(), None))
             .map_err(|err| internal(&err.to_string()))?;
-    let values = e.eval(&chosen)?.into_array(selected)?;
+    let values = e.eval(&chosen, partition)?.into_array(selected)?;
     scatter(values.as_ref(), mask)
 }
 
@@ -148,8 +152,13 @@ pub(crate) trait PhysExpr: Send + Sync + fmt::Debug {
     fn data_type(&self) -> &ArrowType;
     /// Whether a value may be NULL.
     fn nullable(&self) -> bool;
-    /// Its values over `batch`.
-    fn eval(&self, batch: &RecordBatch) -> Result<Value>;
+    /// Its values over `batch` in the executing partition `partition`
+    /// (Spark's partition index): a stateful function (`rand`, `uuid`,
+    /// `monotonically_increasing_id`, ...) owns one value stream per
+    /// partition, and this evaluates the next values of that stream. The
+    /// same query runs each partition's stream from its start, so one
+    /// partition's values never depend on another's rows.
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value>;
 }
 
 /// What every expression of one query is evaluated with.
@@ -173,6 +182,9 @@ pub(crate) struct EvalEnv {
     /// the value inserted last. It travels in the plan (`ExprEnv`), so a
     /// worker instantiating a plan without the feature refuses it.
     pub(crate) map_key_dedup_last_win: bool,
+    /// Counts the unseeded random binds of one plan instantiation (see
+    /// [`BindOptions::seed_salt`](krishiv_functions::scalar::BindOptions::seed_salt)).
+    pub(crate) seed_salt: Arc<AtomicU64>,
 }
 
 impl EvalEnv {
@@ -206,10 +218,13 @@ impl EvalEnv {
             query_start_micros,
             user,
             map_key_dedup_last_win,
+            seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// The environment a plan fixed, with this worker's kernels.
+    /// The environment a plan fixed, with this worker's kernels. Lambda
+    /// variables match by stable identity, so no name-resolution flag is
+    /// plan data.
     pub(crate) fn from_plan(env: &ExprEnv) -> Self {
         Self {
             ansi: env.ansi,
@@ -219,6 +234,7 @@ impl EvalEnv {
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
             map_key_dedup_last_win: env.map_key_dedup_last_win,
+            seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -248,6 +264,23 @@ pub(crate) struct Input<'a> {
     pub(crate) subqueries: &'a [(AttrId, Arc<dyn PhysExpr>)],
 }
 
+/// A column of `input`'s batch: the layout position's field. A lambda
+/// variable reads such a column of the flattened batch the higher-order
+/// call compiled around the body (see `hof`).
+fn column(input: Input<'_>, c: &BoundColumn) -> Result<Arc<dyn PhysExpr>> {
+    let index = input
+        .layout
+        .iter()
+        .position(|a| *a == c.id)
+        .ok_or_else(|| internal(&format!("attribute #{} is not an input column", c.id.0)))?;
+    let field = input.schema.field(index);
+    Ok(Arc::new(Column {
+        index,
+        data_type: field.data_type().clone(),
+        nullable: field.is_nullable(),
+    }))
+}
+
 /// Compiles `e` over `input`.
 pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     match &e.node {
@@ -256,20 +289,11 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             if let Some((_, v)) = input.subqueries.iter().find(|(a, _)| *a == c.id) {
                 return Ok(Arc::clone(v));
             }
-            let index = input
-                .layout
-                .iter()
-                .position(|a| *a == c.id)
-                .ok_or_else(|| {
-                    internal(&format!("attribute #{} is not an input column", c.id.0))
-                })?;
-            let field = input.schema.field(index);
-            Ok(Arc::new(Column {
-                index,
-                data_type: field.data_type().clone(),
-                nullable: field.is_nullable(),
-            }))
+            column(input, c)
         }
+        // A lambda variable: a column of the flattened batch the
+        // higher-order call compiled around the body (see `hof`).
+        ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) => column(input, c),
         ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => compile(expr, input),
         ExprNode::Resolved(ResolvedExpr::Field {
             base,
@@ -285,6 +309,11 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
         ),
         ExprNode::Cast { expr, to, mode } => cast::compile(compile(expr, input)?, to, *mode, input),
         ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Scalar => {
+            if let FunctionId::Registry { name, .. } = &f.id
+                && hof::is_supported(name)
+            {
+                return hof::compile(name, f, input, e);
+            }
             let args = f
                 .args
                 .iter()
@@ -417,7 +446,7 @@ impl PhysExpr for Column {
         self.nullable
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, batch: &RecordBatch, _partition: u32) -> Result<Value> {
         batch
             .columns()
             .get(self.index)
@@ -450,7 +479,7 @@ impl PhysExpr for Lit {
         self.value.logical_null_count() > 0
     }
 
-    fn eval(&self, _batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, _batch: &RecordBatch, _partition: u32) -> Result<Value> {
         Ok(Value::Scalar(Arc::clone(&self.value)))
     }
 }
@@ -504,18 +533,22 @@ pub(crate) fn literal_array(l: &Literal) -> Result<ArrayRef> {
 pub(crate) struct Compiled(pub(crate) Arc<dyn PhysExpr>);
 
 impl Compiled {
-    /// The values over `batch`. When evaluation fails, the error is the
+    /// The values over `batch` in `partition`. When evaluation fails, the error is the
     /// first failing row's, as Spark's row-at-a-time evaluation raises it:
     /// a batch evaluates sub-expressions one after another (and each lazy
     /// `CASE` branch over its own rows), so the first error found need not
     /// be the first row's. Only the failing path pays for the search.
-    fn values(&self, batch: &RecordBatch) -> Result<ArrayRef> {
+    fn values(&self, batch: &RecordBatch, partition: u32) -> Result<ArrayRef> {
         let rows = batch.num_rows();
-        match self.0.eval(batch).and_then(|v| v.into_array(rows)) {
+        match self
+            .0
+            .eval(batch, partition)
+            .and_then(|v| v.into_array(rows))
+        {
             Ok(v) => Ok(v),
             Err(e) if rows > 1 => {
                 for i in 0..rows {
-                    self.0.eval(&batch.slice(i, 1))?;
+                    self.0.eval(&batch.slice(i, 1), partition)?;
                 }
                 Err(e)
             }
@@ -526,7 +559,11 @@ impl Compiled {
 
 impl Predicate for Compiled {
     fn evaluate(&self, batch: &RecordBatch) -> Result<BooleanArray> {
-        let v = self.values(batch)?;
+        <Self as Predicate>::evaluate_in(self, batch, 0)
+    }
+
+    fn evaluate_in(&self, batch: &RecordBatch, partition: u32) -> Result<BooleanArray> {
+        let v = self.values(batch, partition)?;
         v.as_boolean_opt()
             .cloned()
             .ok_or_else(|| internal("a predicate is not boolean"))
@@ -543,7 +580,11 @@ impl ScalarExpr for Compiled {
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ArrayRef> {
-        self.values(batch)
+        <Self as ScalarExpr>::evaluate_in(self, batch, 0)
+    }
+
+    fn evaluate_in(&self, batch: &RecordBatch, partition: u32) -> Result<ArrayRef> {
+        self.values(batch, partition)
     }
 }
 

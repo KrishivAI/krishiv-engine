@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "expm1#235cf212eb44/ansi_on",
-      "reason": "SELECT expm1(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "expm1#235cf212eb44/ansi_off",
-      "reason": "SELECT expm1(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "expm1#93eb72fe98cd/ansi_on",
       "reason": "SELECT expm1(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

@@ -9,28 +9,12 @@
       "reason": "SELECT sha2(INTERVAL '1-2' YEAR TO MONTH, 256) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "sha2#471a5e7d41fd/ansi_on",
-      "reason": "SELECT sha2(array(1, 2), 256) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sha2#471a5e7d41fd/ansi_off",
-      "reason": "SELECT sha2(array(1, 2), 256) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "sha2#5e52fda43a4c/ansi_on",
       "reason": "SELECT sha2('Spark', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sha2#5e52fda43a4c/ansi_off",
       "reason": "SELECT sha2('Spark', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sha2#9286f569ccc1/ansi_on",
-      "reason": "SELECT sha2('Spark', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "sha2#9286f569ccc1/ansi_off",
-      "reason": "SELECT sha2('Spark', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "sha2#9a804177f733/ansi_on",

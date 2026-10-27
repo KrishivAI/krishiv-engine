@@ -9,14 +9,6 @@
       "reason": "SELECT isnull(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "isnull#3b045f12ca67/ansi_on",
-      "reason": "SELECT isnull(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "isnull#3b045f12ca67/ansi_off",
-      "reason": "SELECT isnull(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "isnull#56c254dd036b/ansi_on",
       "reason": "SELECT isnull(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

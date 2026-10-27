@@ -41,14 +41,6 @@
       "reason": "SELECT to_binary('abc', named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
-      "id": "to_binary#3f69e2c8f2f5/ansi_on",
-      "reason": "SELECT to_binary(array(1, 2), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "to_binary#3f69e2c8f2f5/ansi_off",
-      "reason": "SELECT to_binary(array(1, 2), 'utf-8') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "to_binary#414f2deb9e85/ansi_on",
       "reason": "SELECT to_binary('abc', DATE'2024-02-29') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
@@ -90,11 +82,11 @@
     },
     {
       "id": "to_binary#94a597ad1e4e/ansi_on",
-      "reason": "SELECT to_binary('abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT to_binary('abc', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "to_binary#94a597ad1e4e/ansi_off",
-      "reason": "SELECT to_binary('abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+      "reason": "SELECT to_binary('abc', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
     },
     {
       "id": "to_binary#94c4370a6b36/ansi_on",

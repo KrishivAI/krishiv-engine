@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "levenshtein#1ca3389cfad5/ansi_on",
-      "reason": "SELECT levenshtein(array(1, 2), 'sitting') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#1ca3389cfad5/ansi_off",
-      "reason": "SELECT levenshtein(array(1, 2), 'sitting') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "levenshtein#2151df8b71f9/ansi_on",
       "reason": "SELECT levenshtein('kitten', 'sitting', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -31,14 +23,6 @@
     {
       "id": "levenshtein#45c5cc2454fe/ansi_off",
       "reason": "SELECT levenshtein('kitten', INTERVAL '1-2' YEAR TO MONTH, 2) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "levenshtein#5ebf7eaa9faa/ansi_on",
-      "reason": "SELECT levenshtein('kitten', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#5ebf7eaa9faa/ansi_off",
-      "reason": "SELECT levenshtein('kitten', array(1, 2), 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "levenshtein#8bc15785b8fe/ansi_on",
@@ -81,36 +65,12 @@
       "reason": "SELECT levenshtein('kitten', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "levenshtein#b15f7cc0589a/ansi_on",
-      "reason": "SELECT levenshtein('kitten', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#b15f7cc0589a/ansi_off",
-      "reason": "SELECT levenshtein('kitten', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#bb27fbb7bef8/ansi_on",
-      "reason": "SELECT levenshtein('kitten', 'sitting', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#bb27fbb7bef8/ansi_off",
-      "reason": "SELECT levenshtein('kitten', 'sitting', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "levenshtein#ca49decba07e/ansi_on",
       "reason": "SELECT levenshtein(INTERVAL '1 02:03:04' DAY TO SECOND, 'sitting') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "levenshtein#ca49decba07e/ansi_off",
       "reason": "SELECT levenshtein(INTERVAL '1 02:03:04' DAY TO SECOND, 'sitting') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "levenshtein#d848c5657a1c/ansi_on",
-      "reason": "SELECT levenshtein(array(1, 2), 'sitting', 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "levenshtein#d848c5657a1c/ansi_off",
-      "reason": "SELECT levenshtein(array(1, 2), 'sitting', 2) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "levenshtein#eb13bb49b1b9/ansi_on",

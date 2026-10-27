@@ -58,6 +58,7 @@ _TEMPLATES = {
         "<arg1> and <arg2> should be of the same length, got <arg1_length> and <arg2_length>."
     ),
     "VALUE_NOT_ALLOWED": "Value for `<arg_name>` has to be amongst the following values: <allowed_values>.",
+    "VALUE_NOT_ANY_OR_ALL": "Value for `<arg_name>` must be 'any' or 'all', got '<arg_value>'.",
     "VALUE_NOT_PEARSON": "Value for `<arg_name>` only supports 'pearson', got '<arg_value>'.",
     "CANNOT_BE_NONE": "Argument `<arg_name>` cannot be None.",
     "WRONG_NUM_COLUMNS": "Function `<func_name>` should take at least <num_cols> columns.",

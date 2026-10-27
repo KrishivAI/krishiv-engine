@@ -697,11 +697,16 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
                 out.push(Piece::Str(") IN (list-query))"));
             }
         },
-        ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+        ExprNode::Resolved(ResolvedExpr::Column(c) | ResolvedExpr::LambdaVar(c)) => {
             out.push(Piece::Owned(format!("{}#{}", c.name, c.id.0)));
         }
         ExprNode::Resolved(ResolvedExpr::OuterColumn(c)) => {
             out.push(Piece::Owned(format!("outer({}#{})", c.name, c.id.0)));
+        }
+        ExprNode::Lambda { params, body } => {
+            let names: Vec<String> = params.iter().map(|p| p.name.clone()).collect();
+            out.push(Piece::Owned(format!("({}) -> ", names.join(", "))));
+            out.push(Piece::Expr(body));
         }
         ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
             out.push(Piece::Expr(expr));

@@ -33,14 +33,6 @@
       "reason": "SELECT if(INTERVAL '1 02:03:04' DAY TO SECOND, 'a', 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "if#7ffb9c5e13de/ansi_on",
-      "reason": "SELECT if(array(1, 2), 'a', 'b') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "if#7ffb9c5e13de/ansi_off",
-      "reason": "SELECT if(array(1, 2), 'a', 'b') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "if#9d1d0cac3e7d/ansi_on",
       "reason": "SELECT if(1 < 2, INTERVAL '1-2' YEAR TO MONTH, 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -49,28 +41,12 @@
       "reason": "SELECT if(1 < 2, INTERVAL '1-2' YEAR TO MONTH, 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "if#b47b88b41f36/ansi_on",
-      "reason": "SELECT if(1 < 2, 'a', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "if#b47b88b41f36/ansi_off",
-      "reason": "SELECT if(1 < 2, 'a', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "if#b6e3ea7b11fd/ansi_on",
       "reason": "SELECT if(1 < 2, INTERVAL '1 02:03:04' DAY TO SECOND, 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "if#b6e3ea7b11fd/ansi_off",
       "reason": "SELECT if(1 < 2, INTERVAL '1 02:03:04' DAY TO SECOND, 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "if#da00eb044050/ansi_on",
-      "reason": "SELECT if(1 < 2, array(1, 2), 'b') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "if#da00eb044050/ansi_off",
-      "reason": "SELECT if(1 < 2, array(1, 2), 'b') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     }
   ],
   "format_version": 1,

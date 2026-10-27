@@ -9,44 +9,12 @@
       "reason": "SELECT map_from_entries(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "map_from_entries#4cc58b4820f5/ansi_on",
-      "reason": "SELECT map_from_entries(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_from_entries#4cc58b4820f5/ansi_off",
-      "reason": "SELECT map_from_entries(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_from_entries#664f361aaffa/ansi_on",
-      "reason": "SELECT map_from_entries(CAST(array(NULL) AS array<struct<col1:int,col2:string>>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "map_from_entries#664f361aaffa/ansi_off",
-      "reason": "SELECT map_from_entries(CAST(array(NULL) AS array<struct<col1:int,col2:string>>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "map_from_entries#7e5f03554384/ansi_on",
-      "reason": "SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b'))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "map_from_entries#7e5f03554384/ansi_off",
-      "reason": "SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b'))) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
       "id": "map_from_entries#9ef22f750186/ansi_on",
       "reason": "SELECT map_from_entries(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "map_from_entries#9ef22f750186/ansi_off",
       "reason": "SELECT map_from_entries(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "map_from_entries#a9dd0f288b2a/ansi_on",
-      "reason": "SELECT map_from_entries(CAST(array() AS array<struct<col1:int,col2:string>>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
-    },
-    {
-      "id": "map_from_entries#a9dd0f288b2a/ansi_off",
-      "reason": "SELECT map_from_entries(CAST(array() AS array<struct<col1:int,col2:string>>)) | KRISHIV_UNSUPPORTED_FEATURE: function array"
     }
   ],
   "format_version": 1,

@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "radians#595d7d8afe29/ansi_on",
-      "reason": "SELECT radians(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "radians#595d7d8afe29/ansi_off",
-      "reason": "SELECT radians(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "radians#de989828ff4d/ansi_on",
       "reason": "SELECT radians(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

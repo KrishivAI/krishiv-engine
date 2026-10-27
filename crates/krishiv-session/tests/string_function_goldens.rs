@@ -300,7 +300,7 @@ fn check(file: &str, passed: usize, skipped: usize) {
 
 #[test]
 fn string_functions_match_spark() {
-    check("string-functions.sql.out", 212, 31);
+    check("string-functions.sql.out", 213, 30);
 }
 
 #[test]

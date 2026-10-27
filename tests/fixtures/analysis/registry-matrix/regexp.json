@@ -31,22 +31,6 @@
     {
       "id": "regexp#75f562e9a5ab/ansi_off",
       "reason": "SELECT regexp(INTERVAL '1 02:03:04' DAY TO SECOND, '%SystemDrive%\\\\Users.*') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "regexp#7e85a4423a0c/ansi_on",
-      "reason": "SELECT regexp(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#7e85a4423a0c/ansi_off",
-      "reason": "SELECT regexp(array(1, 2), '%SystemDrive%\\\\Users.*') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#b5e72f23ba3a/ansi_on",
-      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp#b5e72f23ba3a/ansi_off",
-      "reason": "SELECT regexp('%SystemDrive%\\Users\\John', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

@@ -9,14 +9,6 @@
       "reason": "SELECT url_decode(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "url_decode#6cdd00a08e12/ansi_on",
-      "reason": "SELECT url_decode(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "url_decode#6cdd00a08e12/ansi_off",
-      "reason": "SELECT url_decode(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "url_decode#c6e875897174/ansi_on",
       "reason": "SELECT url_decode(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

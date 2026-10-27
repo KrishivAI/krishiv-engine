@@ -17,28 +17,12 @@
       "reason": "SELECT endswith(INTERVAL '1-2' YEAR TO MONTH, 'SQL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "endswith#9d22842205a0/ansi_on",
-      "reason": "SELECT endswith(array(1, 2), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "endswith#9d22842205a0/ansi_off",
-      "reason": "SELECT endswith(array(1, 2), 'SQL') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "endswith#b18796f06dfa/ansi_on",
       "reason": "SELECT endswith('Spark SQL', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "endswith#b18796f06dfa/ansi_off",
       "reason": "SELECT endswith('Spark SQL', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "endswith#db6f4211cf83/ansi_on",
-      "reason": "SELECT endswith('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "endswith#db6f4211cf83/ansi_off",
-      "reason": "SELECT endswith('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "endswith#dd88f7cef81d/ansi_on",

@@ -25,22 +25,6 @@
       "reason": "SELECT contains(INTERVAL '1-2' YEAR TO MONTH, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "contains#a2d830b27abd/ansi_on",
-      "reason": "SELECT contains('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "contains#a2d830b27abd/ansi_off",
-      "reason": "SELECT contains('Spark SQL', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "contains#c94bfd9f0f0a/ansi_on",
-      "reason": "SELECT contains(array(1, 2), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "contains#c94bfd9f0f0a/ansi_off",
-      "reason": "SELECT contains(array(1, 2), 'Spark') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "contains#d7f2b5dd724d/ansi_on",
       "reason": "SELECT contains('Spark SQL', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

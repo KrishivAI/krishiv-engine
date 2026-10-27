@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "atan2#0cec7ecf11ad/ansi_on",
-      "reason": "SELECT atan2(array(1, 2), 0) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#0cec7ecf11ad/ansi_off",
-      "reason": "SELECT atan2(array(1, 2), 0) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "atan2#4f62ee0e6c22/ansi_on",
       "reason": "SELECT atan2(0, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -39,14 +31,6 @@
     {
       "id": "atan2#b02563140a11/ansi_off",
       "reason": "SELECT atan2(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#ead386e08f1b/ansi_on",
-      "reason": "SELECT atan2(0, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "atan2#ead386e08f1b/ansi_off",
-      "reason": "SELECT atan2(0, array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

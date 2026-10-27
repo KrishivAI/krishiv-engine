@@ -581,6 +581,7 @@ fn results_are_checked_against_the_binding() {
         types: vec![],
         return_type: DataType::Int32,
         body: Box::new(|_| Ok(Arc::new(StringArray::from(vec!["x"])) as ArrayRef)),
+        partitioned: None,
     };
     let err = wrong.invoke(&[], 1).unwrap_err();
     assert_eq!(class(&err), ErrorClass::InternalError);
@@ -591,8 +592,10 @@ mod bitwise;
 mod calendar;
 mod families;
 mod map;
+mod misc;
 mod number;
 mod predicate;
+mod random;
 mod r#struct;
 mod text;
 mod url;
@@ -609,7 +612,7 @@ fn session_user_and_local_clock() {
         let out: Vec<_> = out.as_string::<i32>().iter().collect();
         assert_eq!(out, [Some("etl"), Some("etl"), Some("etl")]);
     }
-    assert!(bind_scalar("current_user", &[BindArg::from(DataType::Int32)], &opts).is_err());
+    assert!(bind_scalar("current_user", &[DataType::Int32.into()], &opts).is_err());
     // `localtimestamp` is the wall clock of the session zone, without a zone.
     let micros = 1_700_000_000_123_456;
     let opts = BindOptions::new()

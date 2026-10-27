@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "length#55ae664eebe8/ansi_on",
-      "reason": "SELECT length(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "length#55ae664eebe8/ansi_off",
-      "reason": "SELECT length(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "length#c112063cc572/ansi_on",
       "reason": "SELECT length(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

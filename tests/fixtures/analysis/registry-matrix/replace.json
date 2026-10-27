@@ -1,28 +1,12 @@
 {
   "entries": [
     {
-      "id": "replace#45892c6e41c2/ansi_on",
-      "reason": "SELECT replace('ABCabc', array(1, 2), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#45892c6e41c2/ansi_off",
-      "reason": "SELECT replace('ABCabc', array(1, 2), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "replace#5c277e88fd2d/ansi_on",
       "reason": "SELECT replace('ABCabc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "replace#5c277e88fd2d/ansi_off",
       "reason": "SELECT replace('ABCabc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "replace#7994c08a31a3/ansi_on",
-      "reason": "SELECT replace(array(1, 2), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#7994c08a31a3/ansi_off",
-      "reason": "SELECT replace(array(1, 2), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "replace#8abe9653048f/ansi_on",
@@ -47,14 +31,6 @@
     {
       "id": "replace#bc3da4b48ee0/ansi_off",
       "reason": "SELECT replace(INTERVAL '1 02:03:04' DAY TO SECOND, 'abc', 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "replace#bf27e8ab957c/ansi_on",
-      "reason": "SELECT replace('ABCabc', 'abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#bf27e8ab957c/ansi_off",
-      "reason": "SELECT replace('ABCabc', 'abc', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "replace#e9035df3e654/ansi_on",

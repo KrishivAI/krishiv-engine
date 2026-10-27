@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "ascii#852318530548/ansi_on",
-      "reason": "SELECT ascii(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "ascii#852318530548/ansi_off",
-      "reason": "SELECT ascii(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "ascii#a44ca112e769/ansi_on",
       "reason": "SELECT ascii(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
