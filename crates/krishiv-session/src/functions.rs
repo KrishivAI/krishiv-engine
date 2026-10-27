@@ -60,6 +60,10 @@ pub fn lit(value: impl IntoLiteral) -> Column {
 /// ```
 /// use krishiv_session::functions::map_literal;
 /// let options = map_literal(vec![("mode".to_owned(), "FAILFAST".to_owned())]);
+/// let shown = format!("{options:?}");
+/// assert!(shown.contains("Map"), "{shown}");
+/// assert!(shown.contains("mode"), "{shown}");
+/// assert!(shown.contains("FAILFAST"), "{shown}");
 /// ```
 #[must_use]
 pub fn map_literal(pairs: Vec<(String, String)>) -> Column {
