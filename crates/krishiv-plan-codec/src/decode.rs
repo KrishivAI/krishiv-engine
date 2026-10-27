@@ -511,7 +511,7 @@ impl Decoder {
             },
             Kind::WriteFiles(w) => PhysNode::WriteFiles {
                 input: self.boxed(w.input)?,
-                write: write_plan(required(&w.write, "the write plan")?)?,
+                write: w.write.as_ref().map(write_plan).transpose()?,
             },
             Kind::Exchange(e) => PhysNode::Exchange(self.exchange(e)?),
         })

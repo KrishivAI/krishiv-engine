@@ -215,7 +215,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
-            PhysNode::WriteFiles { .. } => Some(Feature::WritePlan),
+            PhysNode::WriteFiles { write, .. } => write.is_some().then_some(Feature::WritePlan),
             PhysNode::Scan(_)
             | PhysNode::OneRow
             | PhysNode::Filter { .. }

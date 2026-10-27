@@ -114,7 +114,7 @@ fn query_results_are_written_committed_and_read_back() {
     let plan = krishiv_exec::physical::PhysicalPlan::new(
         PhysNode::WriteFiles {
             input: Box::new(PhysNode::OneRow),
-            write: krishiv_exec::physical::WritePlan {
+            write: Some(krishiv_exec::physical::WritePlan {
                 format: "parquet".to_owned(),
                 options: BTreeMap::new(),
                 store: "file://out".to_owned(),
@@ -122,7 +122,7 @@ fn query_results_are_written_committed_and_read_back() {
                 job_uuid: "job-1".to_owned(),
                 max_records_per_file: 0,
                 target_file_bytes: 0,
-            },
+            }),
         },
         krishiv_exec::physical::WritePlan::result_schema(),
         krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
@@ -159,7 +159,7 @@ fn query_results_are_written_committed_and_read_back() {
     let bad_plan = krishiv_exec::physical::PhysicalPlan::new(
         PhysNode::WriteFiles {
             input: Box::new(PhysNode::OneRow),
-            write: bad,
+            write: Some(bad),
         },
         krishiv_exec::physical::WritePlan::result_schema(),
         krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
@@ -281,7 +281,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
                 input: Box::new(node),
-                write,
+                write: Some(write),
             },
             WritePlan::result_schema(),
             krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
@@ -457,7 +457,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
                 input: Box::new(node),
-                write,
+                write: Some(write),
             },
             WritePlan::result_schema(),
             krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
@@ -649,7 +649,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
         let plan = krishiv_exec::physical::PhysicalPlan::new(
             PhysNode::WriteFiles {
                 input: Box::new(node),
-                write,
+                write: Some(write),
             },
             WritePlan::result_schema(),
             krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
@@ -716,4 +716,81 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
         "empty/part-00000-job-empty-c000.snappy.parquet"
     );
     assert_eq!(files[0].rows, 0);
+}
+
+/// A write without a write plan (a plan written before the `write_plan`
+/// feature) cannot instantiate: there is no sink to build.
+#[test]
+fn a_write_without_a_write_plan_is_refused() {
+    let plan = krishiv_exec::physical::PhysicalPlan::new(
+        PhysNode::WriteFiles {
+            input: Box::new(PhysNode::OneRow),
+            write: None,
+        },
+        krishiv_exec::physical::WritePlan::result_schema(),
+        krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
+        krishiv_exec::physical::ExprEnv {
+            ansi: true,
+            legacy_statistical_aggregate: false,
+            zone: None,
+            query_start_micros: 0,
+            user: Arc::from("u"),
+        },
+    );
+    let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
+    let e =
+        krishiv_exec::physical::instantiate_task(&plan, &worker, &TaskSpec::whole()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(
+        e.to_string().contains(
+            "a write without a write plan (written by a writer before the write_plan feature)"
+        ),
+        "{e}"
+    );
+}
+
+/// A write without a configuration cannot instantiate: format options
+/// parse against the session's fallbacks, and silently using defaults
+/// would parse them differently than the session's.
+#[test]
+fn a_write_without_a_configuration_is_refused() {
+    let out = tempfile::tempdir().unwrap();
+    let store = Arc::new(LocalFileSystem::new_with_prefix(out.path()).unwrap());
+    let sched = IoScheduler::new(IoConfig::default());
+    let id = StoreId::new("file://out");
+    sched.register_store(id, Arc::clone(&store) as Arc<dyn ObjectStore>);
+    let io = sched.context();
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let plan = krishiv_exec::physical::PhysicalPlan::new(
+        PhysNode::WriteFiles {
+            input: Box::new(PhysNode::OneRow),
+            write: Some(krishiv_exec::physical::WritePlan {
+                format: "parquet".to_owned(),
+                options: BTreeMap::new(),
+                store: "file://out".to_owned(),
+                dir: "result".to_owned(),
+                job_uuid: "job-1".to_owned(),
+                max_records_per_file: 0,
+                target_file_bytes: 0,
+            }),
+        },
+        krishiv_exec::physical::WritePlan::result_schema(),
+        krishiv_exec::planner::ExplainNode::leaf("WriteFiles", ""),
+        krishiv_exec::physical::ExprEnv {
+            ansi: true,
+            legacy_statistical_aggregate: false,
+            zone: None,
+            query_start_micros: 0,
+            user: Arc::from("u"),
+        },
+    );
+    let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
+        .with_io(io)
+        .with_formats(vec![format]);
+    let e = instantiate(&plan, &worker).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    assert!(
+        e.to_string().contains("a write without a configuration"),
+        "{e}"
+    );
 }

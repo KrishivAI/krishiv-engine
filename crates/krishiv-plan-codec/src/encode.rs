@@ -265,7 +265,7 @@ impl Encoder {
             }),
             PhysNode::WriteFiles { input, write } => Kind::WriteFiles(pb::WriteFilesNode {
                 input: self.node_index(input)?,
-                write: Some(write_plan(write)?),
+                write: write.as_ref().map(write_plan).transpose()?,
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
             PhysNode::Expand {
