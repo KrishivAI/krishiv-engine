@@ -126,8 +126,9 @@ fn filter_keeps_selected_rows_with_their_weights() {
 
 #[test]
 fn filter_edge_cases_produce_no_output_and_null_does_not_select() {
+    let (_root, ctx) = ctx();
     let f = Filter::new(schema(), gt1());
-    let mut local = unlocal();
+    let mut local = f.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
     // Empty batch.
     let empty = ints(&[]);
     assert!(
@@ -182,7 +183,11 @@ fn filter_errors_propagate() {
             Ok(BooleanArray::from(vec![true]))
         })),
     );
-    let e = bad_len.execute(&ints(&[1, 2]), &mut unlocal()).unwrap_err();
+    let (_root, ctx) = ctx();
+    let mut local = bad_len
+        .local_state(&ctx)
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let e = bad_len.execute(&ints(&[1, 2]), &mut local).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     let failing = Filter::new(
         schema(),
@@ -192,7 +197,7 @@ fn filter_errors_propagate() {
             }))
         })),
     );
-    assert!(failing.execute(&ints(&[1]), &mut unlocal()).is_err());
+    assert!(failing.execute(&ints(&[1]), &mut local).is_err());
     assert!(
         format!(
             "{:?}",
@@ -254,9 +259,11 @@ fn project_reorders_renames_and_computes() {
         .map(|f| f.name().clone())
         .collect();
     assert_eq!(names, ["s", "x", "y", "s"]);
+    let (_root, ctx) = ctx();
+    let mut local = p.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
     let input = weighted(&[1, 2], &[3, -4]);
     let out = out_batch(
-        p.execute(&input, &mut unlocal())
+        p.execute(&input, &mut local)
             .unwrap_or_else(|e| unreachable!("{e}")),
     )
     .unwrap_or_else(|| unreachable!("rows"));
@@ -287,14 +294,16 @@ fn project_reorders_renames_and_computes() {
 
 #[test]
 fn project_edge_cases() {
+    let (_root, ctx) = ctx();
     let all_null = batch(&[None, None]);
     let p = Project::try_new(
         &schema(),
         vec![ProjectItem::column(0), ProjectItem::expr("y", plus_one())],
     )
     .unwrap_or_else(|e| unreachable!("{e}"));
+    let mut local = p.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
     let out = out_batch(
-        p.execute(&all_null, &mut unlocal())
+        p.execute(&all_null, &mut local)
             .unwrap_or_else(|e| unreachable!("{e}")),
     )
     .unwrap_or_else(|| unreachable!("rows"));
@@ -303,15 +312,18 @@ fn project_edge_cases() {
     // Empty input: no output.
     assert!(
         out_batch(
-            p.execute(&ints(&[]), &mut unlocal())
+            p.execute(&ints(&[]), &mut local)
                 .unwrap_or_else(|e| unreachable!("{e}"))
         )
         .is_none()
     );
     // No columns: the row count survives.
     let none = Project::try_new(&schema(), vec![]).unwrap_or_else(|e| unreachable!("{e}"));
+    let mut none_local = none
+        .local_state(&ctx)
+        .unwrap_or_else(|e| unreachable!("{e}"));
     let out = out_batch(
-        none.execute(&ints(&[1, 2, 3]), &mut unlocal())
+        none.execute(&ints(&[1, 2, 3]), &mut none_local)
             .unwrap_or_else(|e| unreachable!("{e}")),
     );
     assert_eq!(
@@ -322,6 +334,7 @@ fn project_edge_cases() {
 
 #[test]
 fn project_rejects_bad_plans_and_bad_evaluators() {
+    let (_root, ctx) = ctx();
     let e = Project::try_new(&schema(), vec![ProjectItem::column(2)]).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     // An evaluator whose column is shorter than the batch, or of another type.
@@ -331,7 +344,8 @@ fn project_rejects_bad_plans_and_bad_evaluators() {
             vec![ProjectItem::expr("y", Arc::new(PlusOne { ty, short }))],
         )
         .unwrap_or_else(|e| unreachable!("{e}"));
-        let e = p.execute(&ints(&[1, 2]), &mut unlocal()).unwrap_err();
+        let mut local = p.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+        let e = p.execute(&ints(&[1, 2]), &mut local).unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::InternalError);
     }
     // An index that is valid for the plan but not for the batch.
@@ -345,7 +359,22 @@ fn project_rejects_bad_plans_and_bad_evaluators() {
         )
         .unwrap_or_else(|e| unreachable!("{e}")),
     );
-    assert!(p.execute(&narrow, &mut unlocal()).is_err());
+    let mut local = p.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+    assert!(p.execute(&narrow, &mut local).is_err());
+}
+
+#[test]
+fn filter_and_project_reject_foreign_local_state() {
+    // A stateful operator evaluated with another operator's state fails
+    // closed instead of silently reading partition 0's stream.
+    let e = Filter::new(schema(), gt1())
+        .execute(&ints(&[2]), &mut unlocal())
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
+    let p = Project::try_new(&schema(), vec![ProjectItem::column(0)])
+        .unwrap_or_else(|e| unreachable!("{e}"));
+    let e = p.execute(&ints(&[2]), &mut unlocal()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::InternalError);
 }
 
 fn run_limit(offset: u64, limit: u64, sizes: &[usize]) -> (Vec<i64>, usize) {
@@ -711,8 +740,9 @@ fn scan_reports_inconsistent_state_as_internal_errors() {
         offset: 0,
         claimed: 0,
         rows: super::RowStage::new(&[], &schema(), super::RowStageSettings::default()),
+        partition: 0,
     };
-    let e = scan.next_piece(&mut local, 4).unwrap_err();
+    let e = scan.next_piece(&mut local, 4, 0).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::InternalError);
     // A cursor that hands out a morsel the global state does not have.
     let global: crate::GlobalState = Arc::new(ScanGlobal {
@@ -964,4 +994,90 @@ fn expand_rejects_bad_plans() {
         .err()
         .unwrap_or_else(|| unreachable!("an error"));
     assert_eq!(err.error_class(), ErrorClass::InternalError);
+}
+
+/// A stateful function sees the driver's partition: `rand(0)` draws
+/// partition 0's stream on one driver and partition 1's on another, even
+/// when partition 1 binds first, and the same partition draws the same
+/// stream on a fresh evaluation.
+#[test]
+fn project_threads_the_drivers_partition_to_stateful_functions() {
+    use arrow_array::NullArray;
+    use arrow_array::types::Float64Type;
+    use krishiv_common::config::Config;
+    use krishiv_plan::{
+        Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr, ResolvedFunction,
+    };
+
+    use crate::planner::eval::{Compiled, EvalEnv, Input, compile};
+
+    // `rand(0)` analyzed: a non-nullable double of a folded seed.
+    let call = |seed: i32| {
+        let f = ResolvedFunction {
+            id: FunctionId::Registry {
+                name: "rand".to_owned(),
+                id: 0,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(
+                seed,
+            ))))],
+            distinct: false,
+            filter: None,
+            data_type: krishiv_types::DataType::Double,
+            nullable: false,
+            deterministic: false,
+        };
+        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(f)))
+    };
+    let one_row = || {
+        let schema = Arc::new(Schema::new(vec![Field::new("d", DataType::Null, true)]));
+        let data = RecordBatch::try_new(schema, vec![Arc::new(NullArray::new(1))])
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        Batch::new(data)
+    };
+    let project = |seed: i32| {
+        let config = Config::new();
+        let env = EvalEnv::new(&config, Arc::from("test"));
+        let schema = Arc::new(Schema::empty());
+        let compiled = compile(
+            &call(seed),
+            Input {
+                layout: &[],
+                schema: &schema,
+                env: &env,
+                subqueries: &[],
+            },
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"));
+        let input = one_row();
+        Project::try_new(
+            &input.schema(),
+            vec![ProjectItem::expr(
+                "r",
+                Arc::new(Compiled(compiled)) as Arc<dyn crate::operators::expr::ScalarExpr>,
+            )],
+        )
+        .unwrap_or_else(|e| unreachable!("{e}"))
+    };
+    let run = |p: &Arc<Project>, partition: u32| {
+        let (_root, ctx) = ctx();
+        let ctx = ctx.with_partition(partition);
+        let mut local = p.local_state(&ctx).unwrap_or_else(|e| unreachable!("{e}"));
+        let out = out_batch(
+            p.execute(&one_row(), &mut local)
+                .unwrap_or_else(|e| unreachable!("{e}")),
+        )
+        .unwrap_or_else(|| unreachable!("a row"));
+        out.data().column(0).as_primitive::<Float64Type>().value(0)
+    };
+    // Partition 1 binds first on the shared binding: partition 0 still
+    // draws its own stream (each slot draws `base + slot`), and both are
+    // Spark's first draws for their seeds.
+    let p = project(0);
+    assert_eq!(run(&p, 1), 0.6363787615254752);
+    assert_eq!(run(&p, 0), 0.7604953758285915);
+    // A fresh evaluation draws the same stream again: the stream is a pure
+    // function of (seed, partition, row).
+    assert_eq!(run(&project(0), 0), 0.7604953758285915);
 }

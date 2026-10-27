@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      13
-    ]
-  },
-  "file": "group-by-ordinal",
-  "format_version": 1
-}

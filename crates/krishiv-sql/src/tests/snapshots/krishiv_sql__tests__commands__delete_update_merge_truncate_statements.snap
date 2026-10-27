@@ -1,0 +1,1344 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"DELETE FROM t WHERE 1 = 0\", \"DELETE FROM t\",\n\"DELETE FROM IDENTIFIER('ta' || 'b') WHERE 1 = 0\", \"UPDATE t SET c1 = 2\",\n\"UPDATE t SET c1 = 2, c2 = c2 + 1 WHERE c1 > 0\", \"UPDATE t AS x SET x.c1 = 2\",\n\"UPDATE t x SET x.c1 = 2\", \"UPDATE IDENTIFIER('ta' || 'b') SET c1 = 2\",\n\"MERGE INTO t AS x USING s AS y ON x.c1 = y.c1 WHEN MATCHED THEN UPDATE SET c1 = 3\",\n\"MERGE INTO t USING s ON t.c1 = s.c1 WHEN MATCHED THEN DELETE\",\n\"MERGE INTO t USING (SELECT * FROM s) AS y ON t.c1 = y.c1 WHEN NOT MATCHED THEN INSERT *\",\n\"MERGE INTO t USING s ON t.c1 = s.c1 WHEN NOT MATCHED BY TARGET AND s.c2 > 0 THEN INSERT (c1, c2) VALUES (1, 2)\",\n\"MERGE INTO t USING s ON t.c1 = s.c1 WHEN NOT MATCHED BY SOURCE THEN UPDATE SET c1 = 0\",\n\"MERGE INTO IDENTIFIER('ta' || 'b') AS t USING IDENTIFIER('ta' || 'b') AS s ON s.c1 = t.c1 WHEN MATCHED THEN UPDATE SET c1 = 3\",\n\"TRUNCATE TABLE t\", \"TRUNCATE TABLE IDENTIFIER('ta' || 'b')\",\n\"TRUNCATE TABLE t PARTITION (c = 'Us')\",])"
+---
+-- DELETE FROM t WHERE 1 = 0
+Delete(
+    Delete {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        alias: None,
+        where_clause: Some(
+            Expr {
+                kind: Binary(
+                    Expr {
+                        kind: Literal(
+                            Number {
+                                text: "1",
+                                kind: Int,
+                            },
+                        ),
+                        span: 20..21,
+                    },
+                    Eq,
+                    Expr {
+                        kind: Literal(
+                            Number {
+                                text: "0",
+                                kind: Int,
+                            },
+                        ),
+                        span: 24..25,
+                    },
+                ),
+                span: 20..25,
+            },
+        ),
+        span: 0..25,
+    },
+)
+-- DELETE FROM t
+Delete(
+    Delete {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 12..13,
+                    },
+                ],
+                span: 12..13,
+            },
+        ),
+        alias: None,
+        where_clause: None,
+        span: 0..13,
+    },
+)
+-- DELETE FROM IDENTIFIER('ta' || 'b') WHERE 1 = 0
+Delete(
+    Delete {
+        table: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Binary(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "ta",
+                                ),
+                            ),
+                            span: 23..27,
+                        },
+                        Concat,
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "b",
+                                ),
+                            ),
+                            span: 31..34,
+                        },
+                    ),
+                    span: 23..34,
+                },
+                span: 12..35,
+            },
+        ),
+        alias: None,
+        where_clause: Some(
+            Expr {
+                kind: Binary(
+                    Expr {
+                        kind: Literal(
+                            Number {
+                                text: "1",
+                                kind: Int,
+                            },
+                        ),
+                        span: 42..43,
+                    },
+                    Eq,
+                    Expr {
+                        kind: Literal(
+                            Number {
+                                text: "0",
+                                kind: Int,
+                            },
+                        ),
+                        span: 46..47,
+                    },
+                ),
+                span: 42..47,
+            },
+        ),
+        span: 0..47,
+    },
+)
+-- UPDATE t SET c1 = 2
+Update(
+    Update {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 7..8,
+                    },
+                ],
+                span: 7..8,
+            },
+        ),
+        alias: None,
+        assignments: [
+            UpdateAssignment {
+                target: ObjectName {
+                    parts: [
+                        Ident {
+                            value: "c1",
+                            quoted: false,
+                            span: 13..15,
+                        },
+                    ],
+                    span: 13..15,
+                },
+                value: Expr {
+                    kind: Literal(
+                        Number {
+                            text: "2",
+                            kind: Int,
+                        },
+                    ),
+                    span: 18..19,
+                },
+                span: 13..19,
+            },
+        ],
+        where_clause: None,
+        span: 0..19,
+    },
+)
+-- UPDATE t SET c1 = 2, c2 = c2 + 1 WHERE c1 > 0
+Update(
+    Update {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 7..8,
+                    },
+                ],
+                span: 7..8,
+            },
+        ),
+        alias: None,
+        assignments: [
+            UpdateAssignment {
+                target: ObjectName {
+                    parts: [
+                        Ident {
+                            value: "c1",
+                            quoted: false,
+                            span: 13..15,
+                        },
+                    ],
+                    span: 13..15,
+                },
+                value: Expr {
+                    kind: Literal(
+                        Number {
+                            text: "2",
+                            kind: Int,
+                        },
+                    ),
+                    span: 18..19,
+                },
+                span: 13..19,
+            },
+            UpdateAssignment {
+                target: ObjectName {
+                    parts: [
+                        Ident {
+                            value: "c2",
+                            quoted: false,
+                            span: 21..23,
+                        },
+                    ],
+                    span: 21..23,
+                },
+                value: Expr {
+                    kind: Binary(
+                        Expr {
+                            kind: Column(
+                                [
+                                    Ident {
+                                        value: "c2",
+                                        quoted: false,
+                                        span: 26..28,
+                                    },
+                                ],
+                            ),
+                            span: 26..28,
+                        },
+                        Plus,
+                        Expr {
+                            kind: Literal(
+                                Number {
+                                    text: "1",
+                                    kind: Int,
+                                },
+                            ),
+                            span: 31..32,
+                        },
+                    ),
+                    span: 26..32,
+                },
+                span: 21..32,
+            },
+        ],
+        where_clause: Some(
+            Expr {
+                kind: Binary(
+                    Expr {
+                        kind: Column(
+                            [
+                                Ident {
+                                    value: "c1",
+                                    quoted: false,
+                                    span: 39..41,
+                                },
+                            ],
+                        ),
+                        span: 39..41,
+                    },
+                    Gt,
+                    Expr {
+                        kind: Literal(
+                            Number {
+                                text: "0",
+                                kind: Int,
+                            },
+                        ),
+                        span: 44..45,
+                    },
+                ),
+                span: 39..45,
+            },
+        ),
+        span: 0..45,
+    },
+)
+-- UPDATE t AS x SET x.c1 = 2
+Update(
+    Update {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 7..8,
+                    },
+                ],
+                span: 7..8,
+            },
+        ),
+        alias: Some(
+            Ident {
+                value: "x",
+                quoted: false,
+                span: 12..13,
+            },
+        ),
+        assignments: [
+            UpdateAssignment {
+                target: ObjectName {
+                    parts: [
+                        Ident {
+                            value: "x",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                        Ident {
+                            value: "c1",
+                            quoted: false,
+                            span: 20..22,
+                        },
+                    ],
+                    span: 18..22,
+                },
+                value: Expr {
+                    kind: Literal(
+                        Number {
+                            text: "2",
+                            kind: Int,
+                        },
+                    ),
+                    span: 25..26,
+                },
+                span: 18..26,
+            },
+        ],
+        where_clause: None,
+        span: 0..26,
+    },
+)
+-- UPDATE t x SET x.c1 = 2
+Update(
+    Update {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 7..8,
+                    },
+                ],
+                span: 7..8,
+            },
+        ),
+        alias: Some(
+            Ident {
+                value: "x",
+                quoted: false,
+                span: 9..10,
+            },
+        ),
+        assignments: [
+            UpdateAssignment {
+                target: ObjectName {
+                    parts: [
+                        Ident {
+                            value: "x",
+                            quoted: false,
+                            span: 15..16,
+                        },
+                        Ident {
+                            value: "c1",
+                            quoted: false,
+                            span: 17..19,
+                        },
+                    ],
+                    span: 15..19,
+                },
+                value: Expr {
+                    kind: Literal(
+                        Number {
+                            text: "2",
+                            kind: Int,
+                        },
+                    ),
+                    span: 22..23,
+                },
+                span: 15..23,
+            },
+        ],
+        where_clause: None,
+        span: 0..23,
+    },
+)
+-- UPDATE IDENTIFIER('ta' || 'b') SET c1 = 2
+Update(
+    Update {
+        table: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Binary(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "ta",
+                                ),
+                            ),
+                            span: 18..22,
+                        },
+                        Concat,
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "b",
+                                ),
+                            ),
+                            span: 26..29,
+                        },
+                    ),
+                    span: 18..29,
+                },
+                span: 7..30,
+            },
+        ),
+        alias: None,
+        assignments: [
+            UpdateAssignment {
+                target: ObjectName {
+                    parts: [
+                        Ident {
+                            value: "c1",
+                            quoted: false,
+                            span: 35..37,
+                        },
+                    ],
+                    span: 35..37,
+                },
+                value: Expr {
+                    kind: Literal(
+                        Number {
+                            text: "2",
+                            kind: Int,
+                        },
+                    ),
+                    span: 40..41,
+                },
+                span: 35..41,
+            },
+        ],
+        where_clause: None,
+        span: 0..41,
+    },
+)
+-- MERGE INTO t AS x USING s AS y ON x.c1 = y.c1 WHEN MATCHED THEN UPDATE SET c1 = 3
+Merge(
+    Merge {
+        target: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        target_alias: Some(
+            Ident {
+                value: "x",
+                quoted: false,
+                span: 16..17,
+            },
+        ),
+        source: Table {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "s",
+                            quoted: false,
+                            span: 24..25,
+                        },
+                    ],
+                    span: 24..25,
+                },
+            ),
+            alias: Some(
+                Ident {
+                    value: "y",
+                    quoted: false,
+                    span: 29..30,
+                },
+            ),
+            span: 24..30,
+        },
+        on: Expr {
+            kind: Binary(
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "x",
+                                quoted: false,
+                                span: 34..35,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 36..38,
+                            },
+                        ],
+                    ),
+                    span: 34..38,
+                },
+                Eq,
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "y",
+                                quoted: false,
+                                span: 41..42,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 43..45,
+                            },
+                        ],
+                    ),
+                    span: 41..45,
+                },
+            ),
+            span: 34..45,
+        },
+        clauses: [
+            MergeClause {
+                matched: Matched,
+                condition: None,
+                action: Update(
+                    [
+                        UpdateAssignment {
+                            target: ObjectName {
+                                parts: [
+                                    Ident {
+                                        value: "c1",
+                                        quoted: false,
+                                        span: 75..77,
+                                    },
+                                ],
+                                span: 75..77,
+                            },
+                            value: Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "3",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 80..81,
+                            },
+                            span: 75..81,
+                        },
+                    ],
+                ),
+                span: 51..81,
+            },
+        ],
+        span: 0..81,
+    },
+)
+-- MERGE INTO t USING s ON t.c1 = s.c1 WHEN MATCHED THEN DELETE
+Merge(
+    Merge {
+        target: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        target_alias: None,
+        source: Table {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "s",
+                            quoted: false,
+                            span: 19..20,
+                        },
+                    ],
+                    span: 19..20,
+                },
+            ),
+            alias: None,
+            span: 19..20,
+        },
+        on: Expr {
+            kind: Binary(
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 24..25,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 26..28,
+                            },
+                        ],
+                    ),
+                    span: 24..28,
+                },
+                Eq,
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "s",
+                                quoted: false,
+                                span: 31..32,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 33..35,
+                            },
+                        ],
+                    ),
+                    span: 31..35,
+                },
+            ),
+            span: 24..35,
+        },
+        clauses: [
+            MergeClause {
+                matched: Matched,
+                condition: None,
+                action: Delete,
+                span: 41..60,
+            },
+        ],
+        span: 0..60,
+    },
+)
+-- MERGE INTO t USING (SELECT * FROM s) AS y ON t.c1 = y.c1 WHEN NOT MATCHED THEN INSERT *
+Merge(
+    Merge {
+        target: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        target_alias: None,
+        source: Query {
+            query: Query {
+                with: None,
+                body: SetExpr {
+                    kind: Query(
+                        Query {
+                            with: None,
+                            body: SetExpr {
+                                kind: Select(
+                                    Select {
+                                        hints: [],
+                                        quantifier: None,
+                                        projection: [
+                                            SelectItem {
+                                                expr: Expr {
+                                                    kind: Wildcard {
+                                                        qualifier: [],
+                                                        except: [],
+                                                    },
+                                                    span: 27..28,
+                                                },
+                                                alias: None,
+                                                span: 27..28,
+                                            },
+                                        ],
+                                        from: Some(
+                                            FromClause {
+                                                relations: [
+                                                    Relation {
+                                                        lateral: false,
+                                                        primary: TableFactor {
+                                                            kind: Table {
+                                                                name: ObjectName {
+                                                                    parts: [
+                                                                        Ident {
+                                                                            value: "s",
+                                                                            quoted: false,
+                                                                            span: 34..35,
+                                                                        },
+                                                                    ],
+                                                                    span: 34..35,
+                                                                },
+                                                                temporal: None,
+                                                                options: [],
+                                                            },
+                                                            sample: None,
+                                                            alias: None,
+                                                            span: 34..35,
+                                                        },
+                                                        extensions: [],
+                                                        span: 34..35,
+                                                    },
+                                                ],
+                                                lateral_views: [],
+                                                pivot: None,
+                                                unpivot: None,
+                                                span: 29..35,
+                                            },
+                                        ),
+                                        lateral_views: [],
+                                        selection: None,
+                                        group_by: None,
+                                        having: None,
+                                        windows: [],
+                                        qualify: None,
+                                        span: 20..35,
+                                    },
+                                ),
+                                span: 20..35,
+                            },
+                            order_by: [],
+                            order_span: None,
+                            cluster_by: [],
+                            distribute_by: [],
+                            sort_by: [],
+                            windows: [],
+                            limit: None,
+                            offset: None,
+                            span: 20..35,
+                        },
+                    ),
+                    span: 19..36,
+                },
+                order_by: [],
+                order_span: None,
+                cluster_by: [],
+                distribute_by: [],
+                sort_by: [],
+                windows: [],
+                limit: None,
+                offset: None,
+                span: 19..36,
+            },
+            alias: Some(
+                Ident {
+                    value: "y",
+                    quoted: false,
+                    span: 40..41,
+                },
+            ),
+            span: 19..41,
+        },
+        on: Expr {
+            kind: Binary(
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 45..46,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 47..49,
+                            },
+                        ],
+                    ),
+                    span: 45..49,
+                },
+                Eq,
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "y",
+                                quoted: false,
+                                span: 52..53,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 54..56,
+                            },
+                        ],
+                    ),
+                    span: 52..56,
+                },
+            ),
+            span: 45..56,
+        },
+        clauses: [
+            MergeClause {
+                matched: NotMatched,
+                condition: None,
+                action: Insert(
+                    Star,
+                ),
+                span: 62..87,
+            },
+        ],
+        span: 0..87,
+    },
+)
+-- MERGE INTO t USING s ON t.c1 = s.c1 WHEN NOT MATCHED BY TARGET AND s.c2 > 0 THEN INSERT (c1, c2) VALUES (1, 2)
+Merge(
+    Merge {
+        target: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        target_alias: None,
+        source: Table {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "s",
+                            quoted: false,
+                            span: 19..20,
+                        },
+                    ],
+                    span: 19..20,
+                },
+            ),
+            alias: None,
+            span: 19..20,
+        },
+        on: Expr {
+            kind: Binary(
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 24..25,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 26..28,
+                            },
+                        ],
+                    ),
+                    span: 24..28,
+                },
+                Eq,
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "s",
+                                quoted: false,
+                                span: 31..32,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 33..35,
+                            },
+                        ],
+                    ),
+                    span: 31..35,
+                },
+            ),
+            span: 24..35,
+        },
+        clauses: [
+            MergeClause {
+                matched: NotMatchedByTarget,
+                condition: Some(
+                    Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Column(
+                                    [
+                                        Ident {
+                                            value: "s",
+                                            quoted: false,
+                                            span: 67..68,
+                                        },
+                                        Ident {
+                                            value: "c2",
+                                            quoted: false,
+                                            span: 69..71,
+                                        },
+                                    ],
+                                ),
+                                span: 67..71,
+                            },
+                            Gt,
+                            Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "0",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 74..75,
+                            },
+                        ),
+                        span: 67..75,
+                    },
+                ),
+                action: Insert(
+                    Values {
+                        columns: [
+                            ObjectName {
+                                parts: [
+                                    Ident {
+                                        value: "c1",
+                                        quoted: false,
+                                        span: 89..91,
+                                    },
+                                ],
+                                span: 89..91,
+                            },
+                            ObjectName {
+                                parts: [
+                                    Ident {
+                                        value: "c2",
+                                        quoted: false,
+                                        span: 93..95,
+                                    },
+                                ],
+                                span: 93..95,
+                            },
+                        ],
+                        values: [
+                            Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "1",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 105..106,
+                            },
+                            Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "2",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 108..109,
+                            },
+                        ],
+                        span: 81..110,
+                    },
+                ),
+                span: 41..110,
+            },
+        ],
+        span: 0..110,
+    },
+)
+-- MERGE INTO t USING s ON t.c1 = s.c1 WHEN NOT MATCHED BY SOURCE THEN UPDATE SET c1 = 0
+Merge(
+    Merge {
+        target: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 11..12,
+                    },
+                ],
+                span: 11..12,
+            },
+        ),
+        target_alias: None,
+        source: Table {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "s",
+                            quoted: false,
+                            span: 19..20,
+                        },
+                    ],
+                    span: 19..20,
+                },
+            ),
+            alias: None,
+            span: 19..20,
+        },
+        on: Expr {
+            kind: Binary(
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 24..25,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 26..28,
+                            },
+                        ],
+                    ),
+                    span: 24..28,
+                },
+                Eq,
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "s",
+                                quoted: false,
+                                span: 31..32,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 33..35,
+                            },
+                        ],
+                    ),
+                    span: 31..35,
+                },
+            ),
+            span: 24..35,
+        },
+        clauses: [
+            MergeClause {
+                matched: NotMatchedBySource,
+                condition: None,
+                action: Update(
+                    [
+                        UpdateAssignment {
+                            target: ObjectName {
+                                parts: [
+                                    Ident {
+                                        value: "c1",
+                                        quoted: false,
+                                        span: 79..81,
+                                    },
+                                ],
+                                span: 79..81,
+                            },
+                            value: Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "0",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 84..85,
+                            },
+                            span: 79..85,
+                        },
+                    ],
+                ),
+                span: 41..85,
+            },
+        ],
+        span: 0..85,
+    },
+)
+-- MERGE INTO IDENTIFIER('ta' || 'b') AS t USING IDENTIFIER('ta' || 'b') AS s ON s.c1 = t.c1 WHEN MATCHED THEN UPDATE SET c1 = 3
+Merge(
+    Merge {
+        target: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Binary(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "ta",
+                                ),
+                            ),
+                            span: 22..26,
+                        },
+                        Concat,
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "b",
+                                ),
+                            ),
+                            span: 30..33,
+                        },
+                    ),
+                    span: 22..33,
+                },
+                span: 11..34,
+            },
+        ),
+        target_alias: Some(
+            Ident {
+                value: "t",
+                quoted: false,
+                span: 38..39,
+            },
+        ),
+        source: Table {
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "ta",
+                                    ),
+                                ),
+                                span: 57..61,
+                            },
+                            Concat,
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "b",
+                                    ),
+                                ),
+                                span: 65..68,
+                            },
+                        ),
+                        span: 57..68,
+                    },
+                    span: 46..69,
+                },
+            ),
+            alias: Some(
+                Ident {
+                    value: "s",
+                    quoted: false,
+                    span: 73..74,
+                },
+            ),
+            span: 46..74,
+        },
+        on: Expr {
+            kind: Binary(
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "s",
+                                quoted: false,
+                                span: 78..79,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 80..82,
+                            },
+                        ],
+                    ),
+                    span: 78..82,
+                },
+                Eq,
+                Expr {
+                    kind: Column(
+                        [
+                            Ident {
+                                value: "t",
+                                quoted: false,
+                                span: 85..86,
+                            },
+                            Ident {
+                                value: "c1",
+                                quoted: false,
+                                span: 87..89,
+                            },
+                        ],
+                    ),
+                    span: 85..89,
+                },
+            ),
+            span: 78..89,
+        },
+        clauses: [
+            MergeClause {
+                matched: Matched,
+                condition: None,
+                action: Update(
+                    [
+                        UpdateAssignment {
+                            target: ObjectName {
+                                parts: [
+                                    Ident {
+                                        value: "c1",
+                                        quoted: false,
+                                        span: 119..121,
+                                    },
+                                ],
+                                span: 119..121,
+                            },
+                            value: Expr {
+                                kind: Literal(
+                                    Number {
+                                        text: "3",
+                                        kind: Int,
+                                    },
+                                ),
+                                span: 124..125,
+                            },
+                            span: 119..125,
+                        },
+                    ],
+                ),
+                span: 95..125,
+            },
+        ],
+        span: 0..125,
+    },
+)
+-- TRUNCATE TABLE t
+Truncate(
+    Truncate {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 15..16,
+                    },
+                ],
+                span: 15..16,
+            },
+        ),
+        partition: None,
+        span: 0..16,
+    },
+)
+-- TRUNCATE TABLE IDENTIFIER('ta' || 'b')
+Truncate(
+    Truncate {
+        table: Dynamic(
+            DynamicName {
+                expr: Expr {
+                    kind: Binary(
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "ta",
+                                ),
+                            ),
+                            span: 26..30,
+                        },
+                        Concat,
+                        Expr {
+                            kind: Literal(
+                                String(
+                                    "b",
+                                ),
+                            ),
+                            span: 34..37,
+                        },
+                    ),
+                    span: 26..37,
+                },
+                span: 15..38,
+            },
+        ),
+        partition: None,
+        span: 0..38,
+    },
+)
+-- TRUNCATE TABLE t PARTITION (c = 'Us')
+Truncate(
+    Truncate {
+        table: Parts(
+            ObjectName {
+                parts: [
+                    Ident {
+                        value: "t",
+                        quoted: false,
+                        span: 15..16,
+                    },
+                ],
+                span: 15..16,
+            },
+        ),
+        partition: Some(
+            PartitionSpec {
+                parts: [
+                    PartitionSpecPart {
+                        key: Ident {
+                            value: "c",
+                            quoted: false,
+                            span: 28..29,
+                        },
+                        value: Some(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "Us",
+                                    ),
+                                ),
+                                span: 32..36,
+                            },
+                        ),
+                        span: 28..36,
+                    },
+                ],
+                span: 17..37,
+            },
+        ),
+        span: 0..37,
+    },
+)

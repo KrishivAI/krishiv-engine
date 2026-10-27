@@ -9,14 +9,6 @@
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mask#022ee92f6525/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', named_struct('a', 1, 'b', 'x'), 'o') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#022ee92f6525/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', named_struct('a', 1, 'b', 'x'), 'o') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#0ad187a41cfd/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', map('a', 1), 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -57,60 +49,12 @@
       "reason": "SELECT mask('AbCD123-@$#', map('a', 1), 'q') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mask#1b649bdfd6cc/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', named_struct('a', 1, 'b', 'x'), 'q', 'd') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1b649bdfd6cc/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', named_struct('a', 1, 'b', 'x'), 'q', 'd') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#1c8ecfa526a9/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#1c8ecfa526a9/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1d7d64d5b30c/ansi_on",
-      "reason": "SELECT mask(array(1, 2), 'Q', 'q', 'd') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1d7d64d5b30c/ansi_off",
-      "reason": "SELECT mask(array(1, 2), 'Q', 'q', 'd') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1e0708a8ad2b/ansi_on",
-      "reason": "SELECT mask('abcd-EFGH-8765-4321', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1e0708a8ad2b/ansi_off",
-      "reason": "SELECT mask('abcd-EFGH-8765-4321', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1e8d090070e6/ansi_on",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x'), 'Q') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1e8d090070e6/ansi_off",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x'), 'Q') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1f4d944bf49b/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#1f4d944bf49b/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#25df5304a884/ansi_on",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#25df5304a884/ansi_off",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#268098ca5d12/ansi_on",
@@ -137,14 +81,6 @@
       "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mask#2f15a78ccb47/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', array(1, 2), 'q', 'd') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#2f15a78ccb47/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', array(1, 2), 'q', 'd') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#2f388b8a41ca/ansi_on",
       "reason": "SELECT mask('', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
     },
@@ -153,36 +89,12 @@
       "reason": "SELECT mask('', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
     },
     {
-      "id": "mask#2f95d65db220/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', array(1, 2), 'q') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#2f95d65db220/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', array(1, 2), 'q') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#31f94169c574/ansi_on",
-      "reason": "SELECT mask(array(1, 2), 'Q') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#31f94169c574/ansi_off",
-      "reason": "SELECT mask(array(1, 2), 'Q') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#32a541e4c9d1/ansi_on",
       "reason": "SELECT mask(map('a', 1), 'Q', 'q') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#32a541e4c9d1/ansi_off",
       "reason": "SELECT mask(map('a', 1), 'Q', 'q') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#33ab2fa070e6/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', named_struct('a', 1, 'b', 'x'), 'q') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#33ab2fa070e6/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', named_struct('a', 1, 'b', 'x'), 'q') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#341672002912/ansi_on",
@@ -209,14 +121,6 @@
       "reason": "SELECT mask(' \\t a\\u3000\\n ', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
     },
     {
-      "id": "mask#3a40e57c1295/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', array(1, 2), 'q', 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#3a40e57c1295/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', array(1, 2), 'q', 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#3ae6027968be/ansi_on",
       "reason": "SELECT mask(INTERVAL '1 02:03:04' DAY TO SECOND, 'Q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -231,22 +135,6 @@
     {
       "id": "mask#411877cfc39c/ansi_off",
       "reason": "SELECT mask('abc', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
-    },
-    {
-      "id": "mask#4362eee4b42c/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', named_struct('a', 1, 'b', 'x'), 'd') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#4362eee4b42c/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', named_struct('a', 1, 'b', 'x'), 'd') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#4666b33537d9/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#4666b33537d9/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#466aaca1585c/ansi_on",
@@ -287,30 +175,6 @@
     {
       "id": "mask#4c3bbabdc2d6/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#4fffbb92ffbe/ansi_on",
-      "reason": "SELECT mask(array(1, 2), 'Q', 'q', 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#4fffbb92ffbe/ansi_off",
-      "reason": "SELECT mask(array(1, 2), 'Q', 'q', 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#5c0559e4ecbd/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#5c0559e4ecbd/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#648ea467cc55/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#648ea467cc55/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', named_struct('a', 1, 'b', 'x')) | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#6691f60de573/ansi_on",
@@ -361,22 +225,6 @@
       "reason": "SELECT mask('AbCD123-@$#', 'Q', CAST(X'C328FF' AS STRING), 'd', 'o') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
     {
-      "id": "mask#748c5e8c2c48/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', named_struct('a', 1, 'b', 'x'), 'q', 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#748c5e8c2c48/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', named_struct('a', 1, 'b', 'x'), 'q', 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#7a747dbeb68b/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', array(1, 2), 'd') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#7a747dbeb68b/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', array(1, 2), 'd') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#7af2934fee03/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -417,14 +265,6 @@
       "reason": "SELECT mask(map('a', 1), 'Q') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mask#8083dc23d5f1/ansi_on",
-      "reason": "SELECT mask(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#8083dc23d5f1/ansi_off",
-      "reason": "SELECT mask(array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#81733105ced5/ansi_on",
       "reason": "SELECT mask('abcd-EFGH-8765-4321', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -433,36 +273,12 @@
       "reason": "SELECT mask('abcd-EFGH-8765-4321', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mask#84fcdb76838e/ansi_on",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x'), 'Q', 'q') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#84fcdb76838e/ansi_off",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x'), 'Q', 'q') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#8d77fa2b7b92/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', array(1, 2), 'o') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#8d77fa2b7b92/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', array(1, 2), 'o') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#8e073509fa76/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#8e073509fa76/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#8e0b9c282148/ansi_on",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x'), 'Q', 'q', 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#8e0b9c282148/ansi_off",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x'), 'Q', 'q', 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#92e79a232d1f/ansi_on",
@@ -479,22 +295,6 @@
     {
       "id": "mask#94cbcce5e38e/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', INTERVAL '1-2' YEAR TO MONTH, 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#95b34ca14dae/ansi_on",
-      "reason": "SELECT mask(array(1, 2), 'Q', 'q') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#95b34ca14dae/ansi_off",
-      "reason": "SELECT mask(array(1, 2), 'Q', 'q') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#966ffe59aebf/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', array(1, 2), 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#966ffe59aebf/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', array(1, 2), 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#9dc44bff3e50/ansi_on",
@@ -521,14 +321,6 @@
       "reason": "SELECT mask('AbCD123-@$#', INTERVAL '1 02:03:04' DAY TO SECOND, 'q', 'd') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mask#a184b757e96d/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#a184b757e96d/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#a2228ad6d6e9/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -551,14 +343,6 @@
     {
       "id": "mask#a523765f14c7/ansi_off",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', 'o') | string not null where Spark has string"
-    },
-    {
-      "id": "mask#a5481ebc1b9a/ansi_on",
-      "reason": "SELECT mask('abcd-EFGH-8765-4321', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#a5481ebc1b9a/ansi_off",
-      "reason": "SELECT mask('abcd-EFGH-8765-4321', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#a6e0d300e1cd/ansi_on",
@@ -721,22 +505,6 @@
       "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH, 'Q') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "mask#f0ad8615a5c7/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#f0ad8615a5c7/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', array(1, 2)) | KRISHIV_UNSUPPORTED_FEATURE: function array where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#f12975c8c977/ansi_on",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', named_struct('a', 1, 'b', 'x'), 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#f12975c8c977/ansi_off",
-      "reason": "SELECT mask('AbCD123-@$#', 'Q', named_struct('a', 1, 'b', 'x'), 'd', 'o') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "mask#f2eae03490ae/ansi_on",
       "reason": "SELECT mask('AbCD123-@$#', 'Q', 'q', 'd', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INPUT_SIZE_NOT_ONE"
     },
@@ -751,14 +519,6 @@
     {
       "id": "mask#f77fd44df469/ansi_off",
       "reason": "SELECT mask(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#f780e4bd5f2c/ansi_on",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x'), 'Q', 'q', 'd') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "mask#f780e4bd5f2c/ansi_off",
-      "reason": "SELECT mask(named_struct('a', 1, 'b', 'x'), 'Q', 'q', 'd') | KRISHIV_UNSUPPORTED_FEATURE: function named_struct where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "mask#f8c5db4839ce/ansi_on",

@@ -300,7 +300,7 @@ fn check(file: &str, passed: usize, skipped: usize) {
 
 #[test]
 fn string_functions_match_spark() {
-    check("string-functions.sql.out", 212, 31);
+    check("string-functions.sql.out", 213, 30);
 }
 
 #[test]
@@ -313,12 +313,8 @@ fn mask_functions_match_spark() {
     check("mask-functions.sql.out", 57, 0);
 }
 
-#[test]
-fn url_functions_match_spark() {
-    // `parse_url` is `KnownUnsupported` (8 statements skipped); the URL
-    // codecs themselves match Spark.
-    check("url-functions.sql.out", 11, 8);
-}
+// `url-functions.sql.out` is replayed in full (the parse_url redaction of
+// userinfo in column names is a pinned difference) by `url_csv_functions.rs`.
 
 /// The new character functions end to end, against Spark 4.2's results: the
 /// three replayed files do not call `overlay`, `levenshtein` (2/3-arg),

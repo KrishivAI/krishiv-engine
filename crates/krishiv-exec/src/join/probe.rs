@@ -154,6 +154,7 @@ impl Cursor {
         shared: &Shared,
         tables: &Tables<'_>,
         limit: usize,
+        partition: u32,
     ) -> Result<(Option<Batch>, bool)> {
         let n = self.batch.num_rows();
         let quick = !shared.join_type.emits_build() && shared.filter.is_none();
@@ -190,7 +191,10 @@ impl Cursor {
             }
         }
         if !probe.is_empty() {
-            return Ok((self.pairs(shared, tables, &probe, &build)?, false));
+            return Ok((
+                self.pairs(shared, tables, &probe, &build, partition)?,
+                false,
+            ));
         }
         Ok((self.tail(shared)?, true))
     }
@@ -203,6 +207,7 @@ impl Cursor {
         tables: &Tables<'_>,
         probe: &[u32],
         build: &[(usize, u32)],
+        partition: u32,
     ) -> Result<Option<Batch>> {
         let arena = |p: usize| tables.get(p).map(JoinTable::arena);
         let build_cols = shared.build_columns(self.rows, build, arena)?;
@@ -213,7 +218,7 @@ impl Cursor {
         let mask = match &shared.filter {
             Some(f) => {
                 let candidates = record(&shared.filter_schema, columns.clone(), m)?;
-                let mask = f.evaluate(&candidates)?;
+                let mask = f.evaluate_in(&candidates, partition)?;
                 if mask.len() != m {
                     return Err(internal(
                         "a join filter returned the wrong row count".to_owned(),
@@ -368,6 +373,8 @@ struct ProbeLocal {
     signal: Arc<SpillSignal>,
     flush: Flush,
     batch_size: usize,
+    /// The driver's partition: the residual filter evaluates in it.
+    partition: u32,
 }
 
 fn local_mut(local: &mut LocalState) -> Result<&mut ProbeLocal> {
@@ -428,12 +435,13 @@ impl ProbeOp {
             l.cursor = Some(cursor);
         }
         let limit = l.batch_size;
+        let partition = l.partition;
         let cursor = l
             .cursor
             .as_mut()
             .ok_or_else(|| internal("no probe cursor".to_owned()))?;
         loop {
-            let (out, done) = cursor.next(s, &tables, limit)?;
+            let (out, done) = cursor.next(s, &tables, limit, partition)?;
             if done {
                 l.cursor = None;
                 return Ok(OperatorOutput::NeedMoreInput(out));
@@ -473,6 +481,7 @@ impl Operator for ProbeOp {
             signal: Arc::clone(memory.signal()),
             flush: Flush::default(),
             batch_size: ctx.query().config().batch_size.max(1),
+            partition: ctx.partition(),
         }))
     }
 

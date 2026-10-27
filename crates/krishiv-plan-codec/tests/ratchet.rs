@@ -12,7 +12,7 @@
 mod suites;
 
 use krishiv_exec::physical::{PhysicalPlan, WorkerContext, instantiate};
-use krishiv_plan_codec::{decode, encode};
+use krishiv_plan_codec::{CodecError, decode, encode};
 
 use suites::{Suite, queries};
 
@@ -21,9 +21,16 @@ use suites::{Suite, queries};
 /// fails when a query on it plans, so its entry is removed in the change
 /// that makes it plan.
 const TPCDS_NOT_PLANNED: &[&str] = &[
-    "q10", "q16", "q17", "q30", "q32", "q35", "q39", "q41", "q45", "q50", "q51", "q62", "q70",
-    "q72", "q86", "q92", "q94", "q95", "q97", "q99",
+    "q10", "q16", "q30", "q32", "q35", "q41", "q45", "q50", "q51", "q62", "q70", "q72", "q86",
+    "q92", "q94", "q95", "q97", "q99",
 ];
+
+/// TPC-DS queries that plan but use a moment aggregate (`stddev_samp`),
+/// which `krishiv.plan.v1` has no code for yet: the encoder refuses them
+/// with `CodecError::Unsupported`, so none reaches a worker. The list may
+/// only shrink: the test fails when one of them encodes, so its entry is
+/// removed in the change that adds the aggregate to the format.
+const TPCDS_NOT_ENCODABLE: &[&str] = &["q17", "q39"];
 
 fn assert_round_trips(name: &str, plan: &PhysicalPlan) -> Vec<u8> {
     let bytes = encode(plan).unwrap_or_else(|e| panic!("{name}: encode: {e}"));
@@ -61,14 +68,22 @@ fn tpcds_plans_round_trip() {
     let all = queries("tpcds");
     assert_eq!(all.len(), 99);
     let mut not_planned = Vec::new();
+    let mut not_encodable = Vec::new();
     for (name, sql) in &all {
         match suite.plan(sql) {
+            Ok(plan) if TPCDS_NOT_ENCODABLE.contains(&name.as_str()) => match encode(&plan) {
+                Err(CodecError::Unsupported(what)) if what.contains("aggregate function") => {
+                    not_encodable.push(name.as_str());
+                }
+                other => panic!("tpcds {name}: expected a refused aggregate: {other:?}"),
+            },
             Ok(plan) => {
                 assert_round_trips(&format!("tpcds {name}"), &plan);
             }
             Err(_) => not_planned.push(name.as_str()),
         }
     }
+    assert_eq!(not_encodable, TPCDS_NOT_ENCODABLE);
     assert_eq!(
         not_planned, TPCDS_NOT_PLANNED,
         "the TPC-DS queries that do not plan changed: update TPCDS_NOT_PLANNED (it may only shrink)"

@@ -1,6 +1,22 @@
 // SPDX-License-Identifier: Apache-2.0
 //! [`RowLayout`]: where each key column lives in a row, how a batch of key
 //! columns becomes rows ([`EncodedKeys`]), and how two rows compare.
+//!
+//! # The stored row hash `h`
+//! A key row starts with its hash `h`, a fast column-wise mix (one folded
+//! multiply per 8-byte word, foldhash for values longer than 12 bytes)
+//! computed while the values are written. It has no seed, so every
+//! operator instance and worker computes the same `h` for a key, and
+//! sketches over it (the aggregate's HLLs) merge across tables. Tables
+//! place rows by the seeded `g = fin(h ^ seed)` ([`finalize`]).
+//!
+//! `h` is a table-internal hash and never routes a row between processes:
+//! exchanges, key groups and anything written to a plan or to state use the
+//! routing hash `H_kg` (`krishiv_kernels::hash::routing`, P2-T175), which is
+//! versioned and costs more per row (XXH64 per column). Keeping the two
+//! apart is the P2-T171 §5.1 fallback: `H_kg` as the tables' hash slowed
+//! short, hash-bound aggregates measurably, and a hash that never leaves
+//! the process need not be the routing function.
 
 use std::hash::BuildHasher;
 use std::sync::Arc;
@@ -27,6 +43,8 @@ const NULL_HASH: u64 = 0xA5A5_5A5A_C3C3_3C3C;
 /// Odd constants for the hash mix (from the fractional digits of pi and e).
 const MIX: u64 = 0x243F_6A88_85A3_08D3;
 const FINISH: u64 = 0xB7E1_5162_8AED_2A6B;
+/// The seed of the stored hash `h`: none (see the module docs).
+const SEEDLESS: u64 = 0;
 /// Odd constant of [`finalize`] (the fractional digits of sqrt(2)).
 const FIN: u64 = 0x6A09_E667_F3BC_C909;
 
@@ -380,13 +398,14 @@ impl RowLayout {
         Ok(make_array(data))
     }
 
-    /// Encodes and hashes the key `columns` of one batch (one per key type,
-    /// in order) with `seed`.
+    /// Encodes the key `columns` of one batch (one per key type, in order)
+    /// and, for a key layout, computes their stored hash `h` (see the
+    /// module docs).
     ///
     /// # Errors
     /// `INTERNAL_ERROR` if a column does not have its key type, or a value
     /// is longer than 4 GiB.
-    pub fn encode(&self, columns: &[ArrayRef], seed: u64) -> Result<EncodedKeys> {
+    pub fn encode(&self, columns: &[ArrayRef]) -> Result<EncodedKeys> {
         if columns.len() != self.columns.len() {
             return Err(internal(format!(
                 "{} key columns for a {}-key layout",
@@ -402,13 +421,13 @@ impl RowLayout {
             heap: Vec::new(),
             // A payload layout's rows are never hashed.
             hashes: if self.hashed {
-                vec![fold(seed, MIX); n]
+                vec![fold(SEEDLESS, MIX); n]
             } else {
                 Vec::new()
             },
             hashed: self.hashed,
         };
-        let strings = foldhash::fast::FixedState::with_seed(seed);
+        let strings = foldhash::fast::FixedState::with_seed(SEEDLESS);
         for (column, array) in self.columns.iter().zip(columns) {
             if array.len() != n {
                 return Err(internal("key columns of different lengths".to_owned()));
@@ -566,6 +585,12 @@ impl EncodedKeys {
     /// The hash of each row.
     pub fn hashes(&self) -> &[u64] {
         &self.hashes
+    }
+
+    /// The hash of each row, writable: tests forge `h` collisions.
+    #[cfg(test)]
+    pub(super) fn hashes_mut(&mut self) -> &mut [u64] {
+        &mut self.hashes
     }
 
     /// Row `i`'s bytes (empty if out of range).
@@ -971,11 +996,10 @@ fn heap_bytes<'a>(row: &[u8], heap: &'a [u8], at: usize, len: usize) -> Option<&
 /// The hash of an inline view (a value of at most 12 bytes, zero-padded):
 /// its two words folded, so a short key hashes without a byte loop. Every
 /// writer hashes short values this way and long ones with foldhash at the
-/// layout's seed, so equal values hash equally whatever their array type.
+/// constant seed, so equal values hash equally whatever their array type.
 ///
-/// The seed is not folded in here: `h` is seedless (P2-T157 Appendix C;
-/// every caller of [`RowLayout::encode`] passes a constant), so a seed would
-/// not change which values collide, and folding it cost 1.5-3.5% on the
+/// No seed is folded in here: `h` is seedless (P2-T157 Appendix C), so a
+/// seed would not change which values collide, and folding one cost 1.5-3.5% on the
 /// short-key encode benchmarks. Collision resistance is the table-local
 /// `g` ([`finalize`]) and the flooding defence's concern, not `h`'s.
 #[inline]

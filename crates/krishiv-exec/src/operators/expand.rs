@@ -8,7 +8,7 @@ use arrow_array::{ArrayRef, RecordBatch, new_null_array};
 use arrow_schema::{DataType, SchemaRef};
 use krishiv_types::batch::Batch;
 
-use super::{Project, ScalarExpr, local_mut, no_state};
+use super::{PartitionState, Project, ScalarExpr, local_mut};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::operator::{LocalState, Operator, OperatorOutput};
@@ -56,8 +56,14 @@ impl Expand {
     }
 }
 
-/// The next projection to emit for the current input batch.
-struct Cursor(usize);
+/// The next projection to emit for the current input batch, and the
+/// driver's partition: the projections evaluate row expressions, which draw
+/// the partition's stream.
+#[derive(Debug, Clone, Copy)]
+struct State {
+    next: usize,
+    partition: u32,
+}
 
 impl Operator for Expand {
     fn name(&self) -> &'static str {
@@ -68,29 +74,35 @@ impl Operator for Expand {
         Arc::clone(&self.schema)
     }
 
-    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
-        Ok(Box::new(Cursor(0)))
+    fn local_state(&self, ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(State {
+            next: 0,
+            partition: ctx.partition(),
+        }))
     }
 
     fn execute(&self, input: &Batch, local: &mut LocalState) -> Result<OperatorOutput> {
-        let cursor = local_mut::<Cursor>(local, "Expand")?;
+        let state = local_mut::<State>(local, "Expand")?;
         if input.num_rows() == 0 {
-            cursor.0 = 0;
+            state.next = 0;
             return Ok(OperatorOutput::NeedMoreInput(None));
         }
         let project = self
             .projects
-            .get(cursor.0)
+            .get(state.next)
             .ok_or_else(|| internal("an expansion past its last projection".to_owned()))?;
-        let OperatorOutput::NeedMoreInput(Some(out)) = project.execute(input, &mut no_state())?
+        let mut partition: LocalState = Box::new(PartitionState {
+            partition: state.partition,
+        });
+        let OperatorOutput::NeedMoreInput(Some(out)) = project.execute(input, &mut partition)?
         else {
             return Err(internal("a projection did not output a batch".to_owned()));
         };
-        cursor.0 += 1;
-        if cursor.0 < self.projects.len() {
+        state.next += 1;
+        if state.next < self.projects.len() {
             return Ok(OperatorOutput::HaveMoreOutput(out));
         }
-        cursor.0 = 0;
+        state.next = 0;
         Ok(OperatorOutput::NeedMoreInput(Some(out)))
     }
 }
