@@ -1123,9 +1123,15 @@ fn spilling_profile_validates_and_matches_its_text() {
     let mut b = Session::builder().config("krishiv.spill.dir", spill.to_str().unwrap());
     b = b.config("krishiv.memory.limit", "2m");
     let s = b.build().unwrap();
-    // Enough data to overflow a 2 MiB pool: Q18's grouped lineitem.
+    // Enough data to overflow a 2 MiB pool: a sort of the lineitems, not a
+    // join query (a join order that broadcasts a large table follows the
+    // estimates and holds memory that cannot spill).
     common::register_with(&s, 16_000, true);
-    let df = block_on(s.sql(&query(18))).unwrap();
+    let df = block_on(s.sql(
+        "SELECT l_orderkey, l_linenumber, l_extendedprice FROM lineitem \
+         ORDER BY l_extendedprice DESC, l_orderkey, l_linenumber",
+    ))
+    .unwrap();
     let (_, profile) = block_on(df.collect_with_profile()).unwrap();
     let spilled: u64 = profile
         .metrics
@@ -1142,7 +1148,7 @@ fn spilling_profile_validates_and_matches_its_text() {
     validate(&schema, &doc, &schema, "#")
         .unwrap_or_else(|e| panic!("spilling profile schema validation: {e}"));
     check_text_matches_json(
-        "q18-spilling",
+        "sort-spilling",
         &profile.to_text(TextOptions::default()),
         &doc,
     );

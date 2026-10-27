@@ -48,12 +48,15 @@
 
 mod cse;
 mod dag;
+mod estimate;
 mod expr;
 mod fold;
 mod group_limit;
 mod inline_cte;
 mod join_order;
 mod limit;
+mod narrow;
+mod plan_stats;
 mod project;
 mod prune;
 mod pushdown;
@@ -77,9 +80,10 @@ pub use group_limit::{
 };
 pub use join_order::DP_LIMIT;
 pub use limit::TopN;
+pub use plan_stats::PlanStats;
 pub use stats::{
-    ColumnStats, DEFAULT_ROWS, DEFAULT_SELECTIVITY, NoStatistics, Statistics, TableStats,
-    estimated_rows,
+    AttrStats, ColumnStats, DEFAULT_ROWS, DEFAULT_SELECTIVITY, NoStatistics, RelStats, StatSource,
+    Statistics, TableStats, estimated_rows,
 };
 
 /// The most rounds a rule batch runs before its result is taken as is.
@@ -120,11 +124,19 @@ pub struct RuleStep {
 pub struct Options {
     /// Common-subexpression elimination within one operator (`cse`).
     pub cse: bool,
+    /// Statistics propagation: estimates carry column ranges, null
+    /// fractions and distinct counts through filters, joins, aggregates,
+    /// projections and unions. Off, only row counts scale (the estimates
+    /// that order joins and choose restrictions).
+    pub stats_propagation: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { cse: true }
+        Self {
+            cse: true,
+            stats_propagation: true,
+        }
     }
 }
 
@@ -341,13 +353,14 @@ fn run(
         // decides its domain), so a second optimization finds nothing new.
         let estimates = stats.unwrap_or(&NoStatistics);
         let mut root = t.once("Restrict", &root, |r| {
-            restrict::restrict(Arc::clone(r), estimates)
+            restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
         })?;
         if let Some(stats) = stats {
             for round in 1..=MAX_ITERATIONS {
-                let ordered = join_order::reorder(&root, stats);
+                let ordered = join_order::reorder(&root, stats, options.stats_propagation);
                 t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
-                let restricted = restrict::restrict(Arc::clone(&ordered), estimates)?;
+                let restricted =
+                    restrict::restrict(Arc::clone(&ordered), estimates, options.stats_propagation)?;
                 t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
                 let done = Arc::ptr_eq(&restricted, &ordered);
                 root = restricted;

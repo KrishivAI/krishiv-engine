@@ -57,7 +57,6 @@
 //! divergence from Spark, which computes every group.
 
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -68,11 +67,12 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 use crate::dag::{self, with_input};
+use crate::estimate::Estimator;
 use crate::expr::{
     Attrs, and_all, builtin, column, conjuncts, has_outer_reference, has_subquery,
     is_deterministic, recall, references, same, strip_alias, substitute,
 };
-use crate::stats::{Est, Estimator, Statistics};
+use crate::stats::{RelStats, Statistics};
 
 /// The domain must have at most `1 / LOPSIDED` of the aggregate's groups.
 const LOPSIDED: f64 = 2.0;
@@ -88,9 +88,10 @@ pub(crate) const MAX_ID: u64 = 1 << 62;
 pub(crate) fn restrict(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
+    propagate: bool,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut r = Restrict {
-        est: Estimator::new(stats),
+        est: Estimator::with_propagation(stats, propagate),
         root: Arc::clone(&root),
         next: None,
     };
@@ -311,11 +312,11 @@ impl Restrict<'_> {
         // most of what it reads (without distinct counts the groups are
         // overestimated, and a whole table's keys restrict nothing), and
         // a domain no costlier to read than the aggregate's input.
-        let groups_est = self.est.plan(&at).rows;
+        let groups_est = self.est.plan(&at).rows_for_costing();
         let dom_est = self.est.plan(&domain);
         let dom_scanned = self.scanned(&domain);
         if key_ndv(&dom_est, &want) * LOPSIDED > groups_est
-            || dom_est.rows * LOPSIDED > dom_scanned
+            || dom_est.rows_for_costing() * LOPSIDED > dom_scanned
             || dom_scanned > self.scanned(input)
         {
             return None;
@@ -441,7 +442,7 @@ impl Restrict<'_> {
         while let Some(x) = stack.pop() {
             if seen.insert(Arc::as_ptr(&x)) {
                 if matches!(x.node, PlanNode::Scan(_)) {
-                    total += self.est.plan(&x).rows;
+                    total += self.est.plan(&x).rows_for_costing();
                 }
                 x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
             }
@@ -451,11 +452,11 @@ impl Restrict<'_> {
 }
 
 /// The estimated distinct values of the attributes `want` together.
-fn key_ndv(est: &Rc<Est>, want: &Attrs) -> f64 {
+fn key_ndv(est: &Arc<RelStats>, want: &Attrs) -> f64 {
     want.iter()
-        .map(|id| est.cols.get(id).map_or(est.rows, |c| c.ndv))
+        .map(|id| est.cols.get(id).map_or(est.rows_for_costing(), |c| c.ndv))
         .product::<f64>()
-        .min(est.rows)
+        .min(est.rows_for_costing())
 }
 
 /// Whether `input` is already reduced by a semi join on `keys` (this

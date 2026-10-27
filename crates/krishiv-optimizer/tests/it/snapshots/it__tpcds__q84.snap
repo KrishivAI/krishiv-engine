@@ -6,22 +6,22 @@ Project [customer_id#68, customername#69]
 +- Limit 100
    +- Sort [c_customer_id#1 ASC NULLS FIRST], true
       +- Project [c_customer_id#1 AS customer_id#68, concat(concat(coalesce(c_last_name#9, ''), ', '), coalesce(c_first_name#8, '')) AS customername#69, c_customer_id#1]
-         +- Join Inner, (sr_cdemo_sk#52 == cd_demo_sk#31)
-            :- Scan spark_catalog.default.store_returns [sr_cdemo_sk#52]
-            +- Project [cd_demo_sk#31, c_customer_id#1, c_first_name#8, c_last_name#9]
-               +- Join Inner, (cd_demo_sk#31 == c_current_cdemo_sk#2)
+         +- Join Inner, (cd_demo_sk#31 == c_current_cdemo_sk#2)
+            :- Project [c_customer_id#1, c_current_cdemo_sk#2, c_first_name#8, c_last_name#9]
+            :  +- Join Inner, (hd_demo_sk#40 == c_current_hdemo_sk#3)
+            :     :- Project [c_customer_id#1, c_current_cdemo_sk#2, c_current_hdemo_sk#3, c_first_name#8, c_last_name#9]
+            :     :  +- Join Inner, (c_current_addr_sk#4 == ca_address_sk#18)
+            :     :     :- Scan spark_catalog.default.customer [c_customer_id#1, c_current_cdemo_sk#2, c_current_hdemo_sk#3, c_current_addr_sk#4, c_first_name#8, c_last_name#9]
+            :     :     +- Project [ca_address_sk#18]
+            :     :        +- Filter (ca_city#24 == 'Edgewood')
+            :     :           +- Scan spark_catalog.default.customer_address [ca_address_sk#18, ca_city#24]
+            :     +- Project [hd_demo_sk#40]
+            :        +- Join Inner, (ib_income_band_sk#45 == hd_income_band_sk#41)
+            :           :- Scan spark_catalog.default.household_demographics [hd_demo_sk#40, hd_income_band_sk#41]
+            :           +- Project [ib_income_band_sk#45]
+            :              +- Filter ((ib_lower_bound#46 >= 38128) and (ib_upper_bound#47 <= 88128))
+            :                 +- Scan spark_catalog.default.income_band [ib_income_band_sk#45, ib_lower_bound#46, ib_upper_bound#47]
+            +- Project [cd_demo_sk#31]
+               +- Join Inner, (sr_cdemo_sk#52 == cd_demo_sk#31)
                   :- Scan spark_catalog.default.customer_demographics [cd_demo_sk#31]
-                  +- Project [c_customer_id#1, c_current_cdemo_sk#2, c_first_name#8, c_last_name#9]
-                     +- Join Inner, (c_current_addr_sk#4 == ca_address_sk#18)
-                        :- Project [ca_address_sk#18]
-                        :  +- Filter (ca_city#24 == 'Edgewood')
-                        :     +- Scan spark_catalog.default.customer_address [ca_address_sk#18, ca_city#24]
-                        +- Project [c_customer_id#1, c_current_cdemo_sk#2, c_current_addr_sk#4, c_first_name#8, c_last_name#9]
-                           +- Join Inner, (hd_demo_sk#40 == c_current_hdemo_sk#3)
-                              :- Scan spark_catalog.default.customer [c_customer_id#1, c_current_cdemo_sk#2, c_current_hdemo_sk#3, c_current_addr_sk#4, c_first_name#8, c_last_name#9]
-                              +- Project [hd_demo_sk#40]
-                                 +- Join Inner, (ib_income_band_sk#45 == hd_income_band_sk#41)
-                                    :- Scan spark_catalog.default.household_demographics [hd_demo_sk#40, hd_income_band_sk#41]
-                                    +- Project [ib_income_band_sk#45]
-                                       +- Filter ((ib_lower_bound#46 >= 38128) and (ib_upper_bound#47 <= 88128))
-                                          +- Scan spark_catalog.default.income_band [ib_income_band_sk#45, ib_lower_bound#46, ib_upper_bound#47]
+                  +- Scan spark_catalog.default.store_returns [sr_cdemo_sk#52]

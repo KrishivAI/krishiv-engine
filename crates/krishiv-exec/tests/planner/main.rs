@@ -19,6 +19,7 @@ mod hints;
 mod listing;
 mod orientation;
 mod physical;
+mod plan_stats;
 mod runtime_filters;
 mod scan_row_drop;
 mod semantics;

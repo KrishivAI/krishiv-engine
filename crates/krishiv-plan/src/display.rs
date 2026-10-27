@@ -45,6 +45,43 @@ impl Display for LogicalPlan {
     }
 }
 
+/// Text to append to a relation's line, if any.
+type Note<'n> = &'n dyn Fn(&LogicalPlan) -> Option<String>;
+
+/// A plan printed with a note after each relation's line
+/// ([`LogicalPlan::display_with`]).
+pub struct Annotated<'a> {
+    plan: &'a LogicalPlan,
+    note: Note<'a>,
+}
+
+impl fmt::Debug for Annotated<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Annotated").finish_non_exhaustive()
+    }
+}
+
+impl Display for Annotated<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if walk::too_deep(Node::Plan(self.plan)) {
+            return writeln!(f, "{TOO_DEEP}");
+        }
+        let mut printer = Printer::new(self.plan);
+        printer.note = Some(self.note);
+        printer.tree(f, self.plan, "", "")
+    }
+}
+
+impl LogicalPlan {
+    /// The plan as `Display` prints it, each relation's line followed by
+    /// `, ` and `note(relation)` when that is `Some` (`EXPLAIN COST` adds
+    /// the estimated statistics this way).
+    #[must_use]
+    pub fn display_with<'a>(&'a self, note: Note<'a>) -> Annotated<'a> {
+        Annotated { plan: self, note }
+    }
+}
+
 impl Display for Expr {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         if walk::too_deep(Node::Expr(self)) {
@@ -62,12 +99,14 @@ fn key(plan: &LogicalPlan) -> *const LogicalPlan {
 /// (a DAG, e.g. `df.join(df)`) is printed in full once, marked
 /// `(shared #n)`, and as `Shared #n, printed above` at its other places, so
 /// the output is linear in the distinct relations rather than exponential.
-struct Printer {
+struct Printer<'n> {
     shared: HashSet<*const LogicalPlan>,
     labels: HashMap<*const LogicalPlan, usize>,
+    /// Text to append to a relation's line.
+    note: Option<Note<'n>>,
 }
 
-impl Printer {
+impl Printer<'_> {
     /// Finds the relations reached from more than one place.
     fn new(root: &LogicalPlan) -> Self {
         let mut reached: HashMap<*const LogicalPlan, usize> = HashMap::new();
@@ -90,6 +129,7 @@ impl Printer {
                 .map(|(k, _)| k)
                 .collect(),
             labels: HashMap::new(),
+            note: None,
         }
     }
 
@@ -106,6 +146,9 @@ impl Printer {
             return writeln!(f, "{first}Shared #{n}, printed above");
         }
         write!(f, "{first}{}", NodeLine(plan))?;
+        if let Some(text) = self.note.and_then(|note| note(plan)) {
+            write!(f, ", {text}")?;
+        }
         if self.shared.contains(&key(plan)) {
             let n = self.labels.len() + 1;
             self.labels.insert(key(plan), n);

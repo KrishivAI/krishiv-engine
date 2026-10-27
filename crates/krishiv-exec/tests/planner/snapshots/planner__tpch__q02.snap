@@ -6,51 +6,51 @@ TopN 100, [s_acctbal#14 DESC NULLS LAST, n_name#22 ASC NULLS FIRST, s_name#10 AS
 +- Exchange SinglePartition
    +- LocalTopN 100, [s_acctbal#14 DESC NULLS LAST, n_name#22 ASC NULLS FIRST, s_name#10 ASC NULLS FIRST, p_partkey#0 ASC NULLS FIRST]
       +- Project [s_acctbal#14, s_name#10, n_name#22, p_partkey#0, p_mfgr#2, s_address#11, s_phone#13, s_comment#15]
-         +- HashJoin Inner, [n_regionkey#23] = [r_regionkey#25], RuntimeFilter #10: n_regionkey#23 -> spark_catalog.default.nation.n_regionkey
-            :- Project [n_name#22, n_regionkey#23, s_name#10, s_address#11, s_phone#13, s_acctbal#14, s_comment#15, p_partkey#0, p_mfgr#2]
-            :  +- HashJoin Inner, [n_nationkey#21] = [s_nationkey#12], RuntimeFilter #9: n_nationkey#21 -> spark_catalog.default.nation.n_nationkey
-            :     :- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23]
+         +- HashJoin Inner, [s_nationkey#12] = [n_nationkey#21], RuntimeFilter #10: s_nationkey#12 -> spark_catalog.default.supplier.s_nationkey
+            :- Project [s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15, p_partkey#0, p_mfgr#2]
+            :  +- HashJoin Inner, [s_suppkey#9] = [ps_suppkey#17], RuntimeFilter #8: s_suppkey#9 -> spark_catalog.default.supplier.s_suppkey
+            :     :- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15]
             :     +- BroadcastExchange
-            :        +- Project [s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15, p_partkey#0, p_mfgr#2]
-            :           +- HashJoin Inner, [s_suppkey#9] = [ps_suppkey#17], RuntimeFilter #8: s_suppkey#9 -> spark_catalog.default.supplier.s_suppkey
-            :              :- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15]
+            :        +- Project [ps_suppkey#17, p_partkey#0, p_mfgr#2]
+            :           +- HashJoin Inner, [ps_supplycost#19, ps_partkey#16] = [min(ps_supplycost)#47, p_partkey#0], RuntimeFilter #6: ps_supplycost#19 -> spark_catalog.default.partsupp.ps_supplycost, RuntimeFilter #7: ps_partkey#16 -> spark_catalog.default.partsupp.ps_partkey
+            :              :- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19]
             :              +- BroadcastExchange
-            :                 +- Project [ps_suppkey#17, p_partkey#0, p_mfgr#2]
-            :                    +- HashJoin Inner, [ps_supplycost#19, ps_partkey#16] = [min(ps_supplycost)#47, p_partkey#0], RuntimeFilter #6: ps_supplycost#19 -> spark_catalog.default.partsupp.ps_supplycost, RuntimeFilter #7: ps_partkey#16 -> spark_catalog.default.partsupp.ps_partkey
-            :                       :- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19]
+            :                 +- Project [p_partkey#0, p_mfgr#2, min(ps_supplycost)#47]
+            :                    +- HashJoin Inner, [p_partkey#0] = [ps_partkey#28], RuntimeFilter #5: p_partkey#0 -> spark_catalog.default.part.p_partkey
+            :                       :- Project [p_partkey#0, p_mfgr#2]
+            :                       :  +- Filter ((p_type#4 like '%BRASS') and (p_size#5 == 15))
+            :                       :     +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_type#4 like '%BRASS') and (p_size#5 == 15))]
             :                       +- BroadcastExchange
-            :                          +- Project [p_partkey#0, p_mfgr#2, min(ps_supplycost)#47]
-            :                             +- HashJoin Inner, [p_partkey#0] = [ps_partkey#28], RuntimeFilter #5: p_partkey#0 -> spark_catalog.default.part.p_partkey
-            :                                :- Project [p_partkey#0, p_mfgr#2]
-            :                                :  +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
-            :                                :     +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_size#5 == 15) and (p_type#4 like '%BRASS'))]
-            :                                +- BroadcastExchange
-            :                                   +- Project [min(ps_supplycost#31)#4611686018427387915 AS min(ps_supplycost)#47, ps_partkey#28]
-            :                                      +- HashAggregate keys=[ps_partkey#28], functions=[min(ps_supplycost#31)]
-            :                                         +- Exchange hashpartitioning(ps_partkey#28)
-            :                                            +- HashJoin LeftSemi, [ps_partkey#28] = [p_partkey#48], RuntimeFilter #4: ps_partkey#28 -> spark_catalog.default.partsupp.ps_partkey
-            :                                               :- Project [ps_partkey#28, ps_supplycost#31]
-            :                                               :  +- HashJoin Inner, [ps_suppkey#29] = [s_suppkey#33], RuntimeFilter #3: ps_suppkey#29 -> spark_catalog.default.partsupp.ps_suppkey
-            :                                               :     :- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19] (ids +12)
-            :                                               :     +- BroadcastExchange
-            :                                               :        +- Project [s_suppkey#33]
-            :                                               :           +- HashJoin Inner, [s_nationkey#36] = [n_nationkey#40], RuntimeFilter #2: s_nationkey#36 -> spark_catalog.default.supplier.s_nationkey
-            :                                               :              :- Project [s_suppkey#33, s_nationkey#36]
-            :                                               :              :  +- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15] (ids +24)
-            :                                               :              +- BroadcastExchange
-            :                                               :                 +- Project [n_nationkey#40]
-            :                                               :                    +- HashJoin Inner, [n_regionkey#42] = [r_regionkey#44], RuntimeFilter #1: n_regionkey#42 -> spark_catalog.default.nation.n_regionkey
-            :                                               :                       :- Project [n_nationkey#40, n_regionkey#42]
-            :                                               :                       :  +- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23] (ids +19)
-            :                                               :                       +- BroadcastExchange
-            :                                               :                          +- Project [r_regionkey#44]
-            :                                               :                             +- Filter (r_name#26 == 'EUROPE') (ids +19)
-            :                                               :                                +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26], PushedFilters: [(r_name#26 == 'EUROPE')]
-            :                                               +- BroadcastExchange
-            :                                                  +- Project [p_partkey#0] (ids +48)
-            :                                                     +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
-            :                                                        +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_size#5 == 15) and (p_type#4 like '%BRASS'))]
+            :                          +- Project [min(ps_supplycost#31)#4611686018427387915 AS min(ps_supplycost)#47, ps_partkey#28]
+            :                             +- HashAggregate keys=[ps_partkey#28], functions=[min(ps_supplycost#31)]
+            :                                +- Exchange hashpartitioning(ps_partkey#28)
+            :                                   +- HashJoin LeftSemi, [ps_partkey#28] = [p_partkey#48], RuntimeFilter #4: ps_partkey#28 -> spark_catalog.default.partsupp.ps_partkey
+            :                                      :- Project [ps_partkey#28, ps_supplycost#31]
+            :                                      :  +- HashJoin Inner, [ps_suppkey#29] = [s_suppkey#33], RuntimeFilter #3: ps_suppkey#29 -> spark_catalog.default.partsupp.ps_suppkey
+            :                                      :     :- Scan spark_catalog.default.partsupp [ps_partkey#16, ps_suppkey#17, ps_supplycost#19] (ids +12)
+            :                                      :     +- BroadcastExchange
+            :                                      :        +- Project [s_suppkey#33]
+            :                                      :           +- HashJoin Inner, [s_nationkey#36] = [n_nationkey#40], RuntimeFilter #2: s_nationkey#36 -> spark_catalog.default.supplier.s_nationkey
+            :                                      :              :- Project [s_suppkey#33, s_nationkey#36]
+            :                                      :              :  +- Scan spark_catalog.default.supplier [s_suppkey#9, s_name#10, s_address#11, s_nationkey#12, s_phone#13, s_acctbal#14, s_comment#15] (ids +24)
+            :                                      :              +- BroadcastExchange
+            :                                      :                 +- Project [n_nationkey#40]
+            :                                      :                    +- HashJoin Inner, [n_regionkey#42] = [r_regionkey#44], RuntimeFilter #1: n_regionkey#42 -> spark_catalog.default.nation.n_regionkey
+            :                                      :                       :- Project [n_nationkey#40, n_regionkey#42]
+            :                                      :                       :  +- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23] (ids +19)
+            :                                      :                       +- BroadcastExchange
+            :                                      :                          +- Project [r_regionkey#44]
+            :                                      :                             +- Filter (r_name#26 == 'EUROPE') (ids +19)
+            :                                      :                                +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26], PushedFilters: [(r_name#26 == 'EUROPE')]
+            :                                      +- BroadcastExchange
+            :                                         +- Project [p_partkey#0] (ids +48)
+            :                                            +- Filter ((p_size#5 == 15) and (p_type#4 like '%BRASS'))
+            :                                               +- Scan spark_catalog.default.part [p_partkey#0, p_mfgr#2, p_type#4, p_size#5], PushedFilters: [((p_size#5 == 15) and (p_type#4 like '%BRASS'))]
             +- BroadcastExchange
-               +- Project [r_regionkey#25]
-                  +- Filter (r_name#26 == 'EUROPE')
-                     +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26], PushedFilters: [(r_name#26 == 'EUROPE')]
+               +- Project [n_nationkey#21, n_name#22]
+                  +- HashJoin Inner, [n_regionkey#23] = [r_regionkey#25], RuntimeFilter #9: n_regionkey#23 -> spark_catalog.default.nation.n_regionkey
+                     :- Scan spark_catalog.default.nation [n_nationkey#21, n_name#22, n_regionkey#23]
+                     +- BroadcastExchange
+                        +- Project [r_regionkey#25]
+                           +- Filter (r_name#26 == 'EUROPE')
+                              +- Scan spark_catalog.default.region [r_regionkey#25, r_name#26], PushedFilters: [(r_name#26 == 'EUROPE')]

@@ -6,32 +6,32 @@ Project [substring(r_reason_desc, 1, 20)#134, avg1#135, avg2#136, avg(wr_fee)#13
 +- Limit 100
    +- Sort [substring(r_reason_desc#133, 1, 20) ASC NULLS FIRST, avg1#135 ASC NULLS FIRST, avg2#136 ASC NULLS FIRST, avg(wr_fee)#137 ASC NULLS FIRST], true
       +- Aggregate [r_reason_desc#133], [substring(r_reason_desc#133, 1, 20) AS substring(r_reason_desc, 1, 20)#134, avg(ws_quantity#18) AS avg1#135, avg(wr_refunded_cash#54) AS avg2#136, avg(wr_fee#52) AS avg(wr_fee)#137, r_reason_desc#133]
-         +- Project [r_reason_desc#133, ws_quantity#18, wr_fee#52, wr_refunded_cash#54]
-            +- Join Inner, (ws_web_page_sk#12 == wp_web_page_sk#58)
-               :- Scan spark_catalog.default.web_page [wp_web_page_sk#58]
-               +- Project [r_reason_desc#133, ws_web_page_sk#12, ws_quantity#18, wr_fee#52, wr_refunded_cash#54]
-                  +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#103)
-                     :- Project [d_date_sk#103]
-                     :  +- Filter (d_year#109 == 2000)
-                     :     +- Scan spark_catalog.default.date_dim [d_date_sk#103, d_year#109]
-                     +- Project [r_reason_desc#133, ws_sold_date_sk#0, ws_web_page_sk#12, ws_quantity#18, wr_fee#52, wr_refunded_cash#54]
-                        +- Join Inner, (r_reason_sk#131 == wr_reason_sk#46)
-                           :- Scan spark_catalog.default.reason [r_reason_sk#131, r_reason_desc#133]
-                           +- Project [ws_sold_date_sk#0, ws_web_page_sk#12, ws_quantity#18, wr_reason_sk#46, wr_fee#52, wr_refunded_cash#54]
-                              +- Join Inner, ((cd_demo_sk#81 == wr_returning_cdemo_sk#42) and ((((((cd_marital_status#74 == 'M') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == 'Advanced Degree')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 100.00) and (ws_sales_price#21 <= 150.00)))) or ((((cd_marital_status#74 == 'S') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == 'College')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 50.00) and (ws_sales_price#21 <= 100.00))))) or ((((cd_marital_status#74 == 'W') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == '2 yr Degree')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 150.00) and (ws_sales_price#21 <= 200.00))))))
-                                 :- Shift +9
-                                 :  +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#72, cd_marital_status#74, cd_education_status#75] (shared #1)
-                                 +- Project [ws_sold_date_sk#0, ws_web_page_sk#12, ws_quantity#18, ws_sales_price#21, wr_returning_cdemo_sk#42, wr_reason_sk#46, wr_fee#52, wr_refunded_cash#54, cd_marital_status#74, cd_education_status#75]
-                                    +- Join Inner, (((((((ca_country#100 == 'United States') and (ca_state#98 IN ('IN', 'OH', 'NJ'))) and ((ws_net_profit#33 >= 100.00) and (ws_net_profit#33 <= 200.00))) or (((ca_country#100 == 'United States') and (ca_state#98 IN ('WI', 'CT', 'KY'))) and ((ws_net_profit#33 >= 150.00) and (ws_net_profit#33 <= 300.00)))) or (((ca_country#100 == 'United States') and (ca_state#98 IN ('LA', 'IA', 'AR'))) and ((ws_net_profit#33 >= 50.00) and (ws_net_profit#33 <= 250.00)))) and (ws_item_sk#3 == wr_item_sk#36)) and (ws_order_number#17 == wr_order_number#47))
-                                       :- Filter (((((ws_sales_price#21 >= 100.00) and (ws_sales_price#21 <= 150.00)) or ((ws_sales_price#21 >= 50.00) and (ws_sales_price#21 <= 100.00))) or ((ws_sales_price#21 >= 150.00) and (ws_sales_price#21 <= 200.00))) and ((((ws_net_profit#33 >= 100.00) and (ws_net_profit#33 <= 200.00)) or ((ws_net_profit#33 >= 150.00) and (ws_net_profit#33 <= 300.00))) or ((ws_net_profit#33 >= 50.00) and (ws_net_profit#33 <= 250.00))))
-                                       :  +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_web_page_sk#12, ws_order_number#17, ws_quantity#18, ws_sales_price#21, ws_net_profit#33]
-                                       +- Project [wr_item_sk#36, wr_returning_cdemo_sk#42, wr_reason_sk#46, wr_order_number#47, wr_fee#52, wr_refunded_cash#54, ca_state#98, ca_country#100, cd_marital_status#74, cd_education_status#75]
-                                          +- Join Inner, (cd_demo_sk#72 == wr_refunded_cdemo_sk#38)
-                                             :- Project [wr_item_sk#36, wr_refunded_cdemo_sk#38, wr_returning_cdemo_sk#42, wr_reason_sk#46, wr_order_number#47, wr_fee#52, wr_refunded_cash#54, ca_state#98, ca_country#100]
-                                             :  +- Join Inner, (ca_address_sk#90 == wr_refunded_addr_sk#40)
-                                             :     :- Scan spark_catalog.default.web_returns [wr_item_sk#36, wr_refunded_cdemo_sk#38, wr_refunded_addr_sk#40, wr_returning_cdemo_sk#42, wr_reason_sk#46, wr_order_number#47, wr_fee#52, wr_refunded_cash#54]
-                                             :     +- Filter (((cse_138#138 and (ca_state#98 IN ('IN', 'OH', 'NJ'))) or (cse_138#138 and (ca_state#98 IN ('WI', 'CT', 'KY')))) or (cse_138#138 and (ca_state#98 IN ('LA', 'IA', 'AR'))))
-                                             :        +- Project [ca_address_sk#90, ca_state#98, ca_country#100, (ca_country#100 == 'United States') AS cse_138#138]
-                                             :           +- Scan spark_catalog.default.customer_address [ca_address_sk#90, ca_state#98, ca_country#100]
-                                             +- Filter ((((cd_marital_status#74 == 'M') and (cd_education_status#75 == 'Advanced Degree')) or ((cd_marital_status#74 == 'S') and (cd_education_status#75 == 'College'))) or ((cd_marital_status#74 == 'W') and (cd_education_status#75 == '2 yr Degree')))
-                                                +- Shared #1, printed above
+         +- Project [wr_fee#52, wr_refunded_cash#54, r_reason_desc#133, ws_quantity#18]
+            +- Join Inner, ((((ca_address_sk#90 == wr_refunded_addr_sk#40) and ((((((cd_marital_status#74 == 'M') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == 'Advanced Degree')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 100.00) and (ws_sales_price#21 <= 150.00)))) or ((((cd_marital_status#74 == 'S') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == 'College')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 50.00) and (ws_sales_price#21 <= 100.00))))) or ((((cd_marital_status#74 == 'W') and (cd_marital_status#74 == cd_marital_status#83)) and (cd_education_status#75 == '2 yr Degree')) and ((cd_education_status#75 == cd_education_status#84) and ((ws_sales_price#21 >= 150.00) and (ws_sales_price#21 <= 200.00)))))) and (ws_item_sk#3 == wr_item_sk#36)) and (ws_order_number#17 == wr_order_number#47))
+               :- Project [wr_item_sk#36, wr_refunded_addr_sk#40, wr_order_number#47, wr_fee#52, wr_refunded_cash#54, cd_marital_status#74, cd_education_status#75, r_reason_desc#133, cd_marital_status#83, cd_education_status#84]
+               :  +- Join Inner, (cd_demo_sk#81 == wr_returning_cdemo_sk#42)
+               :     :- Project [wr_item_sk#36, wr_refunded_addr_sk#40, wr_returning_cdemo_sk#42, wr_order_number#47, wr_fee#52, wr_refunded_cash#54, cd_marital_status#74, cd_education_status#75, r_reason_desc#133]
+               :     :  +- Join Inner, (r_reason_sk#131 == wr_reason_sk#46)
+               :     :     :- Project [wr_item_sk#36, wr_refunded_addr_sk#40, wr_returning_cdemo_sk#42, wr_reason_sk#46, wr_order_number#47, wr_fee#52, wr_refunded_cash#54, cd_marital_status#74, cd_education_status#75]
+               :     :     :  +- Join Inner, (cd_demo_sk#72 == wr_refunded_cdemo_sk#38)
+               :     :     :     :- Scan spark_catalog.default.web_returns [wr_item_sk#36, wr_refunded_cdemo_sk#38, wr_refunded_addr_sk#40, wr_returning_cdemo_sk#42, wr_reason_sk#46, wr_order_number#47, wr_fee#52, wr_refunded_cash#54]
+               :     :     :     +- Filter ((((cd_marital_status#74 == 'M') and (cd_education_status#75 == 'Advanced Degree')) or ((cd_marital_status#74 == 'S') and (cd_education_status#75 == 'College'))) or ((cd_marital_status#74 == 'W') and (cd_education_status#75 == '2 yr Degree')))
+               :     :     :        +- Scan spark_catalog.default.customer_demographics [cd_demo_sk#72, cd_marital_status#74, cd_education_status#75] (shared #1)
+               :     :     +- Scan spark_catalog.default.reason [r_reason_sk#131, r_reason_desc#133]
+               :     +- Shift +9
+               :        +- Shared #1, printed above
+               +- Project [ws_item_sk#3, ws_order_number#17, ws_quantity#18, ws_sales_price#21, ca_address_sk#90]
+                  +- Join Inner, (ws_web_page_sk#12 == wp_web_page_sk#58)
+                     :- Project [ws_item_sk#3, ws_web_page_sk#12, ws_order_number#17, ws_quantity#18, ws_sales_price#21, ca_address_sk#90]
+                     :  +- Join Inner, (((((ca_country#100 == 'United States') and (ca_state#98 IN ('IN', 'OH', 'NJ'))) and ((ws_net_profit#33 >= 100.00) and (ws_net_profit#33 <= 200.00))) or (((ca_country#100 == 'United States') and (ca_state#98 IN ('WI', 'CT', 'KY'))) and ((ws_net_profit#33 >= 150.00) and (ws_net_profit#33 <= 300.00)))) or (((ca_country#100 == 'United States') and (ca_state#98 IN ('LA', 'IA', 'AR'))) and ((ws_net_profit#33 >= 50.00) and (ws_net_profit#33 <= 250.00))))
+                     :     :- Project [ws_item_sk#3, ws_web_page_sk#12, ws_order_number#17, ws_quantity#18, ws_sales_price#21, ws_net_profit#33]
+                     :     :  +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#103)
+                     :     :     :- Project [d_date_sk#103]
+                     :     :     :  +- Filter (d_year#109 == 2000)
+                     :     :     :     +- Scan spark_catalog.default.date_dim [d_date_sk#103, d_year#109]
+                     :     :     +- Filter (((((ws_sales_price#21 >= 100.00) and (ws_sales_price#21 <= 150.00)) or ((ws_sales_price#21 >= 50.00) and (ws_sales_price#21 <= 100.00))) or ((ws_sales_price#21 >= 150.00) and (ws_sales_price#21 <= 200.00))) and ((((ws_net_profit#33 >= 100.00) and (ws_net_profit#33 <= 200.00)) or ((ws_net_profit#33 >= 150.00) and (ws_net_profit#33 <= 300.00))) or ((ws_net_profit#33 >= 50.00) and (ws_net_profit#33 <= 250.00))))
+                     :     :        +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_web_page_sk#12, ws_order_number#17, ws_quantity#18, ws_sales_price#21, ws_net_profit#33]
+                     :     +- Filter (((cse_138#138 and (ca_state#98 IN ('IN', 'OH', 'NJ'))) or (cse_138#138 and (ca_state#98 IN ('WI', 'CT', 'KY')))) or (cse_138#138 and (ca_state#98 IN ('LA', 'IA', 'AR'))))
+                     :        +- Project [ca_address_sk#90, ca_state#98, ca_country#100, (ca_country#100 == 'United States') AS cse_138#138]
+                     :           +- Scan spark_catalog.default.customer_address [ca_address_sk#90, ca_state#98, ca_country#100]
+                     +- Scan spark_catalog.default.web_page [wp_web_page_sk#58]

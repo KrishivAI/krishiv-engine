@@ -11,21 +11,21 @@ Limit 100
          :  :  +- Shift +356
          :  :     +- Aggregate [i_item_id#65], [i_item_id#65, sum(ss_ext_sales_price#15) AS total_sales#108]
          :  :        +- Join LeftSemi, (i_item_id#65 == i_item_id#87)
-         :  :           :- Project [i_item_id#65, ss_ext_sales_price#15]
+         :  :           :- Project [ss_ext_sales_price#15, i_item_id#65]
          :  :           :  +- Join Inner, (ss_item_sk#2 == i_item_sk#64)
-         :  :           :     :- Project [i_item_sk#64, i_item_id#65]
-         :  :           :     :  +- Scan spark_catalog.default.item [i_item_sk#64, i_item_id#65, i_color#81] (shared #1)
-         :  :           :     +- Project [ss_item_sk#2, ss_ext_sales_price#15]
-         :  :           :        +- Join Inner, (ss_addr_sk#6 == ca_address_sk#51)
-         :  :           :           :- Project [ca_address_sk#51]
-         :  :           :           :  +- Filter (ca_gmt_offset#62 == -5.00)
-         :  :           :           :     +- Scan spark_catalog.default.customer_address [ca_address_sk#51, ca_gmt_offset#62]
-         :  :           :           +- Project [ss_item_sk#2, ss_addr_sk#6, ss_ext_sales_price#15]
-         :  :           :              +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
-         :  :           :                 :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_addr_sk#6, ss_ext_sales_price#15]
-         :  :           :                 +- Project [d_date_sk#23]
-         :  :           :                    +- Filter ((d_year#29 == 2001) and (d_moy#31 == 2))
-         :  :           :                       +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29, d_moy#31]
+         :  :           :     :- Project [ss_item_sk#2, ss_ext_sales_price#15]
+         :  :           :     :  +- Join Inner, (ss_addr_sk#6 == ca_address_sk#51)
+         :  :           :     :     :- Project [ss_item_sk#2, ss_addr_sk#6, ss_ext_sales_price#15]
+         :  :           :     :     :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
+         :  :           :     :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_addr_sk#6, ss_ext_sales_price#15]
+         :  :           :     :     :     +- Project [d_date_sk#23]
+         :  :           :     :     :        +- Filter ((d_year#29 == 2001) and (d_moy#31 == 2))
+         :  :           :     :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29, d_moy#31]
+         :  :           :     :     +- Project [ca_address_sk#51]
+         :  :           :     :        +- Filter (ca_gmt_offset#62 == -5.00)
+         :  :           :     :           +- Scan spark_catalog.default.customer_address [ca_address_sk#51, ca_gmt_offset#62]
+         :  :           :     +- Project [i_item_sk#64, i_item_id#65]
+         :  :           :        +- Scan spark_catalog.default.item [i_item_sk#64, i_item_id#65, i_color#81] (shared #1)
          :  :           +- Project [i_item_id#87]
          :  :              +- Shift +22
          :  :                 +- Filter (i_color#81 IN ('slate', 'blanched', 'burnished'))
@@ -34,21 +34,21 @@ Limit 100
          :     +- Shift +465
          :        +- Aggregate [i_item_id#185], [i_item_id#185, sum(cs_ext_sales_price#132) AS total_sales#228]
          :           +- Join LeftSemi, (i_item_id#185 == i_item_id#207)
-         :              :- Project [i_item_id#185, cs_ext_sales_price#132]
+         :              :- Project [cs_ext_sales_price#132, i_item_id#185]
          :              :  +- Join Inner, (cs_item_sk#124 == i_item_sk#184)
-         :              :     :- Project [i_item_sk#184, i_item_id#185]
-         :              :     :  +- Scan spark_catalog.default.item [i_item_sk#184, i_item_id#185, i_color#201] (shared #2)
-         :              :     +- Project [cs_item_sk#124, cs_ext_sales_price#132]
-         :              :        +- Join Inner, (cs_bill_addr_sk#115 == ca_address_sk#171)
-         :              :           :- Project [ca_address_sk#171]
-         :              :           :  +- Filter (ca_gmt_offset#182 == -5.00)
-         :              :           :     +- Scan spark_catalog.default.customer_address [ca_address_sk#171, ca_gmt_offset#182]
-         :              :           +- Project [cs_bill_addr_sk#115, cs_item_sk#124, cs_ext_sales_price#132]
-         :              :              +- Join Inner, (cs_sold_date_sk#109 == d_date_sk#143)
-         :              :                 :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#109, cs_bill_addr_sk#115, cs_item_sk#124, cs_ext_sales_price#132]
-         :              :                 +- Project [d_date_sk#143]
-         :              :                    +- Filter ((d_year#149 == 2001) and (d_moy#151 == 2))
-         :              :                       +- Scan spark_catalog.default.date_dim [d_date_sk#143, d_year#149, d_moy#151]
+         :              :     :- Project [cs_item_sk#124, cs_ext_sales_price#132]
+         :              :     :  +- Join Inner, (cs_bill_addr_sk#115 == ca_address_sk#171)
+         :              :     :     :- Project [cs_bill_addr_sk#115, cs_item_sk#124, cs_ext_sales_price#132]
+         :              :     :     :  +- Join Inner, (cs_sold_date_sk#109 == d_date_sk#143)
+         :              :     :     :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#109, cs_bill_addr_sk#115, cs_item_sk#124, cs_ext_sales_price#132]
+         :              :     :     :     +- Project [d_date_sk#143]
+         :              :     :     :        +- Filter ((d_year#149 == 2001) and (d_moy#151 == 2))
+         :              :     :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#143, d_year#149, d_moy#151]
+         :              :     :     +- Project [ca_address_sk#171]
+         :              :     :        +- Filter (ca_gmt_offset#182 == -5.00)
+         :              :     :           +- Scan spark_catalog.default.customer_address [ca_address_sk#171, ca_gmt_offset#182]
+         :              :     +- Project [i_item_sk#184, i_item_id#185]
+         :              :        +- Scan spark_catalog.default.item [i_item_sk#184, i_item_id#185, i_color#201] (shared #2)
          :              +- Project [i_item_id#207]
          :                 +- Shift +22
          :                    +- Filter (i_color#201 IN ('slate', 'blanched', 'burnished'))
@@ -57,21 +57,21 @@ Limit 100
             +- Shift +694
                +- Aggregate [i_item_id#305], [i_item_id#305, sum(ws_ext_sales_price#252) AS total_sales#348]
                   +- Join LeftSemi, (i_item_id#305 == i_item_id#327)
-                     :- Project [i_item_id#305, ws_ext_sales_price#252]
+                     :- Project [ws_ext_sales_price#252, i_item_id#305]
                      :  +- Join Inner, (ws_item_sk#232 == i_item_sk#304)
-                     :     :- Project [i_item_sk#304, i_item_id#305]
-                     :     :  +- Scan spark_catalog.default.item [i_item_sk#304, i_item_id#305, i_color#321] (shared #3)
-                     :     +- Project [ws_item_sk#232, ws_ext_sales_price#252]
-                     :        +- Join Inner, (ws_bill_addr_sk#236 == ca_address_sk#291)
-                     :           :- Project [ca_address_sk#291]
-                     :           :  +- Filter (ca_gmt_offset#302 == -5.00)
-                     :           :     +- Scan spark_catalog.default.customer_address [ca_address_sk#291, ca_gmt_offset#302]
-                     :           +- Project [ws_item_sk#232, ws_bill_addr_sk#236, ws_ext_sales_price#252]
-                     :              +- Join Inner, (ws_sold_date_sk#229 == d_date_sk#263)
-                     :                 :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#229, ws_item_sk#232, ws_bill_addr_sk#236, ws_ext_sales_price#252]
-                     :                 +- Project [d_date_sk#263]
-                     :                    +- Filter ((d_year#269 == 2001) and (d_moy#271 == 2))
-                     :                       +- Scan spark_catalog.default.date_dim [d_date_sk#263, d_year#269, d_moy#271]
+                     :     :- Project [ws_item_sk#232, ws_ext_sales_price#252]
+                     :     :  +- Join Inner, (ws_bill_addr_sk#236 == ca_address_sk#291)
+                     :     :     :- Project [ws_item_sk#232, ws_bill_addr_sk#236, ws_ext_sales_price#252]
+                     :     :     :  +- Join Inner, (ws_sold_date_sk#229 == d_date_sk#263)
+                     :     :     :     :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#229, ws_item_sk#232, ws_bill_addr_sk#236, ws_ext_sales_price#252]
+                     :     :     :     +- Project [d_date_sk#263]
+                     :     :     :        +- Filter ((d_year#269 == 2001) and (d_moy#271 == 2))
+                     :     :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#263, d_year#269, d_moy#271]
+                     :     :     +- Project [ca_address_sk#291]
+                     :     :        +- Filter (ca_gmt_offset#302 == -5.00)
+                     :     :           +- Scan spark_catalog.default.customer_address [ca_address_sk#291, ca_gmt_offset#302]
+                     :     +- Project [i_item_sk#304, i_item_id#305]
+                     :        +- Scan spark_catalog.default.item [i_item_sk#304, i_item_id#305, i_color#321] (shared #3)
                      +- Project [i_item_id#327]
                         +- Shift +22
                            +- Filter (i_color#321 IN ('slate', 'blanched', 'burnished'))

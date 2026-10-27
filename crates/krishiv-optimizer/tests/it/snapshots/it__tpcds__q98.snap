@@ -6,13 +6,13 @@ Sort [i_category#35 ASC NULLS FIRST, i_class#33 ASC NULLS FIRST, i_item_id#24 AS
 +- Project [i_item_id#24, i_item_desc#27, i_category#35, i_class#33, i_current_price#28, itemrevenue#73, ((itemrevenue#73 * 100.0000) / _we0#75) AS revenueratio#74]
    +- Window [sum(itemrevenue#73) OVER (PARTITION BY i_class#33 ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS _we0#75], [i_class#33], []
       +- Aggregate [i_item_id#24, i_item_desc#27, i_category#35, i_class#33, i_current_price#28], [i_item_id#24, i_item_desc#27, i_category#35, i_class#33, i_current_price#28, sum(ss_ext_sales_price#15) AS itemrevenue#73]
-         +- Project [i_item_id#24, i_item_desc#27, i_current_price#28, i_class#33, i_category#35, ss_ext_sales_price#15]
+         +- Project [ss_ext_sales_price#15, i_item_id#24, i_item_desc#27, i_current_price#28, i_class#33, i_category#35]
             +- Join Inner, (ss_item_sk#2 == i_item_sk#23)
-               :- Filter (i_category#35 IN ('Sports', 'Books', 'Home'))
-               :  +- Scan spark_catalog.default.item [i_item_sk#23, i_item_id#24, i_item_desc#27, i_current_price#28, i_class#33, i_category#35]
-               +- Project [ss_item_sk#2, ss_ext_sales_price#15]
-                  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#45)
-                     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_ext_sales_price#15]
-                     +- Project [d_date_sk#45]
-                        +- Filter ((d_date#47 >= DATE '1999-02-22') and (d_date#47 <= DATE '1999-03-24'))
-                           +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_date#47]
+               :- Project [ss_item_sk#2, ss_ext_sales_price#15]
+               :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#45)
+               :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_ext_sales_price#15]
+               :     +- Project [d_date_sk#45]
+               :        +- Filter ((d_date#47 >= DATE '1999-02-22') and (d_date#47 <= DATE '1999-03-24'))
+               :           +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_date#47]
+               +- Filter (i_category#35 IN ('Sports', 'Books', 'Home'))
+                  +- Scan spark_catalog.default.item [i_item_sk#23, i_item_id#24, i_item_desc#27, i_current_price#28, i_class#33, i_category#35]

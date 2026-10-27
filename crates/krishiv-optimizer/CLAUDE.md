@@ -14,7 +14,9 @@ Paths are relative to this crate.
 - `src/project.rs` projection rules; `src/limit.rs` limit rules; `src/group_limit.rs` Spark's
   `InferWindowGroupLimit` decision (applied by the physical planner)
 - `src/restrict.rs` subquery restriction rules
-- `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads
+- `src/join_order.rs` inner-join ordering; `src/stats.rs` `Statistics` it reads and the estimate types (`RelStats`, `AttrStats`, `StatSource`)
+- `src/estimate.rs` the `Estimator`: what each operator leaves known of its columns; `src/narrow.rs` predicates over estimates (selectivity and narrowed ranges); `src/plan_stats.rs` `PlanStats`, one pass over an optimized plan (physical planner, `EXPLAIN COST`)
+- `tests/it/plan_stats.rs` one test per propagation rule; `tests/it/qerror.rs` the q-error report (`cargo xtask qerror`)
 - `tests/it/rules.rs` per-rule snapshots; `tests/it/join_order.rs` ordering snapshots; `tests/it/support/eval.rs` reference interpreter
 
 ## Extension points
@@ -34,6 +36,13 @@ Paths are relative to this crate.
   `Statistics`; it never adds a cross product, places each conjunct at the lowest join that has its inputs
   (subquery conjuncts as filters), and restores column order only for positional consumers. Inputs are
   ordered canonically, so `optimize` stays a fixed point.
+- Statistics propagation (`PlanStats`): a filter narrows `min`/`max` of the columns it reads and clears their null
+  fraction when null-rejecting; `OR` takes the union of its branches' ranges, `NOT` and unknown predicates leave
+  ranges alone, so a range only stays or widens (the proptest in `plan_stats.rs` holds it to that). An equality with
+  a literal outside `[min, max]` estimates 0 rows and removes nothing. A join's keys take the smaller distinct count
+  (inner: the ranges intersect, no nulls); an outer join's null-supplying side gains the unmatched fraction as nulls.
+  A distinct count whose `StatSource` is `Guess` is never used by `1 / max(NDV)`. Statistics never change results;
+  `Options::stats_propagation` switches the propagation off for the differential tests.
 - Per-rule and TPC-H plan snapshots live in `tests/it/snapshots/`; differential tests run optimised and
   unoptimised plans through the reference interpreter in `tests/it/support/eval.rs`.
 - Never changes a user's explicit `repartition(n)`.

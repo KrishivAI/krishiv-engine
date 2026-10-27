@@ -14,48 +14,48 @@ Limit 100
          :     :        +- Window [rank() OVER (ORDER BY return_ratio#87 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#91], [], [return_ratio#87 ASC NULLS FIRST]
          :     :           +- Aggregate [ws_item_sk#3], [ws_item_sk#3 AS item#86, (CAST(sum(coalesce(wr_return_quantity#48, 0)) AS DECIMAL(15,4)) / CAST(sum(coalesce(ws_quantity#18, 0)) AS DECIMAL(15,4))) AS return_ratio#87, (CAST(sum(coalesce(CAST(wr_return_amt#49 AS DECIMAL(12,2)), 0.00)) AS DECIMAL(15,4)) / CAST(sum(coalesce(CAST(ws_net_paid#29 AS DECIMAL(12,2)), 0.00)) AS DECIMAL(15,4))) AS currency_ratio#88]
          :     :              +- Project [wr_return_quantity#48, wr_return_amt#49, ws_item_sk#3, ws_quantity#18, ws_net_paid#29]
-         :     :                 +- Join Inner, ((ws_order_number#17 == wr_order_number#47) and (ws_item_sk#3 == wr_item_sk#36))
-         :     :                    :- Filter (wr_return_amt#49 > 10000.00)
-         :     :                    :  +- Scan spark_catalog.default.web_returns [wr_item_sk#36, wr_order_number#47, wr_return_quantity#48, wr_return_amt#49]
-         :     :                    +- Project [ws_item_sk#3, ws_order_number#17, ws_quantity#18, ws_net_paid#29]
-         :     :                       +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#58)
-         :     :                          :- Project [d_date_sk#58]
-         :     :                          :  +- Filter ((d_year#64 == 2001) and (d_moy#66 == 12))
-         :     :                          :     +- Scan spark_catalog.default.date_dim [d_date_sk#58, d_year#64, d_moy#66] (shared #1)
-         :     :                          +- Project [ws_sold_date_sk#0, ws_item_sk#3, ws_order_number#17, ws_quantity#18, ws_net_paid#29]
-         :     :                             +- Filter (((ws_net_profit#33 > 1.00) and (ws_net_paid#29 > 0.00)) and (ws_quantity#18 > 0))
-         :     :                                +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_order_number#17, ws_quantity#18, ws_net_paid#29, ws_net_profit#33]
+         :     :                 +- Join Inner, (ws_sold_date_sk#0 == d_date_sk#58)
+         :     :                    :- Project [wr_return_quantity#48, wr_return_amt#49, ws_sold_date_sk#0, ws_item_sk#3, ws_quantity#18, ws_net_paid#29]
+         :     :                    :  +- Join Inner, ((ws_order_number#17 == wr_order_number#47) and (ws_item_sk#3 == wr_item_sk#36))
+         :     :                    :     :- Filter (wr_return_amt#49 > 10000.00)
+         :     :                    :     :  +- Scan spark_catalog.default.web_returns [wr_item_sk#36, wr_order_number#47, wr_return_quantity#48, wr_return_amt#49]
+         :     :                    :     +- Project [ws_sold_date_sk#0, ws_item_sk#3, ws_order_number#17, ws_quantity#18, ws_net_paid#29]
+         :     :                    :        +- Filter (((ws_net_profit#33 > 1.00) and (ws_net_paid#29 > 0.00)) and (ws_quantity#18 > 0))
+         :     :                    :           +- Scan spark_catalog.default.web_sales [ws_sold_date_sk#0, ws_item_sk#3, ws_order_number#17, ws_quantity#18, ws_net_paid#29, ws_net_profit#33]
+         :     :                    +- Project [d_date_sk#58]
+         :     :                       +- Filter ((d_year#64 == 2001) and (d_moy#66 == 12))
+         :     :                          +- Scan spark_catalog.default.date_dim [d_date_sk#58, d_year#64, d_moy#66] (shared #1)
          :     +- Project ['catalog' AS channel#162, item#155, return_ratio#156, _we0#160 AS return_rank#158, _we1#161 AS currency_rank#159]
          :        +- Filter ((_we0#160 <= 10) or (_we1#161 <= 10))
          :           +- Window [rank() OVER (ORDER BY currency_ratio#157 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we1#161], [], [currency_ratio#157 ASC NULLS FIRST]
          :              +- Window [rank() OVER (ORDER BY return_ratio#156 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#160], [], [return_ratio#156 ASC NULLS FIRST]
          :                 +- Aggregate [cs_item_sk#109], [cs_item_sk#109 AS item#155, (CAST(sum(coalesce(cr_return_quantity#145, 0)) AS DECIMAL(15,4)) / CAST(sum(coalesce(cs_quantity#112, 0)) AS DECIMAL(15,4))) AS return_ratio#156, (CAST(sum(coalesce(CAST(cr_return_amount#146 AS DECIMAL(12,2)), 0.00)) AS DECIMAL(15,4)) / CAST(sum(coalesce(CAST(cs_net_paid#123 AS DECIMAL(12,2)), 0.00)) AS DECIMAL(15,4))) AS currency_ratio#157]
          :                    +- Project [cr_return_quantity#145, cr_return_amount#146, cs_item_sk#109, cs_quantity#112, cs_net_paid#123]
-         :                       +- Join Inner, ((cs_order_number#111 == cr_order_number#144) and (cs_item_sk#109 == cr_item_sk#130))
-         :                          :- Filter (cr_return_amount#146 > 10000.00)
-         :                          :  +- Scan spark_catalog.default.catalog_returns [cr_item_sk#130, cr_order_number#144, cr_return_quantity#145, cr_return_amount#146]
-         :                          +- Project [cs_item_sk#109, cs_order_number#111, cs_quantity#112, cs_net_paid#123]
-         :                             +- Join Inner, (cs_sold_date_sk#94 == d_date_sk#58)
-         :                                :- Project [d_date_sk#58]
-         :                                :  +- Filter ((d_year#64 == 2001) and (d_moy#66 == 12))
-         :                                :     +- Shared #1, printed above
-         :                                +- Project [cs_sold_date_sk#94, cs_item_sk#109, cs_order_number#111, cs_quantity#112, cs_net_paid#123]
-         :                                   +- Filter (((cs_net_profit#127 > 1.00) and (cs_net_paid#123 > 0.00)) and (cs_quantity#112 > 0))
-         :                                      +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#94, cs_item_sk#109, cs_order_number#111, cs_quantity#112, cs_net_paid#123, cs_net_profit#127]
+         :                       +- Join Inner, (cs_sold_date_sk#94 == d_date_sk#58)
+         :                          :- Project [cr_return_quantity#145, cr_return_amount#146, cs_sold_date_sk#94, cs_item_sk#109, cs_quantity#112, cs_net_paid#123]
+         :                          :  +- Join Inner, ((cs_order_number#111 == cr_order_number#144) and (cs_item_sk#109 == cr_item_sk#130))
+         :                          :     :- Filter (cr_return_amount#146 > 10000.00)
+         :                          :     :  +- Scan spark_catalog.default.catalog_returns [cr_item_sk#130, cr_order_number#144, cr_return_quantity#145, cr_return_amount#146]
+         :                          :     +- Project [cs_sold_date_sk#94, cs_item_sk#109, cs_order_number#111, cs_quantity#112, cs_net_paid#123]
+         :                          :        +- Filter (((cs_net_profit#127 > 1.00) and (cs_net_paid#123 > 0.00)) and (cs_quantity#112 > 0))
+         :                          :           +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#94, cs_item_sk#109, cs_order_number#111, cs_quantity#112, cs_net_paid#123, cs_net_profit#127]
+         :                          +- Project [d_date_sk#58]
+         :                             +- Filter ((d_year#64 == 2001) and (d_moy#66 == 12))
+         :                                +- Shared #1, printed above
          +- Project ['store' AS channel#213, item#206, return_ratio#207, _we0#211 AS return_rank#209, _we1#212 AS currency_rank#210]
             +- Filter ((_we0#211 <= 10) or (_we1#212 <= 10))
                +- Window [rank() OVER (ORDER BY currency_ratio#208 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we1#212], [], [currency_ratio#208 ASC NULLS FIRST]
                   +- Window [rank() OVER (ORDER BY return_ratio#207 ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS _we0#211], [], [return_ratio#207 ASC NULLS FIRST]
                      +- Aggregate [ss_item_sk#165], [ss_item_sk#165 AS item#206, (CAST(sum(coalesce(sr_return_quantity#196, 0)) AS DECIMAL(15,4)) / CAST(sum(coalesce(ss_quantity#173, 0)) AS DECIMAL(15,4))) AS return_ratio#207, (CAST(sum(coalesce(CAST(sr_return_amt#197 AS DECIMAL(12,2)), 0.00)) AS DECIMAL(15,4)) / CAST(sum(coalesce(CAST(ss_net_paid#183 AS DECIMAL(12,2)), 0.00)) AS DECIMAL(15,4))) AS currency_ratio#208]
                         +- Project [sr_return_quantity#196, sr_return_amt#197, ss_item_sk#165, ss_quantity#173, ss_net_paid#183]
-                           +- Join Inner, ((ss_ticket_number#172 == sr_ticket_number#195) and (ss_item_sk#165 == sr_item_sk#188))
-                              :- Filter (sr_return_amt#197 > 10000.00)
-                              :  +- Scan spark_catalog.default.store_returns [sr_item_sk#188, sr_ticket_number#195, sr_return_quantity#196, sr_return_amt#197]
-                              +- Project [ss_item_sk#165, ss_ticket_number#172, ss_quantity#173, ss_net_paid#183]
-                                 +- Join Inner, (ss_sold_date_sk#163 == d_date_sk#58)
-                                    :- Project [d_date_sk#58]
-                                    :  +- Filter ((d_year#64 == 2001) and (d_moy#66 == 12))
-                                    :     +- Shared #1, printed above
-                                    +- Project [ss_sold_date_sk#163, ss_item_sk#165, ss_ticket_number#172, ss_quantity#173, ss_net_paid#183]
-                                       +- Filter (((ss_net_profit#185 > 1.00) and (ss_net_paid#183 > 0.00)) and (ss_quantity#173 > 0))
-                                          +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#163, ss_item_sk#165, ss_ticket_number#172, ss_quantity#173, ss_net_paid#183, ss_net_profit#185]
+                           +- Join Inner, (ss_sold_date_sk#163 == d_date_sk#58)
+                              :- Project [sr_return_quantity#196, sr_return_amt#197, ss_sold_date_sk#163, ss_item_sk#165, ss_quantity#173, ss_net_paid#183]
+                              :  +- Join Inner, ((ss_ticket_number#172 == sr_ticket_number#195) and (ss_item_sk#165 == sr_item_sk#188))
+                              :     :- Filter (sr_return_amt#197 > 10000.00)
+                              :     :  +- Scan spark_catalog.default.store_returns [sr_item_sk#188, sr_ticket_number#195, sr_return_quantity#196, sr_return_amt#197]
+                              :     +- Project [ss_sold_date_sk#163, ss_item_sk#165, ss_ticket_number#172, ss_quantity#173, ss_net_paid#183]
+                              :        +- Filter (((ss_net_profit#185 > 1.00) and (ss_net_paid#183 > 0.00)) and (ss_quantity#173 > 0))
+                              :           +- Scan spark_catalog.default.store_sales [ss_sold_date_sk#163, ss_item_sk#165, ss_ticket_number#172, ss_quantity#173, ss_net_paid#183, ss_net_profit#185]
+                              +- Project [d_date_sk#58]
+                                 +- Filter ((d_year#64 == 2001) and (d_moy#66 == 12))
+                                    +- Shared #1, printed above

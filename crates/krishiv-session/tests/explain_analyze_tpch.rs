@@ -197,6 +197,10 @@ fn q18_counts_match_independent_queries() {
     assert_eq!(sunk, big_orders);
 }
 
+/// A sort of the 64,000 lineitems: more than a 2 MiB pool holds.
+const SORTED_LINEITEM: &str = "SELECT l_orderkey, l_linenumber, l_extendedprice FROM lineitem \
+     ORDER BY l_extendedprice DESC, l_orderkey, l_linenumber";
+
 /// Under a tight limit the profile reports spill bytes, in the metrics and in
 /// the text; without a limit it reports none.
 #[test]
@@ -210,9 +214,11 @@ fn spill_bytes_are_positive_under_a_tight_limit_and_zero_without() {
             b = b.config("krishiv.memory.limit", limit);
         }
         let s = b.build().unwrap();
-        // Enough data to overflow a 2 MiB pool: Q18's grouped lineitem.
+        // Enough data to overflow a 2 MiB pool. A sort, not a join query:
+        // a join order that broadcasts a large table (it follows the
+        // estimates) holds memory that cannot spill.
         common::register(&s, 16_000);
-        let df = block_on(s.sql(&query(18))).unwrap();
+        let df = block_on(s.sql(SORTED_LINEITEM)).unwrap();
         block_on(df.collect_with_profile()).unwrap()
     };
     let spilled = |m: &QueryMetrics| -> u64 {

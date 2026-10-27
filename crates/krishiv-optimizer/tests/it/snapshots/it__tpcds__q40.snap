@@ -5,19 +5,19 @@ expression: optimized.root().to_string()
 Limit 100
 +- Sort [w_state#71 ASC NULLS FIRST, i_item_id#76 ASC NULLS FIRST], true
    +- Aggregate [w_state#71, i_item_id#76], [w_state#71, i_item_id#76, sum(CASE WHEN (d_date#99 < DATE '2000-03-11') THEN (cs_sales_price#21 - coalesce(CAST(cr_refunded_cash#57 AS DECIMAL(12,2)), 0.00)) ELSE 0.00 END) AS sales_before#125, sum(CASE WHEN (d_date#99 >= DATE '2000-03-11') THEN (cs_sales_price#21 - coalesce(CAST(cr_refunded_cash#57 AS DECIMAL(12,2)), 0.00)) ELSE 0.00 END) AS sales_after#126]
-      +- Project [w_state#71, cs_sales_price#21, cr_refunded_cash#57, d_date#99, i_item_id#76]
+      +- Project [cs_sales_price#21, cr_refunded_cash#57, d_date#99, i_item_id#76, w_state#71]
          +- Join Inner, (cs_warehouse_sk#14 == w_warehouse_sk#61)
-            :- Scan spark_catalog.default.warehouse [w_warehouse_sk#61, w_state#71]
-            +- Project [cs_warehouse_sk#14, cs_sales_price#21, cr_refunded_cash#57, d_date#99, i_item_id#76]
-               +- Join Inner, (i_item_sk#75 == cs_item_sk#15)
-                  :- Project [cs_warehouse_sk#14, cs_item_sk#15, cs_sales_price#21, cr_refunded_cash#57, d_date#99]
-                  :  +- Join Inner, (cs_sold_date_sk#0 == d_date_sk#97)
-                  :     :- Project [cs_sold_date_sk#0, cs_warehouse_sk#14, cs_item_sk#15, cs_sales_price#21, cr_refunded_cash#57]
-                  :     :  +- Join LeftOuter, ((cs_order_number#17 == cr_order_number#50) and (cs_item_sk#15 == cr_item_sk#36))
-                  :     :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_warehouse_sk#14, cs_item_sk#15, cs_order_number#17, cs_sales_price#21]
-                  :     :     +- Scan spark_catalog.default.catalog_returns [cr_item_sk#36, cr_order_number#50, cr_refunded_cash#57]
-                  :     +- Filter ((d_date#99 >= DATE '2000-02-10') and (d_date#99 <= DATE '2000-04-10'))
-                  :        +- Scan spark_catalog.default.date_dim [d_date_sk#97, d_date#99]
-                  +- Project [i_item_sk#75, i_item_id#76]
-                     +- Filter ((i_current_price#80 >= 0.99) and (i_current_price#80 <= 1.49))
-                        +- Scan spark_catalog.default.item [i_item_sk#75, i_item_id#76, i_current_price#80]
+            :- Project [cs_warehouse_sk#14, cs_sales_price#21, cr_refunded_cash#57, d_date#99, i_item_id#76]
+            :  +- Join Inner, (i_item_sk#75 == cs_item_sk#15)
+            :     :- Project [cs_warehouse_sk#14, cs_item_sk#15, cs_sales_price#21, cr_refunded_cash#57, d_date#99]
+            :     :  +- Join Inner, (cs_sold_date_sk#0 == d_date_sk#97)
+            :     :     :- Project [cs_sold_date_sk#0, cs_warehouse_sk#14, cs_item_sk#15, cs_sales_price#21, cr_refunded_cash#57]
+            :     :     :  +- Join LeftOuter, ((cs_order_number#17 == cr_order_number#50) and (cs_item_sk#15 == cr_item_sk#36))
+            :     :     :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#0, cs_warehouse_sk#14, cs_item_sk#15, cs_order_number#17, cs_sales_price#21]
+            :     :     :     +- Scan spark_catalog.default.catalog_returns [cr_item_sk#36, cr_order_number#50, cr_refunded_cash#57]
+            :     :     +- Filter ((d_date#99 >= DATE '2000-02-10') and (d_date#99 <= DATE '2000-04-10'))
+            :     :        +- Scan spark_catalog.default.date_dim [d_date_sk#97, d_date#99]
+            :     +- Project [i_item_sk#75, i_item_id#76]
+            :        +- Filter ((i_current_price#80 >= 0.99) and (i_current_price#80 <= 1.49))
+            :           +- Scan spark_catalog.default.item [i_item_sk#75, i_item_id#76, i_current_price#80]
+            +- Scan spark_catalog.default.warehouse [w_warehouse_sk#61, w_state#71]

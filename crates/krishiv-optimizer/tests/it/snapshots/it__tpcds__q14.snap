@@ -33,91 +33,91 @@ Limit 100
             :  :  :                       +- Filter ((d_year#1382 >= 1999) and (d_year#1382 <= 2001))
             :  :  :                          +- Shared #2, printed above
             :  :  +- Aggregate [i_brand_id#1509, i_class_id#1511, i_category_id#1513], ['store' AS channel#1553, i_brand_id#1509, i_class_id#1511, i_category_id#1513, sum((CAST(ss_quantity#1489 AS DECIMAL(10,0)) * ss_list_price#1491)) AS sales#1554, count(1) AS number_sales#1555]
-            :  :     +- Project [i_brand_id#1509, i_class_id#1511, i_category_id#1513, ss_quantity#1489, ss_list_price#1491]
+            :  :     +- Project [ss_quantity#1489, ss_list_price#1491, i_brand_id#1509, i_class_id#1511, i_category_id#1513]
             :  :        +- Join LeftSemi, (ss_item_sk#1481 == ss_item_sk#1552)
-            :  :           :- Project [i_brand_id#1509, i_class_id#1511, i_category_id#1513, ss_item_sk#1481, ss_quantity#1489, ss_list_price#1491]
+            :  :           :- Project [ss_item_sk#1481, ss_quantity#1489, ss_list_price#1491, i_brand_id#1509, i_class_id#1511, i_category_id#1513]
             :  :           :  +- Join Inner, (ss_item_sk#1481 == i_item_sk#1502)
-            :  :           :     :- Scan spark_catalog.default.item [i_item_sk#1502, i_brand_id#1509, i_class_id#1511, i_category_id#1513] (shared #3)
-            :  :           :     +- Project [ss_item_sk#1481, ss_quantity#1489, ss_list_price#1491]
-            :  :           :        +- Join Inner, (ss_sold_date_sk#1479 == d_date_sk#1524)
-            :  :           :           :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#1479, ss_item_sk#1481, ss_quantity#1489, ss_list_price#1491]
-            :  :           :           +- Project [d_date_sk#1524]
-            :  :           :              +- Filter ((d_year#1530 == 2001) and (d_moy#1532 == 11))
-            :  :           :                 +- Scan spark_catalog.default.date_dim [d_date_sk#1524, d_year#1530, d_moy#1532] (shared #4)
+            :  :           :     :- Project [ss_item_sk#1481, ss_quantity#1489, ss_list_price#1491]
+            :  :           :     :  +- Join Inner, (ss_sold_date_sk#1479 == d_date_sk#1524)
+            :  :           :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#1479, ss_item_sk#1481, ss_quantity#1489, ss_list_price#1491]
+            :  :           :     :     +- Project [d_date_sk#1524]
+            :  :           :     :        +- Filter ((d_year#1530 == 2001) and (d_moy#1532 == 11))
+            :  :           :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#1524, d_year#1530, d_moy#1532] (shared #3)
+            :  :           :     +- Scan spark_catalog.default.item [i_item_sk#1502, i_brand_id#1509, i_class_id#1511, i_category_id#1513] (shared #4)
             :  :           +- Project [ss_item_sk#3050 AS ss_item_sk#1552] (shared #5)
             :  :              +- Shift +1698
             :  :                 +- Project [i_item_sk#0 AS ss_item_sk#1352]
             :  :                    +- Join Inner, (((i_brand_id#7 == brand_id#749) and (i_class_id#9 == class_id#750)) and (i_category_id#11 == category_id#751))
-            :  :                       :- Scan spark_catalog.default.item [i_item_sk#0, i_brand_id#7, i_class_id#9, i_category_id#11] (shared #6)
-            :  :                       +- Shift +676
-            :  :                          +- Aggregate [brand_id#73, class_id#74, category_id#75], [brand_id#73, class_id#74, category_id#75]
-            :  :                             +- Join LeftSemi, (((brand_id#73 <=> i_brand_id#345) and (class_id#74 <=> i_class_id#347)) and (category_id#75 <=> i_category_id#349))
-            :  :                                :- Aggregate [brand_id#73, class_id#74, category_id#75], [brand_id#73, class_id#74, category_id#75]
-            :  :                                :  +- Join LeftSemi, (((brand_id#73 <=> i_brand_id#145) and (class_id#74 <=> i_class_id#147)) and (category_id#75 <=> i_category_id#149))
-            :  :                                :     :- Project [i_brand_id#7 AS brand_id#73, i_class_id#9 AS class_id#74, i_category_id#11 AS category_id#75]
-            :  :                                :     :  +- Join Inner, (ss_item_sk#24 == i_item_sk#0)
-            :  :                                :     :     :- Shared #6, printed above
-            :  :                                :     :     +- Project [ss_item_sk#24]
-            :  :                                :     :        +- Join Inner, (ss_sold_date_sk#22 == d_date_sk#45)
-            :  :                                :     :           :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#22, ss_item_sk#24]
-            :  :                                :     :           +- Project [d_date_sk#45]
-            :  :                                :     :              +- Filter ((d_year#51 >= 1999) and (d_year#51 <= 2001))
-            :  :                                :     :                 +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_year#51] (shared #7)
-            :  :                                :     +- Shift +138
-            :  :                                :        +- Project [i_brand_id#7, i_class_id#9, i_category_id#11]
-            :  :                                :           +- Join Inner, (cs_item_sk#91 == i_item_sk#0)
-            :  :                                :              :- Shared #6, printed above
-            :  :                                :              +- Project [cs_item_sk#91]
-            :  :                                :                 +- Join Inner, (cs_sold_date_sk#76 == d_date_sk#110)
-            :  :                                :                    :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#76, cs_item_sk#91]
-            :  :                                :                    +- Project [d_date_sk#110]
-            :  :                                :                       +- Shift +65
-            :  :                                :                          +- Filter ((d_year#51 >= 1999) and (d_year#51 <= 2001))
-            :  :                                :                             +- Shared #7, printed above
-            :  :                                +- Shift +338
-            :  :                                   +- Project [i_brand_id#7, i_class_id#9, i_category_id#11]
-            :  :                                      +- Join Inner, (ws_item_sk#279 == i_item_sk#0)
-            :  :                                         :- Shared #6, printed above
-            :  :                                         +- Project [ws_item_sk#279]
-            :  :                                            +- Join Inner, (ws_sold_date_sk#276 == d_date_sk#310)
-            :  :                                               :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#276, ws_item_sk#279]
-            :  :                                               +- Project [d_date_sk#310]
-            :  :                                                  +- Shift +265
-            :  :                                                     +- Filter ((d_year#51 >= 1999) and (d_year#51 <= 2001))
-            :  :                                                        +- Shared #7, printed above
+            :  :                       :- Shift +676
+            :  :                       :  +- Aggregate [brand_id#73, class_id#74, category_id#75], [brand_id#73, class_id#74, category_id#75]
+            :  :                       :     +- Join LeftSemi, (((brand_id#73 <=> i_brand_id#345) and (class_id#74 <=> i_class_id#347)) and (category_id#75 <=> i_category_id#349))
+            :  :                       :        :- Aggregate [brand_id#73, class_id#74, category_id#75], [brand_id#73, class_id#74, category_id#75]
+            :  :                       :        :  +- Join LeftSemi, (((brand_id#73 <=> i_brand_id#145) and (class_id#74 <=> i_class_id#147)) and (category_id#75 <=> i_category_id#149))
+            :  :                       :        :     :- Project [i_brand_id#7 AS brand_id#73, i_class_id#9 AS class_id#74, i_category_id#11 AS category_id#75]
+            :  :                       :        :     :  +- Join Inner, (ss_item_sk#24 == i_item_sk#0)
+            :  :                       :        :     :     :- Project [ss_item_sk#24]
+            :  :                       :        :     :     :  +- Join Inner, (ss_sold_date_sk#22 == d_date_sk#45)
+            :  :                       :        :     :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#22, ss_item_sk#24]
+            :  :                       :        :     :     :     +- Project [d_date_sk#45]
+            :  :                       :        :     :     :        +- Filter ((d_year#51 >= 1999) and (d_year#51 <= 2001))
+            :  :                       :        :     :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#45, d_year#51] (shared #6)
+            :  :                       :        :     :     +- Scan spark_catalog.default.item [i_item_sk#0, i_brand_id#7, i_class_id#9, i_category_id#11] (shared #7)
+            :  :                       :        :     +- Shift +138
+            :  :                       :        :        +- Project [i_brand_id#7, i_class_id#9, i_category_id#11]
+            :  :                       :        :           +- Join Inner, (cs_item_sk#91 == i_item_sk#0)
+            :  :                       :        :              :- Project [cs_item_sk#91]
+            :  :                       :        :              :  +- Join Inner, (cs_sold_date_sk#76 == d_date_sk#110)
+            :  :                       :        :              :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#76, cs_item_sk#91]
+            :  :                       :        :              :     +- Project [d_date_sk#110]
+            :  :                       :        :              :        +- Shift +65
+            :  :                       :        :              :           +- Filter ((d_year#51 >= 1999) and (d_year#51 <= 2001))
+            :  :                       :        :              :              +- Shared #6, printed above
+            :  :                       :        :              +- Shared #7, printed above
+            :  :                       :        +- Shift +338
+            :  :                       :           +- Project [i_brand_id#7, i_class_id#9, i_category_id#11]
+            :  :                       :              +- Join Inner, (ws_item_sk#279 == i_item_sk#0)
+            :  :                       :                 :- Project [ws_item_sk#279]
+            :  :                       :                 :  +- Join Inner, (ws_sold_date_sk#276 == d_date_sk#310)
+            :  :                       :                 :     :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#276, ws_item_sk#279]
+            :  :                       :                 :     +- Project [d_date_sk#310]
+            :  :                       :                 :        +- Shift +265
+            :  :                       :                 :           +- Filter ((d_year#51 >= 1999) and (d_year#51 <= 2001))
+            :  :                       :                 :              +- Shared #6, printed above
+            :  :                       :                 +- Shared #7, printed above
+            :  :                       +- Shared #7, printed above
             :  +- Filter (CAST(sales#1621 AS DECIMAL(32,6)) > CAST(scalar-subquery AS DECIMAL(32,6)))
             :     :  +- Shift +67
             :     :     +- Shared #1, printed above
             :     +- Aggregate [i_brand_id#1509, i_class_id#1511, i_category_id#1513], ['catalog' AS channel#1620, i_brand_id#1509, i_class_id#1511, i_category_id#1513, sum((CAST(cs_quantity#1575 AS DECIMAL(10,0)) * cs_list_price#1577)) AS sales#1621, count(1) AS number_sales#1622]
-            :        +- Project [i_brand_id#1509, i_class_id#1511, i_category_id#1513, cs_quantity#1575, cs_list_price#1577]
+            :        +- Project [cs_quantity#1575, cs_list_price#1577, i_brand_id#1509, i_class_id#1511, i_category_id#1513]
             :           +- Join LeftSemi, (cs_item_sk#1572 == ss_item_sk#1619)
-            :              :- Project [i_brand_id#1509, i_class_id#1511, i_category_id#1513, cs_item_sk#1572, cs_quantity#1575, cs_list_price#1577]
+            :              :- Project [cs_item_sk#1572, cs_quantity#1575, cs_list_price#1577, i_brand_id#1509, i_class_id#1511, i_category_id#1513]
             :              :  +- Join Inner, (cs_item_sk#1572 == i_item_sk#1502)
-            :              :     :- Shared #3, printed above
-            :              :     +- Project [cs_item_sk#1572, cs_quantity#1575, cs_list_price#1577]
-            :              :        +- Join Inner, (cs_sold_date_sk#1557 == d_date_sk#1591)
-            :              :           :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#1557, cs_item_sk#1572, cs_quantity#1575, cs_list_price#1577]
-            :              :           +- Project [d_date_sk#1591]
-            :              :              +- Shift +67
-            :              :                 +- Filter ((d_year#1530 == 2001) and (d_moy#1532 == 11))
-            :              :                    +- Shared #4, printed above
+            :              :     :- Project [cs_item_sk#1572, cs_quantity#1575, cs_list_price#1577]
+            :              :     :  +- Join Inner, (cs_sold_date_sk#1557 == d_date_sk#1591)
+            :              :     :     :- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#1557, cs_item_sk#1572, cs_quantity#1575, cs_list_price#1577]
+            :              :     :     +- Project [d_date_sk#1591]
+            :              :     :        +- Shift +67
+            :              :     :           +- Filter ((d_year#1530 == 2001) and (d_moy#1532 == 11))
+            :              :     :              +- Shared #3, printed above
+            :              :     +- Shared #4, printed above
             :              +- Shift +67
             :                 +- Shared #5, printed above
             +- Filter (CAST(sales#1688 AS DECIMAL(32,6)) > CAST(scalar-subquery AS DECIMAL(32,6)))
                :  +- Shift +134
                :     +- Shared #1, printed above
                +- Aggregate [i_brand_id#1509, i_class_id#1511, i_category_id#1513], ['web' AS channel#1687, i_brand_id#1509, i_class_id#1511, i_category_id#1513, sum((CAST(ws_quantity#1642 AS DECIMAL(10,0)) * ws_list_price#1644)) AS sales#1688, count(1) AS number_sales#1689]
-                  +- Project [i_brand_id#1509, i_class_id#1511, i_category_id#1513, ws_quantity#1642, ws_list_price#1644]
+                  +- Project [ws_quantity#1642, ws_list_price#1644, i_brand_id#1509, i_class_id#1511, i_category_id#1513]
                      +- Join LeftSemi, (ws_item_sk#1627 == ss_item_sk#1686)
-                        :- Project [i_brand_id#1509, i_class_id#1511, i_category_id#1513, ws_item_sk#1627, ws_quantity#1642, ws_list_price#1644]
+                        :- Project [ws_item_sk#1627, ws_quantity#1642, ws_list_price#1644, i_brand_id#1509, i_class_id#1511, i_category_id#1513]
                         :  +- Join Inner, (ws_item_sk#1627 == i_item_sk#1502)
-                        :     :- Shared #3, printed above
-                        :     +- Project [ws_item_sk#1627, ws_quantity#1642, ws_list_price#1644]
-                        :        +- Join Inner, (ws_sold_date_sk#1624 == d_date_sk#1658)
-                        :           :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#1624, ws_item_sk#1627, ws_quantity#1642, ws_list_price#1644]
-                        :           +- Project [d_date_sk#1658]
-                        :              +- Shift +134
-                        :                 +- Filter ((d_year#1530 == 2001) and (d_moy#1532 == 11))
-                        :                    +- Shared #4, printed above
+                        :     :- Project [ws_item_sk#1627, ws_quantity#1642, ws_list_price#1644]
+                        :     :  +- Join Inner, (ws_sold_date_sk#1624 == d_date_sk#1658)
+                        :     :     :- Scan spark_catalog.default.web_sales [ws_sold_date_sk#1624, ws_item_sk#1627, ws_quantity#1642, ws_list_price#1644]
+                        :     :     +- Project [d_date_sk#1658]
+                        :     :        +- Shift +134
+                        :     :           +- Filter ((d_year#1530 == 2001) and (d_moy#1532 == 11))
+                        :     :              +- Shared #3, printed above
+                        :     +- Shared #4, printed above
                         +- Shift +134
                            +- Shared #5, printed above

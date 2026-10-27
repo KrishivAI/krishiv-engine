@@ -10,13 +10,13 @@ Limit 100
             +- Aggregate [i_category#104, i_class#105, i_brand#106, i_product_name#107, d_year#108, d_qoy#109, d_moy#110, s_store_id#111, spark_grouping_id#102], [i_category#104, i_class#105, i_brand#106, i_product_name#107, d_year#108, d_qoy#109, d_moy#110, s_store_id#111, sum(coalesce((ss_sales_price#13 * CAST(ss_quantity#10 AS DECIMAL(10,0))), 0.00)) AS sumsales#103]
                +- Expand [[ss_quantity#10, ss_sales_price#13, i_category#92, i_class#90, i_brand#88, i_product_name#101, d_year#29, d_qoy#33, d_moy#31, s_store_id#52, 0L], [ss_quantity#10, ss_sales_price#13, i_category#92, i_class#90, i_brand#88, i_product_name#101, d_year#29, d_qoy#33, d_moy#31, CAST(NULL AS STRING), 1L], [ss_quantity#10, ss_sales_price#13, i_category#92, i_class#90, i_brand#88, i_product_name#101, d_year#29, d_qoy#33, CAST(NULL AS INT), CAST(NULL AS STRING), 3L], [ss_quantity#10, ss_sales_price#13, i_category#92, i_class#90, i_brand#88, i_product_name#101, d_year#29, CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS STRING), 7L], [ss_quantity#10, ss_sales_price#13, i_category#92, i_class#90, i_brand#88, i_product_name#101, CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS STRING), 15L], [ss_quantity#10, ss_sales_price#13, i_category#92, i_class#90, i_brand#88, CAST(NULL AS STRING), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS STRING), 31L], [ss_quantity#10, ss_sales_price#13, i_category#92, i_class#90, CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS STRING), 63L], [ss_quantity#10, ss_sales_price#13, i_category#92, CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS STRING), 127L], [ss_quantity#10, ss_sales_price#13, CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS STRING), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS INT), CAST(NULL AS STRING), 255L]], [ss_quantity#10, ss_sales_price#13, i_category#104, i_class#105, i_brand#106, i_product_name#107, d_year#108, d_qoy#109, d_moy#110, s_store_id#111, spark_grouping_id#102]
                   +- Join Inner, (ss_store_sk#7 == s_store_sk#51)
-                     :- Scan spark_catalog.default.store [s_store_sk#51, s_store_id#52]
-                     +- Project [i_brand#88, i_class#90, i_category#92, i_product_name#101, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, d_year#29, d_moy#31, d_qoy#33]
-                        +- Join Inner, (ss_item_sk#2 == i_item_sk#80)
-                           :- Scan spark_catalog.default.item [i_item_sk#80, i_brand#88, i_class#90, i_category#92, i_product_name#101]
-                           +- Project [ss_item_sk#2, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, d_year#29, d_moy#31, d_qoy#33]
-                              +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
-                                 :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_store_sk#7, ss_quantity#10, ss_sales_price#13]
-                                 +- Project [d_date_sk#23, d_year#29, d_moy#31, d_qoy#33]
-                                    +- Filter ((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211))
-                                       +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_month_seq#26, d_year#29, d_moy#31, d_qoy#33]
+                     :- Project [ss_store_sk#7, ss_quantity#10, ss_sales_price#13, d_year#29, d_moy#31, d_qoy#33, i_brand#88, i_class#90, i_category#92, i_product_name#101]
+                     :  +- Join Inner, (ss_item_sk#2 == i_item_sk#80)
+                     :     :- Project [ss_item_sk#2, ss_store_sk#7, ss_quantity#10, ss_sales_price#13, d_year#29, d_moy#31, d_qoy#33]
+                     :     :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
+                     :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_store_sk#7, ss_quantity#10, ss_sales_price#13]
+                     :     :     +- Project [d_date_sk#23, d_year#29, d_moy#31, d_qoy#33]
+                     :     :        +- Filter ((d_month_seq#26 >= 1200) and (d_month_seq#26 <= 1211))
+                     :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_month_seq#26, d_year#29, d_moy#31, d_qoy#33]
+                     :     +- Scan spark_catalog.default.item [i_item_sk#80, i_brand#88, i_class#90, i_category#92, i_product_name#101]
+                     +- Scan spark_catalog.default.store [s_store_sk#51, s_store_id#52]

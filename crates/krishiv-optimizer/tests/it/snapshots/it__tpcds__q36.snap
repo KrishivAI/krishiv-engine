@@ -15,20 +15,20 @@ Limit 100
                      :     :- Project [CAST(gross_margin#352 AS DECIMAL(38,9)) AS gross_margin#122, i_category#311 AS i_category#110, i_class#309 AS i_class#111, 0 AS t_category#114, 0 AS t_class#115, 0 AS lochierarchy#116]
                      :     :  +- Shift +248 (shared #1)
                      :     :     +- Aggregate [i_category#63, i_class#61], [sum(ss_net_profit#22) AS ss_net_profit#102, sum(ss_ext_sales_price#15) AS ss_ext_sales_price#103, ((sum(ss_net_profit#22) * 1.0000) / sum(ss_ext_sales_price#15)) AS gross_margin#104, i_category#63, i_class#61]
-                     :     :        +- Project [i_class#61, i_category#63, ss_ext_sales_price#15, ss_net_profit#22]
+                     :     :        +- Project [ss_ext_sales_price#15, ss_net_profit#22, i_class#61, i_category#63]
                      :     :           +- Join Inner, (i_item_sk#51 == ss_item_sk#2)
-                     :     :              :- Scan spark_catalog.default.item [i_item_sk#51, i_class#61, i_category#63]
-                     :     :              +- Project [ss_item_sk#2, ss_ext_sales_price#15, ss_net_profit#22]
-                     :     :                 +- Join Inner, (d_date_sk#23 == ss_sold_date_sk#0)
-                     :     :                    :- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_ext_sales_price#15, ss_net_profit#22]
-                     :     :                    :  +- Join Inner, (s_store_sk#73 == ss_store_sk#7)
-                     :     :                    :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_store_sk#7, ss_ext_sales_price#15, ss_net_profit#22]
-                     :     :                    :     +- Project [s_store_sk#73]
-                     :     :                    :        +- Filter (s_state#97 == 'TN')
-                     :     :                    :           +- Scan spark_catalog.default.store [s_store_sk#73, s_state#97]
-                     :     :                    +- Project [d_date_sk#23]
-                     :     :                       +- Filter (d_year#29 == 2001)
-                     :     :                          +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29]
+                     :     :              :- Project [ss_item_sk#2, ss_ext_sales_price#15, ss_net_profit#22]
+                     :     :              :  +- Join Inner, (d_date_sk#23 == ss_sold_date_sk#0)
+                     :     :              :     :- Project [ss_sold_date_sk#0, ss_item_sk#2, ss_ext_sales_price#15, ss_net_profit#22]
+                     :     :              :     :  +- Join Inner, (s_store_sk#73 == ss_store_sk#7)
+                     :     :              :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_item_sk#2, ss_store_sk#7, ss_ext_sales_price#15, ss_net_profit#22]
+                     :     :              :     :     +- Project [s_store_sk#73]
+                     :     :              :     :        +- Filter (s_state#97 == 'TN')
+                     :     :              :     :           +- Scan spark_catalog.default.store [s_store_sk#73, s_state#97]
+                     :     :              :     +- Project [d_date_sk#23]
+                     :     :              :        +- Filter (d_year#29 == 2001)
+                     :     :              :           +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29]
+                     :     :              +- Scan spark_catalog.default.item [i_item_sk#51, i_class#61, i_category#63]
                      :     +- Aggregate [i_category#110], [((sum(ss_net_profit#107) * 1.0000) / sum(ss_ext_sales_price#108)) AS gross_margin#117, i_category#110, CAST(NULL AS STRING) AS i_class#123, 0 AS t_category#119, 1 AS t_class#120, 1 AS lochierarchy#121]
                      :        +- Project [ss_net_profit#350 AS ss_net_profit#107, ss_ext_sales_price#351 AS ss_ext_sales_price#108, i_category#311 AS i_category#110]
                      :           +- Shared #1, printed above

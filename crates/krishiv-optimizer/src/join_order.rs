@@ -15,20 +15,19 @@
 //! original columns.
 
 use std::collections::{BTreeMap, HashMap};
-use std::rc::Rc;
 use std::sync::Arc;
 
 use krishiv_plan::{
     AttrId, Expr, ExprNode, JoinCondition, JoinKind, LogicalPlan, PlanNode, ResolvedExpr,
 };
 
+use crate::estimate::Estimator;
 use crate::expr::{
     Attrs, and_all, column, common_equalities, conjuncts, has_subquery, implied, is_deterministic,
     references,
 };
-use crate::stats::{
-    Est, Estimator, Statistics, cse_definitions, equi_columns, reads_cse, resolve_cse, selectivity,
-};
+use crate::narrow::{equi_columns, selectivity};
+use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
 
 /// An original relation (kept alive) and its rewrite.
 type Rewritten = (Arc<LogicalPlan>, Arc<LogicalPlan>);
@@ -37,9 +36,13 @@ type Rewritten = (Arc<LogicalPlan>, Arc<LogicalPlan>);
 pub const DP_LIMIT: usize = 10;
 
 /// `root` with every inner-join tree reordered.
-pub(crate) fn reorder(root: &Arc<LogicalPlan>, stats: &dyn Statistics) -> Arc<LogicalPlan> {
+pub(crate) fn reorder(
+    root: &Arc<LogicalPlan>,
+    stats: &dyn Statistics,
+    propagate: bool,
+) -> Arc<LogicalPlan> {
     Reorder {
-        est: Estimator::new(stats),
+        est: Estimator::with_propagation(stats, propagate),
         done: HashMap::new(),
     }
     .positional(root)
@@ -231,7 +234,7 @@ impl Reorder<'_> {
         if leaves.len() < 2 {
             return self.children(root);
         }
-        let ests: Vec<Rc<Est>> = leaves.iter().map(|l| self.est.plan(l)).collect();
+        let ests: Vec<Arc<RelStats>> = leaves.iter().map(|l| self.est.plan(l)).collect();
         let mut graph = Graph::new(&leaves, &ests, preds.clone());
         if graph.binary_parts() > graph.parts(true) {
             // Some inputs are joined only by a condition over three or more
@@ -270,7 +273,7 @@ fn deterministic_condition(c: &JoinCondition) -> bool {
 /// key join, the costlier mistake for ordering.
 fn composite_keys(
     preds: &mut [Pred],
-    all: &Est,
+    all: &RelStats,
     owner: &HashMap<AttrId, usize>,
     at: &HashMap<usize, usize>,
     rows: &[f64],
@@ -320,7 +323,7 @@ fn conditional<'e>(
     sel: f64,
     on: &[usize],
     attrs: &[Attrs],
-    est: impl Fn(usize) -> &'e Est,
+    est: impl Fn(usize) -> &'e RelStats,
 ) -> f64 {
     let implied: f64 = on
         .iter()
@@ -370,7 +373,7 @@ struct Graph {
 }
 
 impl Graph {
-    fn new(leaves: &[Arc<LogicalPlan>], ests: &[Rc<Est>], preds: Vec<Arc<Expr>>) -> Self {
+    fn new(leaves: &[Arc<LogicalPlan>], ests: &[Arc<RelStats>], preds: Vec<Arc<Expr>>) -> Self {
         let mut owner: HashMap<AttrId, usize> = HashMap::new();
         for (i, l) in leaves.iter().enumerate() {
             for c in l.resolved_output().unwrap_or_default() {
@@ -418,10 +421,10 @@ impl Graph {
             .enumerate()
             .map(|(new, &old)| (old, new))
             .collect();
-        let mut rows: Vec<f64> = order.iter().map(|&i| ests[i].rows).collect();
+        let mut rows: Vec<f64> = order.iter().map(|&i| ests[i].rows_for_costing()).collect();
         let mut sorted: Vec<Arc<LogicalPlan>> =
             order.iter().map(|&i| Arc::clone(&leaves[i])).collect();
-        let mut all = Est::default();
+        let mut all = RelStats::default();
         for e in ests {
             all.cols.extend(e.cols.iter().map(|(k, v)| (*k, v.clone())));
         }

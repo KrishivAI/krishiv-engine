@@ -10,7 +10,9 @@
 
 mod cse;
 mod join_order;
+mod plan_stats;
 mod props;
+mod qerror;
 mod rules;
 mod sum_rewrite;
 mod support;

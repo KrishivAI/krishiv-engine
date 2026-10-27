@@ -10,17 +10,17 @@ Sort [cnt#85 DESC NULLS LAST, c_last_name#95 ASC NULLS FIRST], true
          +- Aggregate [ss_ticket_number#9, ss_customer_sk#3], [ss_ticket_number#9, ss_customer_sk#3, count(1) AS cnt#85]
             +- Project [ss_customer_sk#3, ss_ticket_number#9]
                +- Join Inner, (ss_store_sk#7 == s_store_sk#51)
-                  :- Project [s_store_sk#51]
-                  :  +- Filter (s_county#74 IN ('Orange County', 'Bronx County', 'Franklin Parish', 'Williamson County'))
-                  :     +- Scan spark_catalog.default.store [s_store_sk#51, s_county#74]
-                  +- Project [ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9]
-                     +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#80)
-                        :- Project [hd_demo_sk#80]
-                        :  +- Filter ((((hd_buy_potential#82 == 'Unknown') or (hd_buy_potential#82 == '>10000')) and (hd_vehicle_count#84 > 0)) and (CASE WHEN (hd_vehicle_count#84 > 0) THEN ((CAST(hd_dep_count#83 AS DECIMAL(10,0)) * 1.000) / CAST(hd_vehicle_count#84 AS DECIMAL(10,0))) ELSE CAST(NULL AS DECIMAL(26,14)) END > 1.00000000000000))
-                        :     +- Scan spark_catalog.default.household_demographics [hd_demo_sk#80, hd_buy_potential#82, hd_dep_count#83, hd_vehicle_count#84]
-                        +- Project [ss_customer_sk#3, ss_hdemo_sk#5, ss_store_sk#7, ss_ticket_number#9]
-                           +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
-                              :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_customer_sk#3, ss_hdemo_sk#5, ss_store_sk#7, ss_ticket_number#9]
-                              +- Project [d_date_sk#23]
-                                 +- Filter (((d_dom#32 >= 1) and (d_dom#32 <= 2)) and (d_year#29 IN (1999, 2000, 2001)))
-                                    +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29, d_dom#32]
+                  :- Project [ss_customer_sk#3, ss_store_sk#7, ss_ticket_number#9]
+                  :  +- Join Inner, (ss_hdemo_sk#5 == hd_demo_sk#80)
+                  :     :- Project [ss_customer_sk#3, ss_hdemo_sk#5, ss_store_sk#7, ss_ticket_number#9]
+                  :     :  +- Join Inner, (ss_sold_date_sk#0 == d_date_sk#23)
+                  :     :     :- Scan spark_catalog.default.store_sales [ss_sold_date_sk#0, ss_customer_sk#3, ss_hdemo_sk#5, ss_store_sk#7, ss_ticket_number#9]
+                  :     :     +- Project [d_date_sk#23]
+                  :     :        +- Filter (((d_dom#32 >= 1) and (d_dom#32 <= 2)) and (d_year#29 IN (1999, 2000, 2001)))
+                  :     :           +- Scan spark_catalog.default.date_dim [d_date_sk#23, d_year#29, d_dom#32]
+                  :     +- Project [hd_demo_sk#80]
+                  :        +- Filter ((((hd_buy_potential#82 == 'Unknown') or (hd_buy_potential#82 == '>10000')) and (hd_vehicle_count#84 > 0)) and (CASE WHEN (hd_vehicle_count#84 > 0) THEN ((CAST(hd_dep_count#83 AS DECIMAL(10,0)) * 1.000) / CAST(hd_vehicle_count#84 AS DECIMAL(10,0))) ELSE CAST(NULL AS DECIMAL(26,14)) END > 1.00000000000000))
+                  :           +- Scan spark_catalog.default.household_demographics [hd_demo_sk#80, hd_buy_potential#82, hd_dep_count#83, hd_vehicle_count#84]
+                  +- Project [s_store_sk#51]
+                     +- Filter (s_county#74 IN ('Orange County', 'Bronx County', 'Franklin Parish', 'Williamson County'))
+                        +- Scan spark_catalog.default.store [s_store_sk#51, s_county#74]

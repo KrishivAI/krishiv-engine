@@ -26,7 +26,15 @@ fn both(sql: &str) -> (Plan, Plan) {
     let ctx = support::ctx();
     let plan = support::resolve(sql, &ctx);
     let on = optimize(&plan).unwrap();
-    let off = optimize_with_options(&plan, &support::AllDistinct, &Options { cse: false }).unwrap();
+    let off = optimize_with_options(
+        &plan,
+        &support::AllDistinct,
+        &Options {
+            cse: false,
+            ..Options::default()
+        },
+    )
+    .unwrap();
     (on, off)
 }
 
@@ -292,7 +300,15 @@ fn in_items_and_between_upper_bounds_are_not_hoisted() {
 fn switch_disables_the_rule() {
     let ctx = support::ctx();
     let plan = support::resolve("SELECT ((a + b) * c) + ((a + b) * c) AS x FROM t", &ctx);
-    let off = optimize_with_options(&plan, &support::AllDistinct, &Options { cse: false }).unwrap();
+    let off = optimize_with_options(
+        &plan,
+        &support::AllDistinct,
+        &Options {
+            cse: false,
+            ..Options::default()
+        },
+    )
+    .unwrap();
     assert_eq!(extractions(off.root()), 0);
     assert_eq!(off.root().resolved_output(), plan.root().resolved_output());
     for seed in 1..=8 {
@@ -319,8 +335,15 @@ fn differential_results_match() {
     for q in 1..=22 {
         let plan = support::resolve(&support::tpch_sql(q), &ctx);
         let on = optimize(&plan).unwrap();
-        let off =
-            optimize_with_options(&plan, &support::AllDistinct, &Options { cse: false }).unwrap();
+        let off = optimize_with_options(
+            &plan,
+            &support::AllDistinct,
+            &Options {
+                cse: false,
+                ..Options::default()
+            },
+        )
+        .unwrap();
         extracted += on.root().to_string().matches("AS cse_").count();
         let (mut want, mut got) = (eval::rows(&db, off.root()), eval::rows(&db, on.root()));
         assert_eq!(got.len(), want.len(), "q{q:02} row counts");
