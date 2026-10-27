@@ -4184,7 +4184,9 @@ fn order_by_through_having_resolves_full_grouping_expression() {
     assert_eq!(keys, vec![a.output[0].id]);
     // `SELECT count(*) AS c FROM t GROUP BY a + 1 HAVING count(*) > 0
     // ORDER BY a + 1`: the grouping expression is not an output, so the
-    // retry adds it to the aggregate below the filter and sorts by it.
+    // retry adds it to the aggregate below the filter and sorts by it. The
+    // added column stays internal: the sort restores the select list above
+    // what it added, so the query still outputs only `c` (as Spark does).
     let grown = LogicalPlan::table(["t"])
         .aggregate(
             vec![add(c("a"), int(1))],
@@ -4193,18 +4195,35 @@ fn order_by_through_having_resolves_full_grouping_expression() {
         .filter(gt(f("count", vec![star()]), int(0)))
         .sort(vec![crate::SortOrder::asc(add(c("a"), int(1)))]);
     let b = run(grown, &ctx).unwrap();
-    assert_eq!(b.output.len(), 2);
+    assert_eq!(
+        b.output.iter().map(|c| c.name.clone()).collect::<Vec<_>>(),
+        ["c"]
+    );
     let mut grown_keys = Vec::new();
+    let mut grown_names = Vec::new();
     let _ = visit_distinct(Node::Plan(b.plan.root()), |node| {
         if let Node::Plan(p) = node
             && let PlanNode::Sort { order, .. } = &p.node
         {
-            grown_keys.extend(order.iter().flat_map(|o| resolved_ids(&o.expr)));
+            for o in order {
+                let _ = visit_distinct(Node::Expr(&o.expr), |n| {
+                    if let Node::Expr(x) = n
+                        && let ExprNode::Resolved(ResolvedExpr::Column(col)) = &x.node
+                    {
+                        grown_keys.push(col.id);
+                        grown_names.push(col.name.clone());
+                    }
+                    ControlFlow::Continue(())
+                });
+            }
         }
         ControlFlow::Continue(())
     });
+    // The sort key is the grouping expression the retry added below the
+    // filter: one column, named for `a + 1`, and not one of the outputs.
     assert_eq!(grown_keys.len(), 1);
-    assert!(b.output.iter().any(|o| o.id == grown_keys[0]));
+    assert_eq!(grown_names, ["(a + 1)"]);
+    assert!(!b.output.iter().any(|o| o.id == grown_keys[0]));
 }
 
 /// `ORDER BY` over duplicate outputs above windows still reports them
@@ -4217,12 +4236,15 @@ fn order_by_over_windows_reports_duplicates_as_unresolved() {
         function: Arc::new(f("row_number", Vec::new())),
         window: crate::WindowSpecRef::Spec(crate::WindowSpec {
             partition_by: Vec::new(),
-            order_by: Vec::new(),
+            // `row_number` needs an ordered window (Spark rejects `OVER ()`
+            // with `WINDOW_FUNCTION_FRAME_NOT_ORDERED`, as does the
+            // analyzer); the ordering does not affect the sort below.
+            order_by: vec![crate::SortOrder::asc(c("a"))],
             frame: None,
         }),
     }));
-    // `SELECT 1 AS x, 2 AS x, a, row_number() OVER () FROM t GROUP BY a
-    // HAVING a > 0 ORDER BY x`: the `HAVING` needs nothing new, so the
+    // `SELECT 1 AS x, 2 AS x, a, row_number() OVER (ORDER BY a) FROM t
+    // GROUP BY a HAVING a > 0 ORDER BY x`: the `HAVING` needs nothing new, so the
     // sort retries through the filter, but the aggregate holds windows,
     // so the duplicates stay `UNRESOLVED_COLUMN`.
     let plan = LogicalPlan::table(["t"])
@@ -4249,4 +4271,31 @@ fn order_by_over_windows_reports_duplicates_as_unresolved() {
         .map(|(k, v)| (*k, v.clone()))
         .collect();
     assert_eq!(params.get("objectName").map(String::as_str), Some("`x`"));
+}
+
+/// `ORDER BY` passes a sort key's own errors through unchanged: only an
+/// `AMBIGUOUS_REFERENCE` over duplicate outputs becomes
+/// `UNRESOLVED_COLUMN`; any other failure (here a function's arity) is
+/// reported as raised, as Spark 4.2 reports it.
+#[test]
+fn order_by_passes_sort_key_errors_through() {
+    let ctx = ctx();
+    // `SELECT a FROM t ORDER BY upper(1, 2)`: the key is not a name error,
+    // so the sort reports the function's arity failure.
+    let order = LogicalPlan::table(["t"])
+        .project(vec![c("a")])
+        .sort(vec![crate::SortOrder::asc(Expr::function(
+            "upper",
+            vec![int(1), int(2)],
+        ))]);
+    let err = run(order, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+    );
+    let text = err.error.to_string();
+    assert!(
+        text.contains("The `upper` requires 1 parameters but the actual number is 2"),
+        "{text}"
+    );
 }
