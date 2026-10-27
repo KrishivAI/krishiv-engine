@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "nvl#13de9ce1fe22/ansi_on",
+      "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl#13de9ce1fe22/ansi_off",
+      "reason": "SELECT nvl(map('a', 1), array('2')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl#9e1045de78bd/ansi_on",
+      "reason": "SELECT nvl(NULL, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "nvl#9e1045de78bd/ansi_off",
+      "reason": "SELECT nvl(NULL, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "nvl#b47cc5fd236f/ansi_on",
+      "reason": "SELECT nvl(INTERVAL '1 02:03:04' DAY TO SECOND, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl#b47cc5fd236f/ansi_off",
+      "reason": "SELECT nvl(INTERVAL '1 02:03:04' DAY TO SECOND, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl#d806a1029577/ansi_on",
+      "reason": "SELECT nvl(NULL, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "nvl#d806a1029577/ansi_off",
+      "reason": "SELECT nvl(NULL, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "nvl#e0e8f9112791/ansi_on",
+      "reason": "SELECT nvl(INTERVAL '1-2' YEAR TO MONTH, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl#e0e8f9112791/ansi_off",
+      "reason": "SELECT nvl(INTERVAL '1-2' YEAR TO MONTH, array('2')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl#fd2b816559e6/ansi_on",
+      "reason": "SELECT nvl(NULL, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+    },
+    {
+      "id": "nvl#fd2b816559e6/ansi_off",
+      "reason": "SELECT nvl(NULL, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+    }
+  ],
+  "format_version": 1,
+  "function": "nvl"
+}

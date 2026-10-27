@@ -26,7 +26,7 @@ use crate::{
 /// levels on the caller's stack; deeper levels run on fresh 64 MiB
 /// segments. The test thread stays at 2 MiB, so deep plans are still proven
 /// to resolve on a small stack.
-const RESOLVE_STEP: usize = 16;
+pub(super) const RESOLVE_STEP: usize = 16;
 
 /// An attribute in scope: the column, its qualifier and, for a table
 /// column, the securable it belongs to and its catalog name.
@@ -130,7 +130,14 @@ pub(super) struct Resolver<'a> {
     /// input shares subtrees, so equal input keys give equal plans.
     canon: HashMap<usize, Arc<LogicalPlan>>,
     pub(super) columns: Vec<BTreeSet<String>>,
+    /// The lambda scopes pushed by the higher-order calls whose bodies
+    /// bind now, innermost last (see `hof`).
+    pub(super) lambdas: Vec<super::hof::LambdaFrame>,
     depth: usize,
+    /// Expression-binding recursion through higher-order calls (see
+    /// `exprs::expr_in`): every [`RESOLVE_STEP`] levels run on a fresh
+    /// stack.
+    pub(super) expr_depth: usize,
     op_outer: Option<usize>,
     root_env: Option<Arc<Env>>,
     /// Constant folding's values over this pass (see `fold::Memo`).
@@ -159,9 +166,11 @@ pub(super) fn resolve(
         canon: HashMap::new(),
         columns: vec![BTreeSet::new(); b.securables.len()],
         depth: 0,
+        expr_depth: 0,
         op_outer: None,
         root_env: None,
         folds: std::cell::RefCell::default(),
+        lambdas: Vec::new(),
     };
     // Fresh ids start past every id the input already holds (a plan that
     // is resolved in part, or re-analysed).
@@ -207,10 +216,19 @@ fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
                 if let ExprNode::Resolved(
                     ResolvedExpr::Column(c)
                     | ResolvedExpr::OuterColumn(c)
+                    | ResolvedExpr::LambdaVar(c)
                     | ResolvedExpr::Alias { output: c, .. },
                 ) = &e.node
                 {
                     bump(c);
+                }
+                if let ExprNode::Lambda { params, .. } = &e.node {
+                    // Unresolved lambdas carry placeholder identities (see
+                    // `Expr::lambda`); only bound variables reserve ids.
+                    params
+                        .iter()
+                        .filter(|c| c.id.0 != u64::MAX)
+                        .for_each(&mut bump);
                 }
             }
         }
@@ -624,6 +642,27 @@ impl Resolver<'_> {
             PlanNode::Offset { input, offset } => self.limit_node(p, input, offset, true, env),
             PlanNode::WithCte { input, ctes } => self.with_cte(p, input, ctes, env),
             PlanNode::Distinct { input } => self.distinct(p, input, env),
+            PlanNode::Pivot {
+                input,
+                pivot_columns,
+                values,
+                aggregates,
+            } => self.pivot(p, input, pivot_columns, values, aggregates, env),
+            PlanNode::Unpivot {
+                input,
+                value_columns,
+                name_column,
+                column_sets,
+                include_nulls,
+            } => self.unpivot(
+                p,
+                input,
+                value_columns,
+                name_column,
+                column_sets,
+                *include_nulls,
+                env,
+            ),
             PlanNode::Window {
                 input,
                 exprs,
@@ -759,6 +798,8 @@ impl Resolver<'_> {
             | PlanNode::Hint { .. }
             | PlanNode::Union { .. }
             | PlanNode::Distinct { .. }
+            | PlanNode::Pivot { .. }
+            | PlanNode::Unpivot { .. }
             | PlanNode::SetOp { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),

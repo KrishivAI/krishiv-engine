@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-session/tests/error_context.rs
+expression: "render_with_context(&e, sql)"
+---
+[TABLE_OR_VIEW_NOT_FOUND] The table or view `not_exist` cannot be found. Verify the spelling and correctness of the schema and catalog.
+Search path: [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`].
+If you did not qualify the name with a schema, verify the current_schema() output, or qualify the name with the correct schema and catalog.
+To tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01
+== SQL (line 1, position 15) ==
+SELECT 1 FROM not_exist AS X(`hello`)
+              ^^^^^^^^^

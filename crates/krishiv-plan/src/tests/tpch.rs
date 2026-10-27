@@ -444,6 +444,8 @@ fn q16() -> LogicalPlan {
         .project(cols(&["s_suppkey"]));
     let supplier_cnt = Expr::new(ExprNode::Function(FunctionCall {
         name: "count".to_owned(),
+        qualifier: Vec::new(),
+        arg_names: Vec::new(),
         args: vec![Arc::new(c("ps_suppkey"))],
         distinct: true,
         filter: None,

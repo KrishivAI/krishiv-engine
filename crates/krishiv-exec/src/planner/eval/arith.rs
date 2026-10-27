@@ -151,8 +151,11 @@ impl PhysExpr for Binary {
         self.nullable
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let (mut l, r) = (self.l.eval(batch)?, self.r.eval(batch)?);
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let (mut l, r) = (
+            self.l.eval(batch, partition)?,
+            self.r.eval(batch, partition)?,
+        );
         let scalar = l.is_scalar() && r.is_scalar();
         if scalar {
             l = Value::Array(Arc::clone(l.array()));
@@ -213,8 +216,8 @@ impl PhysExpr for Negative {
         self.e.nullable()
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let v = self.e.eval(batch)?;
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.e.eval(batch, partition)?;
         let a = v.array();
         let ctx = &self.kernels;
         macro_rules! int {
@@ -294,8 +297,11 @@ impl PhysExpr for IntegralDivide {
         true
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let (mut l, r) = (self.l.eval(batch)?, self.r.eval(batch)?);
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let (mut l, r) = (
+            self.l.eval(batch, partition)?,
+            self.r.eval(batch, partition)?,
+        );
         let scalar = l.is_scalar() && r.is_scalar();
         if scalar {
             l = Value::Array(Arc::clone(l.array()));

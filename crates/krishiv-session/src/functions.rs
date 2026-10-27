@@ -188,6 +188,7 @@ pub fn count(c: Column) -> Column {
 pub fn count_star() -> Column {
     let star = Column::new(Expr::new(ExprNode::Star(Star {
         qualifier: Vec::new(),
+        except: Vec::new(),
         plan_id: None,
     })));
     call_function("count", [star])

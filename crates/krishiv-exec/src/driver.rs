@@ -119,14 +119,16 @@ fn since(executor: &dyn Executor, start: Instant) -> Duration {
     executor.now().saturating_duration_since(start)
 }
 
-/// Spawns one driver of `run`.
-pub(crate) fn spawn_driver(run: Arc<PipelineRun>) -> TaskHandle {
+/// Spawns one driver of `run`: `partition` is the driver's
+/// scheduler-assigned globally unique partition id within its pipeline
+/// group (see [`TaskContext::with_partition`]).
+pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle {
     let pipeline = run.pipeline.index;
     let query = Arc::clone(&run.query);
     let executor = Arc::clone(&run.executor);
     let q = Arc::clone(&query);
     let body = async move {
-        if let Err(e) = drive(run).await {
+        if let Err(e) = drive(run, partition).await {
             q.fail(e);
         }
     };
@@ -145,8 +147,8 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>) -> TaskHandle {
     executor.spawn(query.class(), Box::pin(timed))
 }
 
-async fn drive(run: Arc<PipelineRun>) -> Result<()> {
-    Driver::new(run)?.run().await
+async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
+    Driver::new(run, partition)?.run().await
 }
 
 /// Times every poll of a driver: the stall detector. A poll is a
@@ -193,11 +195,17 @@ impl Future for Timed {
         let out = this.inner.as_mut().poll(cx);
         let slice = since(&*this.executor, start);
         this.stats.max_slice = this.stats.max_slice.max(slice);
-        let held = match queued.zip(runqueue_wait()) {
-            Some((before, after)) => slice.saturating_sub(after.saturating_sub(before)),
-            None => slice,
-        };
         let config = this.query.config();
+        // Only a slice longer than the threshold can be a stall, so the
+        // second sample is taken for those alone.
+        let held = if slice > config.stall_threshold {
+            match queued.zip(runqueue_wait()) {
+                Some((before, after)) => slice.saturating_sub(after.saturating_sub(before)),
+                None => slice,
+            }
+        } else {
+            slice
+        };
         if held > config.stall_threshold {
             this.stats.stalls += 1;
             if config.fail_on_stall {
@@ -214,10 +222,36 @@ impl Future for Timed {
 /// The time this thread has waited on a run queue so far, from
 /// `/proc/thread-self/schedstat` (its second field, in nanoseconds); `None`
 /// where the kernel does not report it.
+///
+/// The file is opened once per thread and read with `pread`: a poll costs
+/// one syscall instead of open, statx, two reads and close.
+#[cfg(unix)]
 fn runqueue_wait() -> Option<Duration> {
-    let stat = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
-    let nanos = stat.split_whitespace().nth(1)?.parse().ok()?;
-    Some(Duration::from_nanos(nanos))
+    use std::os::unix::fs::FileExt;
+    thread_local! {
+        /// Opened by the thread it describes (`thread-self` is resolved at
+        /// open), `None` where the file is missing.
+        static SCHEDSTAT: Option<std::fs::File> =
+            std::fs::File::open("/proc/thread-self/schedstat").ok();
+    }
+    SCHEDSTAT.with(|file| {
+        let mut buf = [0u8; 128];
+        let n = file.as_ref()?.read_at(&mut buf, 0).ok()?;
+        let nanos = std::str::from_utf8(&buf[..n])
+            .ok()?
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()?;
+        Some(Duration::from_nanos(nanos))
+    })
+}
+
+/// Non-Unix targets have no `/proc/thread-self/schedstat`: there is no
+/// run-queue wait to subtract, so slices are wall time.
+#[cfg(not(unix))]
+fn runqueue_wait() -> Option<Duration> {
+    None
 }
 
 impl Drop for Timed {
@@ -287,7 +321,7 @@ struct Driver {
 }
 
 impl Driver {
-    fn new(run: Arc<PipelineRun>) -> Result<Self> {
+    fn new(run: Arc<PipelineRun>, partition: u32) -> Result<Self> {
         let owner = SpillOwner::new();
         let ctx = |id, name| {
             TaskContext::new(
@@ -297,6 +331,7 @@ impl Driver {
                 id,
                 name,
             )
+            .with_partition(partition)
         };
         let p = &run.pipeline;
         let (source_id, source) = &p.source;

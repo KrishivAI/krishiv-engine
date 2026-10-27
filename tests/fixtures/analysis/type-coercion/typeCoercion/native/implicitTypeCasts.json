@@ -1,0 +1,42 @@
+{
+  "entries": [
+    {
+      "query": "SELECT '$' || date('1996-09-09') || '$' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT '$' || timestamp('1996-09-09 10:11:12.4' )|| '$' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT '12:00:00' = TIME'12:00:00' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: TIME literals"
+    },
+    {
+      "query": "SELECT '12:00:01' > TIME'12:00:00' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: TIME literals"
+    },
+    {
+      "query": "SELECT length(date('1996-09-10')) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "SELECT length(timestamp('1996-09-10 10:11:12.4')) FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function timestamp"
+    },
+    {
+      "query": "SELECT time_trunc('HOUR', '12:34:56') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function time_trunc"
+    },
+    {
+      "query": "select '1996-09-10' like date('1996-09-10') FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    },
+    {
+      "query": "select date('1996-09-10') like '19%' FROM t",
+      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function date"
+    }
+  ],
+  "file": "typeCoercion/native/implicitTypeCasts",
+  "format_version": 1
+}

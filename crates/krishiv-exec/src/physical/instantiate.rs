@@ -387,8 +387,7 @@ impl Instantiation<'_> {
             }
             PhysNode::Aggregate { input, aggregate } => {
                 let input = self.node(input)?;
-                let spec =
-                    aggregate_spec(&input.schema, aggregate, self.env.ansi, self.spill.clone());
+                let spec = aggregate_spec(&input.schema, aggregate, &self.env, self.spill.clone());
                 let schema = spec.output_schema()?;
                 let node = aggregate_node(input.node, spec, &aggregate.distinct)?;
                 Ok(Built { node, schema })
@@ -572,7 +571,7 @@ fn hash_buckets<'p>(input: &'p PhysNode, keys: &[SortKey]) -> Option<&'p [usize]
     let PhysNode::Exchange(e) = input else {
         return None;
     };
-    let Partitioning::Hash { keys: hash } = &e.partitioning else {
+    let Partitioning::Hash { keys: hash, .. } = &e.partitioning else {
         return None;
     };
     let mut lead: Vec<usize> = keys.get(..hash.len())?.iter().map(|k| k.column).collect();
@@ -760,7 +759,7 @@ pub(crate) fn scan_filter(
 pub(crate) fn aggregate_spec(
     input: &SchemaRef,
     a: &AggregatePlan,
-    ansi: bool,
+    env: &EvalEnv,
     spill: Option<SpillScope>,
 ) -> AggregateSpec {
     AggregateSpec {
@@ -768,9 +767,10 @@ pub(crate) fn aggregate_spec(
         group_by: a.group_by.clone(),
         aggregates: a.aggregates.clone(),
         output: a.output,
-        ansi,
+        ansi: env.ansi,
         spill,
         require_unit_weights: false,
+        legacy_statistical: env.legacy_statistical_aggregate,
     }
 }
 
@@ -824,6 +824,17 @@ pub(crate) fn hash_join(
     spill: Option<SpillScope>,
     cell: &mut dyn FnMut(FilterId) -> Result<Arc<RuntimeFilter>>,
 ) -> Result<HashJoin> {
+    if j.distinct_build && !j.distinct_build_allowed() {
+        return Err(internal(format!(
+            "a distinct build on a {:?} join{}",
+            j.join_type,
+            if j.residual.is_some() {
+                " with a residual condition"
+            } else {
+                ""
+            }
+        )));
+    }
     let join = HashJoin::try_new(JoinSpec {
         join_type: j.join_type,
         probe_schema: Arc::clone(probe),
@@ -832,6 +843,7 @@ pub(crate) fn hash_join(
         build_keys: j.build_keys.clone(),
         null_safe: j.null_safe.clone(),
         filter: residual(probe, build, j.residual.as_ref(), env)?,
+        single_match: j.single_match,
         spill,
     })?;
     if j.runtime_filters.is_empty() {

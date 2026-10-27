@@ -1,0 +1,29 @@
+{
+  "cases": {
+    "analyzer-bugs": [
+      24
+    ],
+    "depends-on-command": [
+      16,
+      19,
+      31,
+      32,
+      45,
+      46,
+      47,
+      48
+    ],
+    "query-features": [
+      17
+    ],
+    "sql-commands": [
+      3,
+      54
+    ],
+    "subqueries": [
+      27
+    ]
+  },
+  "file": "cte",
+  "format_version": 1
+}

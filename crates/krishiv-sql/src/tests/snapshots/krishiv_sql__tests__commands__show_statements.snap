@@ -1,0 +1,977 @@
+---
+source: crates/krishiv-sql/src/tests/commands.rs
+expression: "snapshot_stmts(&[\"SHOW TABLES\", \"SHOW TABLES IN showdb\",\n\"SHOW TABLES 'show_t*'\", \"SHOW TABLES LIKE 'show_t*'\",\n\"SHOW TABLES IN showdb LIKE 'show_t*'\",\n\"SHOW TABLES IN IDENTIFIER('id' || 'ent')\",\n\"SHOW TABLE EXTENDED LIKE 'show_t*'\",\n\"SHOW TABLE EXTENDED IN showdb LIKE 'show_t*'\",\n\"SHOW TABLE EXTENDED LIKE 'show_t1' PARTITION (c = 'Us', d = 1)\",\n\"SHOW VIEWS\", \"SHOW VIEWS FROM showdb\", \"SHOW VIEWS IN showdb LIKE 'view_*'\",\n\"SHOW VIEWS 'view_*'\", \"SHOW COLUMNS FROM t\",\n\"SHOW COLUMNS IN showdb.showcolumn1 FROM baddb\",\n\"SHOW COLUMNS FROM IDENTIFIER('ta' || 'b')\", \"SHOW FUNCTIONS\",\n\"SHOW USER FUNCTIONS\", \"SHOW SYSTEM FUNCTIONS LIKE 'a*'\",\n\"SHOW FUNCTIONS FROM db LIKE 'a*'\", \"SHOW FUNCTIONS IN db 'a*'\",\n\"SHOW USER FUNCTIONS FROM db LIKE 'x'\", \"SHOW FUNCTIONS a.b\",\n\"SHOW FUNCTIONS LIKE a\", \"SHOW DATABASES\", \"SHOW SCHEMAS LIKE 's*'\",\n\"SHOW NAMESPACES\", \"SHOW CREATE TABLE t\", \"SHOW CREATE TABLE v AS SERDE\",\n\"SHOW CREATE TABLE IDENTIFIER('test_show')\", \"SHOW TBLPROPERTIES t\",\n\"SHOW TBLPROPERTIES t (k)\", \"SHOW TBLPROPERTIES tbl (\\\"p1\\\")\",\n\"SHOW TBLPROPERTIES IDENTIFIER('ta' || 'b')\", \"SHOW PARTITIONS t\",\n\"SHOW PARTITIONS t PARTITION (c = 'Us')\",\n\"SHOW PARTITIONS IDENTIFIER('test_show')\", \"SHOW CURRENT SCHEMA\",\n\"SHOW CURRENT NAMESPACE\", \"SHOW CURRENT DATABASE\",])"
+---
+-- SHOW TABLES
+Show(
+    Show {
+        kind: Tables {
+            namespace: None,
+            pattern: None,
+            span: 5..11,
+        },
+        span: 0..11,
+    },
+)
+-- SHOW TABLES IN showdb
+Show(
+    Show {
+        kind: Tables {
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "showdb",
+                                quoted: false,
+                                span: 15..21,
+                            },
+                        ],
+                        span: 15..21,
+                    },
+                ),
+            ),
+            pattern: None,
+            span: 5..21,
+        },
+        span: 0..21,
+    },
+)
+-- SHOW TABLES 'show_t*'
+Show(
+    Show {
+        kind: Tables {
+            namespace: None,
+            pattern: Some(
+                ShowPattern {
+                    like: false,
+                    pattern: "show_t*",
+                    span: 12..21,
+                },
+            ),
+            span: 5..21,
+        },
+        span: 0..21,
+    },
+)
+-- SHOW TABLES LIKE 'show_t*'
+Show(
+    Show {
+        kind: Tables {
+            namespace: None,
+            pattern: Some(
+                ShowPattern {
+                    like: true,
+                    pattern: "show_t*",
+                    span: 12..26,
+                },
+            ),
+            span: 5..26,
+        },
+        span: 0..26,
+    },
+)
+-- SHOW TABLES IN showdb LIKE 'show_t*'
+Show(
+    Show {
+        kind: Tables {
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "showdb",
+                                quoted: false,
+                                span: 15..21,
+                            },
+                        ],
+                        span: 15..21,
+                    },
+                ),
+            ),
+            pattern: Some(
+                ShowPattern {
+                    like: true,
+                    pattern: "show_t*",
+                    span: 22..36,
+                },
+            ),
+            span: 5..36,
+        },
+        span: 0..36,
+    },
+)
+-- SHOW TABLES IN IDENTIFIER('id' || 'ent')
+Show(
+    Show {
+        kind: Tables {
+            namespace: Some(
+                Dynamic(
+                    DynamicName {
+                        expr: Expr {
+                            kind: Binary(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "id",
+                                        ),
+                                    ),
+                                    span: 26..30,
+                                },
+                                Concat,
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "ent",
+                                        ),
+                                    ),
+                                    span: 34..39,
+                                },
+                            ),
+                            span: 26..39,
+                        },
+                        span: 15..40,
+                    },
+                ),
+            ),
+            pattern: None,
+            span: 5..40,
+        },
+        span: 0..40,
+    },
+)
+-- SHOW TABLE EXTENDED LIKE 'show_t*'
+Show(
+    Show {
+        kind: TableExtended {
+            namespace: None,
+            pattern: ShowPattern {
+                like: true,
+                pattern: "show_t*",
+                span: 20..34,
+            },
+            partition: None,
+            span: 5..34,
+        },
+        span: 0..34,
+    },
+)
+-- SHOW TABLE EXTENDED IN showdb LIKE 'show_t*'
+Show(
+    Show {
+        kind: TableExtended {
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "showdb",
+                                quoted: false,
+                                span: 23..29,
+                            },
+                        ],
+                        span: 23..29,
+                    },
+                ),
+            ),
+            pattern: ShowPattern {
+                like: true,
+                pattern: "show_t*",
+                span: 30..44,
+            },
+            partition: None,
+            span: 5..44,
+        },
+        span: 0..44,
+    },
+)
+-- SHOW TABLE EXTENDED LIKE 'show_t1' PARTITION (c = 'Us', d = 1)
+Show(
+    Show {
+        kind: TableExtended {
+            namespace: None,
+            pattern: ShowPattern {
+                like: true,
+                pattern: "show_t1",
+                span: 20..34,
+            },
+            partition: Some(
+                PartitionSpec {
+                    parts: [
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "c",
+                                quoted: false,
+                                span: 46..47,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "Us",
+                                        ),
+                                    ),
+                                    span: 50..54,
+                                },
+                            ),
+                            span: 46..54,
+                        },
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "d",
+                                quoted: false,
+                                span: 56..57,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        Number {
+                                            text: "1",
+                                            kind: Int,
+                                        },
+                                    ),
+                                    span: 60..61,
+                                },
+                            ),
+                            span: 56..61,
+                        },
+                    ],
+                    span: 35..62,
+                },
+            ),
+            span: 5..62,
+        },
+        span: 0..62,
+    },
+)
+-- SHOW VIEWS
+Show(
+    Show {
+        kind: Views {
+            namespace: None,
+            pattern: None,
+            span: 5..10,
+        },
+        span: 0..10,
+    },
+)
+-- SHOW VIEWS FROM showdb
+Show(
+    Show {
+        kind: Views {
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "showdb",
+                                quoted: false,
+                                span: 16..22,
+                            },
+                        ],
+                        span: 16..22,
+                    },
+                ),
+            ),
+            pattern: None,
+            span: 5..22,
+        },
+        span: 0..22,
+    },
+)
+-- SHOW VIEWS IN showdb LIKE 'view_*'
+Show(
+    Show {
+        kind: Views {
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "showdb",
+                                quoted: false,
+                                span: 14..20,
+                            },
+                        ],
+                        span: 14..20,
+                    },
+                ),
+            ),
+            pattern: Some(
+                ShowPattern {
+                    like: true,
+                    pattern: "view_*",
+                    span: 21..34,
+                },
+            ),
+            span: 5..34,
+        },
+        span: 0..34,
+    },
+)
+-- SHOW VIEWS 'view_*'
+Show(
+    Show {
+        kind: Views {
+            namespace: None,
+            pattern: Some(
+                ShowPattern {
+                    like: false,
+                    pattern: "view_*",
+                    span: 11..19,
+                },
+            ),
+            span: 5..19,
+        },
+        span: 0..19,
+    },
+)
+-- SHOW COLUMNS FROM t
+Show(
+    Show {
+        kind: Columns {
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                    ],
+                    span: 18..19,
+                },
+            ),
+            namespace: None,
+            span: 5..19,
+        },
+        span: 0..19,
+    },
+)
+-- SHOW COLUMNS IN showdb.showcolumn1 FROM baddb
+Show(
+    Show {
+        kind: Columns {
+            table: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "showdb",
+                            quoted: false,
+                            span: 16..22,
+                        },
+                        Ident {
+                            value: "showcolumn1",
+                            quoted: false,
+                            span: 23..34,
+                        },
+                    ],
+                    span: 16..34,
+                },
+            ),
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "baddb",
+                                quoted: false,
+                                span: 40..45,
+                            },
+                        ],
+                        span: 40..45,
+                    },
+                ),
+            ),
+            span: 5..45,
+        },
+        span: 0..45,
+    },
+)
+-- SHOW COLUMNS FROM IDENTIFIER('ta' || 'b')
+Show(
+    Show {
+        kind: Columns {
+            table: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "ta",
+                                    ),
+                                ),
+                                span: 29..33,
+                            },
+                            Concat,
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "b",
+                                    ),
+                                ),
+                                span: 37..40,
+                            },
+                        ),
+                        span: 29..40,
+                    },
+                    span: 18..41,
+                },
+            ),
+            namespace: None,
+            span: 5..41,
+        },
+        span: 0..41,
+    },
+)
+-- SHOW FUNCTIONS
+Show(
+    Show {
+        kind: Functions {
+            scope: None,
+            system: None,
+            namespace: None,
+            pattern: None,
+            legacy_pattern: None,
+            span: 5..14,
+        },
+        span: 0..14,
+    },
+)
+-- SHOW USER FUNCTIONS
+Show(
+    Show {
+        kind: Functions {
+            scope: None,
+            system: Some(
+                User,
+            ),
+            namespace: None,
+            pattern: None,
+            legacy_pattern: None,
+            span: 5..19,
+        },
+        span: 0..19,
+    },
+)
+-- SHOW SYSTEM FUNCTIONS LIKE 'a*'
+Show(
+    Show {
+        kind: Functions {
+            scope: None,
+            system: Some(
+                System,
+            ),
+            namespace: None,
+            pattern: Some(
+                ShowPattern {
+                    like: true,
+                    pattern: "a*",
+                    span: 22..31,
+                },
+            ),
+            legacy_pattern: None,
+            span: 5..31,
+        },
+        span: 0..31,
+    },
+)
+-- SHOW FUNCTIONS FROM db LIKE 'a*'
+Show(
+    Show {
+        kind: Functions {
+            scope: None,
+            system: None,
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "db",
+                                quoted: false,
+                                span: 20..22,
+                            },
+                        ],
+                        span: 20..22,
+                    },
+                ),
+            ),
+            pattern: Some(
+                ShowPattern {
+                    like: true,
+                    pattern: "a*",
+                    span: 23..32,
+                },
+            ),
+            legacy_pattern: None,
+            span: 5..32,
+        },
+        span: 0..32,
+    },
+)
+-- SHOW FUNCTIONS IN db 'a*'
+Show(
+    Show {
+        kind: Functions {
+            scope: None,
+            system: None,
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "db",
+                                quoted: false,
+                                span: 18..20,
+                            },
+                        ],
+                        span: 18..20,
+                    },
+                ),
+            ),
+            pattern: Some(
+                ShowPattern {
+                    like: false,
+                    pattern: "a*",
+                    span: 21..25,
+                },
+            ),
+            legacy_pattern: None,
+            span: 5..25,
+        },
+        span: 0..25,
+    },
+)
+-- SHOW USER FUNCTIONS FROM db LIKE 'x'
+Show(
+    Show {
+        kind: Functions {
+            scope: None,
+            system: Some(
+                User,
+            ),
+            namespace: Some(
+                Parts(
+                    ObjectName {
+                        parts: [
+                            Ident {
+                                value: "db",
+                                quoted: false,
+                                span: 25..27,
+                            },
+                        ],
+                        span: 25..27,
+                    },
+                ),
+            ),
+            pattern: Some(
+                ShowPattern {
+                    like: true,
+                    pattern: "x",
+                    span: 28..36,
+                },
+            ),
+            legacy_pattern: None,
+            span: 5..36,
+        },
+        span: 0..36,
+    },
+)
+-- SHOW FUNCTIONS a.b
+Show(
+    Show {
+        kind: Functions {
+            scope: None,
+            system: None,
+            namespace: None,
+            pattern: None,
+            legacy_pattern: Some(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "a",
+                            quoted: false,
+                            span: 15..16,
+                        },
+                        Ident {
+                            value: "b",
+                            quoted: false,
+                            span: 17..18,
+                        },
+                    ],
+                    span: 15..18,
+                },
+            ),
+            span: 5..18,
+        },
+        span: 0..18,
+    },
+)
+-- SHOW FUNCTIONS LIKE a
+Show(
+    Show {
+        kind: Functions {
+            scope: None,
+            system: None,
+            namespace: None,
+            pattern: None,
+            legacy_pattern: Some(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "a",
+                            quoted: false,
+                            span: 20..21,
+                        },
+                    ],
+                    span: 20..21,
+                },
+            ),
+            span: 5..21,
+        },
+        span: 0..21,
+    },
+)
+-- SHOW DATABASES
+Show(
+    Show {
+        kind: Namespaces {
+            kind: Database,
+            pattern: None,
+            span: 5..14,
+        },
+        span: 0..14,
+    },
+)
+-- SHOW SCHEMAS LIKE 's*'
+Show(
+    Show {
+        kind: Namespaces {
+            kind: Schema,
+            pattern: Some(
+                ShowPattern {
+                    like: true,
+                    pattern: "s*",
+                    span: 13..22,
+                },
+            ),
+            span: 5..22,
+        },
+        span: 0..22,
+    },
+)
+-- SHOW NAMESPACES
+Show(
+    Show {
+        kind: Namespaces {
+            kind: Namespace,
+            pattern: None,
+            span: 5..15,
+        },
+        span: 0..15,
+    },
+)
+-- SHOW CREATE TABLE t
+Show(
+    Show {
+        kind: CreateTable {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                    ],
+                    span: 18..19,
+                },
+            ),
+            serde: false,
+            span: 5..19,
+        },
+        span: 0..19,
+    },
+)
+-- SHOW CREATE TABLE v AS SERDE
+Show(
+    Show {
+        kind: CreateTable {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "v",
+                            quoted: false,
+                            span: 18..19,
+                        },
+                    ],
+                    span: 18..19,
+                },
+            ),
+            serde: true,
+            span: 5..28,
+        },
+        span: 0..28,
+    },
+)
+-- SHOW CREATE TABLE IDENTIFIER('test_show')
+Show(
+    Show {
+        kind: CreateTable {
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Literal(
+                            String(
+                                "test_show",
+                            ),
+                        ),
+                        span: 29..40,
+                    },
+                    span: 18..41,
+                },
+            ),
+            serde: false,
+            span: 5..41,
+        },
+        span: 0..41,
+    },
+)
+-- SHOW TBLPROPERTIES t
+Show(
+    Show {
+        kind: TblProperties {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 19..20,
+                        },
+                    ],
+                    span: 19..20,
+                },
+            ),
+            key: None,
+            key_span: None,
+            span: 5..20,
+        },
+        span: 0..20,
+    },
+)
+-- SHOW TBLPROPERTIES t (k)
+Show(
+    Show {
+        kind: TblProperties {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 19..20,
+                        },
+                    ],
+                    span: 19..20,
+                },
+            ),
+            key: Some(
+                "k",
+            ),
+            key_span: Some(
+                22..23,
+            ),
+            span: 5..24,
+        },
+        span: 0..24,
+    },
+)
+-- SHOW TBLPROPERTIES tbl ("p1")
+Show(
+    Show {
+        kind: TblProperties {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "tbl",
+                            quoted: false,
+                            span: 19..22,
+                        },
+                    ],
+                    span: 19..22,
+                },
+            ),
+            key: Some(
+                "p1",
+            ),
+            key_span: Some(
+                24..28,
+            ),
+            span: 5..29,
+        },
+        span: 0..29,
+    },
+)
+-- SHOW TBLPROPERTIES IDENTIFIER('ta' || 'b')
+Show(
+    Show {
+        kind: TblProperties {
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Binary(
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "ta",
+                                    ),
+                                ),
+                                span: 30..34,
+                            },
+                            Concat,
+                            Expr {
+                                kind: Literal(
+                                    String(
+                                        "b",
+                                    ),
+                                ),
+                                span: 38..41,
+                            },
+                        ),
+                        span: 30..41,
+                    },
+                    span: 19..42,
+                },
+            ),
+            key: None,
+            key_span: None,
+            span: 5..42,
+        },
+        span: 0..42,
+    },
+)
+-- SHOW PARTITIONS t
+Show(
+    Show {
+        kind: Partitions {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 16..17,
+                        },
+                    ],
+                    span: 16..17,
+                },
+            ),
+            partition: None,
+            span: 5..17,
+        },
+        span: 0..17,
+    },
+)
+-- SHOW PARTITIONS t PARTITION (c = 'Us')
+Show(
+    Show {
+        kind: Partitions {
+            name: Parts(
+                ObjectName {
+                    parts: [
+                        Ident {
+                            value: "t",
+                            quoted: false,
+                            span: 16..17,
+                        },
+                    ],
+                    span: 16..17,
+                },
+            ),
+            partition: Some(
+                PartitionSpec {
+                    parts: [
+                        PartitionSpecPart {
+                            key: Ident {
+                                value: "c",
+                                quoted: false,
+                                span: 29..30,
+                            },
+                            value: Some(
+                                Expr {
+                                    kind: Literal(
+                                        String(
+                                            "Us",
+                                        ),
+                                    ),
+                                    span: 33..37,
+                                },
+                            ),
+                            span: 29..37,
+                        },
+                    ],
+                    span: 18..38,
+                },
+            ),
+            span: 5..38,
+        },
+        span: 0..38,
+    },
+)
+-- SHOW PARTITIONS IDENTIFIER('test_show')
+Show(
+    Show {
+        kind: Partitions {
+            name: Dynamic(
+                DynamicName {
+                    expr: Expr {
+                        kind: Literal(
+                            String(
+                                "test_show",
+                            ),
+                        ),
+                        span: 27..38,
+                    },
+                    span: 16..39,
+                },
+            ),
+            partition: None,
+            span: 5..39,
+        },
+        span: 0..39,
+    },
+)
+-- SHOW CURRENT SCHEMA
+Show(
+    Show {
+        kind: CurrentNamespace {
+            kind: Schema,
+            span: 5..19,
+        },
+        span: 0..19,
+    },
+)
+-- SHOW CURRENT NAMESPACE
+Show(
+    Show {
+        kind: CurrentNamespace {
+            kind: Namespace,
+            span: 5..22,
+        },
+        span: 0..22,
+    },
+)
+-- SHOW CURRENT DATABASE
+Show(
+    Show {
+        kind: CurrentNamespace {
+            kind: Database,
+            span: 5..21,
+        },
+        span: 0..21,
+    },
+)

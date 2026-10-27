@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "hypot#0a720b399ce8/ansi_on",
+      "reason": "SELECT hypot(INTERVAL '1-2' YEAR TO MONTH, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#0a720b399ce8/ansi_off",
+      "reason": "SELECT hypot(INTERVAL '1-2' YEAR TO MONTH, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#176ba9f19b92/ansi_on",
+      "reason": "SELECT hypot(INTERVAL '1 02:03:04' DAY TO SECOND, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#176ba9f19b92/ansi_off",
+      "reason": "SELECT hypot(INTERVAL '1 02:03:04' DAY TO SECOND, 4) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#439f817c8846/ansi_on",
+      "reason": "SELECT hypot(3, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#439f817c8846/ansi_off",
+      "reason": "SELECT hypot(3, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#5688a3994502/ansi_on",
+      "reason": "SELECT hypot(3, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#5688a3994502/ansi_off",
+      "reason": "SELECT hypot(3, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#5c6c6b1a9581/ansi_on",
+      "reason": "SELECT hypot(map('a', 1), 4) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#5c6c6b1a9581/ansi_off",
+      "reason": "SELECT hypot(map('a', 1), 4) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#b0f1ca89094f/ansi_on",
+      "reason": "SELECT hypot(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "hypot#b0f1ca89094f/ansi_off",
+      "reason": "SELECT hypot(3, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "hypot"
+}

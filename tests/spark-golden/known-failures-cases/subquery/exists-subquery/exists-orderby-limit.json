@@ -1,0 +1,20 @@
+{
+  "cases": {
+    "depends-on-command": [
+      5,
+      6,
+      8,
+      9,
+      10,
+      11,
+      16,
+      18,
+      20,
+      21,
+      22,
+      25
+    ]
+  },
+  "file": "subquery/exists-subquery/exists-orderby-limit",
+  "format_version": 1
+}

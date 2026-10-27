@@ -1,0 +1,38 @@
+{
+  "cases": {
+    "depends-on-command": [
+      45,
+      46,
+      47,
+      48
+    ],
+    "fn-aggregate": [
+      35,
+      36,
+      37,
+      38,
+      39,
+      40,
+      41
+    ],
+    "query-features": [
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      33
+    ],
+    "subqueries": [
+      54,
+      55
+    ]
+  },
+  "file": "postgreSQL/aggregates_part1",
+  "format_version": 1
+}

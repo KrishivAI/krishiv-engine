@@ -1,0 +1,78 @@
+{
+  "entries": [
+    {
+      "id": "floor#0c6d71158a9a/ansi_on",
+      "reason": "SELECT floor(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#0c6d71158a9a/ansi_off",
+      "reason": "SELECT floor(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#341fd846f969/ansi_on",
+      "reason": "SELECT floor(3.1411, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "floor#341fd846f969/ansi_off",
+      "reason": "SELECT floor(3.1411, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "floor#43f1129b2daf/ansi_on",
+      "reason": "SELECT floor(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#43f1129b2daf/ansi_off",
+      "reason": "SELECT floor(INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#48b0b9450007/ansi_on",
+      "reason": "SELECT floor(3.1411, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "floor#48b0b9450007/ansi_off",
+      "reason": "SELECT floor(3.1411, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "floor#4a2f3954364e/ansi_on",
+      "reason": "SELECT floor(3.1411, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "floor#4a2f3954364e/ansi_off",
+      "reason": "SELECT floor(3.1411, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has NON_FOLDABLE_ARGUMENT"
+    },
+    {
+      "id": "floor#716ba7127f26/ansi_on",
+      "reason": "SELECT floor(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#716ba7127f26/ansi_off",
+      "reason": "SELECT floor(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#986519e90987/ansi_on",
+      "reason": "SELECT floor(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#986519e90987/ansi_off",
+      "reason": "SELECT floor(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#a8fb09ca0432/ansi_on",
+      "reason": "SELECT floor(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#a8fb09ca0432/ansi_off",
+      "reason": "SELECT floor(INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#f7b36fd3e154/ansi_on",
+      "reason": "SELECT floor(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "floor#f7b36fd3e154/ansi_off",
+      "reason": "SELECT floor(map('a', 1), 3) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "floor"
+}

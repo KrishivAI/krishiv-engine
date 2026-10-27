@@ -21,6 +21,7 @@ pub(super) const NAMES: &[&str] = &[
     "lower",
     "lcase",
     "length",
+    "len",
     "char_length",
     "character_length",
     "trim",
@@ -31,6 +32,7 @@ pub(super) const NAMES: &[&str] = &[
     "endswith",
     "contains",
     "replace",
+    "mask",
     "lpad",
     "rpad",
     "substring",
@@ -38,8 +40,8 @@ pub(super) const NAMES: &[&str] = &[
 ];
 
 /// The shape of an argument list: `S` string, `B` binary, `I` an integral
-/// up to `int`.
-fn shape(args: &[BindArg]) -> String {
+/// up to `int`, `L` a `bigint`.
+pub(super) fn shape(args: &[BindArg]) -> String {
     args.iter()
         .map(|a| {
             let t = a.data_type();
@@ -49,6 +51,8 @@ fn shape(args: &[BindArg]) -> String {
                 'B'
             } else if matches!(t, DataType::Int8 | DataType::Int16 | DataType::Int32) {
                 'I'
+            } else if t == DataType::Int64 {
+                'L'
             } else {
                 '?'
             }
@@ -56,7 +60,7 @@ fn shape(args: &[BindArg]) -> String {
         .collect()
 }
 
-fn utf8(a: arrow_array::StringArray) -> ArrayRef {
+pub(super) fn utf8(a: arrow_array::StringArray) -> ArrayRef {
     Arc::new(a)
 }
 
@@ -78,12 +82,12 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 }))
             })
         }
-        ("length" | "char_length" | "character_length", "S") => {
+        ("length" | "len" | "char_length" | "character_length", "S") => {
             Binding::new(DataType::Int32, |x: &Inputs<'_>| {
                 Ok(Arc::new(string::char_length(&x.strings(0)?)) as ArrayRef)
             })
         }
-        ("length" | "char_length" | "character_length", "B") => {
+        ("length" | "len" | "char_length" | "character_length", "B") => {
             Binding::new(DataType::Int32, |x: &Inputs<'_>| {
                 Ok(Arc::new(string::byte_length(&x.binaries(0)?)) as ArrayRef)
             })
@@ -145,6 +149,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 )?))
             })
         }
+        ("mask", "SSSSS") => Binding::new(text, |x: &Inputs<'_>| {
+            let (s, u, l, d, o) = (x.str(0)?, x.str(1)?, x.str(2)?, x.str(3)?, x.str(4)?);
+            Ok(utf8(string::mask(
+                s.operand(),
+                u.operand(),
+                l.operand(),
+                d.operand(),
+                o.operand(),
+            )?))
+        }),
         ("lpad" | "rpad", "SI" | "SIS" | "BI" | "BIB") => {
             let side = if listed == "lpad" {
                 PadSide::Left

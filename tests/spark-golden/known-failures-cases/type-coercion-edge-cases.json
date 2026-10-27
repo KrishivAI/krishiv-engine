@@ -1,0 +1,17 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      2
+    ],
+    "parser-tail": [
+      3
+    ],
+    "sql-commands": [
+      0,
+      4
+    ]
+  },
+  "file": "type-coercion-edge-cases",
+  "format_version": 1
+}
