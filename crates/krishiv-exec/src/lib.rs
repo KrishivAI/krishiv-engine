@@ -106,6 +106,7 @@ pub use join::{
     HashJoin, HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin,
     NestedLoopJoinNode, NestedLoopSpec,
 };
+pub use metrics::prometheus;
 pub use metrics::registry::{
     BUCKETS, CACHE_LABEL, CATALOGUE, CLASS_LABEL, CounterSample, ERROR_CLASS_LABEL, GIT_SHA_LABEL,
     GaugeSample, HistogramBucket, HistogramSample, LABEL_ALLOWLIST, LabelDef,

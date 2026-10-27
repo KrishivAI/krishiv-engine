@@ -11,6 +11,7 @@ pub mod dev;
 pub mod docs;
 pub mod layering;
 pub mod lint;
+pub mod metrics_gate;
 pub mod policy;
 pub mod precheck;
 pub mod profile;

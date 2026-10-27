@@ -15,6 +15,8 @@
 
 pub(crate) mod registry;
 
+pub mod prometheus;
+
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::time::Duration;

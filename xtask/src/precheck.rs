@@ -599,6 +599,7 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
             x(&["spdx"]),
             x(&["source-guard"]),
             x(&["registry-coverage"]),
+            x(&["metrics-gate"]),
             x(&["dco", "--base", base]),
             Cmd::new(
                 "bash",
