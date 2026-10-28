@@ -317,7 +317,7 @@ pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Bool(true)),
     doc: "Internal: grouped aggregations keep their keys as fixed-width rows in \
           radix-partitioned tables and merge the partitions in parallel. Results are the \
-          same either way; aggregations with string, binary, nested or dictionary keys \
+          same either way; aggregations with nested or dictionary keys \
           keep the columnar path.",
     scope: Scope::Session,
     version_added: "0.1.0",
