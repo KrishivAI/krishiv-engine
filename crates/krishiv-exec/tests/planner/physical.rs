@@ -273,13 +273,22 @@ fn inconsistent_plans_are_internal_errors() {
         instantiate_err(PhysNode::Union { inputs: Vec::new() }, scan_schema, &worker),
         "without inputs",
     );
-    // A write on a worker without a write sink.
+    // A write on a worker without an I/O context.
     let write = PhysNode::WriteFiles {
         input: Box::new(PhysNode::OneRow),
+        write: Some(krishiv_exec::physical::WritePlan {
+            format: "parquet".to_owned(),
+            options: std::collections::BTreeMap::new(),
+            store: "memory://suite".to_owned(),
+            dir: "out".to_owned(),
+            job_uuid: "job-1".to_owned(),
+            max_records_per_file: 0,
+            target_file_bytes: 0,
+        }),
     };
     check(
         instantiate_err(write, Schema::empty(), &worker),
-        "without a write sink",
+        "without an I/O context",
     );
 }
 

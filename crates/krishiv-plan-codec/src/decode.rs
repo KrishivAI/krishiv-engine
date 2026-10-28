@@ -14,7 +14,7 @@ use krishiv_exec::physical::{
     AggregatePlan, ExchangeId, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
     Residual, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter, SubqueryId, SubqueryPlan,
-    SubqueryValueKind,
+    SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{
@@ -512,6 +512,7 @@ impl Decoder {
             },
             Kind::WriteFiles(w) => PhysNode::WriteFiles {
                 input: self.boxed(w.input)?,
+                write: w.write.as_ref().map(write_plan).transpose()?,
             },
             Kind::Exchange(e) => PhysNode::Exchange(self.exchange(e)?),
         })
@@ -994,6 +995,31 @@ fn option(m: &pb::OptionValue) -> Result<OptionValue> {
             scope: r.scope.clone(),
             key: r.key.clone(),
         }),
+    })
+}
+
+fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
+    if m.format.is_empty() {
+        return Err(corrupt("a write plan without a format"));
+    }
+    if m.job_uuid.is_empty() {
+        return Err(corrupt("a write plan without a job id"));
+    }
+    if m.store.is_empty() {
+        return Err(corrupt("a write plan without a store"));
+    }
+    Ok(WritePlan {
+        format: m.format.clone(),
+        options: m
+            .options
+            .iter()
+            .map(|(k, v)| Ok((k.clone(), option(v)?)))
+            .collect::<Result<BTreeMap<_, _>>>()?,
+        store: m.store.clone(),
+        dir: m.dir.clone(),
+        job_uuid: m.job_uuid.clone(),
+        max_records_per_file: m.max_records_per_file,
+        target_file_bytes: m.target_file_bytes,
     })
 }
 

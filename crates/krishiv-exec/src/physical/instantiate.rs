@@ -35,18 +35,25 @@
 //! scans read the cells it hands out, and producers publish their partials
 //! to it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef;
+use krishiv_common::config::Config;
+use krishiv_common::error::KrishivUnsupportedFeature;
+use krishiv_io::{
+    FormatRegistry, IoContext, StoreId, WriteOptions, effective_job_uuid, is_spark_file_source,
+};
 use krishiv_memory::SpillScope;
 use krishiv_plan::{AttrId, Expr};
 use krishiv_udf_sdk::UdfLibrary;
+use object_store::path::Path;
 
 use super::{
     AggregatePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProjectItemPlan, Residual, ScanNode, SubqueryPlan, ValueId, Version,
+    ProjectItemPlan, Residual, ScanId, ScanNode, ScanSplits, SubqueryPlan, ValueId, Version,
+    WritePlan, files_of, partitions_of,
 };
 use crate::aggregate::{AggregateNode, AggregateSpec, HashAggregate, distinct_plan};
 use crate::error::{Result, internal};
@@ -57,7 +64,8 @@ use crate::join::{
 use crate::operator::{Operator, Sink, Source};
 use crate::operators::{
     Expand, FileWrite, FileWriteSink, Filter, FilterPushdown, NullOf, Predicate, Project,
-    ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdowns, Sort, SortKey, TopN,
+    ProjectItem, PushedFilter, ReplicateRows, RuntimeFilters, ScanPushdown, ScanPushdowns, Sort,
+    SortKey, TopN,
 };
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
@@ -81,20 +89,65 @@ pub trait SpillScopes: Send + Sync + fmt::Debug {
 }
 
 /// What a worker resolves a plan's references against: the tables its
-/// scans read, the session UDFs its function calls invoke, the spill scope
-/// of the query, the sink of a write, the values of the plan. One per query
+/// scans read, the session UDFs its function calls invoke, the relation
+/// store its batch splits resolve through, the spill scope of the query,
+/// the I/O context, formats and configuration a write builds its sink
+/// from, and the values of the plan. One per query
 /// and worker.
 #[derive(Clone)]
 pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
     udfs: Option<Arc<UdfLibrary>>,
+    relations: Option<Arc<krishiv_memory::RelationStore>>,
     spill: Option<SpillScope>,
     scopes: Option<Arc<dyn SpillScopes>>,
-    write: Option<Arc<FileWriteSink>>,
+    io: Option<IoContext>,
+    formats: Arc<FormatRegistry>,
+    config: Option<Arc<Config>>,
     /// The plan's values; a fresh [`LocalValues`] per instantiation when
     /// unset.
     values: Option<Arc<dyn ValueService>>,
     producer: Producer,
+}
+
+/// Which task of a stage instantiates a plan fragment: the stage, its
+/// attempt, and the partition within it, with the scan splits of the tasks
+/// that read them. The same fragment bytes run on every worker; the task
+/// tells instantiation which partition's files a write names, which
+/// attempt's suffix keeps a retry from overwriting a committed file, and
+/// which splits each scan reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskSpec {
+    /// The stage.
+    pub stage: u32,
+    /// The stage attempt.
+    pub stage_attempt: u32,
+    /// The partition index (the task number in file names).
+    pub partition: u32,
+    /// The partition count of the stage.
+    pub partitions: u32,
+    /// The task attempt (0 is the first try).
+    pub attempt: u32,
+    /// The splits each scan of the fragment reads, by scan id. A scan
+    /// without an entry plans its own splits exactly as today, so
+    /// single-process behaviour is unchanged.
+    pub scans: BTreeMap<ScanId, ScanSplits>,
+}
+
+impl TaskSpec {
+    /// Partition 0 of 1, attempt 0, reading every scan whole: what a plan
+    /// instantiated without a distributed scheduler runs as.
+    #[must_use]
+    pub fn whole() -> Self {
+        Self {
+            stage: 0,
+            stage_attempt: 0,
+            partition: 0,
+            partitions: 1,
+            attempt: 0,
+            scans: BTreeMap::new(),
+        }
+    }
 }
 
 impl WorkerContext {
@@ -103,9 +156,12 @@ impl WorkerContext {
         Self {
             tables,
             udfs: None,
+            relations: None,
             spill: None,
             scopes: None,
-            write: None,
+            io: None,
+            formats: Arc::new(FormatRegistry::new()),
+            config: None,
             values: None,
             producer: Producer::default(),
         }
@@ -116,6 +172,15 @@ impl WorkerContext {
     #[must_use]
     pub fn with_udfs(mut self, udfs: Arc<UdfLibrary>) -> Self {
         self.udfs = Some(udfs);
+        self
+    }
+
+    /// The same context resolving a scan's batch splits (the
+    /// [`ScanSplits::Batches`] of its task) through `relations`: the
+    /// session's relation store.
+    #[must_use]
+    pub fn with_relations(mut self, relations: Arc<krishiv_memory::RelationStore>) -> Self {
+        self.relations = Some(relations);
         self
     }
 
@@ -135,11 +200,27 @@ impl WorkerContext {
         self
     }
 
-    /// The same context writing a plan's
-    /// [`WriteFiles`](PhysNode::WriteFiles) rows through `sink`.
+    /// The same context with the I/O context `io`: what a
+    /// [`WriteFiles`](PhysNode::WriteFiles) node builds its file sink
+    /// with.
     #[must_use]
-    pub fn with_write_sink(mut self, sink: Arc<FileWriteSink>) -> Self {
-        self.write = Some(sink);
+    pub fn with_io(mut self, io: IoContext) -> Self {
+        self.io = Some(io);
+        self
+    }
+
+    /// The same context resolving a write's format name against `formats`.
+    #[must_use]
+    pub fn with_formats(mut self, formats: Arc<FormatRegistry>) -> Self {
+        self.formats = formats;
+        self
+    }
+
+    /// The same context parsing a write's format options against `config`
+    /// (session fallbacks and strict mode).
+    #[must_use]
+    pub fn with_config(mut self, config: Arc<Config>) -> Self {
+        self.config = Some(config);
         self
     }
 
@@ -165,6 +246,11 @@ impl WorkerContext {
     pub fn spill(&self) -> Option<&SpillScope> {
         self.spill.as_ref()
     }
+
+    /// The relation store, if batch splits resolve through one.
+    pub fn relations(&self) -> Option<&Arc<krishiv_memory::RelationStore>> {
+        self.relations.as_ref()
+    }
 }
 
 impl fmt::Debug for WorkerContext {
@@ -172,26 +258,32 @@ impl fmt::Debug for WorkerContext {
         f.debug_struct("WorkerContext")
             .field("tables", &self.tables)
             .field("udfs", &self.udfs.is_some())
+            .field("relations", &self.relations.is_some())
             .field("spill", &self.spill.is_some())
             .field("spill_scopes", &self.scopes.is_some())
-            .field("write", &self.write.is_some())
+            .field("io", &self.io.is_some())
+            .field("formats", &self.formats.names())
+            .field("config", &self.config.is_some())
             .field("values", &self.values.is_some())
             .field("producer", &self.producer)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
-
-/// The executable graph of `plan` on the worker `worker` describes. Each
-/// call creates its own operators and, unless `worker` sets a value
-/// service, its own values: a plan can be instantiated any number of
-/// times.
+/// The executable graph of `task` of `plan` on the worker `worker`
+/// describes. Each call creates its own operators and, unless `worker` sets
+/// a value service, its own values: a plan can be instantiated any number
+/// of times.
 ///
 /// # Errors
 /// The table providers' errors; `INTERNAL_ERROR` when the plan does not
 /// match the worker's tables any more (a pushed filter honoured
 /// differently, another result schema), names a runtime filter no scan
-/// declares, or writes without a write sink.
-pub fn instantiate(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<Arc<dyn ExecNode>> {
+/// declares, or writes without an I/O context, formats or configuration.
+pub fn instantiate_task(
+    plan: &PhysicalPlan,
+    worker: &WorkerContext,
+    task: &TaskSpec,
+) -> Result<Arc<dyn ExecNode>> {
     let run = || {
         let spill = match (&worker.spill, &worker.scopes) {
             (Some(scope), _) => Some(scope.clone()),
@@ -203,6 +295,7 @@ pub fn instantiate(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<Arc<dy
         env.udfs = worker.udfs.clone();
         let mut cx = Instantiation {
             worker,
+            task: task.clone(),
             spill,
             env,
             values: worker
@@ -227,8 +320,20 @@ pub fn instantiate(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<Arc<dy
         .ok_or_else(|| internal("cannot start an instantiation thread".to_owned()))?
 }
 
+/// The executable graph of `plan` on the worker `worker` describes, as
+/// partition 0 of 1, attempt 0. Each call creates its own operators and,
+/// unless `worker` sets a value service, its own values: a plan can be
+/// instantiated any number of times.
+///
+/// # Errors
+/// As [`instantiate_task`].
+pub fn instantiate(plan: &PhysicalPlan, worker: &WorkerContext) -> Result<Arc<dyn ExecNode>> {
+    instantiate_task(plan, worker, &TaskSpec::whole())
+}
+
 struct Instantiation<'a> {
     worker: &'a WorkerContext,
+    task: TaskSpec,
     /// The query's spill scope on this worker.
     spill: Option<SpillScope>,
     env: EvalEnv,
@@ -469,26 +574,7 @@ impl Instantiation<'_> {
                     node: Arc::new(FanInNode { inputs: nodes }),
                 })
             }
-            PhysNode::WriteFiles { input } => {
-                let sink = self
-                    .worker
-                    .write
-                    .clone()
-                    .ok_or_else(|| internal("a write without a write sink".to_owned()))?;
-                let input = self.node(input)?;
-                if sink.input_schema().fields() != input.schema.fields() {
-                    return Err(internal(
-                        "a write sink of another schema than its plan".to_owned(),
-                    ));
-                }
-                Ok(Built {
-                    schema: Source::schema(sink.as_ref()),
-                    node: Arc::new(FileWrite {
-                        input: input.node,
-                        sink,
-                    }),
-                })
-            }
+            PhysNode::WriteFiles { input, write } => self.write_files(input, write),
             // See the module docs: the operators around an exchange
             // implement it on one worker.
             PhysNode::Exchange(e) if e.partitioning == Partitioning::Broadcast => {
@@ -500,6 +586,7 @@ impl Instantiation<'_> {
 
     fn scan(&self, s: &ScanNode) -> Result<Built> {
         let factory = self.worker.tables.provider(&s.scan)?.scan()?;
+        let factory = self.splits(s.id, factory)?;
         let table = factory.table_schema();
         let mut filters = Vec::new();
         if let Some(f) = &s.filter {
@@ -529,6 +616,89 @@ impl Instantiation<'_> {
         Ok(Built {
             schema: source.schema(),
             node: Arc::new(SourceNode(source)),
+        })
+    }
+
+    /// The scan factory with this task's splits applied: the listed files
+    /// and partitions for a file split (reads stay pinned to the listed
+    /// versions), or the batch range of the resolved relation for a batch
+    /// split. A scan the task names nothing for builds exactly as today.
+    fn splits(&self, id: ScanId, factory: Arc<dyn ScanPushdown>) -> Result<Arc<dyn ScanPushdown>> {
+        let Some(splits) = self.task.scans.get(&id) else {
+            return Ok(factory);
+        };
+        match splits {
+            ScanSplits::Files { .. } => {
+                let partitions = partitions_of(splits)?;
+                factory.with_file_splits(files_of(splits)?, partitions)
+            }
+            ScanSplits::Batches { relation, range } => {
+                let Some(store) = &self.worker.relations else {
+                    return Err(internal(
+                        "a batch split without a relation store".to_owned(),
+                    ));
+                };
+                let batches = store.resolve(&relation.hash, range.clone())?;
+                factory.with_memory_batches(batches)
+            }
+        }
+    }
+
+    /// The file write of `write` over `input`, as task `self.task` runs
+    /// it: the sink is built here from the plan with the worker's own I/O
+    /// context, so the same plan bytes run on every worker. The task
+    /// number in file names is the partition index; attempt 0 names files
+    /// exactly as before, and attempt `k > 0` appends `_<k>` to the job-id
+    /// segment, so a late attempt can never overwrite a committed file.
+    fn write_files(&mut self, input: &PhysNode, write: &Option<WritePlan>) -> Result<Built> {
+        let Some(write) = write else {
+            return Err(internal(
+                "a write without a write plan (written by a writer before the write_plan feature)"
+                    .to_owned(),
+            ));
+        };
+        let io = self
+            .worker
+            .io
+            .clone()
+            .ok_or_else(|| internal("a write without an I/O context".to_owned()))?;
+        let format = match self.worker.formats.get(&write.format) {
+            Ok(format) => format,
+            Err(e) => {
+                if is_spark_file_source(&write.format) {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!("writing the {} format", write.format),
+                    }
+                    .into());
+                }
+                return Err(e);
+            }
+        };
+        let Some(config) = self.worker.config.as_deref() else {
+            return Err(internal("a write without a configuration".to_owned()));
+        };
+        let (options, _) = format.options().parse(&write.options, config)?;
+        let input = self.node(input)?;
+        let sink = Arc::new(FileWriteSink::try_new(
+            Arc::clone(&format),
+            io,
+            Arc::clone(&input.schema),
+            options,
+            WriteOptions {
+                store: StoreId::new(&write.store),
+                dir: Path::from(write.dir.as_str()),
+                task: self.task.partition,
+                job_uuid: effective_job_uuid(&write.job_uuid, self.task.attempt),
+                max_records_per_file: write.max_records_per_file,
+                target_file_bytes: write.target_file_bytes,
+            },
+        )?);
+        Ok(Built {
+            schema: Source::schema(sink.as_ref()),
+            node: Arc::new(FileWrite {
+                input: input.node,
+                sink,
+            }),
         })
     }
 

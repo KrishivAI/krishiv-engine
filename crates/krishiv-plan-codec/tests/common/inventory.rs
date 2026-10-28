@@ -103,6 +103,30 @@ pub(crate) fn scan_columns() -> Vec<BoundColumn> {
     ]
 }
 
+/// A write of a scan as Parquet files: the plan data a file sink is built
+/// from (format, options with a secret reference, store, directory, job
+/// id and file limits).
+pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
+    krishiv_exec::physical::WritePlan {
+        format: "parquet".to_owned(),
+        options: BTreeMap::from([
+            (
+                "compression".to_owned(),
+                OptionValue::Plain("zstd".to_owned()),
+            ),
+            (
+                "token".to_owned(),
+                OptionValue::reference("prod", "warehouse-token"),
+            ),
+        ]),
+        store: "memory://suite".to_owned(),
+        dir: "out".to_owned(),
+        job_uuid: "job-1".to_owned(),
+        max_records_per_file: 600,
+        target_file_bytes: 1 << 20,
+    }
+}
+
 /// A scan of a table, with a pushed filter and both runtime-filter specs.
 pub(crate) fn table_scan() -> ScanNode {
     let options = BTreeMap::from([
@@ -717,6 +741,14 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             "write_files",
             PhysNode::WriteFiles {
                 input: boxed(scan()),
+                write: None,
+            },
+        ),
+        (
+            "write_files_with_plan",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(write_plan()),
             },
         ),
         (

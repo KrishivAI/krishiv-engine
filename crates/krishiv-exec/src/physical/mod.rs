@@ -13,7 +13,8 @@
 //! 2. **Instantiation** ([`instantiate`]) builds the executable graph of
 //!    operators from a plan on the worker that runs it, with the
 //!    resources of that worker ([`WorkerContext`]): table providers and
-//!    their scan factories, the spill scope, the write sink. Expressions
+//!    their scan factories, the spill scope, the I/O context, formats and
+//!    configuration a write builds its sink from. Expressions
 //!    are compiled for the worker's kernels; runtime filters, subquery
 //!    results and broadcast builds are published and read through the
 //!    worker's [`ValueService`](crate::values::ValueService), one per
@@ -44,12 +45,15 @@
 
 pub(crate) mod data;
 mod instantiate;
+pub mod splits;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
 use arrow_array::Array;
-use arrow_schema::{DataType, SchemaRef};
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use krishiv_common::secret::OptionValue;
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
 use krishiv_kernels::hash::routing;
 use krishiv_plan::{AttrId, Expr, Scan};
@@ -58,16 +62,21 @@ use data::plan_data;
 pub use data::{PlanData, assert_plan_data};
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
-pub use instantiate::{SpillScopes, WorkerContext, instantiate};
+pub use instantiate::{SpillScopes, TaskSpec, WorkerContext, instantiate, instantiate_task};
 pub(crate) use instantiate::{
     Unbuilt, Values, aggregate_node, aggregate_spec, expand_op, filter_op, group_limit_op,
     hash_join, nested_loop_join, project_op, replicate_op, scan_filter, sort_op, top_n_op,
+};
+pub use krishiv_memory::{RelationLease, RelationRef, RelationStore};
+pub use splits::{
+    ScanSplits, SplitFileRef, assign_batch_splits, assign_file_splits, deal_ranges, files_of,
+    partitions_of, plan_file_partitions,
 };
 
 use crate::aggregate::{AggregateExpr, AggregateOutput};
 use crate::error::Result;
 use crate::join::JoinType;
-use crate::operators::{FileWriteSink, RowStageSettings, SortKey};
+use crate::operators::{RowStageSettings, SortKey};
 use crate::planner::ExplainNode;
 use crate::window::{GroupLimitPlan, WindowPlan};
 
@@ -371,11 +380,21 @@ pub enum PhysNode {
         /// The inputs.
         inputs: Vec<PhysNode>,
     },
-    /// Writes `input`'s rows through the worker's write sink
-    /// ([`WorkerContext::with_write_sink`]); one row per file written.
+    /// Writes `input`'s rows as files described by `write`; one row per
+    /// file written (`path`, `size`, `rows`). Instantiation builds the
+    /// file sink from `(write, task partition, task attempt)` with the
+    /// worker's own I/O context, so the same plan bytes run on every
+    /// worker. The task number in file names is the partition index.
+    /// `None` is a plan written before the `write_plan` feature: it
+    /// encodes exactly as before (no `write` field) and lists no feature,
+    /// and instantiation refuses it.
     WriteFiles {
         /// The rows to write.
         input: Box<PhysNode>,
+        /// What to write: format, options (secret references only),
+        /// store, directory, job id and file limits. Plain data; absent
+        /// in plans that predate the `write_plan` feature.
+        write: Option<WritePlan>,
     },
     /// Moves rows between partitions.
     Exchange(ExchangePlan),
@@ -567,6 +586,50 @@ pub struct NestedLoopPlan {
     pub residual: Option<Residual>,
 }
 
+/// What a [`PhysNode::WriteFiles`] writes: the file format and its options
+/// (secret references only, never inline secrets or URLs with
+/// credentials), the store and directory, the job UUID naming its files,
+/// and the file limits. Plain data: the same bytes on every worker, and
+/// the sink is built at instantiation from `(self, task partition, task
+/// attempt)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WritePlan {
+    /// The format name (for example `parquet`).
+    pub format: String,
+    /// The format options, as given (references only on the wire).
+    pub options: BTreeMap<String, OptionValue>,
+    /// The store id, as text.
+    pub store: String,
+    /// The target directory, as text.
+    pub dir: String,
+    /// The job UUID naming the write's files.
+    pub job_uuid: String,
+    /// `maxRecordsPerFile`; 0 means unlimited.
+    pub max_records_per_file: u64,
+    /// Roll over to a new file once this many bytes were produced; 0 means
+    /// never.
+    pub target_file_bytes: u64,
+}
+
+impl WritePlan {
+    /// The schema of a write's result rows (`path`, `size`, `rows`): the
+    /// commit message. It matches the file sink's result schema exactly.
+    #[must_use]
+    pub fn result_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![
+            Field::new("path", krishiv_types::DataType::String.to_arrow(), false),
+            Field::new("size", DataType::Int64, false),
+            Field::new("rows", DataType::Int64, false),
+        ]))
+    }
+
+    /// The `EXPLAIN` detail (`<format> to <store>/<dir>`).
+    #[must_use]
+    pub fn describe(&self) -> String {
+        format!("{} to {}/{}", self.format, self.store, self.dir)
+    }
+}
+
 plan_data!(tuple ScanId(id));
 plan_data!(tuple SubqueryId(id));
 plan_data!(tuple ExchangeId(id));
@@ -622,8 +685,17 @@ plan_data!(enum PhysNode {
     HashJoin(join),
     NestedLoopJoin(join),
     Union { inputs },
-    WriteFiles { input },
+    WriteFiles { input, write },
     Exchange(exchange),
+});
+plan_data!(struct WritePlan {
+    format,
+    options,
+    store,
+    dir,
+    job_uuid,
+    max_records_per_file,
+    target_file_bytes
 });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
 plan_data!(struct ScanFilter { layout, predicate, exact });
@@ -672,7 +744,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
-            | Self::WriteFiles { input } => vec![input.as_ref()],
+            | Self::WriteFiles { input, .. } => vec![input.as_ref()],
             Self::Exchange(e) => vec![e.input.as_ref()],
             Self::HashJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_ref(), j.build.as_ref()],
@@ -704,7 +776,7 @@ impl PhysNode {
             | Self::Window { input, .. }
             | Self::WindowGroupLimit { input, .. }
             | Self::Aggregate { input, .. }
-            | Self::WriteFiles { input } => vec![input.as_mut()],
+            | Self::WriteFiles { input, .. } => vec![input.as_mut()],
             Self::Exchange(e) => vec![e.input.as_mut()],
             Self::HashJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
             Self::NestedLoopJoin(j) => vec![j.probe.as_mut(), j.build.as_mut()],
@@ -763,34 +835,26 @@ impl PhysicalPlan {
         &self.warnings
     }
 
-    /// The plan writing this plan's rows through `sink` (`df.write`): its
-    /// result is one row per file written (`path`, `size`, `rows`). The
-    /// worker it runs on writes through the sink its [`WorkerContext`]
-    /// holds ([`WorkerContext::with_write_sink`]), which must write this
-    /// plan's schema. The caller starts the write before
-    /// (`DirectoryWrite::begin`, whose write options built `sink` over
-    /// [`Self::schema`]) and commits it with [`FileWriteSink::files`] once
-    /// the plan has run.
-    ///
-    /// # Errors
-    /// `INTERNAL_ERROR` if `sink` writes another schema.
-    pub fn into_write(self, sink: &FileWriteSink) -> Result<Self> {
-        if sink.input_schema().fields() != self.schema.fields() {
-            return Err(crate::error::internal(
-                "a write sink of another schema than its plan".to_owned(),
-            ));
-        }
-        let explain = ExplainNode::new("WriteFiles", sink.describe(), vec![self.explain]);
+    /// The plan writing this plan's rows as the files `write` describes
+    /// (`df.write`): its result is one row per file written (`path`,
+    /// `size`, `rows`), the commit message. The worker it runs on builds
+    /// the file sink at instantiation from `(write, task partition, task
+    /// attempt)` with its own I/O context. The caller starts the write
+    /// before (`DirectoryWrite::begin`) and commits it from the plan's
+    /// result rows once the plan has run.
+    pub fn into_write(self, write: WritePlan) -> Self {
+        let explain = ExplainNode::new("WriteFiles", write.describe(), vec![self.explain]);
         let root = Arc::unwrap_or_clone(self.root);
-        Ok(Self {
-            schema: crate::operator::Source::schema(sink),
+        Self {
+            schema: WritePlan::result_schema(),
             root: Arc::new(PhysNode::WriteFiles {
                 input: Box::new(root),
+                write: Some(write),
             }),
             explain,
             warnings: self.warnings,
             env: self.env,
-        })
+        }
     }
 
     /// The same plan with `warnings` added.
