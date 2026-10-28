@@ -1504,6 +1504,10 @@ impl SqlFrontend for Frontend {
     fn fingerprint(&self) -> u64 {
         7
     }
+
+    fn keywords(&self) -> Vec<(String, bool)> {
+        Vec::new()
+    }
 }
 
 #[test]

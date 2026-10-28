@@ -16,7 +16,7 @@ VALUES (1)
 SELECT * FROM VALUES (1) AS v(a)
   => Project [*] | +- SubqueryAlias v (a) |    +- InlineTable [a] (1 rows) | 
 SELECT * FROM range(3)
-  => [KRISHIV_UNSUPPORTED_FEATURE] The feature table-valued functions is not supported by Krishiv yet. SQLSTATE: 0A000 @ 14..22
+  => Project [*] | +- TableFunction range [3] | 
 SELECT a FROM t LATERAL VIEW explode(b) x AS y
   => [KRISHIV_UNSUPPORTED_FEATURE] The feature LATERAL VIEW is not supported by Krishiv yet. SQLSTATE: 0A000 @ 9..46
 SELECT row_number() OVER (ORDER BY a) FROM t

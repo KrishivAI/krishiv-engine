@@ -8,9 +8,6 @@
     ],
     "depends-on-command": [
       13
-    ],
-    "query-features": [
-      14
     ]
   },
   "file": "sql-compatibility-functions",

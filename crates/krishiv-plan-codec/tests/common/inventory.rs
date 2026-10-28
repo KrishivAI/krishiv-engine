@@ -493,6 +493,16 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         ("file_scan", PhysNode::Scan(file_scan())),
         ("one_row", PhysNode::OneRow),
         (
+            "range",
+            PhysNode::Range(krishiv_exec::physical::RangeNode {
+                start: 0,
+                end: 10,
+                step: 2,
+                num_slices: Some(4),
+                output: krishiv_plan::AttrId(1),
+            }),
+        ),
+        (
             "filter",
             PhysNode::Filter {
                 input: boxed(scan()),

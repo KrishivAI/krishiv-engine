@@ -675,6 +675,7 @@ impl Resolver<'_> {
                 name,
                 params,
             } => self.hint(p, input, name, params, env),
+            PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
             PlanNode::Read(ReadSource::Files { .. })
@@ -684,6 +685,7 @@ impl Resolver<'_> {
             | PlanNode::Shift { .. }
             | PlanNode::ReplicateRows { .. }
             | PlanNode::Expand { .. }
+            | PlanNode::Range { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
         }
     }
@@ -783,6 +785,15 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
+            PlanNode::Range { output, .. } => {
+                let qual: Arc<[String]> = Arc::from(Vec::new());
+                let out = vec![Attr {
+                    col: output.clone(),
+                    qual,
+                    source: None,
+                }];
+                Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
+            }
             // Handled in `node`, which never forwards them.
             PlanNode::Read(ReadSource::Table { .. })
             | PlanNode::OneRowRelation
@@ -802,6 +813,7 @@ impl Resolver<'_> {
             | PlanNode::Pivot { .. }
             | PlanNode::Unpivot { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }

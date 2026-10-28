@@ -127,6 +127,7 @@ registry! {
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
@@ -222,6 +223,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::HashJoin(j) => j.single_match.then_some(Feature::JoinSingleMatch),
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
+            PhysNode::Range(_) => Some(Feature::Range),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::WriteFiles { write, .. } => write.is_some().then_some(Feature::WritePlan),
             PhysNode::Scan(_)
@@ -364,6 +366,7 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
         PhysNode::Scan(_)
         | PhysNode::OneRow
+        | PhysNode::Range(_)
         | PhysNode::Filter { .. }
         | PhysNode::Limit { .. }
         | PhysNode::ReplicateRows { .. }
@@ -479,6 +482,7 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::OneRow
         | PhysNode::Limit { .. }
+        | PhysNode::Range(_)
         | PhysNode::Sort { .. }
         | PhysNode::TopN { .. }
         | PhysNode::Window { .. }

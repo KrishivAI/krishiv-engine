@@ -665,7 +665,7 @@ fn streaming_scans(root: &PhysNode) -> Vec<&krishiv_exec::physical::ScanNode> {
     fn go<'a>(node: &'a PhysNode, out: &mut Vec<&'a krishiv_exec::physical::ScanNode>) {
         match node {
             PhysNode::Scan(scan) => out.push(scan),
-            PhysNode::OneRow => {}
+            PhysNode::OneRow | PhysNode::Range(_) => {}
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
             | PhysNode::ReplicateRows { input, .. }

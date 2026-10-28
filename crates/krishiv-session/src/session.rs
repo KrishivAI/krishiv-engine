@@ -36,8 +36,8 @@ use krishiv_memory::{
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
-    DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf, Securable,
-    SparkProfile, TableColumn, authorize,
+    BuiltinTableFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
+    Securable, SparkProfile, TableColumn, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
@@ -424,6 +424,62 @@ impl Session {
         }
     }
 
+    /// `range(start, end, step, numSlices)`, as Spark's `Session.range`
+    /// builds it: the same [`PlanNode::Range`] SQL `range` resolves to.
+    /// `start` defaults to 0 and `step` to 1 when not given; `step` must
+    /// not be 0 and `num_slices` must be positive when given (else the
+    /// first action fails, as SQL `range` does).
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// let rows = futures::executor::block_on(session.range(0, 3, 1, None).collect())?;
+    /// assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn range(&self, start: i64, end: i64, step: i64, num_slices: Option<u32>) -> DataFrame {
+        use krishiv_common::error::{FailedFunctionCall, KrishivInvalidPartitionNumber};
+        use krishiv_plan::{BoundColumn, PlanNode};
+        if step == 0 {
+            return DataFrame::invalid(
+                self.clone(),
+                Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+                FailedFunctionCall {
+                    func_name: "`range`".to_owned(),
+                }
+                .into(),
+            );
+        }
+        if let Some(n) = num_slices
+            && n == 0
+        {
+            return DataFrame::invalid(
+                self.clone(),
+                Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
+                KrishivInvalidPartitionNumber {
+                    num_partitions: "0".to_owned(),
+                }
+                .into(),
+            );
+        }
+        // The analyzer passes a resolved `Range` through with its output;
+        // the id is fresh within this fresh plan.
+        let output = BoundColumn {
+            id: krishiv_plan::AttrId(0),
+            name: "id".to_owned(),
+            data_type: krishiv_types::DataType::Long,
+            nullable: false,
+        };
+        let plan = LogicalPlan::new(PlanNode::Range {
+            start,
+            end,
+            step,
+            num_slices,
+            output,
+        });
+        DataFrame::new(self.clone(), Arc::new(plan))
+    }
+
     /// The table or view `name`, lazily (Spark Connect's `spark.table`: an
     /// unknown name fails at the first action).
     ///
@@ -737,6 +793,7 @@ impl Session {
             policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
             functions: Arc::clone(&self.state.functions),
+            table_functions: Arc::new(BuiltinTableFunctions::new()),
             sql: Some(Arc::new(Frontend { options: parser })),
             files: Some(files),
             variables: Arc::clone(&variables),

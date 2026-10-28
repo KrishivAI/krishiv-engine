@@ -418,6 +418,18 @@ impl Instantiation<'_> {
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
             PhysNode::Scan(s) => self.scan(s),
+            PhysNode::Range(r) => {
+                let source = Arc::new(crate::operators::Range::new(
+                    r.start,
+                    r.end,
+                    r.step,
+                    r.num_slices,
+                ));
+                Ok(Built {
+                    schema: source.schema(),
+                    node: Arc::new(SourceNode(source)),
+                })
+            }
             PhysNode::OneRow => {
                 let source = one_row()?;
                 Ok(Built {

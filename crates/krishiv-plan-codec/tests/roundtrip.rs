@@ -38,6 +38,7 @@ macro_rules! variants {
 variants!(
     Scan,
     OneRow,
+    Range,
     Filter,
     Project,
     Limit,
@@ -59,6 +60,7 @@ fn variant_of(node: &PhysNode) -> Variant {
     match node {
         PhysNode::Scan(_) => Variant::Scan,
         PhysNode::OneRow => Variant::OneRow,
+        PhysNode::Range(_) => Variant::Range,
         PhysNode::Filter { .. } => Variant::Filter,
         PhysNode::Project { .. } => Variant::Project,
         PhysNode::Limit { .. } => Variant::Limit,
@@ -433,7 +435,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "nested_types"
             | "struct_field"
             | "lambda_functions"
-            | "map_key_dedup_policy" => 6,
+            | "map_key_dedup_policy"
+            | "range" => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
             | "hash_join_single_match"

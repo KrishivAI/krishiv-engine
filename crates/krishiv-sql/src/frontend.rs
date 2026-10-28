@@ -49,4 +49,8 @@ impl SqlFrontend for Frontend {
         .fold(0, |acc, b| acc << 1 | u64::from(*b));
         flags.wrapping_add(o.max_buckets.wrapping_mul(0x9E3779B97F4A7C15))
     }
+
+    fn keywords(&self) -> Vec<(String, bool)> {
+        crate::keywords::sql_keywords(self.options.enforce_reserved_keywords)
+    }
 }

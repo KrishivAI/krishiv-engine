@@ -417,6 +417,13 @@ impl<'a> Planner<'a> {
                 self.window(input, exprs, partition_by, order_by, None)
             }
             PlanNode::OneRowRelation => Ok(one_row()),
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                num_slices,
+                output,
+            } => Ok(range_node(*start, *end, *step, *num_slices, output)),
             _ => {
                 let text = p.to_string();
                 let name = text.split_whitespace().next().unwrap_or_default();
@@ -1447,6 +1454,38 @@ pub(crate) fn select(planned: Planned, output: &[BoundColumn], name: &str) -> Re
         ids,
         (name, detail),
     ))
+}
+
+/// `range(start, end, step, numSlices)`: one `id BIGINT NOT NULL` column.
+fn range_node(
+    start: i64,
+    end: i64,
+    step: i64,
+    num_slices: Option<u32>,
+    output: &krishiv_plan::BoundColumn,
+) -> Planned {
+    use arrow_schema::{DataType, Field, Schema};
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
+    Planned {
+        schema,
+        node: PhysNode::Range(crate::physical::RangeNode {
+            start,
+            end,
+            step,
+            num_slices,
+            output: output.id,
+        }),
+        layout: vec![output.id],
+        explain: ExplainNode::leaf(
+            "Range",
+            &match num_slices {
+                Some(n) => format!("[{start}, {end}, step {step}, slices {n}]"),
+                None => format!("[{start}, {end}, step {step}]"),
+            },
+        ),
+        sites: Vec::new(),
+        placement: Placement::Unknown,
+    }
 }
 
 /// One row without columns (`SELECT` without `FROM`).

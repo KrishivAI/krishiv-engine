@@ -1094,7 +1094,37 @@ impl Lowerer {
                 return Err(unsupported("IDENTIFIER()", name.span));
             }
             TableFactorKind::Values(rows) => self.inline_table(rows, tf.alias.as_ref(), tf.span)?,
-            _ => return Err(unsupported("table-valued functions", tf.span)),
+            TableFactorKind::TableFunction {
+                name,
+                dynamic_name,
+                args,
+            } => {
+                if dynamic_name.is_some() {
+                    return Err(unsupported("table-valued functions", tf.span));
+                }
+                if name.parts.len() != 1 {
+                    return Err(unsupported("table-valued functions", tf.span));
+                }
+                for a in args {
+                    if a.name.is_some() {
+                        return Err(unsupported("table-valued functions", a.span));
+                    }
+                    if matches!(a.expr.kind, crate::ast::ExprKind::TableArgument(_)) {
+                        return Err(unsupported("table-valued functions", a.span));
+                    }
+                }
+                let lowered = args
+                    .iter()
+                    .map(|a| self.arg(&a.expr))
+                    .collect::<R<Vec<_>>>()?;
+                self.node(
+                    PlanNode::TableFunction {
+                        name: name.parts[0].value.clone(),
+                        args: lowered,
+                    },
+                    tf.span,
+                )
+            }
         };
         Ok(match &tf.alias {
             None => plan,
