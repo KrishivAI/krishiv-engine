@@ -1,0 +1,286 @@
+READ	select 3 * (timestamp'2019-10-15 10:11:12.001002' - date'2019-10-15')
+PARSE_ERROR	select interval 4 month 2 weeks 3 microseconds * 1.5
+READ	select interval 2 years 4 months
+READ	select interval 2 weeks 3 microseconds * 1.5
+READ	select (timestamp'2019-10-15' - timestamp'2019-10-14') / 1.5
+READ	select interval 2147483647 month * 2
+READ	select interval 2147483647 month / 0.5
+READ	select interval 2147483647 day * 2
+READ	select interval 2147483647 day / 0.5
+READ	select interval 2 second * '2'
+READ	select interval 2 second / '2'
+READ	select interval 2 year * '2'
+READ	select interval 2 year / '2'
+READ	select interval 2 second * 'a'
+READ	select interval 2 second / 'a'
+READ	select interval 2 year * 'a'
+READ	select interval 2 year / 'a'
+READ	select '2' * interval 2 second
+READ	select '2' * interval 2 year
+READ	select 'a' * interval 2 second
+READ	select 'a' * interval 2 year
+READ	select '2' / interval 2 second
+READ	select '2' / interval 2 year
+READ	select interval '2 seconds' / 0
+READ	select interval '2 seconds' / null
+READ	select interval '2 seconds' * null
+READ	select null * interval '2 seconds'
+READ	select interval '2' year / 0
+READ	select interval '2' year / null
+READ	select interval '2' year * null
+READ	select null * interval '2' year
+READ	select 2 / interval '2' year
+READ	select 2 / interval '2' hour
+READ	select null / interval '2' year
+READ	select null / interval '2' hour
+PARSE_ERROR	select -interval '-1 month 1 day -1 second'
+READ	select -interval '-1 year 1 month'
+READ	select -interval '-1 day 1 hour -1 minute 1 second'
+PARSE_ERROR	select -interval -1 month 1 day -1 second
+READ	select -interval -1 year 1 month
+READ	select -interval -1 day 1 hour -1 minute 1 second
+PARSE_ERROR	select +interval '-1 month 1 day -1 second'
+READ	select +interval '-1 year 1 month'
+READ	select +interval '-1 day 1 hour -1 minute 1 second'
+PARSE_ERROR	select +interval -1 month 1 day -1 second
+READ	select +interval -1 year 1 month
+READ	select +interval -1 day 1 hour -1 minute 1 second
+READ	select interval -'1-1' year to month
+READ	select interval -'-1-1' year to month
+READ	select interval +'-1-1' year to month
+READ	select interval - '1 2:3:4.001' day to second
+READ	select interval +'1 2:3:4.001' day to second
+READ	select interval -'-1 2:3:4.001' day to second
+READ	select interval -'1' year
+READ	select interval -'-1' year
+READ	select interval -'11' month
+READ	select interval -'-11' month
+READ	select interval -'1' day
+READ	select interval -'-1' day
+READ	select interval -'23' hour
+READ	select interval -'-23' hour
+READ	select interval -'59' minute
+READ	select interval -'-59' minute
+READ	select interval -'59' second
+READ	select interval -'-59' second
+READ	select make_interval(1)
+READ	select make_interval(1, 2)
+READ	select make_interval(1, 2, 3)
+READ	select make_interval(1, 2, 3, 4)
+READ	select make_interval(1, 2, 3, 4, 5)
+READ	select make_interval(1, 2, 3, 4, 5, 6)
+READ	select make_interval(1, 2, 3, 4, 5, 6, 7.008009)
+READ	select make_interval(1, 2, 3, 4, 0, 0, 123456789012.123456)
+READ	select make_interval(0, 0, 0, 0, 0, 0, 1234567890123456789)
+READ	select make_dt_interval(1)
+READ	select make_dt_interval(1, 2)
+READ	select make_dt_interval(1, 2, 3)
+READ	select make_dt_interval(1, 2, 3, 4.005006)
+READ	select make_dt_interval(1, 0, 0, 123456789012.123456)
+READ	select make_dt_interval(2147483647)
+READ	select make_ym_interval(1)
+READ	select make_ym_interval(1, 2)
+READ	select make_ym_interval(0, 1)
+READ	select make_ym_interval(178956970, 7)
+READ	select make_ym_interval(178956970, 8)
+READ	select make_ym_interval(-178956970, -8)
+READ	select make_ym_interval(-178956970, -9)
+READ	select cast('1 second' as interval)
+READ	select cast('+1 second' as interval)
+READ	select cast('-1 second' as interval)
+READ	select cast('+     1 second' as interval)
+READ	select cast('-     1 second' as interval)
+READ	select cast('- -1 second' as interval)
+READ	select cast('- +1 second' as interval)
+READ	select interval 13.123456789 seconds, interval -13.123456789 second
+PARSE_ERROR	select interval 1 year 2 month 3 week 4 day 5 hour 6 minute 7 seconds 8 millisecond 9 microsecond
+READ	select interval 1 year 2 month
+READ	select interval 4 day 5 hour 6 minute 7 seconds
+READ	select interval 3 week 8 millisecond 9 microsecond
+PARSE_ERROR	select interval '30' year '25' month '-100' day '40' hour '80' minute '299.889987299' second
+READ	select interval '30' year '25' month
+READ	select interval '-100' day '40' hour '80' minute '299.889987299' second
+READ	select interval '0-0' year to month
+READ	select interval '0 0:0:0' day to second
+READ	select interval '0 0:0:0.1' day to second
+READ	select interval '10-9' year to month
+READ	select interval '20 15' day to hour
+READ	select interval '20 15:40' day to minute
+READ	select interval '20 15:40:32.99899999' day to second
+READ	select interval '15:40' hour to minute
+READ	select interval '15:40:32.99899999' hour to second
+READ	select interval '40:32.99899999' minute to second
+READ	select interval '40:32' minute to second
+READ	select interval 30 day day
+READ	select interval 30 days days
+PARSE_ERROR	select interval '20 15:40:32.99899999' day to hour
+PARSE_ERROR	select interval '20 15:40:32.99899999' day to minute
+PARSE_ERROR	select interval '15:40:32.99899999' hour to minute
+PARSE_ERROR	select interval '15:40.99899999' hour to second
+PARSE_ERROR	select interval '15:40' hour to second
+PARSE_ERROR	select interval '20 40:32.99899999' minute to second
+READ	select interval 10 nanoseconds
+READ	select map(1, interval 1 day, 2, interval 3 week)
+READ	select map(1, interval 1 day, 2, interval 2 day)
+READ	select map(1, interval 1 year, 2, interval 2 month)
+READ	select map(1, interval 1 month, 2, interval 2 month)
+READ	select map(1, interval 1 week, 2, interval 2 day)
+READ	select map(1, interval 2 millisecond, 3, interval 3 microsecond)
+READ	select interval 'interval 3 year 1 month'
+READ	select interval '3 year 1 month'
+READ	SELECT interval 'interval 2 weeks 2 days 1 hour 3 minutes 2 seconds 100 millisecond 200 microseconds'
+READ	SELECT interval '2 weeks 2 days 1 hour 3 minutes 2 seconds 100 millisecond 200 microseconds'
+PARSE_ERROR	select interval 1 fake_unit
+PARSE_ERROR	select interval 1 year to month
+PARSE_ERROR	select interval '1' year to second
+PARSE_ERROR	select interval '10-9' year to month '2-1' year to month
+PARSE_ERROR	select interval '10-9' year to month '12:11:10' hour to second
+PARSE_ERROR	select interval '1 15:11' day to minute '12:11:10' hour to second
+PARSE_ERROR	select interval 1 year '2-1' year to month
+PARSE_ERROR	select interval 1 year '12:11:10' hour to second
+PARSE_ERROR	select interval '10-9' year to month '1' year
+PARSE_ERROR	select interval '12:11:10' hour to second '1' year
+READ	select interval (-30) day
+READ	select interval (a + 1) day
+PARSE_ERROR	select interval 30 day day day
+READ	select interval (-30) days
+READ	select interval (a + 1) days
+PARSE_ERROR	select interval 30 days days days
+READ	SELECT INTERVAL '178956970-7' YEAR TO MONTH
+PARSE_ERROR	SELECT INTERVAL '178956970-8' YEAR TO MONTH
+READ	SELECT INTERVAL '-178956970-8' YEAR TO MONTH
+READ	SELECT INTERVAL -'178956970-8' YEAR TO MONTH
+READ	select
+READ	select
+READ	select
+READ	select interval '2' year + '3-3'
+READ	select interval '2' year - '4'
+READ	select '4 11:11' - interval '4 22:12' day to minute
+READ	select '4 12:12:12' + interval '4 22:12' day to minute
+SESSION	create temporary view interval_view as select '1' str
+READ	select interval '2' year + str from interval_view
+READ	select interval '2' year - str from interval_view
+READ	select str - interval '4 22:12' day to minute from interval_view
+READ	select str + interval '4 22:12' day to minute from interval_view
+READ	select interval '2-2' year to month + interval '3' day
+READ	select interval '3' day + interval '2-2' year to month
+READ	select interval '2-2' year to month - interval '3' day
+READ	select interval '3' day - interval '2-2' year to month
+READ	select 1 - interval '2' second
+READ	select 1 + interval '2' month
+READ	select interval '2' second + 1
+READ	select interval '2' month - 1
+READ	select interval '\t interval 1 day'
+READ	select interval 'interval \t 1\tday'
+READ	select interval 'interval\t1\tday'
+READ	select interval '1\t' day
+READ	select interval '1 ' day
+READ	select interval '2-2\t' year to month
+PARSE_ERROR	select interval '-\t2-2\t' year to month
+READ	select interval '\n0 12:34:46.789\t' day to second
+PARSE_ERROR	select interval '\n-\t10\t 12:34:46.789\t' day to second
+PARSE_ERROR	select interval '中文 interval 1 day'
+PARSE_ERROR	select interval 'interval中文 1 day'
+PARSE_ERROR	select interval 'interval 1中文day'
+READ	select -(a) from values (interval '-2147483648 months', interval '2147483647 months') t(a, b)
+READ	select a - b from values (interval '-2147483648 months', interval '2147483647 months') t(a, b)
+READ	select b + interval '1 month' from values (interval '-2147483648 months', interval '2147483647 months') t(a, b)
+READ	select a * 1.1 from values (interval '-2147483648 months', interval '2147483647 months') t(a, b)
+READ	select a / 0.5 from values (interval '-2147483648 months', interval '2147483647 months') t(a, b)
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+PARSE_ERROR	select interval '+'
+PARSE_ERROR	select interval '+.'
+PARSE_ERROR	select interval '1'
+PARSE_ERROR	select interval '1.2'
+PARSE_ERROR	select interval '- 2'
+PARSE_ERROR	select interval '1 day -'
+PARSE_ERROR	select interval '1 day 1'
+PARSE_ERROR	select interval '1 day 2' day
+PARSE_ERROR	select interval 'interval 1' day
+READ	select interval '-\t 1' day
+READ	SELECT (INTERVAL '-178956970-8' YEAR TO MONTH) / 2
+READ	SELECT (INTERVAL '-178956970-8' YEAR TO MONTH) / 5
+READ	SELECT (INTERVAL '-178956970-8' YEAR TO MONTH) / -1
+READ	SELECT (INTERVAL '-178956970-8' YEAR TO MONTH) / -1L
+READ	SELECT (INTERVAL '-178956970-8' YEAR TO MONTH) / -1.0
+READ	SELECT (INTERVAL '-178956970-8' YEAR TO MONTH) / -1.0D
+READ	SELECT (INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND) / 2
+READ	SELECT (INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND) / 5
+READ	SELECT (INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND) / -1
+READ	SELECT (INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND) / -1L
+READ	SELECT (INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND) / -1.0
+READ	SELECT (INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND) / -1.0D
+READ	SELECT INTERVAL '106751991 04' DAY TO HOUR
+READ	SELECT INTERVAL '106751991 04:00' DAY TO MINUTE
+READ	SELECT INTERVAL '106751991 04:00:54.775807' DAY TO SECOND
+READ	SELECT INTERVAL '2562047788:00' HOUR TO MINUTE
+READ	SELECT INTERVAL '2562047788:00:54.775807' HOUR TO SECOND
+READ	SELECT INTERVAL '153722867280:54.775807' MINUTE TO SECOND
+READ	SELECT INTERVAL '-106751991 04' DAY TO HOUR
+READ	SELECT INTERVAL '-106751991 04:00' DAY TO MINUTE
+READ	SELECT INTERVAL '-106751991 04:00:54.775808' DAY TO SECOND
+READ	SELECT INTERVAL '-2562047788:00' HOUR TO MINUTE
+READ	SELECT INTERVAL '-2562047788:00:54.775808' HOUR TO SECOND
+READ	SELECT INTERVAL '-153722867280:54.775808' MINUTE TO SECOND
+PARSE_ERROR	SELECT INTERVAL '106751992 04' DAY TO HOUR
+PARSE_ERROR	SELECT INTERVAL '-106751992 04' DAY TO HOUR
+PARSE_ERROR	SELECT INTERVAL '2562047789:00' HOUR TO MINUTE
+PARSE_ERROR	SELECT INTERVAL '-2562047789:00' HOUR TO MINUTE
+PARSE_ERROR	SELECT INTERVAL '153722867281:54.775808' MINUTE TO SECOND
+PARSE_ERROR	SELECT INTERVAL '-153722867281:54.775808' MINUTE TO SECOND
+READ	SELECT INTERVAL '178956970' YEAR
+READ	SELECT INTERVAL '-178956970' YEAR
+READ	SELECT INTERVAL '2147483647' MONTH
+READ	SELECT INTERVAL '-2147483647' MONTH
+READ	SELECT INTERVAL '106751991' DAY
+READ	SELECT INTERVAL '-106751991' DAY
+READ	SELECT INTERVAL '2562047788' HOUR
+READ	SELECT INTERVAL '-2562047788' HOUR
+READ	SELECT INTERVAL '153722867280' MINUTE
+READ	SELECT INTERVAL '-153722867280' MINUTE
+READ	SELECT INTERVAL '54.775807' SECOND
+READ	SELECT INTERVAL '-54.775807' SECOND
+READ	SELECT INTERVAL '1' DAY > INTERVAL '1' HOUR
+READ	SELECT INTERVAL '1 02' DAY TO HOUR = INTERVAL '02:10:55' HOUR TO SECOND
+READ	SELECT INTERVAL '1' YEAR < INTERVAL '1' MONTH
+READ	SELECT INTERVAL '-1-1' YEAR TO MONTH = INTERVAL '-13' MONTH
+READ	SELECT INTERVAL 1 MONTH > INTERVAL 20 DAYS
+READ	SELECT INTERVAL '1' DAY < '1'
+READ	SELECT INTERVAL '1' DAY = '1'
+READ	SELECT INTERVAL '1' DAY > '1'
+READ	SELECT '1' < INTERVAL '1' DAY
+READ	SELECT '1' = INTERVAL '1' DAY
+READ	SELECT '1' > INTERVAL '1' DAY
+READ	SELECT INTERVAL '1' YEAR < '1'
+READ	SELECT INTERVAL '1' YEAR = '1'
+READ	SELECT INTERVAL '1' YEAR > '1'
+READ	SELECT '1' < INTERVAL '1' YEAR
+READ	SELECT '1' = INTERVAL '1' YEAR
+READ	SELECT '1' > INTERVAL '1' YEAR
+READ	SELECT array(INTERVAL '1' YEAR, INTERVAL '1' MONTH)
+READ	SELECT array(INTERVAL '1' DAY, INTERVAL '01:01' HOUR TO MINUTE)
+READ	SELECT array(INTERVAL 1 MONTH, INTERVAL 20 DAYS)
+READ	SELECT coalesce(INTERVAL '1' YEAR, INTERVAL '1' MONTH)
+READ	SELECT coalesce(INTERVAL '1' DAY, INTERVAL '01:01' HOUR TO MINUTE)
+READ	SELECT coalesce(INTERVAL 1 MONTH, INTERVAL 20 DAYS)
+READ	SELECT abs(INTERVAL '-10' YEAR)
+READ	SELECT abs(INTERVAL -'1 02:03:04.123' DAY TO SECOND)
+READ	SELECT div(INTERVAL '1-1' YEAR TO MONTH, INTERVAL '1' YEAR)
+READ	SELECT div(INTERVAL '1-1' YEAR TO MONTH, INTERVAL '-1' MONTH)
+READ	SELECT div(INTERVAL '1 06' DAY TO HOUR, INTERVAL '1' DAY)
+READ	SELECT div(INTERVAL '1 06' DAY TO HOUR, INTERVAL '-1' HOUR)
+READ	SELECT div(INTERVAL '1' MONTH, INTERVAL '-1' DAY)
+READ	SELECT signum(INTERVAL '-10' YEAR)
+READ	SELECT signum(INTERVAL '10' MONTH)
+READ	SELECT signum(INTERVAL '0-0' YEAR TO MONTH)
+READ	SELECT signum(INTERVAL '-10' DAY)
+READ	SELECT signum(INTERVAL '10' HOUR)
+READ	SELECT signum(INTERVAL '0 0:0:0' DAY TO SECOND)
+READ	SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10)
+READ	SELECT width_bucket(INTERVAL '-1' YEAR, INTERVAL -'1-2' YEAR TO MONTH, INTERVAL '1-2' YEAR TO MONTH, 10)
+READ	SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10)
+READ	SELECT width_bucket(INTERVAL '-59' MINUTE, INTERVAL -'1 01' DAY TO HOUR, INTERVAL '1 2:3:4.001' DAY TO SECOND, 10)
+READ	SELECT interval 106751991 day 4 hour 0 minute 54.776 second

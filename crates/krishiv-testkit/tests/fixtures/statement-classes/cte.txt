@@ -1,0 +1,55 @@
+SESSION	create temporary view t as select * from values 0, 1, 2 as t(id)
+SESSION	create temporary view t2 as select * from values 0, 1 as t(id)
+SESSION	create temporary view t3 as select * from t
+DDL	create table t4(col1 TIMESTAMP)
+READ	WITH s AS (SELECT 1 FROM s) SELECT * FROM s
+READ	WITH r AS (SELECT (SELECT * FROM r))
+READ	WITH t AS (SELECT 1 FROM t) SELECT * FROM t
+READ	WITH t AS (SELECT 1) SELECT * FROM t3
+READ	WITH s1 AS (SELECT 1 FROM s2), s2 AS (SELECT 1 FROM s1) SELECT * FROM s1, s2
+READ	WITH t1 AS (SELECT * FROM t2), t2 AS (SELECT 2 FROM t1) SELECT * FROM t1 cross join t2
+READ	WITH CTE1 AS (
+READ	WITH t(x) AS (SELECT 1)
+READ	WITH t(x, y) AS (SELECT 1, 2)
+READ	WITH t(x, x) AS (SELECT 1, 2)
+PARSE_ERROR	WITH t() AS (SELECT 1)
+PARSE_ERROR	WITH
+READ	WITH t AS (SELECT 1 FROM non_existing_table)
+READ	SELECT count(*) FROM (
+READ	WITH w1(c1) AS
+READ	SELECT ( WITH cte(foo) AS ( VALUES(id) )
+READ	WITH same_name AS (SELECT 42)
+READ	WITH same_name(x) AS (SELECT 42)
+READ	WITH q AS (SELECT 'foo' AS x)
+READ	with cte as (select id as id_alias from t)
+READ	with r1 as (select * from r2),
+READ	SELECT * FROM
+READ	select (with q as (select 1 x) select * from q)
+READ	select 1 in (with q as (select 1) select * from q)
+READ	SELECT * FROM
+READ	WITH T1 as (select 1 a)
+READ	WITH TTtt as (select 1 a),
+READ	select
+READ	select
+READ	WITH q1 as (select 1 x)
+READ	WITH q1 as (select 1 x)
+PARSE_ERROR	with cte1 as (select 42), cte1 as (select 42) select * FROM cte1
+READ	with cte1 as (Select id as j from t)
+READ	with cte AS (SELECT * FROM va) SELECT * FROM cte
+READ	with cte as (select * from cte) select * from cte
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT
+READ	WITH cte AS (
+READ	SELECT * FROM (
+READ	WITH `a.b.c` AS (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	SELECT * FROM (
+READ	WITH cte AS (SELECT 1 AS id, 'test' AS COLNAME),
+READ	WITH cte AS (SELECT 1 AS id, 'test' AS COLNAME),
+SESSION	DROP VIEW IF EXISTS t
+SESSION	DROP VIEW IF EXISTS t2
+SESSION	DROP VIEW IF EXISTS t3
+DDL	DROP TABLE IF EXISTS t4

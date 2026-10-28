@@ -1,0 +1,9 @@
+DDL	create table inserttest (col1 int, col2 int /* NOT NULL */, col3 string /* default 'testing' */) using parquet
+WRITE	insert into inserttest  values (NULL, 3, 'testing')
+WRITE	insert into inserttest values (NULL, 5, 'testing')
+WRITE	insert into inserttest values (NULL, 5, 'test')
+WRITE	insert into inserttest values (NULL, 7, 'testing')
+READ	select * from inserttest
+WRITE	insert into inserttest values(30, 50, repeat('x', 10000))
+READ	select col1, col2, char_length(col3) from inserttest
+DDL	drop table inserttest

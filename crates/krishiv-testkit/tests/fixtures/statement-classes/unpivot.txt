@@ -1,0 +1,8 @@
+SESSION	create temporary view courseEarnings as select * from values
+READ	SELECT * FROM courseEarnings
+READ	SELECT * FROM courseEarnings
+READ	SELECT * FROM courseEarnings
+SESSION	create temporary view courseEarningsAndSales as select * from values
+READ	SELECT * FROM courseEarningsAndSales
+READ	SELECT * FROM courseEarningsAndSales
+READ	SELECT * FROM courseEarningsAndSales

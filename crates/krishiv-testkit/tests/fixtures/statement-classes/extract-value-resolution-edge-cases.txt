@@ -1,0 +1,8 @@
+DDL	CREATE TABLE t1(col1 STRUCT<a: STRING>, a STRING)
+READ	SELECT col1.a, a FROM t1 ORDER BY a
+READ	SELECT col1.a, a FROM t1 ORDER BY col1.a
+READ	SELECT split(col1, '-')[1] AS a FROM VALUES('a-b') ORDER BY split(col1, '-')[1]
+DDL	DROP TABLE t1
+READ	SELECT col.a FROM (SELECT null AS col) t
+READ	SELECT col[0] FROM (SELECT null AS col) t
+READ	SELECT col['key'] FROM (SELECT null AS col) t

@@ -1,0 +1,16 @@
+READ	SELECT vector_sum(col) FROM VALUES (array(1.0F, 2.0F, 3.0F)), (array(4.0F, 5.0F, 6.0F)) AS tab(col)
+READ	SELECT vector_avg(col) FROM VALUES (array(1.0F, 2.0F, 3.0F)), (array(3.0F, 4.0F, 5.0F)) AS tab(col)
+READ	SELECT category, vector_sum(embedding) AS sum_vector
+READ	SELECT category, vector_avg(embedding) AS avg_vector
+READ	SELECT vector_sum(col) FROM VALUES
+READ	SELECT vector_avg(col) FROM VALUES
+READ	SELECT vector_sum(col) FROM VALUES
+READ	SELECT vector_sum(col) FROM VALUES
+READ	SELECT key, vector_sum(vec) OVER (PARTITION BY grp) as sum_vec
+READ	SELECT key, vector_avg(vec) OVER (PARTITION BY grp) as avg_vec
+READ	SELECT vector_sum(col) FROM VALUES
+READ	SELECT vector_avg(col) FROM VALUES
+READ	SELECT vector_sum(col) FROM VALUES (array(1.0D, 2.0D)), (array(3.0D, 4.0D)) AS tab(col)
+READ	SELECT vector_avg(col) FROM VALUES (array(1, 2)), (array(3, 4)) AS tab(col)
+READ	SELECT vector_sum(col) FROM VALUES ('not an array'), ('also not an array') AS tab(col)
+READ	SELECT vector_avg(col) FROM VALUES (1.0F), (2.0F) AS tab(col)

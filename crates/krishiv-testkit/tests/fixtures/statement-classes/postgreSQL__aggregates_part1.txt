@@ -1,0 +1,57 @@
+READ	SELECT avg(four) AS avg_1 FROM onek
+READ	SELECT avg(a) AS avg_32 FROM aggtest WHERE a < 100
+READ	select CAST(avg(b) AS Decimal(10,3)) AS avg_107_943 FROM aggtest
+READ	SELECT sum(four) AS sum_1500 FROM onek
+READ	SELECT sum(a) AS sum_198 FROM aggtest
+READ	SELECT sum(b) AS avg_431_773 FROM aggtest
+READ	SELECT max(four) AS max_3 FROM onek
+READ	SELECT max(a) AS max_100 FROM aggtest
+READ	SELECT max(aggtest.b) AS max_324_78 FROM aggtest
+READ	SELECT stddev_pop(b) FROM aggtest
+READ	SELECT stddev_samp(b) FROM aggtest
+READ	SELECT var_pop(b) FROM aggtest
+READ	SELECT var_samp(b) FROM aggtest
+READ	SELECT stddev_pop(CAST(b AS Decimal(38,0))) FROM aggtest
+READ	SELECT stddev_samp(CAST(b AS Decimal(38,0))) FROM aggtest
+READ	SELECT var_pop(CAST(b AS Decimal(38,0))) FROM aggtest
+READ	SELECT var_samp(CAST(b AS Decimal(38,0))) FROM aggtest
+READ	SELECT var_pop(1.0), var_samp(2.0)
+READ	SELECT stddev_pop(CAST(3.0 AS Decimal(38,0))), stddev_samp(CAST(4.0 AS Decimal(38,0)))
+READ	select sum(CAST(null AS int)) from range(1,4)
+READ	select sum(CAST(null AS long)) from range(1,4)
+READ	select sum(CAST(null AS Decimal(38,0))) from range(1,4)
+READ	select sum(CAST(null AS DOUBLE)) from range(1,4)
+READ	select avg(CAST(null AS int)) from range(1,4)
+READ	select avg(CAST(null AS long)) from range(1,4)
+READ	select avg(CAST(null AS Decimal(38,0))) from range(1,4)
+READ	select avg(CAST(null AS DOUBLE)) from range(1,4)
+READ	select sum(CAST('NaN' AS DOUBLE)) from range(1,4)
+READ	select avg(CAST('NaN' AS DOUBLE)) from range(1,4)
+READ	SELECT avg(CAST(x AS DOUBLE)), var_pop(CAST(x AS DOUBLE))
+READ	SELECT avg(CAST(x AS DOUBLE)), var_pop(CAST(x AS DOUBLE))
+READ	SELECT avg(CAST(x AS DOUBLE)), var_pop(CAST(x AS DOUBLE))
+READ	SELECT avg(CAST(x AS DOUBLE)), var_pop(CAST(x AS DOUBLE))
+READ	SELECT avg(CAST(x AS DOUBLE)), var_pop(CAST(x AS DOUBLE))
+READ	SELECT avg(CAST(x AS DOUBLE)), var_pop(CAST(x AS DOUBLE))
+READ	SELECT regr_count(b, a) FROM aggtest
+READ	SELECT regr_sxx(b, a) FROM aggtest
+READ	SELECT regr_syy(b, a) FROM aggtest
+READ	SELECT regr_sxy(b, a) FROM aggtest
+READ	SELECT regr_avgx(b, a), regr_avgy(b, a) FROM aggtest
+READ	SELECT regr_r2(b, a) FROM aggtest
+READ	SELECT regr_slope(b, a), regr_intercept(b, a) FROM aggtest
+READ	SELECT covar_pop(b, a), covar_samp(b, a) FROM aggtest
+READ	SELECT corr(b, a) FROM aggtest
+SESSION	CREATE TEMPORARY VIEW regr_test AS SELECT * FROM VALUES (10,150),(20,250),(30,350),(80,540),(100,200) AS regr_test (x, y
+READ	SELECT count(*), sum(x), regr_sxx(y,x), sum(y),regr_syy(y,x), regr_sxy(y,x)
+READ	SELECT count(*), sum(x), regr_sxx(y,x), sum(y),regr_syy(y,x), regr_sxy(y,x)
+READ	SELECT count(*), sum(x), regr_sxx(y,x), sum(y),regr_syy(y,x), regr_sxy(y,x)
+READ	SELECT count(*), sum(x), regr_sxx(y,x), sum(y),regr_syy(y,x), regr_sxy(y,x)
+SESSION	DROP VIEW regr_test
+READ	SELECT count(four) AS cnt_1000 FROM onek
+READ	SELECT count(DISTINCT four) AS cnt_4 FROM onek
+READ	select ten, count(*), sum(four) from onek
+READ	select ten, count(four), sum(DISTINCT four) from onek
+READ	select ten, sum(distinct four) from onek a
+READ	select ten, sum(distinct four) from onek a
+READ	select

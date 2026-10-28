@@ -203,6 +203,68 @@ pub fn plan_handles_in(rel_path: &str, text: &str) -> Vec<(usize, &'static str)>
     out
 }
 
+/// Whether `code` (a line without its comment) ends a match arm with the
+/// `Admin` statement class: `=> StatementClass::Admin`, or `=> Admin` in a
+/// file that names `StatementClass`.
+fn is_admin_arm(code: &str, names_class: bool) -> bool {
+    let ends_word = |rest: &str| {
+        !rest
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let compact: String = code.split_whitespace().collect::<Vec<_>>().join(" ");
+    let found = |needle: &str| {
+        compact
+            .match_indices(needle)
+            .any(|(i, _)| ends_word(&compact[i + needle.len()..]))
+    };
+    found("=> StatementClass::Admin") || names_class && found("=> Admin")
+}
+
+/// Match arms that classify a statement as `Admin` without a
+/// `// cluster-scope: <reason>` comment on the arm or in the comments and
+/// pattern lines above it (back to the end of the previous arm), as
+/// 1-based lines. `Admin` is the fail-closed class: an arm may choose it
+/// only with a stated reason, so it never becomes a silent catch-all.
+#[must_use]
+pub fn unjustified_admin_arms(text: &str) -> Vec<usize> {
+    let names_class = text.contains("StatementClass");
+    let lines: Vec<&str> = text.lines().collect();
+    let justified = |line: &str| {
+        line.split_once("// cluster-scope:")
+            .is_some_and(|(_, reason)| !reason.trim().is_empty())
+    };
+    let mut out = Vec::new();
+    for (n, line) in lines.iter().enumerate() {
+        let code = line.split("//").next().unwrap_or_default();
+        if !is_admin_arm(code, names_class) {
+            continue;
+        }
+        let mut ok = justified(line);
+        for above in lines[..n].iter().rev() {
+            if ok {
+                break;
+            }
+            let trimmed = above.trim();
+            if trimmed.starts_with("//") {
+                ok = justified(trimmed);
+                continue;
+            }
+            let code = trimmed.split("//").next().unwrap_or_default().trim_end();
+            if code.is_empty() || code.ends_with(',') || code.ends_with('{') || code.ends_with('}')
+            {
+                break;
+            }
+            ok = justified(trimmed);
+        }
+        if !ok {
+            out.push(n + 1);
+        }
+    }
+    out
+}
+
 /// Banned identifiers found in `text` as `(line number, identifier)`.
 #[must_use]
 pub fn banned_idents_in(text: &str) -> Vec<(usize, &'static str)> {

@@ -1,0 +1,34 @@
+SESSION	create temporary view t1 as select * from values
+SESSION	create temporary view t2 as select * from values
+SESSION	create temporary view t3 as select * from values
+SESSION	create temporary view s1 as select * from values
+SESSION	create temporary view s2 as select * from values
+SESSION	create temporary view s3 as select * from values
+READ	SELECT t1a, t1b, t1c, t3a, t3b, t3c
+READ	SELECT    Count(DISTINCT(t1a)),
+READ	SELECT     Count(DISTINCT(t1a))
+READ	SELECT          t1a,
+READ	SELECT     Count(DISTINCT(t1a)),
+READ	SELECT   Count(DISTINCT(t1a))
+READ	SELECT   Count(DISTINCT(t1a)),
+READ	SELECT   Count(DISTINCT(t1a)),
+READ	SELECT   Count(DISTINCT(t1a)),
+READ	SELECT     Count(DISTINCT(t1a)),
+READ	SELECT    t1a,
+READ	SELECT s1.id FROM s1
+READ	SELECT s1.id FROM s1
+READ	SELECT s1.id FROM s1
+READ	SELECT s1.id AS id2 FROM s1
+READ	SELECT s1.id as id2 FROM s1
+READ	SELECT s1.id, s2.id as id2 FROM s1
+READ	SELECT s1.id, s2.id as id2 FROM s1
+READ	SELECT s1.id, s2.id AS id2 FROM s1
+READ	SELECT s1.id FROM s1
+READ	SELECT s1.id AS id2 FROM s1
+READ	SELECT s1.id AS id2 FROM s1
+READ	SELECT s1.id, s2.id AS id2 FROM s1
+READ	SELECT s1.id, s2.id AS id2 FROM s1
+READ	SELECT s1.id, s2.id AS id2 FROM s1
+SESSION	DROP VIEW s1
+SESSION	DROP VIEW s2
+SESSION	DROP VIEW s3

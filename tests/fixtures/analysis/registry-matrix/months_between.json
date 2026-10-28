@@ -9,14 +9,6 @@
       "reason": "SELECT months_between('1997-02-28 10:30:00', '1996-10-30', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "months_between#1de399a111e8/ansi_on",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', map('a', 1), false) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#1de399a111e8/ansi_off",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', map('a', 1), false) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "months_between#3b4d3579db12/ansi_on",
       "reason": "SELECT months_between(INTERVAL '1 02:03:04' DAY TO SECOND, '1996-10-30') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -61,32 +53,8 @@
       "reason": "SELECT months_between(INTERVAL '1-2' YEAR TO MONTH, '1996-10-30') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "months_between#73ccd3b7555a/ansi_on",
-      "reason": "SELECT months_between(map('a', 1), '1996-10-30') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#73ccd3b7555a/ansi_off",
-      "reason": "SELECT months_between(map('a', 1), '1996-10-30') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "months_between#80bf50d60eb0/ansi_off",
       "reason": "SELECT months_between('1997-02-28 10:30:00', '1996-10-30', '1') | resolves to double where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#881804bdfecc/ansi_on",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#881804bdfecc/ansi_off",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#8aeb1b1a9d08/ansi_on",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', '1996-10-30', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#8aeb1b1a9d08/ansi_off",
-      "reason": "SELECT months_between('1997-02-28 10:30:00', '1996-10-30', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "months_between#99ba588b014a/ansi_on",
@@ -95,14 +63,6 @@
     {
       "id": "months_between#99ba588b014a/ansi_off",
       "reason": "SELECT months_between(INTERVAL '1 02:03:04' DAY TO SECOND, '1996-10-30', false) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#ad7e3fced174/ansi_on",
-      "reason": "SELECT months_between(map('a', 1), '1996-10-30', false) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "months_between#ad7e3fced174/ansi_off",
-      "reason": "SELECT months_between(map('a', 1), '1996-10-30', false) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "months_between#c35328709bd8/ansi_on",

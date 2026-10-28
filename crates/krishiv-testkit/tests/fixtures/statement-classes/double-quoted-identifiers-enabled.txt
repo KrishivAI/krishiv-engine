@@ -1,0 +1,30 @@
+READ	SELECT 1 FROM "not_exist"
+SESSION	USE SCHEMA "not_exist"
+DDL	ALTER TABLE "not_exist" ADD COLUMN not_exist int
+DDL	ALTER TABLE not_exist ADD COLUMN "not_exist" int
+READ	SELECT 1 AS "not_exist" FROM not_exist
+READ	SELECT 1 FROM not_exist AS X("hello")
+READ	SELECT "not_exist"()
+READ	SELECT "not_exist".not_exist()
+READ	select 1 from "not_""exists"
+READ	SELECT 1 FROM `hello`
+SESSION	USE SCHEMA `not_exist`
+DDL	ALTER TABLE `not_exist` ADD COLUMN not_exist int
+DDL	ALTER TABLE not_exist ADD COLUMN `not_exist` int
+READ	SELECT 1 AS `not_exist` FROM `not_exist`
+READ	SELECT 1 FROM not_exist AS X(`hello`)
+READ	SELECT `not_exist`()
+READ	SELECT `not_exist`.not_exist()
+READ	SELECT "hello"
+PARSE_ERROR	CREATE TEMPORARY VIEW v(c1 COMMENT "hello") AS SELECT 1
+SESSION	DROP VIEW v
+PARSE_ERROR	SELECT INTERVAL "1" YEAR
+READ	SELECT 'hello'
+SESSION	CREATE TEMPORARY VIEW v(c1 COMMENT 'hello') AS SELECT 1
+SESSION	DROP VIEW v
+READ	SELECT INTERVAL '1' YEAR
+DDL	CREATE SCHEMA "myschema"
+SESSION	CREATE TEMPORARY VIEW "myview"("c1") AS
+READ	SELECT "a1" AS "a2" FROM "myview" AS "atab"("a1")
+DDL	DROP TABLE "myview"
+DDL	DROP SCHEMA "myschema"

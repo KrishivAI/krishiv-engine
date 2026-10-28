@@ -19,7 +19,7 @@ use krishiv_common::error::{
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 use krishiv_exec::FileWriteSink;
-use krishiv_exec::files::{FileReads, ObjectPaths, PathLocator as _};
+use krishiv_exec::files::{FileReads, LocalPaths, ObjectPaths, PathLocator as _};
 use krishiv_exec::physical::{SpillScopes, WorkerContext};
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
@@ -32,16 +32,18 @@ use krishiv_io::csv::CsvFormat;
 use krishiv_io::parquet::ParquetFormat;
 use krishiv_io::{
     DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId, StoreRegistry,
+    parse_object_url,
 };
 use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
-    AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _, BuiltinFunctions,
-    DefaultAnalyzer, FunctionRegistry, Principal, ResolutionConf, SparkProfile, TableColumn,
+    AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
+    BuiltinFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
+    Securable, SparkProfile, TableColumn, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
-use krishiv_sql::{Frontend, ParserOptions};
+use krishiv_sql::{Frontend, ParserOptions, StatementClass};
 use krishiv_types::DataType;
 use krishiv_types::batch::{Batch, Weights};
 use object_store::ObjectStore;
@@ -100,7 +102,10 @@ pub(crate) struct SessionState {
     pub(crate) catalog: Arc<SessionCatalog>,
     pub(crate) variables: Arc<SessionVariables>,
     profile: SparkProfile,
-    principal: Arc<Principal>,
+    /// Fixed for the session's life: caches and fingerprints never mix
+    /// identities (a new identity gets a new session).
+    pub(crate) principal: Arc<Principal>,
+    pub(crate) policy: Arc<dyn AccessPolicy>,
     functions: Arc<dyn FunctionRegistry>,
     executor: Arc<dyn Executor>,
     runner: QueryRunner,
@@ -138,6 +143,7 @@ pub struct SessionBuilder {
     pairs: Vec<(String, String)>,
     profile: SparkProfile,
     principal: Option<Principal>,
+    policy: Option<Arc<dyn AccessPolicy>>,
     executor: Option<Arc<dyn Executor>>,
     functions: Option<Arc<dyn FunctionRegistry>>,
 }
@@ -187,6 +193,26 @@ impl SessionBuilder {
     /// ```
     pub fn principal(mut self, principal: Principal) -> Self {
         self.principal = Some(principal);
+        self
+    }
+
+    /// The access policy every statement is checked against (default:
+    /// [`AllowAll`]): reads during analysis, writes and DDL before they
+    /// change anything, all failing closed with
+    /// `KRISHIV_INSUFFICIENT_PERMISSIONS`. Like the principal, it is fixed
+    /// for the session's life.
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use krishiv_session::{DenyAll, Session};
+    ///
+    /// let s = Session::builder().access_policy(Arc::new(DenyAll)).build()?;
+    /// let e = futures::executor::block_on(s.sql("DROP TABLE t")).unwrap_err();
+    /// assert_eq!(e.error_class().name(), "KRISHIV_INSUFFICIENT_PERMISSIONS");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn access_policy(mut self, policy: Arc<dyn AccessPolicy>) -> Self {
+        self.policy = Some(policy);
         self
     }
 
@@ -250,6 +276,7 @@ impl SessionBuilder {
                 variables: Arc::new(SessionVariables::default()),
                 profile: self.profile,
                 principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
+                policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
                 functions: self
                     .functions
                     .unwrap_or_else(|| Arc::new(BuiltinFunctions::new())),
@@ -281,6 +308,7 @@ impl Session {
             pairs: Vec::new(),
             profile: SparkProfile::default(),
             principal: None,
+            policy: None,
             executor: None,
             functions: None,
         }
@@ -348,22 +376,37 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        // Before any side effect: what the statement writes, creates or
+        // drops (its reads are checked by analysis, first thing).
+        let class = krishiv_sql::classify(&statement);
+        self.authorize_statement(&statement, class, &env).await?;
+        self.run_statement(statement, env, query, &redacted).await
+    }
+
+    /// Runs the parsed, authorized `statement`.
+    async fn run_statement(
+        &self,
+        statement: Statement,
+        env: QueryEnv,
+        query: &str,
+        redacted: &RedactedSql,
+    ) -> Result<DataFrame, KrishivError> {
         match statement {
             Statement::Query(q) => {
                 let plan = krishiv_sql::lower(&q, SourceId(0))
-                    .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+                    .map_err(|e| sql_context(e.error, redacted, e.span.start, e.span.end))?;
                 let df = DataFrame::new(self.clone(), Arc::clone(plan.root()));
-                df.analyzed_in_with_text(env, Some(&redacted)).await?;
+                df.analyzed_in_with_text(env, Some(redacted)).await?;
                 Ok(df)
             }
             Statement::Explain(e) => self.explain_statement(&e).await,
-            Statement::Set(s) => self.exec_set(&s, &redacted).await,
+            Statement::Set(s) => self.exec_set(&s, redacted).await,
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
             Statement::DropView(v) => self.exec_drop_view(&v).await,
-            Statement::DeclareVariable(v) => self.exec_declare(&v, query, &redacted).await,
-            Statement::SetVariable(v) => self.exec_set_variable(&v, query, &redacted).await,
-            Statement::DropVariable(v) => self.exec_drop_variable(&v, &redacted).await,
+            Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
+            Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
+            Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
@@ -611,7 +654,7 @@ impl Session {
             profile: self.state.profile,
             conf: resolution,
             principal: Arc::clone(&self.state.principal),
-            policy: Arc::new(AllowAll),
+            policy: Arc::clone(&self.state.policy),
             catalogs: Arc::new(QueryCatalogs(Arc::clone(&catalog))),
             functions: Arc::clone(&self.state.functions),
             sql: Some(Arc::new(Frontend { options: parser })),
@@ -649,10 +692,12 @@ impl Session {
             env.analysis.conf.case_sensitive,
         )?;
         let plan = Plan::try_new(plan)?;
-        DefaultAnalyzer
+        let analyzed = DefaultAnalyzer
             .analyze(&plan, &env.analysis)
             .await
-            .map_err(|e| attach_analysis(e, text))
+            .map_err(|e| attach_analysis(e, text));
+        // Analysis checks every read: its denials are the reads' denials.
+        crate::access::audit(self, StatementClass::Read, analyzed)
     }
 
     /// The physical plan of `analyzed`, once the files it scans are
@@ -825,8 +870,31 @@ impl Session {
             stores,
         )
         .locate_with_options(text, &options)?;
+        // The directory as it physically is (links in its existing part
+        // resolved): the policy is asked about the directory that is
+        // written, never about a name that a link sends elsewhere.
+        let at = crate::access::physical(at)?;
         let io = self.state.io.context();
-        let Some(write) = DirectoryWrite::begin(&io, at.store, at.path, mode, job_uuid()).await?
+        // Before anything is written or replaced (an overwrite deletes
+        // first): `Modify` and `Create`, both whether or not the path
+        // exists, so a denial never tells whether it does.
+        let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
+        for privilege in [Privilege::Modify, Privilege::Create] {
+            let r = authorize(
+                &*self.state.policy,
+                &self.state.principal,
+                &securable,
+                privilege,
+            )
+            .await;
+            crate::access::audit(self, StatementClass::Write, r)?;
+        }
+        // A link swapped into the checked path since fails the write
+        // before anything is replaced, and again before the commit deletes
+        // what an overwrite replaces.
+        crate::access::still_physical(self, &at)?;
+        let Some(write) =
+            DirectoryWrite::begin(&io, at.store.clone(), at.path.clone(), mode, job_uuid()).await?
         else {
             // `ignore` found the path: nothing is written.
             return Ok(());
@@ -846,6 +914,7 @@ impl Session {
             batch?;
         }
         drop(rows);
+        crate::access::still_physical(self, &at)?;
         write
             .commit(&io, format.as_ref(), schema, &parsed, sink.files())
             .await?;
@@ -854,6 +923,21 @@ impl Session {
 }
 
 impl Session {
+    /// `path` in the qualified form reads and writes use (`file:/a/b`),
+    /// which the access policy is asked about.
+    pub(crate) fn qualify_path(&self, path: &str) -> Result<String, KrishivError> {
+        // No store is built here: cloud paths qualify through their canonical
+        // display (as reads qualify them), local paths through `LocalPaths`.
+        if let Ok(url) = parse_object_url(path) {
+            return Ok(url.display);
+        }
+        Ok(
+            LocalPaths::new(StoreId::new(LOCAL_STORE), self.state.cwd.clone())
+                .locate(path)?
+                .display,
+        )
+    }
+
     /// What a query's plans are instantiated with in this process: the
     /// query's tables, and its spill scope under the session's spill
     /// directory (created at instantiation).

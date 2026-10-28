@@ -1,0 +1,55 @@
+SESSION	create temp view gstest1(a,b,v)
+DDL	create table gstest2 (a integer, b integer, c integer, d integer,
+WRITE	insert into gstest2 values
+DDL	create table gstest3 (a integer, b integer, c integer, d integer) using parquet
+WRITE	insert into gstest3 values
+DDL	create table gstest4(id integer, v integer,
+WRITE	insert into gstest4
+DDL	create table gstest_empty (a integer, b integer, v integer) using parquet
+READ	select a, b, grouping(a), grouping(b), sum(v), count(*), max(v)
+READ	select a, b, grouping(a), grouping(b), sum(v), count(*), max(v)
+READ	select a, b, grouping(a), grouping(b), sum(v), count(*), max(v)
+READ	select a, b, grouping(a), grouping(b), sum(v), count(*), max(v)
+READ	select a, b, sum(c), sum(sum(c)) over (order by a,b) as rsum
+READ	select a, b, sum(v), count(*) from gstest_empty group by grouping sets ((a,b),a)
+READ	select a, b, sum(v), count(*) from gstest_empty group by grouping sets ((a,b),())
+READ	select a, b, sum(v), count(*) from gstest_empty group by grouping sets ((a,b),(),(),())
+READ	select sum(v), count(*) from gstest_empty group by grouping sets ((),(),())
+READ	select t1.a, t2.b, sum(t1.v), count(*) from gstest_empty t1, gstest_empty t2
+READ	select t1.a, t2.b, grouping(t1.a), grouping(t2.b), sum(t1.v), max(t2.a)
+READ	select t1.a, t2.b, grouping(t1.a), grouping(t2.b), sum(t1.v), max(t2.a)
+READ	select a, b, grouping(a), grouping(b), sum(t1.v), max(t2.c)
+READ	select four, x
+READ	select four, x || 'x'
+READ	select (x+y)*1, sum(z)
+SESSION	CREATE TEMP VIEW int8_tbl AS SELECT * FROM VALUES
+READ	select x, not x as not_x, q2 from
+SESSION	DROP VIEW int8_tbl
+READ	select ten, sum(distinct four) from onek a
+READ	select a,count(*) from gstest2 group by rollup(a) order by a
+READ	select a,count(*) from gstest2 group by rollup(a) having a is distinct from 1 order by a
+READ	select ten, grouping(ten) from onek
+READ	select ten, grouping(ten) from onek
+READ	select ten, grouping(ten) from onek
+READ	select ten, grouping(ten) from onek
+READ	select ten, sum(distinct four) filter (where string(four) like '123') from onek a
+READ	select count(*) from gstest4 group by rollup(unhashable_col,unsortable_col)
+READ	select a, b, grouping(a), grouping(b), sum(v), count(*), max(v)
+READ	select a, b, grouping(a), grouping(b), sum(v), count(*), max(v)
+READ	select unsortable_col, count(*)
+READ	select unhashable_col, unsortable_col,
+READ	select unhashable_col, unsortable_col,
+READ	select a, b, sum(v), count(*) from gstest_empty group by grouping sets ((a,b),a)
+READ	select a, b, sum(v), count(*) from gstest_empty group by grouping sets ((a,b),())
+READ	select a, b, sum(v), count(*) from gstest_empty group by grouping sets ((a,b),(),(),())
+READ	select sum(v), count(*) from gstest_empty group by grouping sets ((),(),())
+READ	select a, b, grouping(a), grouping(b), sum(v), count(*), max(v)
+READ	select a, b, sum(c), sum(sum(c)) over (order by a,b) as rsum
+READ	SELECT a, b, count(*), max(a), max(b) FROM gstest3 GROUP BY GROUPING SETS(a, b,()) ORDER BY a, b
+READ	select v||'a', case grouping(v||'a') when 1 then 1 else 0 end, count(*)
+READ	select v||'a', case when grouping(v||'a') = 1 then 1 else 0 end, count(*)
+SESSION	DROP VIEW gstest1
+DDL	DROP TABLE gstest2
+DDL	DROP TABLE gstest3
+DDL	DROP TABLE gstest4
+DDL	DROP TABLE gstest_empty
