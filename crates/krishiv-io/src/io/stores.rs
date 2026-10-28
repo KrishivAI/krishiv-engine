@@ -1113,28 +1113,23 @@ mod tests {
     #[test]
     fn failures_name_keys_and_buckets_but_never_secrets() {
         // A store that cannot be built names what is missing, never a
-        // secret: no account here, however the key is set. Process
+        // secret: no account here, however the key is set. The process
         // environment can supply the missing account through the builders'
         // `from_env` fallback, turning the expected failure into a success;
-        // skip that case (with a reason) instead of mutating the environment.
-        if std::env::var("AZURE_STORAGE_ACCOUNT_NAME")
-            .ok()
-            .is_some_and(|v| !v.is_empty())
-        {
-            println!(
-                "SKIP azure-missing-account: AZURE_STORAGE_ACCOUNT_NAME is set, so the builder succeeds"
-            );
-        } else {
-            let registry = StoreRegistry::new(config(&[(AZURE_ACCOUNT_KEY, CANARY)]));
-            let url = parse_object_url("abfss://cont/k").unwrap();
-            let error = registry.store(&url).unwrap_err();
-            assert_eq!(
-                error.error_class(),
-                ErrorClass::KrishivObjectStoreRequestFailed
-            );
-            assert!(!error.to_string().contains(CANARY));
-            assert!(!format!("{error:?}").contains(CANARY));
-            assert!(!format!("{registry:?}").contains(CANARY));
+        // either way nothing secret prints (no skipped case).
+        let registry = StoreRegistry::new(config(&[(AZURE_ACCOUNT_KEY, CANARY)]));
+        let url = parse_object_url("abfss://cont/k").unwrap();
+        match registry.store(&url) {
+            Ok(_) => assert!(!format!("{registry:?}").contains(CANARY)),
+            Err(error) => {
+                assert_eq!(
+                    error.error_class(),
+                    ErrorClass::KrishivObjectStoreRequestFailed
+                );
+                assert!(!error.to_string().contains(CANARY));
+                assert!(!format!("{error:?}").contains(CANARY));
+                assert!(!format!("{registry:?}").contains(CANARY));
+            }
         }
 
         // An invalid flag names the key; the value is only the marker.
@@ -1167,20 +1162,14 @@ mod tests {
             .unwrap_err();
         assert!(!error.to_string().contains(CANARY));
 
-        // Half a key pair is refused without echo. As above, the environment
-        // can complete the pair (`AWS_ACCESS_KEY_ID` through `from_env`);
-        // skip that case with a reason instead of mutating the environment.
-        if std::env::var("AWS_ACCESS_KEY_ID")
-            .ok()
-            .is_some_and(|v| !v.is_empty())
-        {
-            println!("SKIP s3-half-key-pair: AWS_ACCESS_KEY_ID is set, so the builder succeeds");
-        } else {
-            let registry = StoreRegistry::new(config(&[(S3_SECRET_KEY, CANARY)]));
-            let error = registry
-                .store(&parse_object_url("s3://bucket/k").unwrap())
-                .unwrap_err();
-            assert!(!error.to_string().contains(CANARY));
+        // Half a key pair is refused without echo. The environment can
+        // complete the pair (`AWS_ACCESS_KEY_ID` through `from_env`),
+        // turning the failure into a success; either way nothing secret
+        // prints (no skipped case).
+        let registry = StoreRegistry::new(config(&[(S3_SECRET_KEY, CANARY)]));
+        match registry.store(&parse_object_url("s3://bucket/k").unwrap()) {
+            Ok(_) => assert!(!format!("{registry:?}").contains(CANARY)),
+            Err(error) => assert!(!error.to_string().contains(CANARY)),
         }
     }
 

@@ -2,10 +2,11 @@
 //! Parquet round-trips through cloud object stores, against emulators
 //! (P2-T084).
 //!
-//! Each test runs only when its endpoint variable is set and skips with a
-//! printed reason otherwise. The tests never start or stop emulators; point
-//! them at one that is already running and create the bucket or container
-//! first:
+//! Each test runs the full round-trip when its endpoint variable is set,
+//! and otherwise asserts the offline behaviour (store construction touches
+//! no network; misconfiguration fails with the exact config error). The
+//! tests never start or stop emulators; point them at one that is already
+//! running and create the bucket or container first:
 //!
 //! - MinIO: `KRISHIV_TEST_S3_ENDPOINT=http://127.0.0.1:9000`, credentials
 //!   `minioadmin`/`minioadmin`, bucket `krishiv-test`
@@ -35,6 +36,7 @@ use arrow_array::{Int32Array, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use krishiv_common::config::Config;
+use krishiv_common::error::ErrorClass;
 use krishiv_io::{FileRef, IoConfig, IoScheduler, StoreRegistry};
 use object_store::path::Path;
 
@@ -185,9 +187,27 @@ fn ensure_gcs_bucket(endpoint: &str, bucket: &str) {
 #[tokio::test]
 async fn s3_round_trip() {
     let Some(endpoint) = endpoint("KRISHIV_TEST_S3_ENDPOINT") else {
-        println!(
-            "SKIP s3_round_trip: KRISHIV_TEST_S3_ENDPOINT is not set (MinIO, e.g. http://127.0.0.1:9000; create the bucket first: mc mb local/krishiv-test)"
-        );
+        // No emulator in this environment: store construction is still
+        // offline (no I/O) and misconfiguration still fails with the exact
+        // config error.
+        let config = test_config(&[
+            ("fs.s3a.endpoint", "http://127.0.0.1:1"),
+            ("fs.s3a.access.key", "minioadmin"),
+            ("fs.s3a.secret.key", "minioadmin"),
+            ("fs.s3a.path.style.access", "true"),
+            ("fs.s3a.endpoint.region", "us-east-1"),
+        ]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        let (_, _, display) = registry.ensure(&sched, "s3a://krishiv-test/k").unwrap();
+        assert_eq!(display, "s3a://krishiv-test/k");
+        let bad = test_config(&[("fs.s3a.path.style.access", "banana")]);
+        let bad_sched = IoScheduler::new(IoConfig::from_config(&bad));
+        let bad_registry = StoreRegistry::new(bad);
+        let err = bad_registry
+            .ensure(&bad_sched, "s3a://krishiv-test/k")
+            .unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::KrishivInvalidConfigValue);
         return;
     };
     write_then_read(
@@ -206,9 +226,34 @@ async fn s3_round_trip() {
 #[tokio::test]
 async fn gcs_round_trip() {
     let Some(endpoint) = endpoint("KRISHIV_TEST_GCS_ENDPOINT") else {
-        println!(
-            "SKIP gcs_round_trip: KRISHIV_TEST_GCS_ENDPOINT is not set (fake-gcs-server, e.g. http://127.0.0.1:4443)"
-        );
+        // No emulator in this environment: store construction is still
+        // offline (no I/O) and conflicting credentials are still refused.
+        let config = test_config(&[
+            ("fs.gs.storage.root.url", "http://127.0.0.1:1"),
+            (
+                "fs.gs.auth.service.account.json",
+                r#"{"private_key": "key", "private_key_id": "id", "client_email": "test@example.com", "disable_oauth": true}"#,
+            ),
+        ]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        let (_, _, display) = registry.ensure(&sched, "gs://krishiv-test/k").unwrap();
+        assert_eq!(display, "gs://krishiv-test/k");
+        let bad = test_config(&[
+            (
+                "fs.gs.auth.service.account.json.keyfile",
+                "/tmp/krishiv-test-key.json",
+            ),
+            (
+                "fs.gs.auth.service.account.json",
+                r#"{"private_key": "key", "private_key_id": "id", "client_email": "test@example.com", "disable_oauth": true}"#,
+            ),
+        ]);
+        let bad_sched = IoScheduler::new(IoConfig::from_config(&bad));
+        let bad_registry = StoreRegistry::new(bad);
+        bad_registry
+            .ensure(&bad_sched, "gs://krishiv-test/k")
+            .unwrap_err();
         return;
     };
     ensure_gcs_bucket(&endpoint, "krishiv-test");
@@ -228,8 +273,41 @@ async fn gcs_round_trip() {
 #[tokio::test]
 async fn azure_round_trip() {
     let Some(endpoint) = endpoint("KRISHIV_TEST_AZURE_ENDPOINT") else {
-        println!(
-            "SKIP azure_round_trip: KRISHIV_TEST_AZURE_ENDPOINT is not set (Azurite, e.g. http://127.0.0.1:10000/devstoreaccount1; create the container first: az storage container create --name krishiv-test)"
+        // No emulator in this environment: store construction is still
+        // offline (no I/O) and a malformed SAS token is still refused with
+        // the exact request error.
+        let config = test_config(&[
+            ("fs.azure.endpoint", "http://127.0.0.1:1/devstoreaccount1"),
+            ("fs.azure.account.name", "devstoreaccount1"),
+            (
+                "fs.azure.account.key.devstoreaccount1",
+                "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+            ),
+        ]);
+        let sched = IoScheduler::new(IoConfig::from_config(&config));
+        let registry = StoreRegistry::new(config);
+        let (_, _, display) = registry
+            .ensure(
+                &sched,
+                "abfss://krishiv-test@devstoreaccount1.dfs.core.windows.net/k",
+            )
+            .unwrap();
+        assert_eq!(
+            display,
+            "abfss://krishiv-test@devstoreaccount1.dfs.core.windows.net/k"
+        );
+        let bad = test_config(&[
+            ("fs.azure.account.name", "acct"),
+            ("fs.azure.sas.cont.acct", "not-a-sas-token"),
+        ]);
+        let bad_sched = IoScheduler::new(IoConfig::from_config(&bad));
+        let bad_registry = StoreRegistry::new(bad);
+        let err = bad_registry
+            .ensure(&bad_sched, "abfss://cont@acct.dfs.core.windows.net/k")
+            .unwrap_err();
+        assert_eq!(
+            err.error_class(),
+            ErrorClass::KrishivObjectStoreRequestFailed
         );
         return;
     };
