@@ -16,6 +16,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_schema::SchemaRef;
 use futures::future::BoxFuture;
+use krishiv_io::split::FilePartition;
 use krishiv_io::{
     ColumnPath, FieldMapping, FileRef, MetadataCols, PushdownExpr, RowLevel, RowSelection,
     ScanFilter,
@@ -139,6 +140,31 @@ pub trait ScanPushdown: Send + Sync {
     /// `INTERNAL_ERROR` for a projection path that does not exist or a
     /// selection the scan cannot honour.
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>>;
+    /// The same scan reading exactly `files` in `partitions` (split file
+    /// indexes refer to the files), as a distributed task does. The default
+    /// refuses: only file scans honour it.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a scan that does not read files.
+    fn with_file_splits(
+        &self,
+        files: Vec<FileRef>,
+        partitions: Vec<FilePartition>,
+    ) -> Result<Arc<dyn ScanPushdown>> {
+        let _ = (files, partitions);
+        Err(internal("this scan does not read files".to_owned()))
+    }
+    /// The same scan reading exactly `batches`, as a distributed task does.
+    /// The default refuses: only in-memory scans honour it.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a scan that does not read in-memory batches.
+    fn with_memory_batches(&self, batches: Vec<Batch>) -> Result<Arc<dyn ScanPushdown>> {
+        let _ = batches;
+        Err(internal(
+            "this scan does not read in-memory batches".to_owned(),
+        ))
+    }
     /// The schema of the batches a source built with `pushdowns` returns,
     /// without building it (planning reads it; the source is built when the
     /// plan is instantiated). The default builds the source.
@@ -375,6 +401,29 @@ impl ScanPushdown for MemoryScan {
 
     fn filter_pushdown(&self, _filter: &PushedFilter) -> FilterPushdown {
         FilterPushdown::Exact
+    }
+
+    fn with_memory_batches(&self, batches: Vec<Batch>) -> Result<Arc<dyn ScanPushdown>> {
+        if let Some(bad) = batches
+            .iter()
+            .find(|b| b.schema().fields() != self.table.fields())
+        {
+            return Err(internal(format!(
+                "scan batch has fields {:?}, expected {:?}",
+                bad.schema().fields(),
+                self.table.fields()
+            )));
+        }
+        Ok(Arc::new(Self {
+            table: Arc::clone(&self.table),
+            batches: batches.into(),
+            projection: self.projection.clone(),
+            filters: self.filters.clone(),
+            limit: self.limit,
+            output: Arc::clone(&self.output),
+            rows_read: AtomicU64::new(0),
+            runtime: self.runtime.clone(),
+        }))
     }
 
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>> {

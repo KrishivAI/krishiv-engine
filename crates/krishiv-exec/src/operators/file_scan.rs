@@ -122,8 +122,21 @@ impl FileScan {
 
     /// The same scan reading exactly `partitions` (split file indexes refer
     /// to the listed files), as a distributed task does.
+    ///
+    /// Prefer [`Self::with_file_splits`] when the files differ too: split
+    /// file indexes always refer to the files the scan was given.
     #[must_use]
     pub fn with_partitions(mut self, partitions: Vec<FilePartition>) -> Self {
+        self.partitions = Partitions::Given(partitions.into());
+        self
+    }
+
+    /// The same scan reading exactly `files` in `partitions` (split file
+    /// indexes refer to `files`), as a distributed task does: the listed
+    /// files with their versions pinned.
+    #[must_use]
+    pub fn with_file_splits(mut self, files: Vec<FileRef>, partitions: Vec<FilePartition>) -> Self {
+        self.files = files.into();
         self.partitions = Partitions::Given(partitions.into());
         self
     }
@@ -135,6 +148,25 @@ impl FileScan {
     /// As [`ScanPushdown::build`].
     pub fn source(&self, pushdowns: ScanPushdowns) -> Result<FileScanSource> {
         FileScanSource::new(self, pushdowns)
+    }
+
+    /// The listed files, in listing order (split file indexes refer to
+    /// them).
+    #[must_use]
+    pub fn files(&self) -> &[FileRef] {
+        &self.files
+    }
+
+    /// The format the files are read with.
+    #[must_use]
+    pub fn format(&self) -> &Arc<dyn FileFormat> {
+        &self.format
+    }
+
+    /// The parsed read options.
+    #[must_use]
+    pub fn format_options(&self) -> &FormatOptions {
+        &self.format_options
     }
 
     fn plan(&self) -> Arc<[FilePartition]> {
@@ -181,6 +213,14 @@ impl ScanPushdown for FileScan {
 
     fn build(&self, pushdowns: ScanPushdowns) -> Result<Arc<dyn Source>> {
         Ok(Arc::new(self.source(pushdowns)?))
+    }
+
+    fn with_file_splits(
+        &self,
+        files: Vec<FileRef>,
+        partitions: Vec<FilePartition>,
+    ) -> Result<Arc<dyn ScanPushdown>> {
+        Ok(Arc::new(self.clone().with_file_splits(files, partitions)))
     }
 
     fn output_schema(&self, pushdowns: &ScanPushdowns) -> Result<SchemaRef> {
