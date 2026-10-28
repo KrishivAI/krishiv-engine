@@ -43,6 +43,7 @@ pub fn krishiv_session::functions::count_star() -> krishiv_session::Column
 pub fn krishiv_session::functions::expr(&str) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::lit(impl krishiv_session::functions::IntoLiteral) -> krishiv_session::Column
 pub fn krishiv_session::functions::lit_null() -> krishiv_session::Column
+pub fn krishiv_session::functions::map_literal(alloc::vec::Vec<(alloc::string::String, alloc::string::String)>) -> krishiv_session::Column
 pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
