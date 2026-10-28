@@ -58,6 +58,10 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 loom.workspace = true
 
 [[bench]]
+name = "coalesce"
+harness = false
+
+[[bench]]
 name = "io"
 harness = false
 
