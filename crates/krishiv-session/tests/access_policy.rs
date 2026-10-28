@@ -544,3 +544,188 @@ fn path_prefix_policy_keeps_paths_under_its_roots() {
     let e = PathPrefixPolicy::new([tmp.path().join("missing")], Arc::new(AllowAll)).unwrap_err();
     assert_eq!(e.error_class().name(), "PATH_NOT_FOUND");
 }
+
+/// Allows everything; on the first `Create` check of a path it runs
+/// `swap`, standing in for another process changing the file system
+/// between the check and the write.
+struct SwapOnCheck {
+    swapped: AtomicBool,
+    swap: Box<dyn Fn() + Send + Sync>,
+}
+
+impl AccessPolicy for SwapOnCheck {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(0)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        if privilege == Privilege::Create
+            && matches!(securable, Securable::Path(_))
+            && !self.swapped.swap(true, Ordering::SeqCst)
+        {
+            (self.swap)();
+        }
+        Box::pin(std::future::ready(Ok(AccessDecision::Allow)))
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_swapped_in_after_the_check_fails_the_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(root.join("out")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(root.join("out/old"), b"x").unwrap();
+    std::fs::write(outside.join("keep"), b"y").unwrap();
+    let before = tree(&outside);
+
+    // The checked directory becomes a link out of the root: the overwrite
+    // must neither delete nor write outside it.
+    let (r, o) = (root.clone(), outside.clone());
+    let s = session(Arc::new(SwapOnCheck {
+        swapped: AtomicBool::new(false),
+        swap: Box::new(move || {
+            std::fs::remove_dir_all(r.join("out")).unwrap();
+            std::os::unix::fs::symlink(&o, r.join("out")).unwrap();
+        }),
+    }));
+    let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+    let out = root.join("out");
+    assert_eq!(
+        class(block_on(
+            df.write().mode("overwrite").parquet(out.to_str().unwrap())
+        )),
+        DENIED
+    );
+    assert_eq!(tree(&outside), before, "nothing changed outside the root");
+
+    // A missing parent that becomes a link.
+    let (r, o) = (root.clone(), outside.clone());
+    let s = session(Arc::new(SwapOnCheck {
+        swapped: AtomicBool::new(false),
+        swap: Box::new(move || std::os::unix::fs::symlink(&o, r.join("new")).unwrap()),
+    }));
+    let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+    let sub = root.join("new/sub");
+    assert_eq!(
+        class(block_on(df.write().parquet(sub.to_str().unwrap()))),
+        DENIED
+    );
+    assert_eq!(tree(&outside), before, "nothing changed outside the root");
+}
+
+#[cfg(unix)]
+#[test]
+fn writes_go_to_the_directory_a_link_names_and_are_checked_there() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+    let policy = PathPrefixPolicy::new([&root], Arc::new(AllowAll)).unwrap();
+    let s = session(Arc::new(policy));
+    let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+    let e = block_on(df.write().parquet(root.join("link/o").to_str().unwrap())).unwrap_err();
+    assert_eq!(e.error_class().name(), DENIED);
+    // The denial names the directory the write would have gone to.
+    assert!(
+        e.to_string()
+            .contains(&format!("{}/o", outside.canonicalize().unwrap().display())),
+        "{e}"
+    );
+    assert!(!outside.join("o").exists());
+}
+
+fn no_create_on_paths(securable: &Securable, p: Privilege) -> AccessDecision {
+    if p == Privilege::Create && matches!(securable, Securable::Path(_)) {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+#[test]
+fn a_writer_without_create_learns_nothing_about_existence() {
+    let s = session(Policy::new(no_create_on_paths));
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("p");
+    let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+    let write = || {
+        block_on(df.write().mode("append").parquet(p.to_str().unwrap()))
+            .unwrap_err()
+            .to_string()
+    };
+    let missing = write();
+    std::fs::create_dir(&p).unwrap();
+    let existing = write();
+    assert_eq!(missing, existing);
+    assert!(
+        missing.contains("[KRISHIV_INSUFFICIENT_PERMISSIONS]"),
+        "{missing}"
+    );
+    assert_eq!(std::fs::read_dir(&p).unwrap().count(), 0, "nothing written");
+}
+
+#[test]
+fn a_temporary_table_location_is_checked() {
+    let s = session(Arc::new(DenyAll));
+    let dir = tempfile::tempdir().unwrap();
+    let loc = dir.path().join("tl");
+    for sql in [
+        format!(
+            "CREATE TEMPORARY TABLE x USING parquet LOCATION '{}' AS SELECT 1 AS a",
+            loc.display()
+        ),
+        format!(
+            "CREATE TEMPORARY TABLE x USING parquet LOCATION '{}'",
+            dir.path().display()
+        ),
+    ] {
+        assert_eq!(class(block_on(s.sql(&sql))), DENIED, "{sql}");
+    }
+    assert!(!loc.exists());
+}
+
+fn no_reads_of_s(securable: &Securable, p: Privilege) -> AccessDecision {
+    if p == Privilege::Select && matches!(securable, Securable::Table(t) if t.name == "s") {
+        deny()
+    } else {
+        AccessDecision::Allow
+    }
+}
+
+#[test]
+fn merge_sources_are_never_read_unchecked() {
+    let s = session(Policy::new(no_reads_of_s));
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    s.register_batches("s", schema, vec![]).unwrap();
+    // A table source is a target of the statement: checked before dispatch.
+    assert_eq!(
+        class(block_on(s.sql(
+            "MERGE INTO t USING s ON t.a = s.a WHEN MATCHED THEN DELETE"
+        ))),
+        DENIED
+    );
+    // A query source is read only through analysis, which asks the policy;
+    // the session does not run MERGE yet, so nothing is read at all.
+    assert_eq!(
+        class(block_on(s.sql(
+            "MERGE INTO t USING (SELECT * FROM s) x ON t.a = x.a WHEN MATCHED THEN DELETE"
+        ))),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    // Its reads, as analysis finds them, are denied.
+    let e = block_on(s.statement_info(
+        "MERGE INTO t USING (SELECT * FROM s) x ON t.a = x.a WHEN MATCHED THEN DELETE",
+    ))
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), DENIED);
+}

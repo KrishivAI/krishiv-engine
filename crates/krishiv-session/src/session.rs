@@ -854,29 +854,31 @@ impl Session {
             .into());
         };
         let at = LocalPaths::new(StoreId::new(LOCAL_STORE), self.state.cwd.clone()).locate(text)?;
+        // The directory as it physically is (links in its existing part
+        // resolved): the policy is asked about the directory that is
+        // written, never about a name that a link sends elsewhere.
+        let at = crate::access::physical(at)?;
         let io = self.state.io.context();
         // Before anything is written or replaced (an overwrite deletes
-        // first): the path as the write uses it, `Modify`, and `Create`
-        // when nothing is there yet (asked after `Modify`, so only a
-        // principal who may write it learns whether it exists).
+        // first): `Modify` and `Create`, both whether or not the path
+        // exists, so a denial never tells whether it does.
         let securable = Securable::Path(OptionValue::from_user("path", at.display.clone()));
-        let securable = &securable;
-        let check = |privilege| async move {
+        for privilege in [Privilege::Modify, Privilege::Create] {
             let r = authorize(
                 &*self.state.policy,
                 &self.state.principal,
-                securable,
+                &securable,
                 privilege,
-            );
-            crate::access::audit(self, StatementClass::Write, r.await)
-        };
-        check(Privilege::Modify).await?;
-        let exists = io.head(&at.store, &at.path).await?.is_some()
-            || io.is_directory(&at.store, &at.path).await?;
-        if !exists {
-            check(Privilege::Create).await?;
+            )
+            .await;
+            crate::access::audit(self, StatementClass::Write, r)?;
         }
-        let Some(write) = DirectoryWrite::begin(&io, at.store, at.path, mode, job_uuid()).await?
+        // A link swapped into the checked path since fails the write
+        // before anything is replaced, and again before the commit deletes
+        // what an overwrite replaces.
+        crate::access::still_physical(self, &at)?;
+        let Some(write) =
+            DirectoryWrite::begin(&io, at.store.clone(), at.path.clone(), mode, job_uuid()).await?
         else {
             // `ignore` found the path: nothing is written.
             return Ok(());
@@ -896,6 +898,7 @@ impl Session {
             batch?;
         }
         drop(rows);
+        crate::access::still_physical(self, &at)?;
         write
             .commit(&io, format.as_ref(), schema, &options, sink.files())
             .await?;

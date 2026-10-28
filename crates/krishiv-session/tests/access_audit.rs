@@ -86,10 +86,24 @@ fn each_denial_leaves_one_audit_record() {
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
     block_on(df.write().parquet(out.to_str().unwrap())).unwrap_err();
     let write = take();
+    block_on(s.sql("DROP TABLE IDENTIFIER('a' || 'b')")).unwrap_err();
+    let unplaceable = take();
     block_on(s.sql("SET a = b")).unwrap();
     assert!(
         take().is_empty(),
         "allowed statements leave no audit record"
+    );
+
+    // A check that fails closed because it cannot name the object is
+    // recorded too.
+    assert_eq!(unplaceable.len(), 1, "{unplaceable:?}");
+    assert!(
+        unplaceable[0].contains("error_class=KRISHIV_UNSUPPORTED_FEATURE"),
+        "{unplaceable:?}"
+    );
+    assert!(
+        unplaceable[0].contains("statement_class=DDL"),
+        "{unplaceable:?}"
     );
 
     for (records, class, privilege) in [

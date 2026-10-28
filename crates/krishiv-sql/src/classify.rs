@@ -311,7 +311,8 @@ pub struct Target<'a> {
 /// the object's definition: `Drop` on it and `Create` in its namespace),
 /// `Select` on what it reads without a query (metadata commands, `LIKE`
 /// sources, `MERGE` from a table), and `Monitor` on the cluster for the
-/// `ADMIN` class. Session-class statements need nothing.
+/// `ADMIN` class. Session-class statements need nothing beyond the files
+/// they name (a temporary table's `LOCATION`).
 #[must_use]
 #[deny(clippy::wildcard_enum_match_arm)]
 #[expect(clippy::too_many_lines, reason = "one arm per statement kind")]
@@ -358,7 +359,17 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         },
         Statement::CreateTable(c) => {
             if c.temporary {
-                return Vec::new();
+                // Session-local, but its files are still read, and written
+                // by `AS SELECT`.
+                let mut out: Vec<Target<'_>> = c
+                    .location
+                    .iter()
+                    .map(|p| t(TargetObject::Path(p), Select))
+                    .collect();
+                if c.as_query.is_some() {
+                    out.extend(location(&c.location));
+                }
+                return out;
             }
             let mut out = vec![t(O::ParentOf(&c.name), Create)];
             if c.or_replace {

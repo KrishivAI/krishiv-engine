@@ -15,10 +15,11 @@ use std::sync::Arc;
 
 use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature, PathNotFound};
 use krishiv_common::secret::OptionValue;
+use krishiv_exec::files::LocatedPath;
 use krishiv_plan::SourceId;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
-    SecurableUse, TableIdent, authorize, namespace_parts, table_ident,
+    SecurableUse, TableIdent, authorize, insufficient_permissions, namespace_parts, table_ident,
 };
 use krishiv_sql::ast::{DdlName, ExprKind, Literal, Statement};
 use krishiv_sql::{
@@ -145,16 +146,23 @@ pub(crate) fn audit<T>(
     if let Err(e) = &result
         && e.error_class() == ErrorClass::KrishivInsufficientPermissions
     {
-        tracing::warn!(
-            target: "krishiv::audit",
-            principal = %session.state.principal.name,
-            statement_class = class.name(),
-            error_class = e.error_class().name(),
-            denial = %e,
-            "access denied"
-        );
+        log_denial(session, class, e);
     }
     result
+}
+
+/// The audit record of the denial `e` (see [`audit`]): also written when
+/// an access check fails closed because it cannot name what a statement
+/// touches (`KRISHIV_UNSUPPORTED_FEATURE`).
+fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
+    tracing::warn!(
+        target: "krishiv::audit",
+        principal = %session.state.principal.name,
+        statement_class = class.name(),
+        error_class = e.error_class().name(),
+        denial = %e,
+        "access denied"
+    );
 }
 
 impl Session {
@@ -180,7 +188,13 @@ impl Session {
         }
         let mut checked: Vec<(Securable, Privilege)> = Vec::new();
         for target in targets {
-            let securables = audit(self, class, self.securables_of(target.object, env))?;
+            let securables = match self.securables_of(target.object, env) {
+                Ok(s) => s,
+                Err(e) => {
+                    log_denial(self, class, &e);
+                    return Err(e);
+                }
+            };
             for securable in securables {
                 if checked
                     .iter()
@@ -349,6 +363,47 @@ fn folded(ident: &TableIdent) -> TableIdent {
     }
 }
 
+/// `at` (a local path, `file:/...`) with the symbolic links of its
+/// existing part resolved: the directory a write really goes to.
+pub(crate) fn physical(at: LocatedPath) -> Result<LocatedPath, KrishivError> {
+    let Some(local) = at.display.strip_prefix("file:") else {
+        return Ok(at);
+    };
+    let resolved = resolve_links(Path::new(local)).ok_or_else(|| unplaceable("this path"))?;
+    let parts = resolved
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(p) => Some(p.to_str().ok_or_else(|| unplaceable("non-UTF-8 paths"))),
+            _ => None,
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(LocatedPath {
+        store: at.store,
+        path: object_store::path::Path::from_iter(parts.iter().copied()),
+        display: format!("file:/{}", parts.join("/")),
+    })
+}
+
+/// Fails closed (`KRISHIV_INSUFFICIENT_PERMISSIONS`) when `at`, a path
+/// [`physical`] resolved and the policy allowed, now resolves elsewhere: a
+/// symbolic link was swapped into it.
+pub(crate) fn still_physical(session: &Session, at: &LocatedPath) -> Result<(), KrishivError> {
+    let now = physical(at.clone())?;
+    if now.display == at.display {
+        return Ok(());
+    }
+    let securable = Securable::Path(OptionValue::from_user("path", now.display));
+    audit(
+        session,
+        StatementClass::Write,
+        Err(insufficient_permissions(
+            &session.state.principal,
+            &securable,
+            Privilege::Modify,
+        )),
+    )
+}
+
 /// Allows paths only under the given root directories, and delegates every
 /// other decision to `inner`: the policy behind a server's data-directory
 /// restriction.
@@ -357,8 +412,11 @@ fn folded(ident: &TableIdent) -> TableIdent {
 /// (`file:/a/b`, `.` and `..` already resolved), after resolving symbolic
 /// links in the part of it that exists, against the roots with their links
 /// resolved. Anything else is denied: other schemes (`s3://`, ...), paths
-/// with credentials, percent-encoded text (the store would not decode it
-/// the way the comparison reads it) and relative or unresolved paths.
+/// with credentials, any path containing `%` (percent-encoded text would
+/// not be decoded the way the comparison reads it, so even a literal `%`
+/// in a file name is refused) and relative or unresolved paths. Session
+/// writes go to the resolved directory and fail if a link is swapped into
+/// it before the write begins or commits.
 /// Resolving links reads file metadata on the calling thread, once per
 /// path and query.
 ///
