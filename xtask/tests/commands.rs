@@ -1072,3 +1072,141 @@ fn budgets_cache_main_rejects_a_dirty_working_tree() {
         "{out:?}"
     );
 }
+
+/// The real `git`, for fake-`git` scripts to delegate to.
+fn real_git() -> std::path::PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|d| d.join("git"))
+        .find(|p| p.is_file())
+        .unwrap()
+}
+
+/// A `git` that answers `subcommand` with `answer` and delegates
+/// everything else to the real one, first on `PATH` for the child.
+#[cfg(unix)]
+fn fake_git(bin: &Path, subcommand: &str, answer: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    write(
+        bin,
+        "git",
+        &format!(
+            "#!/bin/sh\nif [ \"$1\" = \"{subcommand}\" ]; then printf '%s' \"{answer}\"; exit 0; fi\nexec \"$REAL_GIT\" \"$@\"\n"
+        ),
+    );
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+fn xtask_with_path(args: &[&str], bin: &Path) -> Output {
+    let path = format!(
+        "{}:{}",
+        bin.to_str().unwrap(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(args)
+        .env("PATH", path)
+        .env("REAL_GIT", real_git())
+        .output()
+        .unwrap()
+}
+
+/// `budgets --precheck` rejects a merge-base that is not a commit id: the
+/// cache lookup must never escape its directory.
+#[cfg(unix)]
+#[test]
+fn budgets_precheck_rejects_an_unsafe_merge_base() {
+    let dir = init_repo("budgets-bad-base");
+    let repo = dir.to_str().unwrap().to_owned();
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fake_git(&bin, "merge-base", "../evil");
+    let out = xtask_with_path(
+        &["budgets", "--precheck", "--repo", &repo, "--base", "main"],
+        &bin,
+    );
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("bad merge-base"),
+        "{out:?}"
+    );
+}
+
+/// `budgets --cache-main` rejects a `HEAD` id that is not a commit id.
+#[cfg(unix)]
+#[test]
+fn budgets_cache_main_rejects_an_unsafe_head_id() {
+    let dir = init_repo("budgets-bad-head");
+    let repo = dir.to_str().unwrap().to_owned();
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    fake_git(&bin, "rev-parse", "not a sha");
+    let out = xtask_with_path(&["budgets", "--cache-main", "--repo", &repo], &bin);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("bad HEAD id"),
+        "{out:?}"
+    );
+}
+
+/// `budgets --cache-main` in a repository without a Rust project reports
+/// the cargo failure instead of caching anything.
+#[test]
+fn budgets_cache_main_reports_a_cargo_metadata_failure() {
+    let dir = init_repo("budgets-no-cargo");
+    let repo = dir.to_str().unwrap();
+    let out = xtask(&["budgets", "--cache-main", "--repo", repo]);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cargo metadata failed"),
+        "{out:?}"
+    );
+}
+
+/// `budgets --cache-main` reports a cache write failure: measuring may
+/// succeed while filing the measurement fails.
+#[cfg(unix)]
+#[test]
+fn budgets_cache_main_reports_an_unwritable_cache() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tmp("budgets-cache-unwritable");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    write(&dir, "README.md", "hi\n");
+    // The unsafe-site scan reads `crates/`; an empty one measures nothing.
+    std::fs::create_dir_all(dir.join("crates")).unwrap();
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    let repo = dir.to_str().unwrap().to_owned();
+    // The cache directory as a file: measuring succeeds, filing it fails.
+    let target = dir.join("target");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::write(target.join("precheck"), "blocker\n").unwrap();
+    let fake = dir.join("cargo");
+    std::fs::write(
+        &fake,
+        r#"#!/bin/sh
+case "$1" in
+  metadata) printf '{"workspace_members":["w"],"resolve":{"nodes":[{"id":"w"},{"id":"dep"}]},"target_directory":"%s"}' "$FAKE_TARGET" ;;
+  tree) printf 'krishiv-cli v0.1.0 (/w)\ndep v1.0.0\n' ;;
+  build)
+    while [ $# -gt 0 ]; do [ "$1" = --target-dir ] && d=$2; shift; done
+    mkdir -p "$d/dist" && printf '0123456789' > "$d/dist/krishiv" ;;
+  *) exit 2 ;;
+esac
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["budgets", "--cache-main", "--repo", &repo])
+        .env("CARGO", &fake)
+        .env("FAKE_TARGET", &target)
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("GITHUB_STEP_SUMMARY")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("cannot create"),
+        "{out:?}"
+    );
+}

@@ -10,7 +10,9 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch, StringArray, StringViewArray};
+use arrow_array::{
+    Array, ArrayRef, BinaryArray, Int32Array, RecordBatch, StringArray, StringViewArray,
+};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use krishiv_common::config::Config;
 use krishiv_common::error::{ErrorClass, KrishivError};
@@ -19,12 +21,17 @@ use krishiv_plan::analyzer::testing::{block_on, context};
 use krishiv_plan::analyzer::{
     Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
 };
+use krishiv_plan::{
+    BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition, JoinKind,
+    LogicalPlan, Plan, PlanNode, ResolvedExpr, ResolvedFunction,
+};
 
 use super::{Runnable, run};
 use krishiv_exec::planner::{
     DefaultPlanner, MemoryTable, MemoryTables, PhysicalPlanner, PlanningContext,
     TableProviderResolver,
 };
+use krishiv_types::DataType;
 use krishiv_types::batch::Batch;
 
 /// An analysis and planning context with name resolution for `tables`.
@@ -86,9 +93,41 @@ fn cx() -> Cx {
     ];
     let (cols8, t8) = table(&ArrowType::Utf8, strings8);
     let (cols_view, tview) = table(&ArrowType::Utf8View, strings_view);
+    // `ub(a INT, b BINARY)`: a binary key carrier for joins against the
+    // string tables below.
+    let b_schema = Arc::new(Schema::new(vec![
+        Field::new("a", ArrowType::Int32, true),
+        Field::new("b", ArrowType::Binary, true),
+    ]));
+    let b_batch = RecordBatch::try_new(
+        Arc::clone(&b_schema),
+        vec![
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(4)])),
+            Arc::new(BinaryArray::from(vec![
+                Some(b"apple".as_slice()),
+                Some(b"banana".as_slice()),
+                None,
+                Some(b"cherry".as_slice()),
+            ])) as ArrayRef,
+        ],
+    )
+    .unwrap();
+    let b_cols = vec![
+        TableColumn {
+            name: "a".to_owned(),
+            data_type: DataType::Integer,
+            nullable: true,
+        },
+        TableColumn {
+            name: "b".to_owned(),
+            data_type: DataType::Binary,
+            nullable: true,
+        },
+    ];
     let catalog = MemoryCatalog::new("spark_catalog")
         .with_table(&["default"], "u8", cols8, None)
-        .with_table(&["default"], "uv", cols_view, None);
+        .with_table(&["default"], "uv", cols_view, None)
+        .with_table(&["default"], "ub", b_cols, None);
     let mut config = Config::new();
     config.set("spark.sql.ansi.enabled", "true").unwrap();
     Cx {
@@ -102,7 +141,11 @@ fn cx() -> Cx {
         tables: Arc::new(
             MemoryTables::new()
                 .with_table(&["spark_catalog", "default", "u8"], t8)
-                .with_table(&["spark_catalog", "default", "uv"], tview),
+                .with_table(&["spark_catalog", "default", "uv"], tview)
+                .with_table(
+                    &["spark_catalog", "default", "ub"],
+                    Arc::new(MemoryTable::new(b_schema, vec![Batch::new(b_batch)])),
+                ),
         ),
         config: Arc::new(config),
     }
@@ -440,6 +483,74 @@ fn different_spark_types_still_fail() {
             err.error_class(),
             ErrorClass::CastInvalidInput,
             "{sql}: {err}"
+        );
+    }
+}
+
+/// The analyzed plan of `sql`, without optimization or physical planning.
+fn analyzed(cx: &Cx, sql: &str) -> Arc<LogicalPlan> {
+    let parsed =
+        krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
+            .unwrap();
+    let plan = block_on(DefaultAnalyzer.analyze(&parsed, &cx.ctx))
+        .unwrap()
+        .plan;
+    Arc::clone(plan.root())
+}
+
+/// A resolved `l = r` over two analyzed branches' output columns.
+fn eq(l: BoundColumn, r: BoundColumn) -> Arc<Expr> {
+    let col = |c: BoundColumn| Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c))));
+    Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+        ResolvedFunction {
+            id: FunctionId::Builtin(Builtin::Eq),
+            kind: FunctionKind::Scalar,
+            args: vec![col(l), col(r)],
+            distinct: false,
+            filter: None,
+            data_type: DataType::Boolean,
+            nullable: true,
+            deterministic: true,
+        },
+    ))))
+}
+
+/// Join keys of different Spark types are left for the join builder to
+/// reject, never silently coerced: `INT` against `STRING` (one side has
+/// no string/binary carrier) and `STRING` against `BINARY` (carriers of
+/// different families). The analyzer would cast these pairs, so the test
+/// joins the analyzed branches directly.
+#[test]
+fn joins_with_keys_of_other_spark_types_still_fail() {
+    let cx = cx();
+    let branch = |sql: &str| {
+        let plan = analyzed(&cx, sql);
+        let col = plan
+            .resolved_output()
+            .and_then(|mut cols| cols.pop())
+            .unwrap();
+        (plan, col)
+    };
+    for (left, right) in [
+        ("SELECT a FROM u8", "SELECT s FROM uv"),
+        ("SELECT s FROM u8", "SELECT b FROM ub"),
+    ] {
+        let ((l, lc), (r, rc)) = (branch(left), branch(right));
+        let root = LogicalPlan::new(PlanNode::Join {
+            left: l,
+            right: r,
+            kind: JoinKind::Inner,
+            condition: JoinCondition::On(eq(lc, rc)),
+        });
+        let err = DefaultPlanner
+            .plan(
+                &Plan::try_new(root).unwrap(),
+                &PlanningContext::new(Arc::clone(&cx.tables), Arc::clone(&cx.config)),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("join keys differ in type"),
+            "{left} JOIN {right}: {err}"
         );
     }
 }

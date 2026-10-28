@@ -354,6 +354,23 @@ mod tests {
         assert!(coerce_to(col(0, ArrowType::Utf8), &ArrowType::BinaryView, &env).is_err());
     }
 
+    /// `coerce_to` without ANSI keeps the values too: the encoding change
+    /// itself never depends on the session mode.
+    #[test]
+    fn coerce_to_in_legacy_mode_keeps_values() {
+        let mut config = Config::new();
+        config.set("spark.sql.ansi.enabled", "false").unwrap();
+        let env = EvalEnv::new(&config, Arc::from("test"));
+        let batch = batch();
+        let e = coerce_to(col(0, ArrowType::Utf8), &ArrowType::Utf8View, &env).unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Utf8View);
+        let got = e.eval(&batch, 0).unwrap().into_array(2).unwrap();
+        assert_eq!(
+            got.as_string_view().iter().collect::<Vec<_>>(),
+            vec![Some("a"), None]
+        );
+    }
+
     /// `unify` puts one Spark type's two encodings in the canonical
     /// carrier and leaves everything else for the caller to reject.
     #[test]

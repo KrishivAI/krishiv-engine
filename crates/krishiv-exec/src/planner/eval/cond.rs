@@ -113,9 +113,17 @@ impl PhysExpr for InList {
                 None,
             ))));
         }
+        // The kernels take at most one literal side: broadcast a scalar
+        // value once, and reuse it across the elements.
+        let scalar = v.is_scalar();
+        let v = if scalar {
+            Value::Array(v.into_array(rows)?)
+        } else {
+            v
+        };
         let mut matched = vec![false; rows];
         let mut saw_null = vec![false; rows];
-        let mut saw_array = !v.is_scalar();
+        let mut saw_array = !scalar;
         for item in &self.items {
             if matched.iter().all(|m| *m) {
                 break;
@@ -123,7 +131,8 @@ impl PhysExpr for InList {
             let other = item.eval(batch, partition)?;
             saw_array = saw_array || !other.is_scalar();
             let eq = cmp(CompareKind::Equal, &v, &other, &self.kernels)?;
-            // `eq` is one row for scalar-vs-scalar, else `rows`.
+            // One row per batch row: a scalar value was broadcast above,
+            // so only a one-row batch keeps `eq` short.
             let scalar_eq = eq.len() == 1 && rows != 1;
             for i in 0..rows {
                 if matched[i] {
@@ -221,12 +230,20 @@ impl PhysExpr for Between {
                 None,
             ))));
         }
+        // The kernels take at most one literal side: broadcast a scalar
+        // value once, and reuse it for both bounds.
+        let scalar = v.is_scalar();
+        let v = if scalar {
+            Value::Array(v.into_array(rows)?)
+        } else {
+            v
+        };
         let ge = cmp(CompareKind::GreaterEq, &v, &lo, &self.kernels)?;
         let scalar_ge = ge.len() == 1 && rows != 1;
         // `false AND _` is `false`: skip `hi` where every row decided.
         let all_false = (0..ge.len()).all(|i| ge.is_valid(i) && !ge.value(i));
         if all_false {
-            if ge.len() == 1 && v.is_scalar() && lo.is_scalar() {
+            if scalar && lo.is_scalar() {
                 let out: ArrayRef =
                     Arc::new(BooleanArray::new(BooleanBuffer::from(vec![false]), None));
                 return Ok(Value::Scalar(out));
@@ -245,7 +262,7 @@ impl PhysExpr for Between {
             return Ok(Value::Array(out));
         }
         let hi = self.hi.eval(batch, partition)?;
-        let all_scalar = v.is_scalar() && lo.is_scalar() && hi.is_scalar();
+        let all_scalar = scalar && lo.is_scalar() && hi.is_scalar();
         let le = cmp(CompareKind::LessEq, &v, &hi, &self.kernels)?;
         let n = if all_scalar { 1 } else { rows };
         let mut values = Vec::with_capacity(n);
@@ -689,7 +706,8 @@ mod tests {
 
     use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type};
     use arrow_array::{
-        Decimal128Array, Float64Array, Int32Array, Int64Array, NullArray, StringViewArray,
+        Decimal128Array, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
+        StringViewArray,
     };
     use arrow_schema::{Field, Schema};
     use krishiv_common::config::Config;
@@ -1357,5 +1375,453 @@ mod tests {
                 .collect::<Vec<_>>(),
             [None, Some("z"), Some("q")]
         );
+    }
+
+    /// A two-column batch of one Spark `STRING` in both carriers.
+    fn strings_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("v", ArrowType::Utf8View, true),
+        ]));
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("b"), None])) as ArrayRef,
+                Arc::new(StringViewArray::from(vec![Some("b"), Some("c")])),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// `IN` over a `Utf8` value with `Utf8View` elements (and the reverse):
+    /// each side meets the canonical carrier once, keeping its values.
+    #[test]
+    fn in_list_meets_mixed_encodings_in_the_view() {
+        let env = env(true);
+        let batch = strings_batch();
+        let e = in_list(
+            vec![
+                column(0, ArrowType::Utf8, true),
+                lit(&Literal::String("b".to_owned())),
+                lit(&Literal::String("c".to_owned())),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Boolean);
+        assert!(e.nullable());
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        // A `Utf8View` value against a `Utf8` element: the element is cast.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("v", ArrowType::Utf8View, true),
+            Field::new("u", ArrowType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringViewArray::from(vec![Some("b"), Some("c")])),
+                Arc::new(StringArray::from(vec![Some("b"), Some("b")])),
+            ],
+        )
+        .unwrap();
+        let e = in_list(
+            vec![
+                column(0, ArrowType::Utf8View, true),
+                column(1, ArrowType::Utf8, true),
+                lit(&Literal::String("x".to_owned())),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(false)]
+        );
+    }
+
+    /// `IN` without a list is an engine bug; operands of different Spark
+    /// types fail here exactly as `=` does.
+    #[test]
+    fn in_list_rejects_an_empty_list_and_other_spark_types() {
+        let env = env(true);
+        let err = in_list(vec![column(0, ArrowType::Int32, true)], &env).unwrap_err();
+        assert!(err.to_string().contains("IN without a list"), "{err}");
+        let err = in_list(
+            vec![
+                column(0, ArrowType::Int32, true),
+                lit(&Literal::String("x".to_owned())),
+            ],
+            &env,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("comparison of Int32 with Utf8View"),
+            "{err}"
+        );
+    }
+
+    /// An `IN` list of untyped `NULL`s never matches, and a `NULL` value
+    /// never matches either: every row is NULL.
+    #[test]
+    fn in_list_with_only_untyped_nulls_never_matches() {
+        let env = env(true);
+        let batch = strings_batch();
+        let e = in_list(
+            vec![
+                column(0, ArrowType::Utf8, true),
+                lit(&Literal::Null(None)),
+                lit(&Literal::Null(None)),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [None, None]
+        );
+        let e = in_list(
+            vec![
+                lit(&Literal::Null(None)),
+                lit(&Literal::String("b".to_owned())),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &rows_batch(2))
+                .as_boolean()
+                .iter()
+                .collect::<Vec<_>>(),
+            [None, None]
+        );
+    }
+
+    /// `IN` over a batch without rows answers an empty column.
+    #[test]
+    fn in_list_on_an_empty_batch_answers_empty() {
+        let env = env(true);
+        let batch = rows_batch(0);
+        let e = in_list(
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Integer(2))],
+            &env,
+        )
+        .unwrap();
+        let got = e.eval(&batch, 0).unwrap().into_array(0).unwrap();
+        assert_eq!(got.len(), 0);
+    }
+
+    /// `IN` of scalars is one scalar: a match, or NULL when nothing
+    /// matched and an element is NULL.
+    #[test]
+    fn in_list_of_scalars_is_a_scalar() {
+        let env = env(true);
+        let batch = rows_batch(2);
+        let e = in_list(
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Integer(1))],
+            &env,
+        )
+        .unwrap();
+        match e.eval(&batch, 0).unwrap() {
+            Value::Scalar(a) => assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [Some(true)]),
+            v => panic!("not a scalar: {v:?}"),
+        }
+        let e = in_list(
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Integer(2))],
+            &env,
+        )
+        .unwrap();
+        match e.eval(&batch, 0).unwrap() {
+            Value::Scalar(a) => {
+                assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [Some(false)]);
+            }
+            v => panic!("not a scalar: {v:?}"),
+        }
+        let e = in_list(
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Null(None))],
+            &env,
+        )
+        .unwrap();
+        match e.eval(&batch, 0).unwrap() {
+            Value::Scalar(a) => {
+                assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [None]);
+            }
+            v => panic!("not a scalar: {v:?}"),
+        }
+    }
+
+    /// The `IN` value is evaluated once per batch, however many elements
+    /// the list holds.
+    #[test]
+    fn in_list_evaluates_its_value_once() {
+        let env = env(true);
+        let batch = rows_batch(3);
+        let n = Arc::new(AtomicUsize::new(0));
+        let value: Arc<dyn PhysExpr> = Arc::new(Count {
+            inner: lit(&Literal::Long(1)),
+            n: Arc::clone(&n),
+        });
+        let e = in_list(
+            vec![value, lit(&Literal::Long(1)), lit(&Literal::Long(2))],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(true), Some(true)]
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    /// Elements past the point where every row matched are never
+    /// evaluated: a later element cannot change a `true`.
+    #[test]
+    fn in_list_skips_elements_after_every_row_matched() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+        )
+        .unwrap();
+        let counted = |l: &Literal, n: &Arc<AtomicUsize>| -> Arc<dyn PhysExpr> {
+            Arc::new(Count {
+                inner: lit(l),
+                n: Arc::clone(n),
+            })
+        };
+        let (n0, n1, n2) = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let e = in_list(
+            vec![
+                column(0, ArrowType::Int32, true),
+                counted(&Literal::Integer(1), &n0),
+                counted(&Literal::Integer(2), &n1),
+                counted(&Literal::Integer(3), &n2),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(true)]
+        );
+        assert_eq!(n0.load(Ordering::SeqCst), 1);
+        assert_eq!(n1.load(Ordering::SeqCst), 1);
+        assert_eq!(n2.load(Ordering::SeqCst), 0);
+    }
+
+    /// `BETWEEN` over a `Utf8` value with `Utf8View` bounds (and a
+    /// `Utf8View` value with a `Utf8` bound).
+    #[test]
+    fn between_meets_mixed_encodings_in_the_view() {
+        let env = env(true);
+        let batch = strings_batch();
+        let e = between(
+            column(0, ArrowType::Utf8, true),
+            lit(&Literal::String("a".to_owned())),
+            lit(&Literal::String("c".to_owned())),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Boolean);
+        assert!(e.nullable());
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("w", ArrowType::Utf8View, true),
+            Field::new("u", ArrowType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringViewArray::from(vec![Some("b"), Some("c")])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .unwrap();
+        let e = between(
+            column(0, ArrowType::Utf8View, true),
+            column(1, ArrowType::Utf8, true),
+            lit(&Literal::String("c".to_owned())),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(true)]
+        );
+    }
+
+    /// `BETWEEN` over operands of different Spark types fails here exactly
+    /// as its two comparisons do.
+    #[test]
+    fn between_with_other_spark_types_fails_like_its_comparisons() {
+        let env = env(true);
+        let err = between(
+            column(0, ArrowType::Int32, true),
+            lit(&Literal::String("a".to_owned())),
+            lit(&Literal::String("c".to_owned())),
+            &env,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("comparison of Int32 with Utf8View"),
+            "{err}"
+        );
+    }
+
+    /// `BETWEEN` over a batch without rows answers an empty column.
+    #[test]
+    fn between_on_an_empty_batch_answers_empty() {
+        let env = env(true);
+        let batch = rows_batch(0);
+        let e = between(
+            lit(&Literal::Integer(1)),
+            lit(&Literal::Integer(0)),
+            lit(&Literal::Integer(2)),
+            &env,
+        )
+        .unwrap();
+        let got = e.eval(&batch, 0).unwrap().into_array(0).unwrap();
+        assert_eq!(got.len(), 0);
+    }
+
+    /// `false AND _` is `false`: where `v >= lo` already decided every
+    /// row, the upper bound is never evaluated.
+    #[test]
+    fn between_skips_the_upper_bound_where_the_lower_decided_false() {
+        let env = env(true);
+        let n = Arc::new(AtomicUsize::new(0));
+        let hi: Arc<dyn PhysExpr> = Arc::new(Count {
+            inner: lit(&Literal::Long(3)),
+            n: Arc::clone(&n),
+        });
+        let e = between(lit(&Literal::Long(1)), lit(&Literal::Long(5)), hi, &env).unwrap();
+        match e.eval(&rows_batch(2), 0).unwrap() {
+            Value::Scalar(a) => {
+                assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [Some(false)]);
+            }
+            v => panic!("not a scalar: {v:?}"),
+        }
+        assert_eq!(n.load(Ordering::SeqCst), 0);
+        // One decided row does not skip the bound for the rest.
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 7])) as ArrayRef],
+        )
+        .unwrap();
+        let n = Arc::new(AtomicUsize::new(0));
+        let hi: Arc<dyn PhysExpr> = Arc::new(Count {
+            inner: lit(&Literal::Integer(6)),
+            n: Arc::clone(&n),
+        });
+        let e = between(
+            column(0, ArrowType::Int32, true),
+            lit(&Literal::Integer(5)),
+            hi,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(false), Some(false)]
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    /// `BETWEEN` is `v >= lo AND v <= hi` under Kleene logic: NULL in,
+    /// NULL out, unless one side already decided `false`.
+    #[test]
+    fn between_follows_kleene_logic_for_nulls() {
+        let env = env(true);
+        let batch = rows_batch(1);
+        for (v, lo, hi, want) in [
+            (
+                Literal::Long(2),
+                Literal::Long(1),
+                Literal::Null(None),
+                None,
+            ),
+            (
+                Literal::Long(2),
+                Literal::Null(None),
+                Literal::Long(3),
+                None,
+            ),
+            (
+                Literal::Null(None),
+                Literal::Long(1),
+                Literal::Long(3),
+                None,
+            ),
+            (
+                Literal::Long(5),
+                Literal::Long(1),
+                Literal::Long(3),
+                Some(false),
+            ),
+            (
+                Literal::Long(2),
+                Literal::Long(1),
+                Literal::Long(3),
+                Some(true),
+            ),
+        ] {
+            let e = between(lit(&v), lit(&lo), lit(&hi), &env).unwrap();
+            assert_eq!(
+                values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+                [want],
+                "{v:?} BETWEEN {lo:?} AND {hi:?}"
+            );
+        }
+    }
+
+    /// The `BETWEEN` value is evaluated once per batch, for both bounds
+    /// alike.
+    #[test]
+    fn between_evaluates_its_value_once() {
+        let env = env(true);
+        let batch = rows_batch(1);
+        let n = Arc::new(AtomicUsize::new(0));
+        let value: Arc<dyn PhysExpr> = Arc::new(Count {
+            inner: lit(&Literal::Long(1)),
+            n: Arc::clone(&n),
+        });
+        let e = between(value, lit(&Literal::Long(0)), lit(&Literal::Long(2)), &env).unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true)]
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    /// A `nullif` value of another Spark type than the result keeps no
+    /// result cast: the mix fails at evaluation, as the analyzer never
+    /// produces it.
+    #[test]
+    fn nullif_with_a_value_outside_the_result_type_fails_evaluation() {
+        let env = env(true);
+        let batch = rows_batch(1);
+        let schema = Arc::new(Schema::empty());
+        let f = resolved("nullif", DataType::String);
+        let e = null_if(
+            &f,
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Integer(1))],
+            input(&env, &[], &schema),
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Utf8View);
+        assert!(e.eval(&batch, 0).is_err());
     }
 }
