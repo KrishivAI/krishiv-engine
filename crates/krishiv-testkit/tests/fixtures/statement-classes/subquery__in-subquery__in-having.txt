@@ -1,0 +1,12 @@
+SESSION	create temporary view t1 as select * from values
+SESSION	create temporary view t2 as select * from values
+SESSION	create temporary view t3 as select * from values
+READ	SELECT t1a,
+READ	SELECT t1a,
+READ	SELECT t1a, t1b, t1c
+READ	SELECT t1a, t1b, t1c
+READ	SELECT Count(DISTINCT( t1a )),
+READ	SELECT t1a,
+READ	SELECT t1a,
+READ	SELECT t1a,
+READ	SELECT t1a,

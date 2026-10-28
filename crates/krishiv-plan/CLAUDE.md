@@ -19,6 +19,7 @@ Paths are relative to this crate.
 - `src/analyzer/mod.rs` analyzer entry; `src/analyzer/bind.rs` Bind stage (async, catalog and access policy)
 - `src/analyzer/windows.rs` window binding and extraction into `Window` relations
 - `src/analyzer/suggest.rs` the edit-distance ranking of `UNRESOLVED_COLUMN` proposals (only classes whose Spark message proposes names use it)
+- `src/analyzer/access.rs` `authorize` (the one privilege check: fail closed, filtered readers never change a securable), `table_ident` / `namespace_parts`
 - `src/analyzer/resolve.rs` Resolve stage (sync); `src/analyzer/builtins.rs` `BuiltinFunctions`; `src/analyzer/coerce.rs` implicit coercion
 - `src/tests/inventory.rs` node inventory checked by the tests
 

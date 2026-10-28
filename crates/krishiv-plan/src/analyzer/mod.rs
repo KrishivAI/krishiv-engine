@@ -62,6 +62,7 @@
 //! provider's text. Catalog functions are not policy-checked yet (no
 //! catalog functions exist before P3).
 
+mod access;
 mod analytics;
 mod bind;
 mod builtins;
@@ -93,13 +94,14 @@ use krishiv_common::error::KrishivError;
 use krishiv_common::redact::RedactedSql;
 use twox_hash::XxHash3_128;
 
+pub use access::{authorize, insufficient_permissions, namespace_parts, table_ident};
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
     AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, CallTypes, Catalog,
-    CatalogResolver, Constant, FileSchemaResolver, FunctionEntry, FunctionLookup, FunctionRegistry,
-    InputBuilder, InputType, Inputs, MemoryCatalog, NameForm, Operator, PolicyVersion, Principal,
-    PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable, SourceKind, SqlFrontend,
-    TableColumn, TableIdent, TableKind, TableMeta,
+    CatalogResolver, Constant, DenyAll, FileSchemaResolver, FunctionEntry, FunctionLookup,
+    FunctionRegistry, InputBuilder, InputType, Inputs, MemoryCatalog, NameForm, Operator,
+    PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable,
+    SourceKind, SqlFrontend, TableColumn, TableIdent, TableKind, TableMeta,
 };
 pub use variables::{SessionVariable, VariableSnapshot, variable_name};
 

@@ -1,0 +1,14 @@
+DDL	CREATE OR REPLACE VIEW t1(a1, a2) as values (0, 1), (1, 2)
+DDL	CREATE OR REPLACE VIEW t2(b1, b2) as values (0, 2), (0, 3)
+DDL	CREATE OR REPLACE VIEW t3(c1, c2) as values (0, 2), (0, 3)
+SESSION	set spark.sql.optimizer.decorrelateInnerQuery.enabled=true
+SESSION	set spark.sql.legacy.scalarSubqueryCountBugBehavior=false
+READ	select ( select sum(cnt) from (select count(*) cnt from t2 where t1.a1 = t2.b1) ) a from t1 order by a desc
+READ	select ( select count(*) from (select count(*) cnt from t2 where t1.a1 = t2.b1) ) a from t1 order by a desc
+READ	select (
+READ	select (
+SESSION	reset spark.sql.optimizer.decorrelateInnerQuery.enabled
+SESSION	reset spark.sql.legacy.scalarSubqueryCountBugBehavior
+SESSION	DROP VIEW t1
+SESSION	DROP VIEW t2
+SESSION	DROP VIEW t3

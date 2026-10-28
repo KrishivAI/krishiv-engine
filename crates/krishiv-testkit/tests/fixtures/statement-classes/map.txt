@@ -1,0 +1,10 @@
+READ	select element_at(map(1, 'a', 2, 'b'), 5)
+READ	select map(1, 'a', 2, 'b')[5]
+READ	select map_contains_key(map(1, 'a', 2, 'b'), 5)
+READ	select map_contains_key(map(1, 'a', 2, 'b'), 1)
+READ	select map_contains_key(map(1, 'a', 2, 'b'), 5.0)
+READ	select map_contains_key(map(1, 'a', 2, 'b'), 1.0)
+READ	select map_contains_key(map(1.0, 'a', 2, 'b'), 5)
+READ	select map_contains_key(map(1.0, 'a', 2, 'b'), 1)
+READ	select map_contains_key(map('1', 'a', '2', 'b'), 1)
+READ	select map_contains_key(map(1, 'a', 2, 'b'), '1')

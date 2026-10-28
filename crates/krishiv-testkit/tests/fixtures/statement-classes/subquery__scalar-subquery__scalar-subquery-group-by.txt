@@ -1,0 +1,24 @@
+SESSION	create temp view x (x1, x2) as values (1, 1), (2, 2)
+SESSION	create temp view y (y1, y2) as values (2, 0), (3, -1)
+SESSION	create temp view z (z1, z2) as values (1, 0), (1, 1)
+READ	select * from x where (select count(*) from y where y1 = x1 group by y1) = 1
+READ	select * from x where (select count(*) from y where y1 = x1 group by x1) = 1
+READ	select * from x where (select count(*) from y where y1 > x1 group by x1) = 1
+READ	select *, (select count(*) from y where x1 = y1 and y2 = 1 group by y2) from x
+READ	select *, (select count(*) from y where x1 = y1 and y2 = x1 + 1 group by y2) from x
+READ	select *, (select count(*) from y where x1 = y1 and cast(y2 as double) = x1 + 1
+READ	select *, (select count(*) from y where y2 + 1 = x1 + x2 group by y2 + 1) from x
+SESSION	set spark.sql.optimizer.scalarSubqueryUseSingleJoin = false
+READ	select * from x where (select count(*) from y where y1 > x1 group by y1) = 1
+READ	select *, (select count(*) from y where y1 + y2 = x1 group by y1) from x
+READ	select *, (select count(*) from y where x1 = y1 and y2 + 10 = x1 + 1 group by y2) from x
+SESSION	set spark.sql.optimizer.scalarSubqueryUseSingleJoin = true
+READ	select * from x where (select count(*) from y where y1 > x1 group by y1) = 1
+READ	select *, (select count(*) from y where y1 + y2 = x1 group by y1) from x
+READ	select *, (select count(*) from y where x1 = y1 and y2 + 10 = x1 + 1 group by y2) from x
+READ	select *, (select count(*) from (select * from y where y1 = x1 union all select * from y) sub group by y1) from x
+READ	select *, (select count(*) from y left join (select * from z where z1 = x1) sub on y2 = z2 group by z1) from x
+SESSION	set spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate = true
+SESSION	set spark.sql.optimizer.scalarSubqueryUseSingleJoin = false
+READ	select * from x where (select count(*) from y where y1 > x1 group by y1) = 1
+SESSION	reset spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate

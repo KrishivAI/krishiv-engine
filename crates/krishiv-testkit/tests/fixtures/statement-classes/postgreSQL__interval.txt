@@ -1,0 +1,24 @@
+READ	SELECT interval '999' second
+READ	SELECT interval '999' minute
+READ	SELECT interval '999' hour
+READ	SELECT interval '999' day
+READ	SELECT interval '999' month
+READ	SELECT interval '1' year
+READ	SELECT interval '2' month
+READ	SELECT interval '3' day
+READ	SELECT interval '4' hour
+READ	SELECT interval '5' minute
+READ	SELECT interval '6' second
+READ	SELECT interval '1-2' year to month
+PARSE_ERROR	SELECT interval '1 2:03' day to hour
+PARSE_ERROR	SELECT interval '1 2:03:04' day to hour
+READ	SELECT interval '1 2:03' day to minute
+PARSE_ERROR	SELECT interval '1 2:03:04' day to minute
+PARSE_ERROR	SELECT interval '1 2:03' day to second
+READ	SELECT interval '1 2:03:04' day to second
+PARSE_ERROR	SELECT interval '1 2:03' hour to minute
+PARSE_ERROR	SELECT interval '1 2:03:04' hour to minute
+PARSE_ERROR	SELECT interval '1 2:03' hour to second
+PARSE_ERROR	SELECT interval '1 2:03:04' hour to second
+PARSE_ERROR	SELECT interval '1 2:03' minute to second
+PARSE_ERROR	SELECT interval '1 2:03:04' minute to second
