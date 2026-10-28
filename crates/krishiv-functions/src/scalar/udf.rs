@@ -233,14 +233,19 @@ enum Strict {
 }
 
 /// The union of the null masks of `args`: a scalar null is every row null.
+/// Validity comes from `logical_nulls`, so a logical null (an untyped
+/// `NULL` literal's `NullArray`, a dictionary or a run-end array) counts
+/// as null too.
 fn strict_mask(args: &[Arg]) -> Strict {
     let mut valid: Option<BooleanBuffer> = None;
     for a in args {
         match a {
-            Arg::Scalar(one) if one.is_null(0) => return Strict::AllNull,
+            Arg::Scalar(one) if one.logical_nulls().is_some_and(|n| n.is_null(0)) => {
+                return Strict::AllNull;
+            }
             Arg::Scalar(_) => {}
             Arg::Array(column) => {
-                let Some(nulls) = column.nulls() else {
+                let Some(nulls) = column.logical_nulls() else {
                     continue;
                 };
                 // A validity buffer over the whole batch.

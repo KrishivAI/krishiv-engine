@@ -42,7 +42,7 @@ use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggregateFunction, is_moment};
 use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
-use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr, SubqueryKind};
+use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr};
 use krishiv_types::DataType;
 
 /// The `min_reader_version` of a plan that uses no feature (the epoch-1
@@ -385,24 +385,9 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             f(Construct::Lambda);
         }
         f(Construct::Expr(e));
-        // A UDF call hides in any expression of the node.
+        // A UDF call hides in any expression of the node (`exprs_of`
+        // already yields every descendant, so one node check is enough).
         functions_in(e, f);
-    }
-
-    for t in types_of(node) {
-        f(Construct::Type(t));
-    }
-    for t in arrow_types_of(node) {
-        f(Construct::ArrowType(t));
-    }
-    for e in exprs_of(node) {
-        if matches!(
-            &e.node,
-            ExprNode::Lambda { .. } | ExprNode::Resolved(ResolvedExpr::LambdaVar(_))
-        ) {
-            f(Construct::Lambda);
-        }
-        f(Construct::Expr(e));
     }
 }
 
@@ -515,57 +500,17 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
     out
 }
 
-/// Calls `f` with every function call `e` holds: only a session UDF needs
-/// a feature, so only those arms matter. Every current [`ExprNode`] variant
-/// appears here explicitly, so a new expression kind holding a call cannot
-/// silently skip UDF feature detection (a future variant hits the wildcard,
-/// whose children are still walked below; encoding refuses unknown nodes
+/// Calls `f` with the function call `e` holds, if one: only a session UDF
+/// needs a feature, so only that arm matters. The call site already visits
+/// every descendant (see `exprs_of`), so one node check covers the whole
+/// subtree. Every current [`ExprNode`] variant appears in the call-site
+/// walk explicitly, so a new expression kind holding a call cannot
+/// silently skip UDF feature detection (encoding refuses unknown nodes
 /// first). Physical expressions hold no subquery nodes (the codec refuses
-/// them); values of one are still entered, so nothing hides.
-#[expect(
-    clippy::match_same_arms,
-    reason = "every current expression kind is listed explicitly"
-)]
+/// them).
 fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
-    let mut stack = vec![e];
-    let mut seen = std::collections::HashSet::new();
-    while let Some(e) = stack.pop() {
-        if !seen.insert(Arc::as_ptr(e)) {
-            continue;
-        }
-        match &e.node {
-            ExprNode::Resolved(ResolvedExpr::Function(c)) => f(Construct::Function(&c.id)),
-            ExprNode::Resolved(
-                ResolvedExpr::Column(_)
-                | ResolvedExpr::OuterColumn(_)
-                | ResolvedExpr::LambdaVar(_)
-                | ResolvedExpr::Alias { .. },
-            ) => {}
-            ExprNode::Resolved(ResolvedExpr::Field { .. }) => {}
-            // Physical expressions hold no subqueries; the values of one
-            // are still entered, so nothing hides (`SubqueryKind` is
-            // non-exhaustive, so a future kind is ignored here but still
-            // walked through `for_each_child` below).
-            ExprNode::Subquery { kind, .. } => {
-                if let SubqueryKind::In(values) = kind {
-                    stack.extend(values.iter());
-                }
-            }
-            ExprNode::Column(_)
-            | ExprNode::Literal(_)
-            | ExprNode::TypedLiteral { .. }
-            | ExprNode::Star(_)
-            | ExprNode::Function(_)
-            | ExprNode::Cast { .. }
-            | ExprNode::Alias { .. }
-            | ExprNode::Lambda { .. }
-            | ExprNode::Field { .. }
-            // A future expression kind hits this arm too: its children are
-            // still walked below, so nested calls cannot hide; encoding
-            // refuses it first.
-            | ExprNode::Window(_) | _ => {}
-        }
-        e.for_each_child(&mut |c| stack.push(c));
+    if let ExprNode::Resolved(ResolvedExpr::Function(c)) = &e.node {
+        f(Construct::Function(&c.id));
     }
 }
 

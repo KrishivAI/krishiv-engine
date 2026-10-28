@@ -230,7 +230,10 @@ fn builtins_win_over_a_same_name_udf() {
     // `system.session` and `session` reach the UDF only.
     assert_eq!(one_string(&s, "SELECT system.session.upper('a')"), "udf:a");
     assert_eq!(one_string(&s, "SELECT session.upper('a')"), "udf:a");
-    // `system.builtin` of a UDF-only name is unknown.
+    // `system.builtin` of a UDF-only name is unknown, even with the UDF
+    // registered (a builtin-qualified call never reaches a session UDF).
+    s.register_udf(AddOne).unwrap();
+    assert_eq!(ints(&collect(&s, "SELECT add_one(41)")), [Some(42)]);
     let e = block_on(s.sql("SELECT system.builtin.add_one(1)")).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::UnresolvedRoutine);
 }

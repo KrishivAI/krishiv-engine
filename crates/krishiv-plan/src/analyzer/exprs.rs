@@ -682,12 +682,20 @@ impl Resolver<'_> {
                     // A lambda binds where it is used: a higher-order
                     // call binds its array and lambda children itself
                     // (see `hof`), while a lambda anywhere else is no
-                    // higher-order call's argument.
+                    // higher-order call's argument. Only unqualified and
+                    // builtin-qualified calls take the higher-order path:
+                    // a session-qualified UDF named like one (`session.filter`,
+                    // ...) runs the UDF.
+                    let hof = |f: &FunctionCall| {
+                        (f.unqualified().is_some()
+                            || super::bind::is_builtin_qualifier(&f.qualifier))
+                        .then(|| super::hof::Hof::of(&f.name))
+                        .flatten()
+                    };
                     if let ExprNode::Function(f) = &x.node
-                        && (super::hof::Hof::of(&f.name).is_some()
-                            || super::hof::has_direct_lambda(f))
+                        && (hof(f).is_some() || super::hof::has_direct_lambda(f))
                     {
-                        let Some(h) = super::hof::Hof::of(&f.name) else {
+                        let Some(h) = hof(f) else {
                             return Err(super::hof::not_higher_order(&f.name, x.origin));
                         };
                         let kids = self.child_ctx(&x, ctx);
@@ -761,12 +769,24 @@ impl Resolver<'_> {
 
     pub(super) fn is_aggregate(&self, e: &Expr) -> bool {
         match &e.node {
-            ExprNode::Function(f) => matches!(
-                self.ctx
-                    .functions
-                    .lookup(std::slice::from_ref(&f.name), self.ctx.profile),
-                FunctionLookup::Found(entry) if entry.kind == FunctionKind::Aggregate
-            ),
+            ExprNode::Function(f) => {
+                // A session-qualified call (`session.f`) resolves through
+                // its full qualifier (UDFs only), as resolution does; any
+                // other call resolves by its bare name.
+                let name;
+                let lookup: &[String] = if super::bind::is_session_qualifier(&f.qualifier) {
+                    let mut parts = f.qualifier.clone();
+                    parts.push(f.name.clone());
+                    name = parts;
+                    &name
+                } else {
+                    std::slice::from_ref(&f.name)
+                };
+                matches!(
+                    self.ctx.functions.lookup(lookup, self.ctx.profile),
+                    FunctionLookup::Found(entry) if entry.kind == FunctionKind::Aggregate
+                )
+            }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => f.kind == FunctionKind::Aggregate,
             _ => false,
         }
@@ -1345,6 +1365,20 @@ impl Resolver<'_> {
                         std::slice::from_ref(&lookup_name.to_owned()),
                         self.ctx.profile,
                     ) {
+                        // A builtin-qualified call (`builtin.f`,
+                        // `system.builtin.f`) reaches built-ins only: a
+                        // session UDF of the same name stays unresolved.
+                        FunctionLookup::Found(entry)
+                            if builtin.is_some() && matches!(entry.id, FunctionId::Udf { .. }) =>
+                        {
+                            return Err(AnalysisError::new(
+                                UnresolvedRoutine {
+                                    routine_name: quoted(&parts),
+                                    search_path: self.b.search_path.clone(),
+                                },
+                                e.origin,
+                            ));
+                        }
                         FunctionLookup::Found(entry) => entry,
                         FunctionLookup::KnownUnsupported => {
                             return Err(unsupported(

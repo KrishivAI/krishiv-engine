@@ -356,13 +356,13 @@ fn call(
             let kids = kids(f, conf, memo, functions)?;
             registry(name, f, kids, conf)
         }
-        FunctionId::Udf { name, version } => udf(name, *version, f, conf, functions),
+        FunctionId::Udf { name, version } => udf(name, *version, f, conf, memo, functions),
     }
 }
 
-/// A deterministic scalar session-UDF call of literal arguments, invoked
+/// A deterministic scalar session-UDF call of foldable arguments, invoked
 /// through the same binding execution uses. A nondeterministic UDF, a
-/// non-literal argument, an unknown version or a failure to bind never
+/// non-foldable argument, an unknown version or a failure to bind never
 /// folds; a bound call that fails folds to its error (the analyzer's
 /// raising-literal form).
 fn udf(
@@ -370,17 +370,18 @@ fn udf(
     version: u32,
     f: &ResolvedFunction,
     conf: Conf,
+    memo: &mut Memo,
     functions: &dyn FunctionRegistry,
 ) -> Folded {
     let udf = functions.resolve_udf(name, version)?;
-    let literals: Vec<ArrayRef> = f
-        .args
-        .iter()
-        .map(|a| match &a.node {
-            ExprNode::Literal(l) => literal(l),
-            _ => None,
-        })
-        .collect::<Option<Vec<_>>>()?;
+    // Folded (not syntactic) arguments, as for built-ins: casts and nested
+    // calls fold, and an argument error propagates.
+    let kids = kids(f, conf, memo, functions)?;
+    let literals = match values(kids) {
+        Ok(a) => a,
+        Err(e) => return Some(Err(e)),
+    };
+    let literals: Vec<ArrayRef> = literals.into_iter().map(normalized).collect();
     let arg_types: Vec<ArrowType> = literals.iter().map(|a| a.data_type().clone()).collect();
     let bound = krishiv_functions::scalar::bind_udf(
         &udf,
@@ -1070,6 +1071,52 @@ mod tests {
                 &TestUdfs::new(),
             ),
             None
+        );
+        // A cast of a literal folds first, as for built-ins (implicit
+        // casts no longer block folding).
+        assert_eq!(
+            super::constant(
+                &Arc::new(udf(
+                    "test_udf",
+                    2,
+                    vec![cast_of(lit(Literal::Short(41)), DataType::Integer)],
+                    true
+                )),
+                Conf::new(true, true, SparkProfile::V4_2, None),
+                &mut Memo::default(),
+                &TestUdfs::new(),
+            ),
+            Some(Constant::Integral(42))
+        );
+        // A nested UDF call folds first too.
+        assert_eq!(
+            super::constant(
+                &Arc::new(udf(
+                    "test_udf",
+                    2,
+                    vec![udf("test_udf", 2, vec![int(41)], true)],
+                    true
+                )),
+                Conf::new(true, true, SparkProfile::V4_2, None),
+                &mut Memo::default(),
+                &TestUdfs::new(),
+            ),
+            Some(Constant::Integral(43))
+        );
+        // An argument that folds to an error propagates, as for built-ins.
+        assert_eq!(
+            class(super::constant(
+                &Arc::new(udf(
+                    "test_udf",
+                    2,
+                    vec![udf("test_udf_failing", 9, vec![int(41)], true)],
+                    true
+                )),
+                Conf::new(true, true, SparkProfile::V4_2, None),
+                &mut Memo::default(),
+                &TestUdfs::new(),
+            )),
+            Some(ErrorClass::FailedExecuteUdf)
         );
         // The fixtures expose their contracts directly.
         let registry = TestUdfs::new();

@@ -233,17 +233,28 @@ fn run(
                 Ok(pushdown::imply_join_condition(p))
             })
         })?;
-        // UDF calls of literals fold before the rewrite batch, so its
-        // constant folding sees the values (and only it needs the UDFs).
-        let root = match udfs {
-            Some((library, config)) => t.once("FoldUdfs", &root, |r| {
-                dag::rewrite_up(Arc::clone(r), &mut |p| {
+        // UDF calls of literals fold with the rewrite batch to a fixed
+        // point: folding exposes the constants rewriting folds, and
+        // rewriting exposes the literals folding folds (casts, arithmetic
+        // and nested calls), so neither alone reaches the fixed point.
+        // Only this pass needs the UDFs.
+        let mut root = root;
+        if let Some((library, config)) = udfs {
+            for round in 1..=MAX_ITERATIONS {
+                let before = Arc::clone(&root);
+                let prev = Arc::clone(&root);
+                root = dag::rewrite_up(Arc::clone(&root), &mut |p| {
                     Ok(fold::fold_plan(p, &fold_ctx(library, config)))
-                })
-            })?,
-            None => root,
-        };
-        let root = batch(root, "Rewrite", &mut t)?;
+                })?;
+                t.step("FoldUdfs", round, "FoldUdfs", &prev, &root);
+                root = batch(root, "Rewrite", &mut t)?;
+                if Arc::ptr_eq(&before, &root) {
+                    break;
+                }
+            }
+        } else {
+            root = batch(root, "Rewrite", &mut t)?;
+        }
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
         })?;

@@ -10,8 +10,8 @@ use arrow_array::ArrayRef;
 use krishiv_common::config::Config;
 use krishiv_optimizer::{NoStatistics, optimize_with_udfs};
 use krishiv_plan::{
-    Expr, ExprNode, FunctionId, FunctionKind, Literal, LogicalPlan, Plan, PlanNode, ResolvedExpr,
-    ResolvedFunction,
+    Builtin, CastMode, Expr, ExprNode, FunctionId, FunctionKind, Literal, LogicalPlan, Plan,
+    PlanNode, ResolvedExpr, ResolvedFunction,
 };
 use krishiv_types::DataType;
 use krishiv_udf_sdk::{
@@ -87,11 +87,15 @@ impl ScalarUdf for PlusOne {
 }
 
 fn call(deterministic: bool) -> Arc<Expr> {
+    versioned_call(deterministic, 2)
+}
+
+fn versioned_call(deterministic: bool, version: u32) -> Arc<Expr> {
     Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
         ResolvedFunction {
             id: FunctionId::Udf {
                 name: "my_udf".to_owned(),
-                version: 2,
+                version,
             },
             kind: FunctionKind::Scalar,
             args: vec![Arc::new(Expr::literal(Literal::Integer(41)))],
@@ -160,13 +164,99 @@ fn other_udf_calls_stay_in_the_plan() {
         &project_expr(&optimized).node,
         ExprNode::Resolved(ResolvedExpr::Function(_))
     ));
-    // An unregistered version never folds either.
-    let empty = UdfLibrary::new();
-    let optimized = optimize_with_udfs(&plan(call(true)), &NoStatistics, &empty, &config).unwrap();
+    // An unregistered version never folds either: `PlusOne` is at
+    // version 2, so a call at version 3 stays in the plan.
+    let optimized =
+        optimize_with_udfs(&plan(versioned_call(true, 3)), &NoStatistics, &lib, &config).unwrap();
+    assert_eq!(calls.load(Ordering::Relaxed), 0);
     assert!(matches!(
         &project_expr(&optimized).node,
         ExprNode::Resolved(ResolvedExpr::Function(_))
     ));
+}
+
+#[test]
+fn udf_calls_fold_once_their_arguments_do() {
+    // Arithmetic, casts and nested UDF calls are not literals on the
+    // first pass: the rewrite batch folds them, then the UDF pass folds
+    // the calls, to a fixed point.
+    fn builtin(op: Builtin, args: Vec<Arc<Expr>>, data_type: DataType) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(op),
+                kind: FunctionKind::Scalar,
+                args,
+                distinct: false,
+                filter: None,
+                data_type,
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    }
+    fn udf(arg: Arc<Expr>) -> Arc<Expr> {
+        Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Udf {
+                    name: "my_udf".to_owned(),
+                    version: 2,
+                },
+                kind: FunctionKind::Scalar,
+                args: vec![arg],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Integer,
+                nullable: true,
+                deterministic: true,
+            },
+        ))))
+    }
+    fn cast(arg: Arc<Expr>, to: DataType) -> Arc<Expr> {
+        // A pinned mode is resolved (`Default` is the analyzer's to pin).
+        Arc::new(Expr::new(ExprNode::Cast {
+            expr: arg,
+            to,
+            mode: CastMode::Ansi,
+        }))
+    }
+    fn fold(arg: Arc<Expr>) -> (Arc<Expr>, usize) {
+        let lib = Arc::new(UdfLibrary::new());
+        let calls = Arc::new(AtomicUsize::new(0));
+        lib.register(Arc::new(PlusOne {
+            deterministic: true,
+            calls: Arc::clone(&calls),
+        }))
+        .unwrap();
+        let optimized =
+            optimize_with_udfs(&plan(udf(arg)), &NoStatistics, &lib, &config()).unwrap();
+        (project_expr(&optimized), calls.load(Ordering::Relaxed))
+    }
+    let lit = |v: i32| Arc::new(Expr::literal(Literal::Integer(v)));
+    // `my_udf(1 + 2)` folds once the rewrite batch folds the sum.
+    let (folded, calls) = fold(builtin(
+        Builtin::Add,
+        vec![lit(1), lit(2)],
+        DataType::Integer,
+    ));
+    assert_eq!(folded.node, Expr::literal(Literal::Integer(4)).node);
+    assert_eq!(calls, 1);
+    // `my_udf(CAST(41L AS INT))` folds once the cast folds.
+    let (folded, calls) = fold(cast(
+        Arc::new(Expr::literal(Literal::Long(41))),
+        DataType::Integer,
+    ));
+    assert_eq!(folded.node, Expr::literal(Literal::Integer(42)).node);
+    assert_eq!(calls, 1);
+    // `my_udf(CAST(my_udf(1 + 2) AS INT))` takes two rounds: the inner
+    // call folds first, then the cast, then the outer call.
+    let inner = udf(builtin(
+        Builtin::Add,
+        vec![lit(1), lit(2)],
+        DataType::Integer,
+    ));
+    let (folded, calls) = fold(cast(inner, DataType::Integer));
+    assert_eq!(folded.node, Expr::literal(Literal::Integer(5)).node);
+    assert_eq!(calls, 2);
 }
 
 /// An identity UDF over every scalar literal type: folding covers each

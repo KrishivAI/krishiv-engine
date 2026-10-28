@@ -291,9 +291,18 @@ fn check_function(
                 .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile),
         )
     };
+    // A builtin-qualified call (`builtin.f`, `system.builtin.f`) reaches
+    // built-ins only: a session UDF of the same name stays unresolved.
+    let unresolved = matches!(&registry, Some(FunctionLookup::NotFound) | None)
+        || (builtin.is_some()
+            && matches!(
+                &registry,
+                Some(FunctionLookup::Found(entry))
+                    if matches!(entry.id, crate::FunctionId::Udf { .. })
+            ));
     // Unknown functions fail before any named-argument check (Spark never
     // reaches a builder for them).
-    if !builtin_op && !grouping && matches!(&registry, Some(FunctionLookup::NotFound) | None) {
+    if !builtin_op && !grouping && unresolved {
         return Err(AnalysisError::new(
             UnresolvedRoutine {
                 routine_name: quoted(&parts),
@@ -325,6 +334,15 @@ fn check_function(
     }
 }
 
+/// Whether `qualifier` names the built-in catalog (`builtin` or
+/// `system.builtin`, case-insensitively): such a call reaches built-ins
+/// only.
+pub(super) fn is_builtin_qualifier(qualifier: &[String]) -> bool {
+    matches!(qualifier, [q] if q.eq_ignore_ascii_case("builtin"))
+        || matches!(qualifier, [s, b]
+        if s.eq_ignore_ascii_case("system") && b.eq_ignore_ascii_case("builtin"))
+}
+
 /// Whether `qualifier` names a session UDF catalog (`session` or
 /// `system.session`, case-insensitively): such a call reaches UDFs only.
 pub(super) fn is_session_qualifier(qualifier: &[String]) -> bool {
@@ -350,10 +368,7 @@ pub(super) fn qualified_parts(
     if is_session_qualifier(&f.qualifier) {
         return Ok((parts, None));
     }
-    let builtin = matches!(f.qualifier.as_slice(), [q] if q.eq_ignore_ascii_case("builtin"))
-        || matches!(f.qualifier.as_slice(), [s, b]
-        if s.eq_ignore_ascii_case("system") && b.eq_ignore_ascii_case("builtin"));
-    if !builtin {
+    if !is_builtin_qualifier(&f.qualifier) {
         return Err(AnalysisError::new(
             UnresolvedRoutine {
                 routine_name: quoted(&parts),
