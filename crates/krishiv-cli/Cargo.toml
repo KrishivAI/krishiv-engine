@@ -50,4 +50,7 @@ wasm-udf = ["krishiv/wasm-udf"]
 ui = ["krishiv/ui", "dep:krishiv-server"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishiv-memory"]
+# Live async-task diagnostics over `tokio-console` (P2-T129): off by default;
+# needs `RUSTFLAGS="--cfg tokio_unstable"` for the task names.
+tokio-console = ["krishiv/tokio-console"]
 full = ["krishiv/full"]

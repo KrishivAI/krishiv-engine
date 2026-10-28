@@ -15,7 +15,7 @@ unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "deny"
 # `--cfg loom` builds the loom model tests (krishiv-memory, krishiv-exec);
 # `cargo codspeed` builds benches with `--cfg codspeed`.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(codspeed)"] }
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(codspeed)", "cfg(tokio_unstable)"] }
 # ADR 0029 (2026-10-17 lint set).
 unreachable_pub = "warn"
 missing_debug_implementations = "warn"
@@ -150,6 +150,9 @@ mimalloc = { version = "0.1.52", default-features = false }
 # FFI crate of mimalloc; dev-dependency only, for the allocator-linked test (P2-T012).
 libmimalloc-sys = { version = "0.1.49", default-features = false }
 clap = { version = "4.6", default-features = false }
+# Live async-task diagnostics (`tokio-console`, P2-T129): off by default, see
+# `crates/krishiv-exec/src/console.rs`.
+console-subscriber = { version = "0.5.0", default-features = false }
 reedline = { version = "0.52", default-features = false }
 uuid = { version = "1.28", default-features = false }
 

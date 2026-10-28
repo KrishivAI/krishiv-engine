@@ -68,6 +68,7 @@
 pub mod aggregate;
 mod cancel;
 mod channel;
+pub mod console;
 mod context;
 mod driver;
 mod error;
@@ -95,6 +96,7 @@ pub mod values;
 pub mod window;
 
 pub use cancel::CancellationToken;
+pub use console::maybe_init_tokio_console;
 pub use context::{
     DEFAULT_BATCH_SIZE, DEFAULT_MORSEL_ROWS, ExecConfig, MemoryHandle, OperatorId, QueryContext,
     QueryId, TaskContext,

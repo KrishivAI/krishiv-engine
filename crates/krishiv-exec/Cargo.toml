@@ -36,6 +36,9 @@ serde_json = { workspace = true, features = ["std"] }
 object_store.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 tracing = { workspace = true, features = ["std"] }
+# Live async-task diagnostics (`tokio-console`, P2-T129): enabled only by the
+# `tokio-console` feature, so default builds link none of it.
+console-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 insta.workspace = true
@@ -55,6 +58,13 @@ loom = { workspace = true, features = ["futures"] }
 [features]
 # Row-layout key-page prototype (P2-T157); not part of the default build.
 row-table-prototype = []
+# Live async-task diagnostics over `tokio-console` (P2-T129): task names and
+# the console subscriber. Off by default; needs `RUSTFLAGS="--cfg
+# tokio_unstable"` for the task names (they are absent without it).
+tokio-console = ["dep:console-subscriber", "tokio/tracing"]
+# The planted non-yielding operator its diagnostics walk-through uses
+# (`testing::BusyLoop`); test-only, implies `tokio-console`.
+tokio-console-test = ["tokio-console"]
 
 [[bench]]
 name = "pipeline"

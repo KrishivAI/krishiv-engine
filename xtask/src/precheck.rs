@@ -66,6 +66,7 @@ pub const STEP_IDS: &[&str] = &[
     "layering",
     "deny",
     "machete",
+    "tokio-console",
     "clippy",
     "doc",
     "nextest",
@@ -98,7 +99,7 @@ pub fn mapping(check: &str) -> Option<Mapping> {
         "fmt" => Mapping::Local(&["fmt"]),
         "clippy" => Mapping::Local(&["clippy"]),
         "test" => Mapping::Local(&["nextest"]),
-        "deny" => Mapping::Local(&["deny"]),
+        "deny" => Mapping::Local(&["deny", "tokio-console"]),
         "machete" => Mapping::Local(&["machete"]),
         "layering" => Mapping::Local(&["layering"]),
         "docs" => Mapping::Local(&["doc"]),
@@ -653,6 +654,13 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
         )
     } else {
         skip("machete", "no Cargo.toml/Cargo.lock change")
+    });
+    steps.push(if ch.manifests {
+        // The default feature tree must not leak the console subscriber or
+        // tokio's tracing feature (P2-T129); `cargo tree` needs no extra tool.
+        run("tokio-console", vec![x(&["tokio-console-check"])])
+    } else {
+        skip("tokio-console", "no Cargo.toml/Cargo.lock change")
     });
 
     if rust {

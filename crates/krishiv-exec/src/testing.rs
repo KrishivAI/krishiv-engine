@@ -290,6 +290,45 @@ impl Operator for PassThrough {
     }
 }
 
+/// A pass-through that busy-loops [`BUSY_LOOP`](Self::BUSY_LOOP) per batch
+/// without yielding: the planted non-yielding operator of the tokio-console
+/// diagnostics walk-through (P2-T129). Behind `tokio-console-test` and for
+/// tests only: it trips the driver's stall detector on purpose, so the
+/// console shows a task with a long poll time.
+#[cfg(feature = "tokio-console-test")]
+#[derive(Debug, Default)]
+pub struct BusyLoop;
+
+#[cfg(feature = "tokio-console-test")]
+impl BusyLoop {
+    /// How long each batch spins, without yielding.
+    pub const BUSY_LOOP: Duration = Duration::from_millis(50);
+
+    /// A new planted slow operator.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self)
+    }
+}
+
+#[cfg(feature = "tokio-console-test")]
+impl Operator for BusyLoop {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        let start = std::time::Instant::now();
+        while start.elapsed() < Self::BUSY_LOOP {
+            std::hint::spin_loop();
+        }
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+}
+
 /// A streaming `LIMIT`: `Finished` once `limit` rows passed (over all
 /// drivers).
 #[derive(Debug)]

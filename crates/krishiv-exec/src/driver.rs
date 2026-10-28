@@ -144,7 +144,8 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle 
         query: Arc::clone(&query),
         executor: Arc::clone(&executor),
     };
-    executor.spawn(query.class(), Box::pin(timed))
+    let name = crate::console::driver_task_name(query.id(), pipeline, partition);
+    crate::console::spawn_named(&executor, &query, query.class(), &name, Box::pin(timed))
 }
 
 async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
