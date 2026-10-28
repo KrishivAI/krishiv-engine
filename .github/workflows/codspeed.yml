@@ -63,7 +63,7 @@ jobs:
           - shard: exec-agg-sort
             bench_flags: "--bench aggregate --bench sort"
           - shard: exec-join-ops
-            bench_flags: "--bench hash_join --bench operators --bench routing_hash"
+            bench_flags: "--bench hash_join --bench operators --bench routing_hash --bench udf"
           - shard: pipeline-io
             bench_flags: "--bench pipeline --bench spill_file --bench io --bench runtime_filter"
           - shard: kernels-sql
