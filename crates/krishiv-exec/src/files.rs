@@ -471,6 +471,7 @@ mod tests {
             assert!(!hidden(name), "{name}");
         }
         assert_eq!(display_name("parquet"), "Parquet");
+        assert_eq!(display_name("avro"), "Avro");
         assert_eq!(display_name("json"), "JSON");
         assert_eq!(display_name("mock"), "mock");
     }
