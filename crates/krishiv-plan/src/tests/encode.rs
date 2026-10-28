@@ -297,6 +297,31 @@ fn lambda_and_its_variables_enter_the_key() {
     assert_ne!(p(col), base, "variable tag");
 }
 
+/// A session UDF's version is part of its key: re-registering a UDF never
+/// reuses a key of the version it replaced.
+#[test]
+fn udf_versions_enter_the_key() {
+    let call = |version: u32| {
+        let func = ResolvedFunction {
+            id: FunctionId::Udf {
+                name: "f".to_owned(),
+                version,
+            },
+            kind: FunctionKind::Scalar,
+            args: vec![Arc::new(Expr::column(["a"]))],
+            distinct: false,
+            filter: None,
+            data_type: DataType::String,
+            nullable: true,
+            deterministic: true,
+        };
+        let call = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(func)));
+        LogicalPlan::table(["t"]).project(vec![call])
+    };
+    assert_eq!(key(call(1)), key(call(1)));
+    assert_ne!(key(call(1)), key(call(2)), "version");
+}
+
 /// A function's key is its name, kind and arguments, never its registry
 /// handle, so a cache shared across builds cannot confuse two functions.
 #[test]

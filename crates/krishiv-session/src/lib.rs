@@ -52,6 +52,7 @@ mod explain_graph;
 pub mod functions;
 mod profile;
 mod session;
+mod udfs;
 mod variables;
 mod window;
 
@@ -70,6 +71,13 @@ pub use krishiv_plan::analyzer::{
     Securable, SecurableUse,
 };
 pub use krishiv_sql::{ExplainKind, StatementClass};
+pub use krishiv_udf_sdk::{
+    ArgField, InvokeContext, NullHandling, ReturnField, ScalarUdf, Signature, UdfArg, UdfError,
+    UdfInputType, UdfLibrary, UdfProperties,
+};
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use session::{RecordBatchStream, Session, SessionBuilder};
+/// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
+/// for [`Session::register_udf`].
+pub use udfs::SessionFunctions;
 pub use window::WindowSpec;

@@ -47,6 +47,7 @@ use krishiv_io::{
 };
 use krishiv_memory::SpillScope;
 use krishiv_plan::{AttrId, Expr};
+use krishiv_udf_sdk::UdfLibrary;
 use object_store::path::Path;
 
 use super::{
@@ -88,13 +89,15 @@ pub trait SpillScopes: Send + Sync + fmt::Debug {
 }
 
 /// What a worker resolves a plan's references against: the tables its
-/// scans read, the relation store its batch splits resolve through, the
-/// spill scope of the query, the I/O context, formats and configuration a
-/// write builds its sink from, and the values of the plan. One per query
+/// scans read, the session UDFs its function calls invoke, the relation store
+/// its batch splits resolve through, the spill scope of the query, the I/O
+/// context, formats and configuration a write builds its sink from, and the
+/// values of the plan. One per query
 /// and worker.
 #[derive(Clone)]
 pub struct WorkerContext {
     tables: Arc<dyn TableProviderResolver>,
+    udfs: Option<Arc<UdfLibrary>>,
     relations: Option<Arc<krishiv_memory::RelationStore>>,
     spill: Option<SpillScope>,
     scopes: Option<Arc<dyn SpillScopes>>,
@@ -152,6 +155,7 @@ impl WorkerContext {
     pub fn new(tables: Arc<dyn TableProviderResolver>) -> Self {
         Self {
             tables,
+            udfs: None,
             relations: None,
             spill: None,
             scopes: None,
@@ -161,6 +165,14 @@ impl WorkerContext {
             values: None,
             producer: Producer::default(),
         }
+    }
+
+    /// The same context invoking session UDFs from `udfs`. A plan calling
+    /// a UDF the context lacks fails with `KRISHIV_UDF_NOT_AVAILABLE`.
+    #[must_use]
+    pub fn with_udfs(mut self, udfs: Arc<UdfLibrary>) -> Self {
+        self.udfs = Some(udfs);
+        self
     }
 
     /// The same context resolving a scan's batch splits (the
@@ -245,6 +257,7 @@ impl fmt::Debug for WorkerContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WorkerContext")
             .field("tables", &self.tables)
+            .field("udfs", &self.udfs.is_some())
             .field("relations", &self.relations.is_some())
             .field("spill", &self.spill.is_some())
             .field("spill_scopes", &self.scopes.is_some())
@@ -277,11 +290,14 @@ pub fn instantiate_task(
             (None, Some(scopes)) => Some(scopes.scope()?),
             (None, None) => None,
         };
+        let mut env = EvalEnv::from_plan(plan.env());
+        // The UDFs travel with the worker, never with the plan.
+        env.udfs = worker.udfs.clone();
         let mut cx = Instantiation {
             worker,
             task: task.clone(),
             spill,
-            env: EvalEnv::from_plan(plan.env()),
+            env,
             values: worker
                 .values
                 .clone()

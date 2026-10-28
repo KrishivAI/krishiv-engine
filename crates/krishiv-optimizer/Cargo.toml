@@ -16,6 +16,7 @@ krishiv-functions = { path = "../krishiv-functions" }
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 
 [dev-dependencies]
 criterion.workspace = true

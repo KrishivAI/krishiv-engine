@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 arrow-array.workspace = true
+arrow-buffer.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
 fancy-regex = { workspace = true, features = ["std"] }
@@ -28,6 +29,7 @@ regex-syntax = { workspace = true, features = ["unicode-bool", "unicode-case", "
 krishiv-common = { path = "../krishiv-common" }
 krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-types = { path = "../krishiv-types" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 
 [dev-dependencies]
 arrow-buffer.workspace = true

@@ -29,6 +29,7 @@ krishiv-memory = { path = "../krishiv-memory" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 thiserror.workspace = true
 # The query profile's JSON document (`profile`).
 serde_json = { workspace = true, features = ["std"] }
@@ -68,6 +69,10 @@ tokio-console = ["dep:console-subscriber", "dep:tracing-subscriber", "tokio/trac
 # The planted non-yielding operator its diagnostics walk-through uses
 # (`testing::BusyLoop`); test-only, implies `tokio-console`.
 tokio-console-test = ["tokio-console"]
+
+[[bench]]
+name = "udf"
+harness = false
 
 [[bench]]
 name = "pipeline"

@@ -242,8 +242,37 @@ fn check_function(
     origin: Origin,
 ) -> Result<(), AnalysisError> {
     // `builtin.f` / `system.builtin.f` (case-insensitively) resolve to the
-    // builtin function; any other qualifier is an unresolved routine.
+    // builtin function; `session.f` / `system.session.f` reach a session
+    // UDF only; any other qualifier is an unresolved routine.
     let (parts, builtin) = qualified_parts(f, &search_path(ctx), origin)?;
+    // A session-qualified call resolves through the full parts (UDFs only).
+    if is_session_qualifier(&f.qualifier) {
+        let named = f.arg_names.iter().any(Option::is_some);
+        let registry = ctx.functions.lookup(&parts, ctx.profile);
+        if matches!(registry, FunctionLookup::NotFound) {
+            return Err(AnalysisError::new(
+                UnresolvedRoutine {
+                    routine_name: quoted(&parts),
+                    search_path: search_path(ctx),
+                },
+                origin,
+            ));
+        }
+        if named && super::builtins::named_signature(&f.name).is_none() {
+            return Err(AnalysisError::new(
+                NamedParametersNotSupported {
+                    function_name: quoted(&parts),
+                },
+                origin,
+            ));
+        }
+        return match registry {
+            FunctionLookup::KnownUnsupported => {
+                Err(unsupported(format!("function {}", parts.join(".")), origin))
+            }
+            _ => Ok(()),
+        };
+    }
     let name = builtin.as_deref().unwrap_or(&f.name);
     let named = f.arg_names.iter().any(Option::is_some);
     // The canonical operators exist in every profile; the analyzer types
@@ -262,9 +291,18 @@ fn check_function(
                 .lookup(std::slice::from_ref(&name.to_owned()), ctx.profile),
         )
     };
+    // A builtin-qualified call (`builtin.f`, `system.builtin.f`) reaches
+    // built-ins only: a session UDF of the same name stays unresolved.
+    let unresolved = matches!(&registry, Some(FunctionLookup::NotFound) | None)
+        || (builtin.is_some()
+            && matches!(
+                &registry,
+                Some(FunctionLookup::Found(entry))
+                    if matches!(entry.id, crate::FunctionId::Udf { .. })
+            ));
     // Unknown functions fail before any named-argument check (Spark never
     // reaches a builder for them).
-    if !builtin_op && !grouping && matches!(&registry, Some(FunctionLookup::NotFound) | None) {
+    if !builtin_op && !grouping && unresolved {
         return Err(AnalysisError::new(
             UnresolvedRoutine {
                 routine_name: quoted(&parts),
@@ -296,9 +334,27 @@ fn check_function(
     }
 }
 
+/// Whether `qualifier` names the built-in catalog (`builtin` or
+/// `system.builtin`, case-insensitively): such a call reaches built-ins
+/// only.
+pub(super) fn is_builtin_qualifier(qualifier: &[String]) -> bool {
+    matches!(qualifier, [q] if q.eq_ignore_ascii_case("builtin"))
+        || matches!(qualifier, [s, b]
+        if s.eq_ignore_ascii_case("system") && b.eq_ignore_ascii_case("builtin"))
+}
+
+/// Whether `qualifier` names a session UDF catalog (`session` or
+/// `system.session`, case-insensitively): such a call reaches UDFs only.
+pub(super) fn is_session_qualifier(qualifier: &[String]) -> bool {
+    matches!(qualifier, [q] if q.eq_ignore_ascii_case("session"))
+        || matches!(qualifier, [s, q]
+        if s.eq_ignore_ascii_case("system") && q.eq_ignore_ascii_case("session"))
+}
+
 /// The routine a call names: every part as written (`parts`), and the
 /// builtin name when the qualifier is `builtin` or `system.builtin`
-/// (case-insensitively). Any other qualifier is `UNRESOLVED_ROUTINE`.
+/// (case-insensitively). A session qualifier (`session`, `system.session`)
+/// carries no builtin name; any other qualifier is `UNRESOLVED_ROUTINE`.
 pub(super) fn qualified_parts(
     f: &crate::FunctionCall,
     search_path: &str,
@@ -309,10 +365,10 @@ pub(super) fn qualified_parts(
     if f.qualifier.is_empty() {
         return Ok((parts, None));
     }
-    let builtin = matches!(f.qualifier.as_slice(), [q] if q.eq_ignore_ascii_case("builtin"))
-        || matches!(f.qualifier.as_slice(), [s, b]
-        if s.eq_ignore_ascii_case("system") && b.eq_ignore_ascii_case("builtin"));
-    if !builtin {
+    if is_session_qualifier(&f.qualifier) {
+        return Ok((parts, None));
+    }
+    if !is_builtin_qualifier(&f.qualifier) {
         return Err(AnalysisError::new(
             UnresolvedRoutine {
                 routine_name: quoted(&parts),

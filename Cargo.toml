@@ -83,6 +83,12 @@ parquet = { version = "60", default-features = false }
 # object_store is pinned to the version delta_kernel 0.30 builds against (ADR 0028
 # update 2026-10-17); never enable parquet's `object_store` feature (deny.toml).
 object_store = { version = "=0.14.2", default-features = false }
+# Avro container files (P2-T081b): datum encode/decode, codecs and schema
+# parsing. Only the pure-Rust codecs are enabled (deflate is built in;
+# snappy needs no OpenSSL). The `zstandard` feature stays off: it pulls
+# zstd 0.13, which carries RUSTSEC-2026-0391, and no apache-avro release
+# allows zstd 0.14; zstandard, bzip2 and xz files are refused.
+apache-avro = { version = "=0.22.0", default-features = false, features = ["snappy"] }
 # Implementing `object_store::ObjectStore` (an `async_trait` trait) for store
 # wrappers; already in the tree through object_store itself.
 async-trait = { version = "0.1.89", default-features = false }

@@ -8,5 +8,9 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[dependencies]
+arrow-array.workspace = true
+krishiv-types = { path = "../krishiv-types" }
+
 [lints]
 workspace = true

@@ -38,6 +38,7 @@ fn root(limit: Option<usize>, quantum: usize) -> Arc<TreePool> {
             spill_wait_timeout: Duration::from_secs(2),
             abort_release_timeout: Duration::from_secs(30),
             spill_scratch_reserve: 0,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     )
@@ -72,6 +73,9 @@ fn config_entries_feed_memory_config() {
     assert_eq!(d.spill_scratch_reserve, DEFAULT_SPILL_SCRATCH_RESERVE);
     let (c, _) = Config::from_pairs([("krishiv.memory.spillScratchReserve", "0")]).unwrap();
     assert_eq!(MemoryConfig::from_config(&c).spill_scratch_reserve, 0);
+    assert!(d.resident_guard, "the guard is on by default");
+    let (c, _) = Config::from_pairs([("krishiv.memory.residentGuard", "false")]).unwrap();
+    assert!(!MemoryConfig::from_config(&c).resident_guard);
 }
 
 fn floored(limit: usize, reserve: usize) -> Arc<TreePool> {
@@ -82,6 +86,7 @@ fn floored(limit: usize, reserve: usize) -> Arc<TreePool> {
             spill_wait_timeout: Duration::from_secs(2),
             abort_release_timeout: Duration::from_secs(30),
             spill_scratch_reserve: reserve,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     )
@@ -896,6 +901,7 @@ fn an_unavailable_timer_fails_the_request_without_hurting_anyone() {
             spill_wait_timeout: Duration::from_millis(20),
             abort_release_timeout: Duration::from_millis(20),
             spill_scratch_reserve: 0,
+            resident_guard: true,
         },
         Arc::new(clock),
     );
@@ -1284,4 +1290,84 @@ fn the_effective_limit_is_the_smallest_on_the_path_to_the_root() {
     assert_eq!(wide.effective_limit(), Some(2 << 20));
     let free = root(None, 1).child("q", None);
     assert_eq!(free.effective_limit(), None);
+}
+
+/// Sets the resident-set guard's cut of `root` (the sampler's output).
+fn set_cut(root: &TreePool, bytes: usize) {
+    root.node().shared.cut.store(bytes, sync::Ordering::Release);
+}
+
+#[test]
+fn the_resident_guards_cut_lowers_ordinary_grants_at_the_root_only() {
+    let root = root(Some(64 * Q), Q);
+    let q = root.child_pool("q", Some(64 * Q));
+    let id = q.register("op", None);
+    set_cut(&root, 16 * Q);
+    q.try_reserve(id, 48 * Q).unwrap();
+    let e = q.try_reserve(id, Q).unwrap_err();
+    assert!(matches!(e, MemoryError::Exhausted { .. }), "{e:?}");
+    // Spill scratch keeps the whole limit; the limits are unchanged.
+    let scratch = q.register("scratch", None);
+    q.try_reserve_scratch(scratch, 16 * Q).unwrap();
+    assert_eq!(root.limit(), Some(64 * Q));
+    assert_eq!(q.effective_limit(), Some(64 * Q));
+    // The cut is the root's: a query's own limit is not cut.
+    assert_eq!(
+        root.node().shortfall(Q, crate::pool::Class::Ordinary),
+        64 * Q + Q - 48 * Q
+    );
+    assert_eq!(root.node().shortfall(Q, crate::pool::Class::Unguarded), Q);
+    set_cut(&root, 0);
+    q.release(scratch, 16 * Q);
+    q.try_reserve(id, Q).unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cut_makes_a_round_spill_what_it_holds_above_the_ceiling() {
+    let root = root(Some(64 * Q), Q);
+    let q1 = root.child_pool("q1", None);
+    let owner = SpillOwner::new();
+    let signal = owner.signal();
+    let x_id = q1.register("x", Some(Arc::clone(&signal) as Arc<dyn Spillable>));
+    let mut x = Reservation::new(Arc::clone(&q1) as Arc<dyn MemoryPool>, x_id);
+    x.try_grow(60 * Q).unwrap();
+    signal.set_spillable_bytes(60 * Q);
+    set_cut(&root, 16 * Q);
+    let q2 = root.child_pool("q2", None);
+    let w = q2.register("w", None);
+    let q2c = Arc::clone(&q2);
+    let request = tokio::spawn(async move { q2c.reserve(w, 2 * Q).await });
+    let target = loop {
+        if let Some(t) = signal.spill_requested() {
+            break t;
+        }
+        tokio::task::yield_now().await;
+    };
+    // The whole excess over the cut ceiling, not just the 2 Q asked for.
+    assert_eq!(target, 60 * Q + 2 * Q - 48 * Q);
+    x.shrink(target);
+    signal.set_spillable_bytes(x.size());
+    signal.complete(target);
+    request.await.unwrap().unwrap();
+    assert_eq!(root.reserved(), 48 * Q);
+    assert_eq!(root.stats().aborts, 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_cut_never_fails_or_aborts_a_query() {
+    let root = root(Some(64 * Q), Q);
+    let q1 = root.child_pool("q1", None);
+    let held = q1.register("held", None);
+    q1.try_reserve(held, 60 * Q).unwrap();
+    set_cut(&root, 16 * Q);
+    let q2 = root.child_pool("q2", None);
+    let w = q2.register("w", None);
+    // Nothing can spill: past the spills, the round asks without the cut.
+    q2.reserve(w, 2 * Q).await.unwrap();
+    q2.reserve_without_abort(w, Q).await.unwrap();
+    assert!(q1.check_aborted().is_ok());
+    assert_eq!(root.stats().aborts, 0);
+    // Beyond the limit itself it still fails as before.
+    let e = q2.reserve_without_abort(w, 2 * Q).await.unwrap_err();
+    assert!(matches!(e, MemoryError::Exhausted { .. }), "{e:?}");
 }

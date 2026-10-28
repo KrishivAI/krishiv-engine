@@ -14,3 +14,4 @@ mod rules;
 mod sum_rewrite;
 mod support;
 mod tpch;
+mod udf;
