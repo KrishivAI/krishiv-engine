@@ -303,6 +303,11 @@ pub enum InputType {
         /// Whether Spark's required type names ANSI intervals.
         intervals: bool,
     },
+    /// Any map type; an untyped `NULL` becomes `map<null, null>` (Spark's
+    /// implicit cast of `NULL` to the abstract map type).
+    Map,
+    /// Any array type; an untyped `NULL` becomes `array<null>`.
+    Array,
     /// One of these types (Spark's `TypeCollection`): an argument of one of
     /// them stays as it is, another is cast to the first it may be cast to
     /// implicitly.
@@ -316,6 +321,8 @@ impl InputType {
         match self {
             Self::Any => "\"ANY\"".to_owned(),
             Self::Exact(t) | Self::Strict(t) => format!("\"{}\"", t.sql()),
+            Self::Map => "\"MAP\"".to_owned(),
+            Self::Array => "\"ARRAY\"".to_owned(),
             Self::Numeric { intervals: false } => "\"NUMERIC\"".to_owned(),
             Self::Numeric { intervals: true } => "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned(),
             // Spark's `AnyTimestampType` names itself in words.
@@ -379,6 +386,19 @@ pub enum Inputs {
     /// Argument `i` takes `types[i]`; the last type repeats for further
     /// arguments.
     Expects(Vec<InputType>),
+    /// `map(k1, v1, ...)`: the keys (even positions) and the values (odd)
+    /// each take the type they meet at; `CREATE_MAP_KEY_DIFF_TYPES` and
+    /// `CREATE_MAP_VALUE_DIFF_TYPES` when either side has none.
+    Map,
+    /// `map_concat(m1, ...)`: every argument must be a map
+    /// (`MAP_CONCAT_DIFF_TYPES` otherwise, an untyped `NULL` included);
+    /// with ANSI they must share the type ignoring nullability, without it
+    /// they meet at their common type (`DATA_DIFF_TYPES` either way).
+    MapConcat,
+    /// `map_contains_key(map, key)`: the key meets the map's key type
+    /// without string promotion, and both are cast to the wider key type;
+    /// no casts when there is none (the result rule reports it).
+    MapContainsKey,
     /// Every argument takes the type all of them meet at (`coalesce`);
     /// `DATATYPE_MISMATCH.DATA_DIFF_TYPES` when there is none.
     Common,
@@ -425,6 +445,9 @@ impl Inputs {
             | Self::CommonNoStrings
             | Self::Leading(_)
             | Self::CommonWithZero
+            | Self::Map
+            | Self::MapConcat
+            | Self::MapContainsKey
             | Self::Comparable { .. }
             | Self::NullSafeEqual
             | Self::Operator(_)

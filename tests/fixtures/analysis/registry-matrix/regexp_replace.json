@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "regexp_replace#074e6419593f/ansi_on",
-      "reason": "SELECT regexp_replace(map('a', 1), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#074e6419593f/ansi_off",
-      "reason": "SELECT regexp_replace(map('a', 1), '(\\\\d+)', 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "regexp_replace#1043ae0b689c/ansi_on",
       "reason": "SELECT regexp_replace('100-200', INTERVAL '1-2' YEAR TO MONTH, 'num') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
@@ -39,22 +31,6 @@
     {
       "id": "regexp_replace#44c18601c5b8/ansi_off",
       "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "regexp_replace#4554f98913c4/ansi_on",
-      "reason": "SELECT regexp_replace('100-200', map('a', 1), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#4554f98913c4/ansi_off",
-      "reason": "SELECT regexp_replace('100-200', map('a', 1), 'num') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#d6194fc8a763/ansi_on",
-      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "regexp_replace#d6194fc8a763/ansi_off",
-      "reason": "SELECT regexp_replace('100-200', '(\\\\d+)', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "regexp_replace#d882b6eb34c6/ansi_on",
