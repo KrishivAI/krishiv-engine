@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "id": "dayofmonth#0296012a73bf/ansi_on",
+      "reason": "SELECT dayofmonth(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofmonth#0296012a73bf/ansi_off",
+      "reason": "SELECT dayofmonth(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofmonth#63cbd5ac0445/ansi_on",
+      "reason": "SELECT dayofmonth(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofmonth#63cbd5ac0445/ansi_off",
+      "reason": "SELECT dayofmonth(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofmonth#f3fcda265ff3/ansi_on",
+      "reason": "SELECT dayofmonth(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "dayofmonth#f3fcda265ff3/ansi_off",
+      "reason": "SELECT dayofmonth(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "dayofmonth"
+}

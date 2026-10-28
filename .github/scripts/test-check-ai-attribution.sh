@@ -46,6 +46,7 @@ expect_blocked "lower-case Claude-Session" "Subject\n\nclaude-session: abc\n"
 expect_blocked "Generated with line" "Subject\n\nGenerated with [Claude Code](https://claude.com/claude-code)\n"
 expect_blocked "lower-case generated with" "Subject\n\ngenerated WITH tool\n"
 expect_blocked "robot emoji" "Subject\n\n🤖 done\n"
+expect_allowed "regenerated baseline with the generator" "Regenerate golden ratchet baseline with golden-report --ratchet update\n\nThe session engine now passes foo#25, so the frozen baseline is regenerated with the generator instead of hand edits.\n"
 
 # Multi-line: the human co-author is fine, the Claude-Session line on line 5 is not.
 printf 'Subject line\n\nBody paragraph.\nCo-Authored-By: Jane Doe <jane@example.com>\nClaude-Session: https://claude.ai/code/session_x\n' > "$msg"

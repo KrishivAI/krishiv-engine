@@ -105,7 +105,7 @@ pub(super) fn int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Integer, c)
 }
 
-fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn boolean(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Boolean, c)
 }
 
@@ -163,9 +163,27 @@ fn date_sub(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// The type of the first (cast) argument: `binary` or `string` overloads.
-fn first_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+pub(super) fn first_type(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     let t = c.data_type(0).cloned().unwrap_or(DataType::String);
     typed(t, c)
+}
+
+fn always_null_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Date, true))
+}
+
+fn always_null_timestamp(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Timestamp, true))
+}
+
+fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Double, c)
+}
+
+/// `make_date`: an invalid date is NULL with ANSI off, so the result may be
+/// null then whatever the arguments.
+fn make_date_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Date, !c.ansi() || c.any_nullable()))
 }
 
 fn clock_date(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -186,7 +204,7 @@ fn user(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 // ---- strings ----
 
-fn is_binary(c: &CallTypes<'_>, i: usize) -> bool {
+pub(super) fn is_binary(c: &CallTypes<'_>, i: usize) -> bool {
     c.data_type(i) == Some(&DataType::Binary)
 }
 
@@ -218,7 +236,7 @@ fn strings() -> Vec<Spec> {
     let text_or_bytes = InputType::OneOf(vec![DataType::String, DataType::Binary]);
     let mut out = scalar(&["upper", "ucase", "lower", "lcase"], &text, string);
     out.extend(scalar(
-        &["length", "char_length", "character_length"],
+        &["length", "len", "char_length", "character_length"],
         &Inputs::Expects(vec![text_or_bytes.clone()]),
         int,
     ));
@@ -289,6 +307,17 @@ fn strings() -> Vec<Spec> {
         ]),
         first_type,
     ));
+    out.extend(scalar(
+        &["mask"],
+        &Inputs::Expects(vec![
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+            InputType::Strict(DataType::String),
+        ]),
+        string,
+    ));
     out
 }
 
@@ -347,6 +376,64 @@ fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     })
 }
 
+/// `TimestampType` as `date_trunc` and `months_between` expect it: other
+/// types are cast to `TIMESTAMP` or refused naming it, but a
+/// `TIMESTAMP_NTZ` is kept (Spark casts it, as the binding does, in the
+/// session zone).
+fn instant_input(c: &CallTypes<'_>, i: usize) -> InputType {
+    if c.data_type(i) == Some(&DataType::TimestampNtz) {
+        InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz])
+    } else {
+        exact(DataType::Timestamp)
+    }
+}
+
+fn date_trunc_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![exact(DataType::String), instant_input(c, 1)]
+}
+
+fn months_between_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![
+        instant_input(c, 0),
+        instant_input(c, 1),
+        exact(DataType::Boolean),
+    ]
+}
+
+/// `TimestampNTZType` as `convert_timezone` expects it: a `TIMESTAMP` is
+/// kept (Spark casts it, as the binding does, to the wall clock of the
+/// session zone).
+fn wall_clock_input(c: &CallTypes<'_>, i: usize) -> InputType {
+    if c.data_type(i) == Some(&DataType::Timestamp) {
+        InputType::OneOf(vec![DataType::TimestampNtz, DataType::Timestamp])
+    } else {
+        exact(DataType::TimestampNtz)
+    }
+}
+
+fn zone_shift_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![instant_input(c, 0), exact(DataType::String)]
+}
+
+fn convert_timezone_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    match c.args().len() {
+        2 => vec![exact(DataType::String), wall_clock_input(c, 1)],
+        _ => vec![
+            exact(DataType::String),
+            exact(DataType::String),
+            wall_clock_input(c, 2),
+        ],
+    }
+}
+
+fn timestamp_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Timestamp, c)
+}
+
+fn timestamp_ntz_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::TimestampNtz, c)
+}
+
 fn datetime() -> Vec<Spec> {
     let days = InputType::OneOf(vec![DataType::Integer, DataType::Short, DataType::Byte]);
     let day_inputs = Inputs::Expects(vec![exact(DataType::Date), days]);
@@ -357,10 +444,74 @@ fn datetime() -> Vec<Spec> {
         &Inputs::Expects(vec![exact(DataType::Date)]),
         int,
     ));
+    let date_only = Inputs::Expects(vec![exact(DataType::Date)]);
     out.extend(scalar(
-        &["year", "month", "day", "dayofmonth"],
-        &Inputs::Expects(vec![exact(DataType::Date)]),
+        &[
+            "year",
+            "month",
+            "day",
+            "dayofmonth",
+            "dayofweek",
+            "dayofyear",
+            "weekofyear",
+            "weekday",
+            "quarter",
+        ],
+        &date_only,
         int,
+    ));
+    // `UnixDate` expects a date and casts nothing else to one.
+    out.extend(scalar(
+        &["unix_date"],
+        &Inputs::Expects(vec![InputType::Strict(DataType::Date)]),
+        int,
+    ));
+    // The time fields read a timestamp of either kind; a date is cast to
+    // one.
+    let any_timestamp = InputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]);
+    out.extend(scalar(
+        &["hour", "minute", "second"],
+        &Inputs::Expects(vec![any_timestamp]),
+        int,
+    ));
+    out.extend(scalar(&["monthname", "dayname"], &date_only, string));
+    out.extend(scalar(
+        &["add_months"],
+        &Inputs::Expects(vec![exact(DataType::Date), exact(DataType::Integer)]),
+        date,
+    ));
+    out.extend(scalar(&["last_day"], &date_only, date));
+    // `NextDay`, `TruncDate` and `TruncTimestamp` are nullable whatever
+    // their arguments: an unknown weekday or unit gives NULL.
+    out.extend(scalar(
+        &["next_day", "trunc"],
+        &Inputs::Expects(vec![exact(DataType::Date), exact(DataType::String)]),
+        always_null_date,
+    ));
+    out.extend(scalar(
+        &["date_trunc"],
+        &Inputs::Built(InputBuilder(date_trunc_inputs)),
+        always_null_timestamp,
+    ));
+    out.extend(scalar(
+        &["months_between"],
+        &Inputs::Built(InputBuilder(months_between_inputs)),
+        double,
+    ));
+    out.extend(scalar(
+        &["from_utc_timestamp", "to_utc_timestamp"],
+        &Inputs::Built(InputBuilder(zone_shift_inputs)),
+        timestamp_result,
+    ));
+    out.extend(scalar(
+        &["convert_timezone"],
+        &Inputs::Built(InputBuilder(convert_timezone_inputs)),
+        timestamp_ntz_result,
+    ));
+    out.extend(scalar(
+        &["make_date"],
+        &Inputs::Expects(vec![exact(DataType::Integer)]),
+        make_date_result,
     ));
     out.extend(scalar(
         &["extract", "date_part"],
@@ -462,6 +613,12 @@ fn any_value(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     pick(c, "any_value")
 }
 
+/// The moment aggregates (`CentralMomentAgg`, `Covariance`, `Corr`): every
+/// argument is cast to `DOUBLE`; the result is a nullable `DOUBLE`.
+fn moment(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Double, true))
+}
+
 /// `bool_and`, `bool_or` and their aliases: `boolean`, NULL for no non-NULL
 /// input.
 fn nullable_boolean(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -484,6 +641,7 @@ fn by(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::Numeric { intervals: true }]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
+    let doubles = || Inputs::Expects(vec![exact(DataType::Double)]);
     vec![
         aggregate("count", Inputs::Any, count, Aggregate::Count),
         aggregate("sum", numeric(), sum, Aggregate::Sum),
@@ -496,6 +654,18 @@ fn aggregates() -> Vec<Spec> {
         aggregate("last", Inputs::Any, last, Aggregate::Last),
         aggregate("last_value", Inputs::Any, last, Aggregate::Last),
         aggregate("any_value", Inputs::Any, any_value, Aggregate::AnyValue),
+        aggregate("stddev", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("std", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("stddev_samp", doubles(), moment, Aggregate::StddevSamp),
+        aggregate("stddev_pop", doubles(), moment, Aggregate::StddevPop),
+        aggregate("variance", doubles(), moment, Aggregate::VarSamp),
+        aggregate("var_samp", doubles(), moment, Aggregate::VarSamp),
+        aggregate("var_pop", doubles(), moment, Aggregate::VarPop),
+        aggregate("skewness", doubles(), moment, Aggregate::Skewness),
+        aggregate("kurtosis", doubles(), moment, Aggregate::Kurtosis),
+        aggregate("corr", doubles(), moment, Aggregate::Corr),
+        aggregate("covar_samp", doubles(), moment, Aggregate::CovarSamp),
+        aggregate("covar_pop", doubles(), moment, Aggregate::CovarPop),
         // Spark runs these as `count`, `min` and `max` of a rewritten argument.
         aggregate("count_if", boolean_arg(), count, Aggregate::Count),
         aggregate("bool_and", boolean_arg(), nullable_boolean, Aggregate::Min),
@@ -678,5 +848,11 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::bitwise::specs());
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());
+    out.extend(super::misc::specs());
+    out.extend(super::url::specs());
+    out.extend(super::csv::specs());
+    out.extend(super::text::specs());
+    out.extend(super::hof::specs());
+    out.extend(super::r#struct::specs());
     out
 }

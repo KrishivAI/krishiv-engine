@@ -1,0 +1,45 @@
+{
+  "cases": {
+    "depends-on-command": [
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28
+    ],
+    "query-features": [
+      9,
+      10,
+      11,
+      12,
+      13,
+      14
+    ],
+    "sql-commands": [
+      0,
+      1,
+      15,
+      16,
+      29,
+      30
+    ],
+    "window": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ]
+  },
+  "file": "postgreSQL/window_part2",
+  "format_version": 1
+}

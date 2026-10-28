@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "depends-on-command": [
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "file": "udf/udf-natural-join",
+  "format_version": 1
+}

@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "signum#1faf24081a60/ansi_on",
+      "reason": "SELECT signum(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "signum#1faf24081a60/ansi_off",
+      "reason": "SELECT signum(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "signum#7c837d354941/ansi_on",
+      "reason": "SELECT signum(INTERVAL -'100' YEAR) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "signum#7c837d354941/ansi_off",
+      "reason": "SELECT signum(INTERVAL -'100' YEAR) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "signum#84c5fc9bcfb8/ansi_on",
+      "reason": "SELECT signum(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "signum#84c5fc9bcfb8/ansi_off",
+      "reason": "SELECT signum(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "signum#854c4eb019e8/ansi_on",
+      "reason": "SELECT signum(CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "signum#854c4eb019e8/ansi_off",
+      "reason": "SELECT signum(CAST(NULL AS interval year)) | parse: KRISHIV_UNSUPPORTED_FEATURE: interval data types (\"INTERVAL\")"
+    },
+    {
+      "id": "signum#d0d71adb94f9/ansi_on",
+      "reason": "SELECT signum(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "signum#d0d71adb94f9/ansi_off",
+      "reason": "SELECT signum(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "signum"
+}

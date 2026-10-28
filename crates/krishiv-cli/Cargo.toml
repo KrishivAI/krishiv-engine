@@ -24,6 +24,7 @@ krishiv-memory = { path = "../krishiv-memory", optional = true }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-server = { path = "../krishiv-server", optional = true }
 krishiv-common = { path = "../krishiv-common" }
+serde_json = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 
 [dev-dependencies]

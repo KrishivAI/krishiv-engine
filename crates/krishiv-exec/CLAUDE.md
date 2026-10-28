@@ -29,6 +29,10 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
 `probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+`values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
+versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible
+once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is
+ignored); `WorkerContext` holds the service, a fresh `LocalValues` per instantiation by default.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model.
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a
@@ -61,7 +65,9 @@ Paths are relative to this crate.
 - `src/planner/mod.rs` physical planner (IR to physical plan); `src/planner/runtime_filter.rs` runtime-filter sites
 - `src/operators/mod.rs` stateless operators (scan, filter, project, limit, union)
 - `src/aggregate/mod.rs` hash aggregate; `src/join/mod.rs` hash join (build, probe, grace spill)
-- `src/rows/mod.rs` row-table layout and pages shared by aggregate and join
+- `src/rows/mod.rs` row-table layout and pages shared by aggregate and join; the stored row hash `h` is a fast seedless
+  table hash, never the routing hash `H_kg` (kernels `hash::routing`, used only by exchanges and key groups);
+  tables place rows by the seeded `g = finalize(h, seed)`; `rows/flooding_tests.rs` bounds probe runs under crafted and forged `h` collisions
 - `src/window/mod.rs` window operator and plan types; `src/window/eval.rs` frames, ranking and frame aggregates; `src/planner/window.rs` plans it over sorted input
 - `src/operators/file_scan.rs` and `file_write.rs` file scan and write operators over `krishiv-io`
 
@@ -89,4 +95,5 @@ Paths are relative to this crate.
 ## Tests
 `cargo nextest run -p krishiv-exec --no-tests=pass` · `cargo clippy -p krishiv-exec --all-targets -- -D warnings` ·
 loom models: `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib --release loom_model::` (use a separate target dir) ·
-benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators`
+benches: `cargo bench -p krishiv-exec --bench pipeline` · `--bench operators` · `--bench routing_hash` (per-row
+`H_kg` vs the row layout's table hash and seeded foldhash)

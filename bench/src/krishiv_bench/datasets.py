@@ -1,4 +1,4 @@
-"""Dataset generators (P0-T18). CLI: `uv run krishiv-datasets <tpch|tpcds|clickbench|nexmark|zipf|h2o-*|manifest>`.
+"""Dataset generators (P0-T18). CLI: `uv run krishiv-datasets <tpch|tpcds|clickbench|nexmark|zipf|h2o-*|dsb|manifest>`.
 
 All output goes to $KRISHIV_DATA/<dataset>/sf<N>/ as Parquet, plus a sha256 manifest in
 $KRISHIV_DATA/manifests/. Nothing here is ever written inside the repo.
@@ -282,6 +282,7 @@ def main(argv=None) -> None:
     p.add_argument("--keys", type=int, default=1_000_000)
     p.add_argument("--alpha", type=float, default=1.1)
     p.add_argument("--seed", type=int, default=0)
+    from .dsb import DEFAULT_SEED as DEFAULT_QUERY_SEED
     from .h2o import DEFAULT_KEYS, SIZES
     from .h2o_data import GENERATOR_VERSION, UPSTREAM_SEED
 
@@ -298,6 +299,16 @@ def main(argv=None) -> None:
         "h2o-verify", help="recompute a generated h2o dataset's content digests against its MANIFEST.json"
     )
     p.add_argument("directory", type=Path)
+    p = sub.add_parser(
+        "dsb",
+        help="DSB (many-join TPC-DS derivative; TPC EULA tools fetched at run time): data, queries, DuckDB oracle",
+    )
+    p.add_argument("--sf", type=int, default=1, help="integer scale (dsdgen), about 1 GB of raw data per unit")
+    p.add_argument("--seed", type=int, default=DEFAULT_QUERY_SEED, help="dsqgen seed for the query parameters")
+    p.add_argument("--threads", type=int, default=1, help="DuckDB threads for the Parquet conversion (1: byte-stable)")
+    p.add_argument("--no-oracle", action="store_true", help="skip the DuckDB answers")
+    p = sub.add_parser("dsb-verify", help="recompute a generated DSB dataset's checksums against its MANIFEST.json")
+    p.add_argument("directory", type=Path)
     p = sub.add_parser("memcap", help="memcap suite data (seeded star schema) under $KRISHIV_DATA/memcap/v1/<rows>")
     p.add_argument("--rows", nargs="+", default=["10m"], metavar="N", help="whole millions, e.g. 10m 50m 150m")
     p = sub.add_parser("manifest", help="(re)write sha256 manifest for a dataset dir")
@@ -308,6 +319,25 @@ def main(argv=None) -> None:
     t0 = time.time()
     if a.cmd in ("h2o-groupby", "h2o-join"):
         print(gen_h2o(a.cmd.removeprefix("h2o-"), a))
+    elif a.cmd == "dsb":
+        from . import dsb
+
+        try:
+            d = dsb.generate(a.sf, a.seed, a.threads, oracle=not a.no_oracle)
+        except (ValueError, FileExistsError) as e:
+            sys.exit(str(e))
+        print(d)
+        print("manifest:", write_manifest(d, f"{d.parent.name}-{d.name}"))
+        man = dsb.read_manifest(d)
+        assert man is not None
+        print("relations per query (count: queries):", man["relation_count_distribution"])
+    elif a.cmd == "dsb-verify":
+        from . import dsb
+
+        problems = dsb.verify(a.directory)
+        if problems:
+            sys.exit("\n".join(problems))
+        print(f"{a.directory}: verified")
     elif a.cmd == "h2o-verify":
         from . import h2o_data
 

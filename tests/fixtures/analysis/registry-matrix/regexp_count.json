@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "regexp_count#0afc8da34f72/ansi_on",
+      "reason": "SELECT regexp_count(map('a', 1), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#0afc8da34f72/ansi_off",
+      "reason": "SELECT regexp_count(map('a', 1), 'Ste(v|ph)en') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#10f4912f6ce6/ansi_on",
+      "reason": "SELECT regexp_count(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#10f4912f6ce6/ansi_off",
+      "reason": "SELECT regexp_count(INTERVAL '1-2' YEAR TO MONTH, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#3aa426da86a3/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#3aa426da86a3/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#3fc084e47395/ansi_on",
+      "reason": "SELECT regexp_count(INTERVAL '1 02:03:04' DAY TO SECOND, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#3fc084e47395/ansi_off",
+      "reason": "SELECT regexp_count(INTERVAL '1 02:03:04' DAY TO SECOND, 'Ste(v|ph)en') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#4e5127786dc5/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#4e5127786dc5/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "regexp_count#e50fca3b8f7b/ansi_on",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "regexp_count#e50fca3b8f7b/ansi_off",
+      "reason": "SELECT regexp_count('Steven Jones and Stephen Smith are the best players', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "regexp_count"
+}

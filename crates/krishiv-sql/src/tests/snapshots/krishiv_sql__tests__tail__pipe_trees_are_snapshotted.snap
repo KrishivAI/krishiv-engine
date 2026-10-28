@@ -1,0 +1,94 @@
+---
+source: crates/krishiv-sql/src/tests/tail.rs
+expression: "super::snapshot(&[\"TABLE t |> WHERE a | LIMIT 2\"])"
+---
+-- TABLE t |> WHERE a | LIMIT 2
+Query {
+    with: None,
+    body: SetExpr {
+        kind: Pipe(
+            Pipe {
+                input: SetExpr {
+                    kind: Table(
+                        ObjectName {
+                            parts: [
+                                Ident {
+                                    value: "t",
+                                    quoted: false,
+                                    span: 6..7,
+                                },
+                            ],
+                            span: 6..7,
+                        },
+                    ),
+                    span: 0..7,
+                },
+                ops: [
+                    PipeOp {
+                        kind: Where(
+                            PipeWhere {
+                                condition: Expr {
+                                    kind: Column(
+                                        [
+                                            Ident {
+                                                value: "a",
+                                                quoted: false,
+                                                span: 17..18,
+                                            },
+                                        ],
+                                    ),
+                                    span: 17..18,
+                                },
+                                windows: [],
+                                span: 11..18,
+                            },
+                        ),
+                        span: 8..18,
+                    },
+                    PipeOp {
+                        kind: Organization(
+                            QueryOrganization {
+                                order_by: [],
+                                order_span: None,
+                                cluster_by: [],
+                                distribute_by: [],
+                                sort_by: [],
+                                windows: [],
+                                limit: Some(
+                                    Limit {
+                                        value: Some(
+                                            Expr {
+                                                kind: Literal(
+                                                    Number {
+                                                        text: "2",
+                                                        kind: Int,
+                                                    },
+                                                ),
+                                                span: 27..28,
+                                            },
+                                        ),
+                                        span: 21..28,
+                                    },
+                                ),
+                                offset: None,
+                                span: 21..28,
+                            },
+                        ),
+                        span: 19..28,
+                    },
+                ],
+                span: 0..28,
+            },
+        ),
+        span: 0..28,
+    },
+    order_by: [],
+    order_span: None,
+    cluster_by: [],
+    distribute_by: [],
+    sort_by: [],
+    windows: [],
+    limit: None,
+    offset: None,
+    span: 0..28,
+}

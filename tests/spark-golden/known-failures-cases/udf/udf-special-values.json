@@ -1,0 +1,14 @@
+{
+  "cases": {
+    "test-udfs": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
+  },
+  "file": "udf/udf-special-values",
+  "format_version": 1
+}

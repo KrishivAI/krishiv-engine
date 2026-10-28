@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "depends-on-command": [
+      1,
+      2,
+      3
+    ]
+  },
+  "file": "subquery/in-subquery/not-in-unit-tests-multi-column-literal",
+  "format_version": 1
+}

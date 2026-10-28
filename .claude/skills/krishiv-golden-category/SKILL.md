@@ -36,11 +36,15 @@ or by hand (ADR 0008). Three kinds exist; pick the one that fits.
    directory's `pyproject.toml` only configures lint).
 
 ## C. Ratcheted manifests
-`tests/fixtures/analysis/type-coercion-manifest.json` and `registry-matrix-manifest.json` list the cases that fail
+`tests/fixtures/analysis/type-coercion/` (one file per coercion input file) and `registry-matrix/` (one file per
+function) list the cases that fail
 today, each with a reason; `crates/krishiv-testkit/tests/{type_coercion,registry_matrix}.rs` require the list to
-match the actual failures exactly, so a fix shrinks it and a regression fails.
-- Regenerate with `KRISHIV_UPDATE_MANIFEST=1 cargo test -p krishiv-testkit --test <name>`, then read the diff:
-  entries removed are progress, entries added are regressions to explain or fix.
+match the actual failures exactly, so a fix shrinks it and a regression fails. `tests/spark-golden/known-failures.json`
+holds the categories and rules while `tests/spark-golden/known-failures-cases/` holds one file per golden input file.
+- Regenerate with `KRISHIV_UPDATE_MANIFEST=1 cargo test -p krishiv-testkit --test <name>` (or `cargo xtask golden
+  --engine session --ratchet update` for the golden baseline), then read the diff:
+  entries removed are progress, entries added are regressions to explain or fix. Only the files whose content changed
+  are rewritten, so two PRs touching different keys never conflict.
 - A ratchet list in code (`TPCDS_NOT_PLANNED` in `crates/krishiv-plan-codec/tests/ratchet.rs`) follows the same rule:
   it may only shrink, and the test fails when a listed item starts to pass.
 

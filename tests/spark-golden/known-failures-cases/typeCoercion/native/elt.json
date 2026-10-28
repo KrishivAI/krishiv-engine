@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "query-features": [
+      0,
+      1,
+      3,
+      5
+    ]
+  },
+  "file": "typeCoercion/native/elt",
+  "format_version": 1
+}

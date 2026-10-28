@@ -153,6 +153,7 @@ fn every_expression_form_prints() {
         (
             Expr::new(ExprNode::Star(Star {
                 qualifier: vec!["t".to_owned()],
+                except: Vec::new(),
                 plan_id: Some(PlanId(4)),
             })),
             "t.*@plan4",
@@ -198,6 +199,8 @@ fn every_expression_form_prints() {
         (
             Expr::new(ExprNode::Function(FunctionCall {
                 name: "sum".to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args: vec![col("a")],
                 distinct: false,
                 filter: Some(col("p")),
@@ -264,6 +267,8 @@ fn shared_subqueries_print_once() {
     ));
     let both = Expr::new(ExprNode::Function(FunctionCall {
         name: Builtin::And.name().to_owned(),
+        qualifier: Vec::new(),
+        arg_names: Vec::new(),
         args: vec![Arc::clone(&sub), sub],
         distinct: false,
         filter: None,

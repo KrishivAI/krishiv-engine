@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "depends-on-command": [
+      8
+    ]
+  },
+  "file": "column-resolution-aggregate",
+  "format_version": 1
+}
