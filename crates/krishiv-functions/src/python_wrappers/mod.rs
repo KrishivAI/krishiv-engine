@@ -38,6 +38,7 @@ const HELPERS: &[&str] = &[
     "_num_or_col",
     "_one_of",
     "_opt",
+    "_opts",
 ];
 
 /// The generated files.
@@ -127,6 +128,9 @@ enum Conv {
     Int,
     /// A `Column`, or any other value is a literal.
     Literal,
+    /// A `Column`, a `dict[str, str]` as a map literal, or any other value
+    /// is a literal (PySpark's `options` parameters).
+    Opts,
 }
 
 impl Conv {
@@ -137,6 +141,7 @@ impl Conv {
             "ColumnOrName | int" => Some(Self::Int),
             "Column | int" | "Column | str" | "int | Column" | "str | Column" | "bool | Column"
             | "int" | "str" | "bool" | "Any" => Some(Self::Literal),
+            "dict[str, str]" => Some(Self::Opts),
             _ => None,
         }
     }
@@ -147,6 +152,7 @@ impl Conv {
             Self::Number => "_num_or_col",
             Self::Int => "_int_or_col",
             Self::Literal => "_lit",
+            Self::Opts => "_opts",
         }
     }
 }
@@ -186,9 +192,15 @@ impl Param {
 }
 
 /// Parses `name: annotation [= default]` items; `*name: ColumnOrName` is variadic.
+/// Annotations may hold `[...]` (as `dict[str, str]` does): items split on
+/// commas outside brackets.
 fn parse_params(spec: &str) -> Result<Vec<Param>, String> {
     let mut out = Vec::new();
-    for item in spec.split(',').map(str::trim).filter(|i| !i.is_empty()) {
+    for item in split_params(spec) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
         let (head, default) = match item.split_once('=') {
             Some((h, d)) => (h.trim(), Some(d.trim().to_owned())),
             None => (item, None),
@@ -215,6 +227,26 @@ fn parse_params(spec: &str) -> Result<Vec<Param>, String> {
         });
     }
     Ok(out)
+}
+
+/// `spec` split on commas outside `[...]` (so `dict[str, str]` survives).
+fn split_params(spec: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0_usize;
+    let mut start = 0_usize;
+    for (i, c) in spec.char_indices() {
+        match c {
+            '[' => depth = depth.saturating_add(1),
+            ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                out.push(spec.get(start..i).unwrap_or_default());
+                start = i.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    out.push(spec.get(start..).unwrap_or_default());
+    out
 }
 
 /// `head` + `args` + `tail`, laid out as `ruff format` does: on one line if it fits, else the

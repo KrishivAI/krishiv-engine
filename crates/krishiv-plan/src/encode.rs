@@ -1200,6 +1200,14 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 self.u8(11);
                 self.bytes(b);
             }
+            Literal::Map(pairs) => {
+                self.u8(18);
+                self.len(pairs.len());
+                for (k, v) in pairs {
+                    self.str(k);
+                    self.str(v);
+                }
+            }
             Literal::Date(d) => {
                 self.u8(12);
                 self.put(&d.to_le_bytes());
