@@ -20,7 +20,7 @@ use krishiv_bench_runner::{encode_path, rss_bound};
 use parquet::arrow::ArrowWriter;
 use parquet::file::properties::WriterProperties;
 
-const LIMIT: u64 = 64 << 20;
+const LIMIT: u64 = 48 << 20;
 const THREADS: u64 = 2;
 const ROWS: i64 = 800_000;
 /// Room in the cgroup cap for spill-file page cache (see the test).

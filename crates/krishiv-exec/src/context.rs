@@ -76,9 +76,9 @@ impl Default for ExecConfig {
             stall_threshold: Duration::from_millis(10),
             fail_on_stall: false,
             seed: None,
-            agg_row_layout: false,
+            agg_row_layout: true,
             detailed_metrics: false,
-            join_row_layout: false,
+            join_row_layout: true,
             join_radix_bits: 3,
             sort_hash_buckets: true,
         }
@@ -97,11 +97,11 @@ impl ExecConfig {
         let agg_row_layout = config
             .get(&EXEC_AGG_ROW_LAYOUT)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
-            .unwrap_or(false);
+            .unwrap_or(true);
         let join_row_layout = config
             .get(&EXEC_JOIN_ROW_LAYOUT)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
-            .unwrap_or(false);
+            .unwrap_or(true);
         let join_radix_bits = config
             .get(&EXEC_JOIN_RADIX_BITS)
             .and_then(krishiv_common::config::ConfigValue::as_int)

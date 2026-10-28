@@ -498,11 +498,11 @@ fn tpch_sf0_01_matches_spark() {
     check(&dir, &dir.join("spark-answers.json"));
 }
 
-/// [`tpch_sf0_01_matches_spark`] with the row-layout aggregate tables
-/// (`krishiv.exec.agg.rowLayout`, P2-T159).
+/// [`tpch_sf0_01_matches_spark`] with the columnar aggregate tables
+/// (`krishiv.exec.agg.rowLayout` off): both layouts return Spark's answers.
 #[test]
-fn tpch_sf0_01_matches_spark_with_row_layout_aggregates() {
-    super::AGG_ROW_LAYOUT.set(true);
+fn tpch_sf0_01_matches_spark_with_columnar_aggregates() {
+    super::AGG_ROW_LAYOUT.set(false);
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tpch-sf0.01-parquet");
     check(&dir, &dir.join("spark-answers.json"));
 }

@@ -20,7 +20,7 @@
 //!   spilling, and switches to pass-through (one state row per input row)
 //!   when it does not reduce its input (see [`BypassPolicy`]).
 //!
-//! # Row-layout tables (`krishiv.exec.agg.rowLayout`, off by default)
+//! # Row-layout tables (`krishiv.exec.agg.rowLayout`, on by default)
 //! With the setting on and every grouping key of a type with a row
 //! encoding (integers, decimals, dates, timestamps, floats, booleans,
 //! strings and binaries), [`HashAggregate`] keeps its keys as rows in radix
@@ -31,9 +31,9 @@
 //! when its input is nearly unique; `finalize` merges each range of
 //! partitions from every driver in its own task, in parallel, sized from
 //! per-partition sketches. Accumulators, spill files and the disk phase are
-//! the same as the default path's, so results are the same; deterministic
+//! the same as the columnar path's, so results are the same; deterministic
 //! mode never clears an index. Dictionary and nested keys, global
-//! aggregates and [`PartialAggregate`] keep the default tables.
+//! aggregates and [`PartialAggregate`] keep the columnar tables.
 //!
 //! # Plans
 //! An [`AggregateSpec`] lists the grouping columns and the aggregates. Each

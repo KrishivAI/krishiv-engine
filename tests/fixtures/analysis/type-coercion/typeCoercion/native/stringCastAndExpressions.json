@@ -1,20 +1,12 @@
 {
   "entries": [
     {
-      "query": "select from_json(a, 'a INT') from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_json"
-    },
-    {
       "query": "select from_unixtime('2018-01-01', a) from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_unixtime"
     },
     {
       "query": "select from_unixtime(a) from t",
       "reason": "KRISHIV_UNSUPPORTED_FEATURE: function from_unixtime"
-    },
-    {
-      "query": "select get_json_object(a, a) from t",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: function get_json_object"
     },
     {
       "query": "select json_tuple(a, a) from t",

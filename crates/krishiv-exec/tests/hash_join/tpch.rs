@@ -444,7 +444,16 @@ fn decimal(v: i128, scale: u32) -> String {
 /// Runs a plan under a `limit`-byte budget; its rows as one batch.
 async fn exec(plan: Node, limit: usize) -> (RecordBatch, Arc<QueryContext>) {
     let root = root(limit);
-    let q = query(&root, 1, ExecConfig::default());
+    // The thread-local layout decides (`set_row_layout` loops both): start
+    // from columnar so `query`'s `|= forced` keeps it.
+    let q = query(
+        &root,
+        1,
+        ExecConfig {
+            join_row_layout: false,
+            ..ExecConfig::default()
+        },
+    );
     let out = run(&runner_for(4, limit), plan.0, &q).await.unwrap();
     assert_released(&root);
     let data: Vec<RecordBatch> = out.iter().map(|b| b.data().clone()).collect();
