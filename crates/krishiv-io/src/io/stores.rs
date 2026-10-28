@@ -1054,9 +1054,9 @@ mod tests {
             (S3_ACCESS_KEY, CANARY),
         ]);
         for key in [GCS_KEYFILE, GCS_KEY, S3_ACCESS_KEY] {
-            let secret = cred(&cfg, &BTreeMap::new(), key).unwrap().unwrap();
-            assert_eq!(secret.expose_secret(), CANARY);
-            assert!(!format!("{secret:?}").contains(CANARY), "{key}");
+            let held = cred(&cfg, &BTreeMap::new(), key).unwrap().unwrap();
+            assert_eq!(held.expose_secret(), CANARY);
+            assert!(!format!("{held:?}").contains(CANARY), "{key}");
         }
     }
 
@@ -1352,10 +1352,10 @@ mod tests {
         assert!(!error.to_string().contains(CANARY));
         assert!(!format!("{error:?}").contains(CANARY));
         assert!(!format!("{registry:?}").contains(CANARY));
-        let secret = OptionValue::from_user(S3_SECRET_KEY, CANARY);
-        assert!(secret.as_plain().is_none());
-        assert!(!secret.to_string().contains(CANARY));
-        assert!(!format!("{secret:?}").contains(CANARY));
+        let held = OptionValue::from_user(S3_SECRET_KEY, CANARY);
+        assert!(held.as_plain().is_none());
+        assert!(!held.to_string().contains(CANARY));
+        assert!(!format!("{held:?}").contains(CANARY));
         // `ensure_with_options` registers under a suffixed id whose text is
         // also free of the secret.
         let sched = crate::IoScheduler::new(crate::IoConfig::from_config(&Config::new()));

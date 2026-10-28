@@ -48,12 +48,14 @@ jobs:
             Apache-2.0, Apache-2.0 WITH LLVM-exception, MIT, BSD-2-Clause,
             BSD-3-Clause, ISC, Zlib, Unicode-3.0, MPL-2.0, 0BSD, CC0-1.0
           # deny.toml [licenses] exceptions (tiny-keccak is CC0-1.0, reached
-          # only on wasm32).
+          # only on wasm32; webpki-root-certs is CDLA-Permissive-2.0, the
+          # root-certificate data reached through the object-store TLS stack).
           # GitHub Actions used only in CI: Swatinem/rust-cache is LGPL-3.0, but it is
           # CI tooling that runs on the build runner and is never distributed with, or
           # linked into, any Krishiv artifact, so the copyleft terms do not reach us.
           allow-dependencies-licenses: >-
             pkg:cargo/tiny-keccak,
+            pkg:cargo/webpki-root-certs,
             pkg:githubactions/Swatinem/rust-cache
 
   # Pull requests: read-only, fails on any finding.
