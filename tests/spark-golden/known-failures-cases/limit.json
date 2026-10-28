@@ -1,0 +1,16 @@
+{
+  "cases": {
+    "nested-interval-types": [
+      1,
+      2
+    ],
+    "parser-tail": [
+      6
+    ],
+    "query-features": [
+      12
+    ]
+  },
+  "file": "limit",
+  "format_version": 1
+}

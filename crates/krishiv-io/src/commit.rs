@@ -22,6 +22,7 @@
 //!   manifest commit's (P2-T082b).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use arrow_schema::SchemaRef;
 use bytes::{Bytes, BytesMut};
@@ -81,6 +82,8 @@ pub struct DirectoryWrite {
     job_uuid: String,
     /// The objects an overwrite replaces, listed at the start.
     replaced: Vec<Path>,
+    /// The highest task attempt observed, for the commit's orphan sweep.
+    max_attempt: AtomicU32,
 }
 
 impl DirectoryWrite {
@@ -139,7 +142,15 @@ impl DirectoryWrite {
             dir,
             job_uuid: job_uuid.into(),
             replaced,
+            max_attempt: AtomicU32::new(0),
         }))
+    }
+
+    /// Records that a task attempt ran: the commit lists for orphans only
+    /// when an attempt above 0 ran. Single-process writes (attempt 0 only)
+    /// then skip the commit-time listing.
+    pub fn note_attempt(&self, attempt: u32) {
+        self.max_attempt.fetch_max(attempt, Ordering::Relaxed);
     }
 
     /// The writer options of task `task` (no `maxRecordsPerFile`, no
@@ -156,8 +167,10 @@ impl DirectoryWrite {
         }
     }
 
-    /// Commits the write of `files` (all of them, from every task): an
-    /// empty file of `schema` if there are none, then the old objects of an
+    /// Commits the write of `files` (all of them, from every committed
+    /// task): an empty file of `schema` if there are none, then every
+    /// object of this write no committed task listed (a failed or late
+    /// attempt's files, or orphans) is deleted, then the old objects of an
     /// overwrite are deleted, then `_SUCCESS` is written. Returns the files
     /// of the output.
     ///
@@ -172,12 +185,35 @@ impl DirectoryWrite {
         o: &FormatOptions,
         files: Vec<WrittenFileInfo>,
     ) -> Result<Vec<WrittenFileInfo>> {
+        let max_attempt = self.max_attempt.load(Ordering::Relaxed);
+        self.commit_with_attempts(io, format, schema, o, files, max_attempt)
+            .await
+    }
+
+    /// [`Self::commit`], sweeping orphans only when `max_attempt > 0`: with
+    /// no retried attempt no late or failed attempt file can exist on the
+    /// success path (a failed task fails the write before the commit), so an
+    /// append into many files skips the commit-time listing. Callers that
+    /// ran tasks pass the highest attempt they started.
+    pub async fn commit_with_attempts(
+        self,
+        io: &IoContext,
+        format: &dyn FileFormat,
+        schema: SchemaRef,
+        o: &FormatOptions,
+        files: Vec<WrittenFileInfo>,
+        max_attempt: u32,
+    ) -> Result<Vec<WrittenFileInfo>> {
         let mut files = files;
         if files.is_empty() {
             files.push(self.empty_file(io, format, schema, o).await?);
         }
         // Never a file of this write, even if its job UUID was reused.
         let new: std::collections::HashSet<&Path> = files.iter().map(|f| &f.path).collect();
+        let observed = self.max_attempt.load(Ordering::Relaxed).max(max_attempt);
+        if observed > 0 {
+            self.delete_orphans(io, &new).await?;
+        }
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`
         // for callers that spawn it.
@@ -198,6 +234,44 @@ impl DirectoryWrite {
         )
         .await?;
         Ok(files)
+    }
+
+    /// Deletes every object under the write's directory that looks like a
+    /// file of this job but no committed task listed: the files of a failed
+    /// or late attempt (attempt `k > 0` appends `_<k>` to the job-id
+    /// segment, so they still contain the job UUID), or orphans. Files of
+    /// other writes (other job UUIDs) and `_SUCCESS` are kept.
+    async fn delete_orphans(
+        &self,
+        io: &IoContext,
+        committed: &std::collections::HashSet<&Path>,
+    ) -> Result<()> {
+        let listed = io.list(&self.store, &self.dir).await?;
+        let mut orphans = Vec::new();
+        for meta in &listed {
+            if committed.contains(&meta.location) {
+                continue;
+            }
+            let Some(name) = meta.location.filename() else {
+                continue;
+            };
+            // Data files of this write (`part-<task>-<job>-c<n>...`, or
+            // `part-<task>-<job>_<attempt>-c<n>...` for a retry); `_SUCCESS`
+            // and other writes' files never carry this job in that slot.
+            // A bare `contains(job)` over-matches single-letter test jobs
+            // (`part-` and `-c000` contain `a` and `c`), so match the job
+            // segment anchored to its layout: after `part-<task>-` the name
+            // starts with `<job>-c` or `<job>_<attempt>-c`.
+            if is_job_file(name, &self.job_uuid) {
+                orphans.push(meta.location.clone());
+            }
+        }
+        let deletes: Vec<_> = orphans.iter().map(|p| io.delete(&self.store, p)).collect();
+        futures::stream::iter(deletes)
+            .buffer_unordered(PARALLEL_DELETES)
+            .try_collect::<Vec<()>>()
+            .await?;
+        Ok(())
     }
 
     /// One file of `schema` without rows: Spark writes it so that the
@@ -231,6 +305,46 @@ impl DirectoryWrite {
             statistics: done.statistics,
         })
     }
+}
+
+/// Whether `name` is a data file of the write with job id `job`: anchored
+/// to `part-<task>-<job>-c...` or `part-<task>-<job>_<attempt>-c...`, so a
+/// job id that is a suffix of another write's (`"1"` vs `"job-1"`) never
+/// matches the other's files.
+fn is_job_file(name: &str, job: &str) -> bool {
+    let Some(rest) = name.strip_prefix("part-") else {
+        return false;
+    };
+    let Some(dash) = rest.find('-') else {
+        return false;
+    };
+    let after_task = &rest[dash + 1..];
+    if let Some(after_job) = after_task.strip_prefix(job) {
+        if let Some(after_dash) = after_job.strip_prefix("-c") {
+            // `c<n>`: the file number follows; the suffix check stays
+            // lenient so future suffixes still match.
+            return after_dash
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_digit());
+        }
+        if let Some(after_underscore) = after_job.strip_prefix('_') {
+            // `<attempt>-c<n>`: the attempt is digits, then `-c<n>`.
+            let digits = after_underscore
+                .bytes()
+                .take_while(u8::is_ascii_digit)
+                .count();
+            if digits == 0 {
+                return false;
+            }
+            if let Some(after_attempt) = after_underscore.get(digits..)
+                && let Some(after_c) = after_attempt.strip_prefix("-c")
+            {
+                return after_c.chars().next().is_some_and(|c| c.is_ascii_digit());
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]

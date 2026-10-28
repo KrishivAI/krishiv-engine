@@ -80,9 +80,10 @@ struct Like {
 pub(super) fn like(mut args: Vec<Arc<dyn PhysExpr>>) -> Result<Arc<dyn PhysExpr>> {
     let escape = if args.len() == 3 {
         let e = args.pop().ok_or_else(|| internal("LIKE arity"))?;
-        let v = e.eval(&RecordBatch::new_empty(Arc::new(
-            arrow_schema::Schema::empty(),
-        )));
+        let v = e.eval(
+            &RecordBatch::new_empty(Arc::new(arrow_schema::Schema::empty())),
+            0,
+        );
         match v {
             Ok(Value::Scalar(s)) if is_string(s.data_type()) && s.is_valid(0) => {
                 let text = str_value(s.as_ref(), 0);
@@ -114,8 +115,11 @@ impl PhysExpr for Like {
         self.s.nullable() || self.pattern.nullable()
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
-        let (s, p) = (self.s.eval(batch)?, self.pattern.eval(batch)?);
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let (s, p) = (
+            self.s.eval(batch, partition)?,
+            self.pattern.eval(batch, partition)?,
+        );
         let scalar = s.is_scalar() && p.is_scalar();
         let rows = if scalar { 1 } else { batch.num_rows() };
         let (sa, pa) = (s.array(), p.array());
@@ -176,11 +180,11 @@ impl PhysExpr for Concat {
         self.nullable
     }
 
-    fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
         let values = self
             .args
             .iter()
-            .map(|a| a.eval(batch))
+            .map(|a| a.eval(batch, partition))
             .collect::<Result<Vec<_>>>()?;
         let scalar = values.iter().all(Value::is_scalar);
         let arrays = values
@@ -230,7 +234,7 @@ mod tests {
             true
         }
 
-        fn eval(&self, batch: &RecordBatch) -> Result<Value> {
+        fn eval(&self, batch: &RecordBatch, _partition: u32) -> Result<Value> {
             Ok(Value::Array(Arc::clone(batch.column(self.0))))
         }
     }
@@ -282,7 +286,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let Value::Array(out) = e.eval(&batch).unwrap() else {
+        let Value::Array(out) = e.eval(&batch, 0).unwrap() else {
             panic!("a column in, a column out");
         };
         let out: Vec<_> = out.as_string_view().iter().collect();

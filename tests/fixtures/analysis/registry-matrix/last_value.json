@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "last_value#622de0ac1241/ansi_on",
+      "reason": "SELECT last_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#622de0ac1241/ansi_off",
+      "reason": "SELECT last_value(col, INTERVAL '1 02:03:04' DAY TO SECOND) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#c7c59077b5a9/ansi_on",
+      "reason": "SELECT last_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    },
+    {
+      "id": "last_value#c7c59077b5a9/ansi_off",
+      "reason": "SELECT last_value(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (10), (5), (NULL) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
+    }
+  ],
+  "format_version": 1,
+  "function": "last_value"
+}

@@ -1,0 +1,13 @@
+{
+  "cases": {
+    "query-features": [
+      1,
+      2
+    ],
+    "subqueries": [
+      3
+    ]
+  },
+  "file": "postgreSQL/aggregates_part3",
+  "format_version": 1
+}

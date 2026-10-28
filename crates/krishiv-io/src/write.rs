@@ -33,6 +33,18 @@ pub fn spark_file_name(task: u32, job_uuid: &str, file: u32, suffix: &str) -> St
     format!("part-{task:05}-{job_uuid}-c{file:03}{suffix}")
 }
 
+/// The job-id segment of a task's file names: `base` for attempt 0 (names
+/// exactly as before), `base_<attempt>` after that, so a retried attempt
+/// can never overwrite a committed attempt's file.
+#[must_use]
+pub fn effective_job_uuid(base: &str, attempt: u32) -> String {
+    if attempt == 0 {
+        base.to_owned()
+    } else {
+        format!("{base}_{attempt}")
+    }
+}
+
 /// Settings of one task's writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteOptions {

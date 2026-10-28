@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "translate#4fc6835d5253/ansi_on",
+      "reason": "SELECT translate('AaBbCc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#4fc6835d5253/ansi_off",
+      "reason": "SELECT translate('AaBbCc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#6b471fcf6248/ansi_on",
+      "reason": "SELECT translate('AaBbCc', 'abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#6b471fcf6248/ansi_off",
+      "reason": "SELECT translate('AaBbCc', 'abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#8a5e59a300f4/ansi_on",
+      "reason": "SELECT translate(INTERVAL '1-2' YEAR TO MONTH, 'abc', '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#8a5e59a300f4/ansi_off",
+      "reason": "SELECT translate(INTERVAL '1-2' YEAR TO MONTH, 'abc', '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#92b37a714fb0/ansi_on",
+      "reason": "SELECT translate(INTERVAL '1 02:03:04' DAY TO SECOND, 'abc', '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#92b37a714fb0/ansi_off",
+      "reason": "SELECT translate(INTERVAL '1 02:03:04' DAY TO SECOND, 'abc', '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#c45b98070c1c/ansi_on",
+      "reason": "SELECT translate('AaBbCc', INTERVAL '1 02:03:04' DAY TO SECOND, '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#c45b98070c1c/ansi_off",
+      "reason": "SELECT translate('AaBbCc', INTERVAL '1 02:03:04' DAY TO SECOND, '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#c7809497221c/ansi_on",
+      "reason": "SELECT translate('AaBbCc', INTERVAL '1-2' YEAR TO MONTH, '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "translate#c7809497221c/ansi_off",
+      "reason": "SELECT translate('AaBbCc', INTERVAL '1-2' YEAR TO MONTH, '123') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "translate"
+}

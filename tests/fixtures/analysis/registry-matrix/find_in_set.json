@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "find_in_set#09e908e71f87/ansi_on",
+      "reason": "SELECT find_in_set(INTERVAL '1-2' YEAR TO MONTH,'abc,b,ab,c,def') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "find_in_set#09e908e71f87/ansi_off",
+      "reason": "SELECT find_in_set(INTERVAL '1-2' YEAR TO MONTH,'abc,b,ab,c,def') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "find_in_set#13c7df199694/ansi_on",
+      "reason": "SELECT find_in_set('ab',INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "find_in_set#13c7df199694/ansi_off",
+      "reason": "SELECT find_in_set('ab',INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "find_in_set#73fb1df4d3b1/ansi_on",
+      "reason": "SELECT find_in_set(INTERVAL '1 02:03:04' DAY TO SECOND,'abc,b,ab,c,def') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "find_in_set#73fb1df4d3b1/ansi_off",
+      "reason": "SELECT find_in_set(INTERVAL '1 02:03:04' DAY TO SECOND,'abc,b,ab,c,def') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "find_in_set#bef48bdf9089/ansi_on",
+      "reason": "SELECT find_in_set('ab',INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "find_in_set#bef48bdf9089/ansi_off",
+      "reason": "SELECT find_in_set('ab',INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "find_in_set"
+}

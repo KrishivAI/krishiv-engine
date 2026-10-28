@@ -1,0 +1,42 @@
+SESSION	CREATE TEMPORARY VIEW tbl_view AS SELECT * FROM VALUES
+DDL	CREATE TABLE ids (id INT) USING CSV
+READ	SELECT * FROM tbl_view
+READ	SELECT * EXCEPT (id) FROM tbl_view
+READ	SELECT * EXCEPT (name) FROM tbl_view
+READ	SELECT * EXCEPT (data) FROM tbl_view
+READ	SELECT * EXCEPT (data.f1) FROM tbl_view
+READ	SELECT * EXCEPT (data.s2) FROM tbl_view
+READ	SELECT * EXCEPT (data.s2.f2) FROM tbl_view
+READ	SELECT * EXCEPT (data.f1, data.s2) FROM tbl_view
+READ	SELECT * EXCEPT (id, name, data) FROM tbl_view
+READ	SELECT * EXCEPT (`a-b-c`) FROM (SELECT 1 a_b_c, 2 `a-b-c`)
+READ	SELECT tbl_view.* EXCEPT (name) FROM tbl_view
+WRITE	INSERT INTO ids
+READ	SELECT * FROM ids
+READ	SELECT * EXCEPT (ids.id) FROM ids
+READ	SELECT data.* EXCEPT (s2) FROM tbl_view
+READ	SELECT data.* EXCEPT (s2.f2) FROM tbl_view
+READ	SELECT data.s2.* EXCEPT (f2) FROM tbl_view
+PARSE_ERROR	SELECT * EXCEPT name FROM tbl_view
+PARSE_ERROR	SELECT * EXCEPT() name FROM tbl_view
+READ	SELECT * EXCEPT(invalid_column) FROM tbl_view
+READ	SELECT * EXCEPT(id, invalid_column) FROM tbl_view
+READ	SELECT * EXCEPT(id, id) FROM tbl_view
+READ	SELECT * EXCEPT(data.s2, data.s2.f2) FROM tbl_view
+SESSION	DROP VIEW tbl_view
+SESSION	CREATE TEMPORARY VIEW v1 AS VALUES (1, 2, NULL, 4, 5) AS T(c1, c2, c3, c4, c5)
+READ	SELECT coalesce(*) FROM v1
+READ	SELECT coalesce(* EXCEPT(c1, c2)) FROM v1
+READ	SELECT array(*) FROM v1
+READ	SELECT array(v1.*) FROM v1
+READ	SELECT concat_ws(',', *) FROM v1
+READ	SELECT (*) FROM v1
+READ	SELECT struct(*) FROM v1
+READ	SELECT greatest(*) FROM v1
+READ	SELECT 5 IN (*) FROM v1
+READ	SELECT c1.* FROM VALUES(named_struct('a', 1, 'b', 2), 10, 20) as t(c1, c2, c3)
+READ	SELECT 1 FROM v1 WHERE coalesce(*) = 1
+READ	SELECT 1 FROM v1 WHERE array(*) = array(1, 2, NULL, 4, 5)
+READ	SELECT 1 FROM v1 WHERE 4 IN (*)
+READ	SELECT T.* FROM v1, LATERAL (SELECT  v1.*) AS T(c1, c2, c3, c4, c5)
+READ	SELECT T.* FROM v1, LATERAL (SELECT  COALESCE(v1.*)) AS T(x)

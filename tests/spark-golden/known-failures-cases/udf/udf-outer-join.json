@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "depends-on-command": [
+      2,
+      6
+    ]
+  },
+  "file": "udf/udf-outer-join",
+  "format_version": 1
+}

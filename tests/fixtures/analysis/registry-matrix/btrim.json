@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "btrim#49205ad1c50a/ansi_on",
+      "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#49205ad1c50a/ansi_off",
+      "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#5a1a560c70c8/ansi_on",
+      "reason": "SELECT btrim(INTERVAL '1 02:03:04' DAY TO SECOND, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#5a1a560c70c8/ansi_off",
+      "reason": "SELECT btrim(INTERVAL '1 02:03:04' DAY TO SECOND, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#a36287350867/ansi_on",
+      "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#a36287350867/ansi_off",
+      "reason": "SELECT btrim(INTERVAL '1-2' YEAR TO MONTH, 'SL') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#d8226b5a98fe/ansi_on",
+      "reason": "SELECT btrim('SSparkSQLS', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#d8226b5a98fe/ansi_off",
+      "reason": "SELECT btrim('SSparkSQLS', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#da68f3d17439/ansi_on",
+      "reason": "SELECT btrim('SSparkSQLS', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#da68f3d17439/ansi_off",
+      "reason": "SELECT btrim('SSparkSQLS', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#ddadbcba5fdc/ansi_on",
+      "reason": "SELECT btrim(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "btrim#ddadbcba5fdc/ansi_off",
+      "reason": "SELECT btrim(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "btrim"
+}

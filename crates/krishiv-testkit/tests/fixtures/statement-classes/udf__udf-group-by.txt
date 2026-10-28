@@ -1,0 +1,52 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT udf(a), udf(COUNT(b)) FROM testData
+READ	SELECT COUNT(udf(a)), udf(COUNT(b)) FROM testData
+READ	SELECT udf(a), COUNT(udf(b)) FROM testData GROUP BY a
+READ	SELECT udf(a), udf(COUNT(udf(b))) FROM testData GROUP BY b
+READ	SELECT COUNT(udf(a)), COUNT(udf(b)) FROM testData GROUP BY udf(a)
+READ	SELECT 'foo', COUNT(udf(a)) FROM testData GROUP BY 1
+READ	SELECT 'foo' FROM testData WHERE a = 0 GROUP BY udf(1)
+READ	SELECT 'foo', udf(APPROX_COUNT_DISTINCT(udf(a))) FROM testData WHERE a = 0 GROUP BY udf(1)
+READ	SELECT 'foo', MAX(STRUCT(udf(a))) FROM testData WHERE a = 0 GROUP BY udf(1)
+READ	SELECT udf(a + b), udf(COUNT(b)) FROM testData GROUP BY a + b
+READ	SELECT udf(a + 2), udf(COUNT(b)) FROM testData GROUP BY a + 1
+READ	SELECT udf(a + 1) + 1, udf(COUNT(b)) FROM testData GROUP BY udf(a + 1)
+READ	SELECT SKEWNESS(udf(a)), udf(KURTOSIS(a)), udf(MIN(a)), MAX(udf(a)), udf(AVG(udf(a))), udf(VARIANCE(a)), STDDEV(udf(a)),
+READ	SELECT COUNT(DISTINCT udf(b)), udf(COUNT(DISTINCT b, c)) FROM (SELECT 1 AS a, 2 AS b, 3 AS c) GROUP BY udf(a)
+READ	SELECT udf(a) AS k, COUNT(udf(b)) FROM testData GROUP BY k
+READ	SELECT a AS k, udf(COUNT(b)) FROM testData GROUP BY k HAVING k > 1
+READ	SELECT udf(COUNT(b)) AS k FROM testData GROUP BY k
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testDataHasSameNameWithAlias AS SELECT * FROM VALUES
+READ	SELECT k AS a, udf(COUNT(udf(v))) FROM testDataHasSameNameWithAlias GROUP BY udf(a)
+SESSION	set spark.sql.groupByAliases=false
+READ	SELECT a AS k, udf(COUNT(udf(b))) FROM testData GROUP BY k
+READ	SELECT udf(a), COUNT(udf(1)) FROM testData WHERE false GROUP BY udf(a)
+READ	SELECT udf(COUNT(1)) FROM testData WHERE false
+READ	SELECT 1 FROM (SELECT udf(COUNT(1)) FROM testData WHERE false) t
+READ	SELECT 1 from (
+READ	SELECT corr(DISTINCT x, y), udf(corr(DISTINCT y, x)), count(*)
+READ	SELECT udf(1) FROM range(10) HAVING true
+READ	SELECT udf(udf(1)) FROM range(10) HAVING MAX(id) > 0
+READ	SELECT udf(id) FROM range(10) HAVING id > 0
+SESSION	CREATE OR REPLACE TEMPORARY VIEW test_agg AS SELECT * FROM VALUES
+READ	SELECT udf(every(v)), udf(some(v)), any(v) FROM test_agg WHERE 1 = 0
+READ	SELECT udf(every(udf(v))), some(v), any(v) FROM test_agg WHERE k = 4
+READ	SELECT every(v), udf(some(v)), any(v) FROM test_agg WHERE k = 5
+READ	SELECT udf(k), every(v), udf(some(v)), any(v) FROM test_agg GROUP BY udf(k)
+READ	SELECT udf(k), every(v) FROM test_agg GROUP BY k HAVING every(v) = false
+READ	SELECT udf(k), udf(every(v)) FROM test_agg GROUP BY udf(k) HAVING every(v) IS NULL
+READ	SELECT udf(k),
+READ	SELECT udf(udf(k)),
+READ	SELECT every(udf(1))
+READ	SELECT some(udf(1S))
+READ	SELECT any(udf(1L))
+READ	SELECT udf(every("true"))
+READ	SELECT k, v, every(v) OVER (PARTITION BY k ORDER BY v) FROM test_agg
+READ	SELECT k, udf(udf(v)), some(v) OVER (PARTITION BY k ORDER BY v) FROM test_agg
+READ	SELECT udf(udf(k)), v, any(v) OVER (PARTITION BY k ORDER BY v) FROM test_agg
+READ	SELECT udf(count(*)) FROM test_agg HAVING count(*) > 1L
+READ	SELECT k, udf(max(v)) FROM test_agg GROUP BY k HAVING max(v) = true
+READ	SELECT * FROM (SELECT udf(COUNT(*)) AS cnt FROM test_agg) WHERE cnt > 1L
+READ	SELECT udf(count(*)) FROM test_agg WHERE count(*) > 1L
+READ	SELECT udf(count(*)) FROM test_agg WHERE count(*) + 1L > 1L
+READ	SELECT udf(count(*)) FROM test_agg WHERE k = 1 or k = 2 or count(*) + 1L > 1L or max(k) > 1

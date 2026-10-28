@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "query-features": [
+      1,
+      3,
+      5
+    ]
+  },
+  "file": "non-excludable-rule",
+  "format_version": 1
+}

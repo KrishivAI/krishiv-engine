@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "contains#4b1b8fa21e9e/ansi_on",
+      "reason": "SELECT contains(INTERVAL '1 02:03:04' DAY TO SECOND, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "contains#4b1b8fa21e9e/ansi_off",
+      "reason": "SELECT contains(INTERVAL '1 02:03:04' DAY TO SECOND, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "contains#5bee7c2dbe51/ansi_on",
+      "reason": "SELECT contains('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "contains#5bee7c2dbe51/ansi_off",
+      "reason": "SELECT contains('Spark SQL', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "contains#6c826c84c7a4/ansi_on",
+      "reason": "SELECT contains(INTERVAL '1-2' YEAR TO MONTH, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "contains#6c826c84c7a4/ansi_off",
+      "reason": "SELECT contains(INTERVAL '1-2' YEAR TO MONTH, 'Spark') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "contains#d7f2b5dd724d/ansi_on",
+      "reason": "SELECT contains('Spark SQL', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "contains#d7f2b5dd724d/ansi_off",
+      "reason": "SELECT contains('Spark SQL', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "contains"
+}

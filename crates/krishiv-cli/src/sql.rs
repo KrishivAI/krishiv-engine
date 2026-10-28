@@ -2,11 +2,13 @@
 //! `krishiv sql`: runs SQL from `-e`, `-f` or stdin and prints the rows.
 
 use std::fmt::Write as _;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::common::{build_session, key_value, read_input, split_statements};
 use clap::{Args, ValueEnum};
+use krishiv::DataFrame;
 use krishiv::arrow::array::cast::AsArray;
 use krishiv::arrow::array::types::{
     Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
@@ -14,7 +16,6 @@ use krishiv::arrow::array::types::{
 };
 use krishiv::arrow::array::{Array, RecordBatch};
 use krishiv::arrow::datatypes::{DataType, TimeUnit};
-use krishiv::{DataFrame, Session};
 
 /// Output formats of a result set.
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -25,6 +26,38 @@ pub(crate) enum Format {
     Csv,
     /// One JSON object per row (JSON Lines).
     Json,
+}
+
+/// Output formats of `--explain-analyze` and `--explain-verbose`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ExplainFormat {
+    /// Plain text (the default).
+    Text,
+    /// The versioned JSON document (experimental: may change before 1.0).
+    Json,
+    /// A Mermaid `flowchart TD` of the plan or profile DAG.
+    Mermaid,
+    /// A Graphviz `digraph` of the plan or profile DAG.
+    Dot,
+}
+
+impl ExplainFormat {
+    /// The [`krishiv::GraphFormat`] of a non-text CLI format; `None` for
+    /// [`Self::Text`]. Reuses [`krishiv::GraphFormat::as_str`] for the shared
+    /// names instead of a second string table.
+    fn graph_format(self) -> Option<krishiv::GraphFormat> {
+        match self {
+            Self::Text => None,
+            Self::Json => Some(krishiv::GraphFormat::Json),
+            Self::Mermaid => Some(krishiv::GraphFormat::Mermaid),
+            Self::Dot => Some(krishiv::GraphFormat::Dot),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        self.graph_format()
+            .map_or("text", krishiv::GraphFormat::as_str)
+    }
 }
 
 /// Arguments of `krishiv sql`.
@@ -63,20 +96,30 @@ pub(crate) struct SqlArgs {
     explain_verbose: bool,
     /// With --explain-analyze or --explain-verbose: print the versioned JSON
     /// document (one line per statement) instead of text (experimental: may
-    /// change before 1.0).
+    /// change before 1.0). A synonym for `--explain-format json`.
     #[arg(long, requires = "explain")]
     json: bool,
-}
-
-fn key_value(s: &str) -> Result<(String, String), String> {
-    match s.split_once('=') {
-        Some((k, v)) if !k.trim().is_empty() => Ok((k.trim().to_owned(), v.to_owned())),
-        _ => Err(format!("expected KEY=VALUE, got `{s}`")),
-    }
+    /// With --explain-analyze or --explain-verbose: the output format
+    /// (`text`, `json`, `mermaid` or `dot`). `mermaid` and `dot` graph the
+    /// physical plan (for --explain-verbose the optimizer steps stay in
+    /// `text`/`json` only).
+    #[arg(long = "explain-format", value_enum, requires = "explain")]
+    explain_format: Option<ExplainFormat>,
 }
 
 /// Runs the command; the process exit code (0 ok, 1 query or I/O error).
 pub(crate) fn run(args: &SqlArgs) -> i32 {
+    if args.json
+        && let Some(format) = args.explain_format
+        && format != ExplainFormat::Json
+    {
+        let _ = writeln!(
+            io::stderr(),
+            "error: the argument '--json' cannot be used with '--explain-format {}'\n\nFor more information, try '--help'.",
+            format.name(),
+        );
+        return 2;
+    }
     match run_inner(args) {
         Ok(()) => 0,
         Err(msg) => {
@@ -86,41 +129,14 @@ pub(crate) fn run(args: &SqlArgs) -> i32 {
     }
 }
 
-fn read_input(args: &SqlArgs) -> Result<String, String> {
-    if let Some(sql) = &args.execute {
-        return Ok(sql.clone());
-    }
-    match &args.file {
-        Some(p) if p.as_os_str() != "-" => {
-            std::fs::read_to_string(p).map_err(|e| format!("cannot read {}: {e}", p.display()))
-        }
-        _ => {
-            let mut s = String::new();
-            io::stdin()
-                .read_to_string(&mut s)
-                .map_err(|e| format!("cannot read stdin: {e}"))?;
-            Ok(s)
-        }
-    }
-}
-
 fn run_inner(args: &SqlArgs) -> Result<(), String> {
-    let input = read_input(args)?;
-    let mut builder = Session::builder();
-    for (k, v) in &args.conf {
-        builder = builder.config(k, v);
-    }
-    let session = builder.build().map_err(|e| e.to_string())?;
-    for (name, path) in &args.table {
-        let df = session.read().parquet([path.as_str()]);
-        futures::executor::block_on(df.create_or_replace_temp_view(name))
-            .map_err(|e| format!("--table {name}={path}: {e}"))?;
-    }
+    let input = read_input(args.execute.as_ref(), args.file.as_ref())?;
+    let session = build_session(&args.conf, &args.table)?;
     let tz = session_tz_micros(session.conf().get("spark.sql.session.timeZone").as_deref())?;
     for (line_offset, stmt) in split_statements(&input) {
         let start = Instant::now();
         let df = futures::executor::block_on(session.sql(&stmt))
-            .map_err(|e| format!("{e}{}", caret(&stmt, line_offset, &e)))?;
+            .map_err(|e| describe(&stmt, line_offset, &e))?;
         if args.explain_analyze || args.explain_verbose {
             print_explain(&df, args)?;
         } else {
@@ -133,53 +149,105 @@ fn run_inner(args: &SqlArgs) -> Result<(), String> {
     Ok(())
 }
 
+/// The output format of `--explain-analyze` and `--explain-verbose`:
+/// `--json` is a synonym for `--explain-format json`.
+fn explain_format(args: &SqlArgs) -> ExplainFormat {
+    if args.json {
+        ExplainFormat::Json
+    } else {
+        args.explain_format.unwrap_or(ExplainFormat::Text)
+    }
+}
+
 /// Prints the profile (`--explain-analyze`) or the optimizer's stages
-/// (`--explain-verbose`) of the query `df`, as text or JSON.
+/// (`--explain-verbose`) of the query `df`, in the requested format.
 fn print_explain(df: &DataFrame, args: &SqlArgs) -> Result<(), String> {
+    // One run per branch: the `Json`/`Mermaid`/`Dot` arms share
+    // `explain_*_with`, so there is a single route to each document and no
+    // second rendering that can drift.
+    let format = explain_format(args);
     let text = if args.explain_analyze {
-        let p = futures::executor::block_on(df.explain_analyze()).map_err(|e| e.to_string())?;
-        if args.json {
-            p.to_json()
-        } else {
-            p.to_text(krishiv::TextOptions::default())
+        match format.graph_format() {
+            None => {
+                let p =
+                    futures::executor::block_on(df.explain_analyze()).map_err(|e| e.to_string())?;
+                p.to_text(krishiv::TextOptions::default())
+            }
+            Some(graph) => futures::executor::block_on(df.explain_analyze_with(graph))
+                .map_err(|e| e.to_string())?,
         }
     } else {
-        let v = futures::executor::block_on(df.explain_verbose()).map_err(|e| e.to_string())?;
-        if args.json { v.to_json() } else { v.to_text() }
+        match format.graph_format() {
+            None => {
+                let v =
+                    futures::executor::block_on(df.explain_verbose()).map_err(|e| e.to_string())?;
+                v.to_text()
+            }
+            Some(graph) => futures::executor::block_on(df.explain_verbose_with(graph))
+                .map_err(|e| e.to_string())?,
+        }
     };
     let mut out = io::stdout().lock();
     writeln!(out, "{}", text.trim_end()).map_err(|e| format!("cannot write output: {e}"))
 }
 
-/// Spark-style position and caret for a parse error in `stmt`; empty for any
-/// other error. The session drops the parser's span, so the statement is
-/// parsed again here to recover it.
-fn caret(stmt: &str, line_offset: usize, error: &krishiv::Error) -> String {
-    if !error.error_class().name().starts_with("PARSE_")
-        && !error.error_class().name().starts_with("UNCLOSED_")
-    {
-        return String::new();
+/// `error` of the `line_offset`-th input line's statement `stmt` as shown
+/// to the user: a syntax error in Spark's `ParseException` layout
+/// ([`krishiv_sql::parse_exception_suffix`]), otherwise the message with the SQL span
+/// that raised it marked. The text shown is the statement with its secrets
+/// redacted, and line numbers count from the start of the input on both
+/// paths: the summary's headers are shifted by `line_offset`, whose lines
+/// the contexts count from the statement's own first line.
+fn describe(stmt: &str, line_offset: usize, error: &krishiv::Error) -> String {
+    let redacted = krishiv_sql::redact_sql(stmt);
+    let text = redacted.as_str();
+    let parse = krishiv_sql::parse_exception_suffix(text, line_offset, error);
+    if !parse.is_empty() {
+        return format!("{error}{parse}");
     }
-    let Err(parse) = krishiv_sql::parse_statement(stmt, &krishiv_sql::ParserOptions::default())
-    else {
-        return String::new();
-    };
-    let start = parse.span.start.min(stmt.len());
-    let before = &stmt[..stmt.floor_char_boundary(start)];
-    let line_no = line_offset + before.matches('\n').count() + 1;
-    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-    let line = stmt[line_start..].lines().next().unwrap_or("");
-    let col = before[line_start..].chars().count();
-    let width = stmt[before.len()..parse.span.end.max(start).min(stmt.len())]
-        .chars()
-        .take_while(|c| *c != '\n')
-        .count()
-        .max(1);
-    format!(
-        "\n(line {line_no}, pos {col})\n\n== SQL ==\n{line}\n{}{}",
-        " ".repeat(col),
-        "^".repeat(width)
+    shift_lines(
+        &krishiv_common::error::render_with_context(error, text),
+        line_offset,
     )
+}
+
+/// `rendered` with every `== SQL (line N, ...)` header moved `line_offset`
+/// lines down, so a statement past the first shows file-relative lines.
+fn shift_lines(rendered: &str, line_offset: usize) -> String {
+    if line_offset == 0 {
+        return rendered.to_owned();
+    }
+    let mut out = String::with_capacity(rendered.len());
+    let mut first = true;
+    for line in rendered.split('\n') {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.push_str(&shift_header(line, line_offset));
+    }
+    out
+}
+
+/// `line` with its `== SQL (line N, ...)` header moved `line_offset` lines
+/// down; any other line unchanged.
+fn shift_header(line: &str, line_offset: usize) -> String {
+    let Some(after) = line.strip_prefix("== SQL") else {
+        return line.to_owned();
+    };
+    let Some(found) = after.find("(line ") else {
+        return line.to_owned();
+    };
+    let digits: String = after[found + "(line ".len()..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let Ok(no) = digits.parse::<usize>() else {
+        return line.to_owned();
+    };
+    let head = &line[..line.len() - after.len() + found + "(line ".len()];
+    let tail = &after[found + "(line ".len() + digits.len()..];
+    format!("{head}{}{tail}", no.saturating_add(line_offset))
 }
 
 fn print_result(df: &DataFrame, format: Format, tz: i64) -> Result<(), String> {
@@ -416,6 +484,24 @@ fn cell(a: &dyn Array, i: usize, null: &str, tz: i64) -> String {
                 .collect();
             format!("{{{}}}", items.join(", "))
         }
+        DataType::Map(_, _) => {
+            let m = a.as_map();
+            let offsets = m.value_offsets();
+            let (from, to) = (
+                usize::try_from(offsets[i]).unwrap_or(0),
+                usize::try_from(offsets[i + 1]).unwrap_or(0),
+            );
+            let items: Vec<String> = (from..to)
+                .map(|j| {
+                    format!(
+                        "{} -> {}",
+                        cell(m.keys().as_ref(), j, "NULL", tz),
+                        cell(m.values().as_ref(), j, "NULL", tz)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", items.join(", "))
+        }
         other => format!("<{other}>"),
     }
 }
@@ -461,74 +547,6 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Splits `input` at `;` outside quotes and comments; blank statements are
-/// dropped. Each statement comes with the number of input lines before it.
-fn split_statements(input: &str) -> Vec<(usize, String)> {
-    let mut out = Vec::new();
-    let mut done_lines = 0;
-    let mut cur = String::new();
-    let mut chars = input.chars().peekable();
-    let mut quote: Option<char> = None;
-    let mut code = false;
-    while let Some(c) = chars.next() {
-        cur.push(c);
-        match quote {
-            Some(q) => {
-                if c == '\\' && q != '`' {
-                    if let Some(n) = chars.next() {
-                        cur.push(n);
-                    }
-                } else if c == q {
-                    quote = None;
-                }
-            }
-            None => match c {
-                '\'' | '"' | '`' => {
-                    code = true;
-                    quote = Some(c);
-                }
-                '-' if chars.peek() == Some(&'-') => {
-                    for n in chars.by_ref() {
-                        cur.push(n);
-                        if n == '\n' {
-                            break;
-                        }
-                    }
-                }
-                '/' if chars.peek() == Some(&'*') => {
-                    let mut prev = '\0';
-                    for n in chars.by_ref() {
-                        cur.push(n);
-                        if prev == '*' && n == '/' {
-                            break;
-                        }
-                        prev = n;
-                    }
-                }
-                ';' => {
-                    cur.pop();
-                    push_stmt(&mut out, &mut done_lines, &mut cur, code);
-                    code = false;
-                }
-                c if !c.is_whitespace() => code = true,
-                _ => {}
-            },
-        }
-    }
-    push_stmt(&mut out, &mut done_lines, &mut cur, code);
-    out
-}
-
-fn push_stmt(out: &mut Vec<(usize, String)>, done_lines: &mut usize, cur: &mut String, code: bool) {
-    if code {
-        let leading = cur.len() - cur.trim_start().len();
-        let skipped = cur[..leading].matches('\n').count();
-        out.push((*done_lines + skipped, cur.trim().to_owned()));
-    }
-    *done_lines += cur.matches('\n').count();
-    cur.clear();
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -543,26 +561,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn splits_outside_quotes_and_comments() {
-        let s = split_statements("select 'a;b'; -- x;y\nselect 2; /* ; */ select `c;`;;");
-        assert_eq!(s.len(), 3, "{s:?}");
-        assert_eq!(s[0].1, "select 'a;b'");
-        assert_eq!(s[1].0, 0);
-        let t = split_statements("select 1;\n\n  select 2");
-        assert_eq!(t[1], (2, "select 2".to_owned()));
-        // Comment-only fragments are not statements.
-        let c = split_statements("-- only\n; /* x */ ; select 1 -- tail\n;\n-- end");
-        assert_eq!(c, vec![(1, "select 1 -- tail".to_owned())]);
-        let esc = split_statements("select 'it\\'s;' ; select 2");
-        assert_eq!(esc.len(), 2, "{esc:?}");
-    }
-
-    #[test]
-    fn key_value_parsing() {
-        assert_eq!(key_value("a=b=c"), Ok(("a".into(), "b=c".into())));
-        assert_eq!(key_value(" k = v"), Ok(("k".into(), " v".into())));
-        assert!(key_value("novalue").is_err());
-        assert!(key_value("=v").is_err());
+    fn explain_format_names_reuse_graph_format() {
+        assert_eq!(ExplainFormat::Text.graph_format(), None);
+        assert_eq!(
+            ExplainFormat::Json.graph_format(),
+            Some(krishiv::GraphFormat::Json)
+        );
+        assert_eq!(
+            ExplainFormat::Mermaid.graph_format(),
+            Some(krishiv::GraphFormat::Mermaid)
+        );
+        assert_eq!(
+            ExplainFormat::Dot.graph_format(),
+            Some(krishiv::GraphFormat::Dot)
+        );
+        assert_eq!(ExplainFormat::Text.name(), "text");
+        assert_eq!(
+            ExplainFormat::Mermaid.name(),
+            krishiv::GraphFormat::Mermaid.as_str()
+        );
     }
 
     #[test]
@@ -592,6 +609,20 @@ mod tests {
             Arc::new(Field::new("x", DataType::Int32, true)),
             arr(Int32Array::from(vec![7])),
         )]);
+        let mut mb = krishiv::arrow::array::builder::MapBuilder::new(
+            None,
+            krishiv::arrow::array::builder::StringBuilder::new(),
+            krishiv::arrow::array::builder::Int32Builder::new(),
+        );
+        mb.keys().append_value("a");
+        mb.values().append_value(1);
+        mb.keys().append_value("b");
+        mb.values().append_null();
+        mb.append(true).expect("map entry");
+        mb.append(true).expect("empty map");
+        let map = mb.finish();
+        assert_eq!(cell(&map, 0, "NULL", 0), "{a -> 1, b -> NULL}");
+        assert_eq!(cell(&map, 1, "NULL", 0), "{}");
         let cases: Vec<(ArrayRef, &str)> = vec![
             (arr(BooleanArray::from(vec![true])), "true"),
             (arr(UInt8Array::from(vec![5])), "5"),
@@ -664,11 +695,50 @@ mod tests {
     }
 
     #[test]
-    fn caret_is_empty_for_non_parse_errors() {
-        let e = Session::new()
+    fn parse_suffix_is_empty_for_non_parse_errors() {
+        let e = krishiv::Session::new()
             .and_then(|s| futures::executor::block_on(s.sql("select * from nope")).map(|_| ()))
             .expect_err("unknown table");
-        assert_eq!(caret("select * from nope", 0, &e), "");
+        assert_eq!(
+            krishiv_sql::parse_exception_suffix("select * from nope", 0, &e),
+            ""
+        );
+    }
+
+    #[test]
+    fn describe_counts_lines_from_the_file_start() {
+        let stmt = "select x\nfrom (select 1 as a) t";
+        let e = krishiv::Session::new()
+            .and_then(|s| futures::executor::block_on(s.sql(stmt)).map(|_| ()))
+            .expect_err("unknown column");
+        let shown = describe(stmt, 5, &e);
+        assert!(shown.starts_with(&e.to_string()), "{shown}");
+        assert!(
+            shown.ends_with("\n== SQL (line 6, position 8) ==\nselect x\n       ^"),
+            "{shown}"
+        );
+        // A later statement's syntax error already counted from the file.
+        let parse = krishiv::Session::new()
+            .and_then(|s| futures::executor::block_on(s.sql("xyz 1")).map(|_| ()))
+            .expect_err("syntax error");
+        let shown = describe("xyz 1", 2, &parse);
+        assert!(
+            shown.ends_with(" (line 3, pos 0)\n\n== SQL ==\nxyz 1\n^^^\n"),
+            "{shown}"
+        );
+    }
+
+    #[test]
+    fn describe_keeps_the_parse_exception_layout_for_syntax_errors() {
+        let e = krishiv::Session::new()
+            .and_then(|s| futures::executor::block_on(s.sql("xyz 1")).map(|_| ()))
+            .expect_err("syntax error");
+        let shown = describe("xyz 1", 0, &e);
+        assert!(
+            shown.ends_with(" (line 1, pos 0)\n\n== SQL ==\nxyz 1\n^^^\n"),
+            "{shown}"
+        );
+        assert_eq!(shown.matches("== SQL").count(), 1, "{shown}");
     }
 
     #[test]

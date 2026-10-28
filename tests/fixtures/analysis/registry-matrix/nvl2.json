@@ -1,0 +1,54 @@
+{
+  "entries": [
+    {
+      "id": "nvl2#1e1261c292b6/ansi_on",
+      "reason": "SELECT nvl2(INTERVAL '1 02:03:04' DAY TO SECOND, 2, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "nvl2#1e1261c292b6/ansi_off",
+      "reason": "SELECT nvl2(INTERVAL '1 02:03:04' DAY TO SECOND, 2, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "nvl2#239048a3bfae/ansi_on",
+      "reason": "SELECT nvl2(INTERVAL '1-2' YEAR TO MONTH, 2, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "nvl2#239048a3bfae/ansi_off",
+      "reason": "SELECT nvl2(INTERVAL '1-2' YEAR TO MONTH, 2, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "nvl2#9537be4ef8c8/ansi_on",
+      "reason": "SELECT nvl2(NULL, 2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl2#9537be4ef8c8/ansi_off",
+      "reason": "SELECT nvl2(NULL, 2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl2#997859899362/ansi_on",
+      "reason": "SELECT nvl2(NULL, 2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl2#997859899362/ansi_off",
+      "reason": "SELECT nvl2(NULL, 2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl2#d68aaefed581/ansi_on",
+      "reason": "SELECT nvl2(NULL, INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl2#d68aaefed581/ansi_off",
+      "reason": "SELECT nvl2(NULL, INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl2#e7ae2541b711/ansi_on",
+      "reason": "SELECT nvl2(NULL, INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    },
+    {
+      "id": "nvl2#e7ae2541b711/ansi_off",
+      "reason": "SELECT nvl2(NULL, INTERVAL '1 02:03:04' DAY TO SECOND, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
+    }
+  ],
+  "format_version": 1,
+  "function": "nvl2"
+}

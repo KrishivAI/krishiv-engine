@@ -1,0 +1,18 @@
+{
+  "cases": {
+    "datetime": [
+      36,
+      45,
+      52
+    ],
+    "legacy-configs": [
+      59,
+      60
+    ],
+    "nested-interval-types": [
+      46
+    ]
+  },
+  "file": "literals",
+  "format_version": 1
+}

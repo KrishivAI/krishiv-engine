@@ -16,11 +16,18 @@
 mod bitwise;
 mod catalog;
 mod conditional;
+mod csv;
 mod defs;
 mod hashing;
+mod hof;
+mod map;
 mod math;
+mod misc;
 mod number;
 mod predicate;
+mod r#struct;
+mod text;
+mod url;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -46,6 +53,11 @@ pub enum Execution {
     /// By the executor's window operator, over a window (`row_number`,
     /// `rank`, ...); never called without `OVER`.
     Window,
+    /// By the executor's higher-order compiler, which evaluates the lambda
+    /// bodies: `transform`, `filter`, `exists`, `forall`
+    /// (`krishiv_exec::planner::eval::hof`, over `krishiv_kernels::list`).
+    /// A lambda is no Arrow value, so these never bind a kernel here.
+    HigherOrder,
 }
 
 /// The aggregates the executor implements.
@@ -66,6 +78,24 @@ pub enum Aggregate {
     First,
     /// `last` / `last_value`; `ignoreNulls` is the second argument.
     Last,
+    /// `stddev` / `std` / `stddev_samp`.
+    StddevSamp,
+    /// `stddev_pop`.
+    StddevPop,
+    /// `variance` / `var_samp`.
+    VarSamp,
+    /// `var_pop`.
+    VarPop,
+    /// `skewness`.
+    Skewness,
+    /// `kurtosis`.
+    Kurtosis,
+    /// `corr`.
+    Corr,
+    /// `covar_samp`.
+    CovarSamp,
+    /// `covar_pop`.
+    CovarPop,
     /// `any_value`; `ignoreNulls` is the second argument.
     AnyValue,
     /// `max_by(x, y)`.

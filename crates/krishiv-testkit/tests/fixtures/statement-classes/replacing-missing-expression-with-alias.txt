@@ -1,0 +1,22 @@
+READ	SELECT col1 + 1 AS a FROM VALUES(1) GROUP BY a ORDER BY col1 + 1
+READ	SELECT col1 + 1 AS a, a AS b FROM VALUES(1) GROUP BY a ORDER BY col1 + 1
+READ	SELECT col1 + 1 AS a FROM VALUES(1) GROUP BY a HAVING col1 + 1 > 0
+READ	SELECT col1 + 1 AS a, a AS b FROM VALUES(1) GROUP BY a HAVING col1 + 1 > 0
+READ	SELECT col1, col2, GROUPING(col1) FROM VALUES("abc", 1) GROUP BY CUBE(col1, col2) ORDER BY GROUPING(col1)
+READ	SELECT col1, col2, GROUPING(col1) FROM VALUES("abc", 1) GROUP BY CUBE(col1, col2) HAVING GROUPING(col1) != NULL
+READ	SELECT make_date(col1, col2, col3) AS a FROM VALUES(1,2,3) GROUP BY make_date(col1, col2, col3) ORDER BY make_date(col1,
+READ	SELECT make_date(col1, col2, col3) AS a, a AS b FROM VALUES(1,2,3) GROUP BY make_date(col1, col2, col3) ORDER BY make_da
+READ	SELECT make_date(col1, col2, col3) AS a FROM VALUES(1,2,3) GROUP BY make_date(col1, col2, col3) HAVING make_date(col1, c
+READ	SELECT make_date(col1, col2, col3) AS a, a AS b FROM VALUES(1,2,3) GROUP BY make_date(col1, col2, col3) HAVING make_date
+READ	SELECT make_date(col1, col2, col3) AS a FROM VALUES(1,2,3) ORDER BY make_date(col1, col2, col3)
+READ	SELECT make_date(col1, col2, col3) AS a, a AS b FROM VALUES(1,2,3) ORDER BY make_date(col1, col2, col3)
+READ	SELECT col1, col1 AS a FROM VALUES(1) GROUP BY col1 ORDER BY col1 ASC
+READ	SELECT col1 AS a, col1 FROM VALUES(1) GROUP BY col1 ORDER BY col1 ASC
+READ	SELECT col1, col1 AS a FROM VALUES(1) GROUP BY col1 HAVING col1 > 0
+READ	SELECT col1 AS a, col1 FROM VALUES(1) GROUP BY col1 HAVING col1 > 0
+READ	SELECT col2 AS b, col2 FROM VALUES(1,2) GROUP BY 1,2 ORDER BY ALL
+READ	SELECT col2 AS b, col2 FROM VALUES(1,2) GROUP BY 1,2 HAVING col2 > 0 ORDER BY ALL
+READ	SELECT col2 AS b, col2, b as c FROM VALUES(1,2) GROUP BY 1,2 ORDER BY ALL
+READ	SELECT col2 AS b, col2, b as c FROM VALUES(1,2) GROUP BY 1,2 HAVING col2 > 0 ORDER BY ALL
+READ	SELECT col1 AS a FROM VALUES(1,2) GROUP BY col1, col2 HAVING col2 > 1 ORDER BY col1
+READ	SELECT col1 AS a, a AS b FROM VALUES(1,2) GROUP BY col1, col2 HAVING col2 > 1 ORDER BY col1

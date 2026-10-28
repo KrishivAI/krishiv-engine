@@ -128,6 +128,46 @@ pub enum Statement {
     SetVariable(SetVariable),
     /// `DROP TEMPORARY VAR[IABLE] [IF EXISTS] name`.
     DropVariable(DropVariable),
+    /// `CREATE [OR REPLACE] [GLOBAL] [TEMPORARY] VIEW ...`: every view
+    /// shape the legacy [`CreateView`] node cannot express (a permanent
+    /// view, or a temporary view with a qualified or computed name, a
+    /// datasource provider, or the `GLOBAL` qualifier).
+    CreatePermanentView(Box<CreatePermanentView>),
+    /// `DROP VIEW [IF EXISTS] name` with a qualified or computed name.
+    DropPermanentView(DropPermanentView),
+    /// `ALTER TABLE name ...`.
+    AlterTable(Box<AlterTable>),
+    /// `ALTER VIEW name ...`.
+    AlterView(Box<AlterView>),
+    /// `ALTER DATABASE|SCHEMA|NAMESPACE name ...`.
+    AlterNamespace(AlterNamespace),
+    /// `INSERT INTO|OVERWRITE ...`, or `FROM ... INSERT INTO ... INSERT
+    /// INTO ...` (a multi-table insert).
+    Insert(Box<Insert>),
+    /// `DELETE FROM name [WHERE ...]`.
+    Delete(Delete),
+    /// `UPDATE name SET ... [WHERE ...]`.
+    Update(Box<Update>),
+    /// `MERGE INTO ...`.
+    Merge(Box<Merge>),
+    /// `TRUNCATE TABLE name [PARTITION ...]`.
+    Truncate(Truncate),
+    /// `SHOW ...`.
+    Show(Show),
+    /// `DESCRIBE ...` (`DESC` for `DESCRIBE`).
+    Describe(Describe),
+    /// `CACHE ...`, `UNCACHE ...` or `CLEAR CACHE`.
+    Cache(Cache),
+    /// `REFRESH ...`.
+    Refresh(Refresh),
+    /// `ANALYZE TABLE ... COMPUTE STATISTICS ...`.
+    Analyze(Analyze),
+    /// `MSCK REPAIR TABLE ...` or `REPAIR TABLE ...`.
+    Repair(Repair),
+    /// `ADD JAR|FILE|ARCHIVE ...`.
+    AddResource(AddResource),
+    /// `LIST JAR|FILE|ARCHIVE [...]`.
+    ListResource(ListResource),
 }
 
 impl Statement {
@@ -150,6 +190,24 @@ impl Statement {
             Self::DeclareVariable(d) => d.span,
             Self::SetVariable(s) => s.span,
             Self::DropVariable(d) => d.span,
+            Self::CreatePermanentView(v) => v.span,
+            Self::DropPermanentView(v) => v.span,
+            Self::AlterTable(a) => a.span,
+            Self::AlterView(a) => a.span,
+            Self::AlterNamespace(a) => a.span,
+            Self::Insert(i) => i.span,
+            Self::Delete(d) => d.span,
+            Self::Update(u) => u.span,
+            Self::Merge(m) => m.span,
+            Self::Truncate(t) => t.span,
+            Self::Show(s) => s.span,
+            Self::Describe(d) => d.span,
+            Self::Cache(c) => c.span,
+            Self::Refresh(r) => r.span,
+            Self::Analyze(a) => a.span,
+            Self::Repair(r) => r.span,
+            Self::AddResource(r) => r.span,
+            Self::ListResource(r) => r.span,
         }
     }
 }
@@ -739,6 +797,12 @@ pub struct CreateTableLike {
     pub location: Option<String>,
     /// `TBLPROPERTIES (...)`.
     pub tblproperties: Vec<TableOption>,
+    /// The first clause written more than once, in the order Spark checks
+    /// them (`PROVIDER` for `USING`, `STORED AS/BY`, `ROW FORMAT`,
+    /// `LOCATION`, `TBLPROPERTIES`): the statement then fails with
+    /// `DUPLICATE_CLAUSES`. Repeated clauses are merged above (lists
+    /// appended, the later single value kept).
+    pub duplicate_clause: Option<&'static str>,
     /// Source text, from `CREATE` to the end of the statement.
     pub span: Span,
 }
@@ -890,6 +954,921 @@ pub struct Use {
     /// The name.
     pub name: DdlName,
     /// Source text, from `USE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `CREATE [OR REPLACE] [GLOBAL] [TEMPORARY] VIEW [IF NOT EXISTS] name
+/// [(columns)] [USING provider] [OPTIONS (...)] [COMMENT '...']
+/// [TBLPROPERTIES (...)] [WITH SCHEMA ...] [AS query]`: every view shape
+/// the legacy temporary [`CreateView`] node cannot express. A datasource
+/// temporary view (`USING ...` with no `AS`) has no query.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreatePermanentView {
+    /// `OR REPLACE`.
+    pub or_replace: bool,
+    /// `GLOBAL` (a global temporary view).
+    pub global: bool,
+    /// `TEMPORARY` (`TEMP`).
+    pub temporary: bool,
+    /// `IF NOT EXISTS`.
+    pub if_not_exists: bool,
+    /// The view name.
+    pub name: DdlName,
+    /// The declared column aliases; empty for none.
+    pub columns: Vec<PermanentViewColumn>,
+    /// `DEFAULT COLLATION ...`.
+    pub collation: Option<ObjectName>,
+    /// `USING provider` (a datasource temporary view).
+    pub using: Option<ObjectName>,
+    /// `OPTIONS (...)`.
+    pub options: Vec<TableOption>,
+    /// `COMMENT '...'`.
+    pub comment: Option<String>,
+    /// `TBLPROPERTIES (...)`.
+    pub tblproperties: Vec<TableOption>,
+    /// `WITH SCHEMA ...`.
+    pub schema_binding: Option<SchemaBinding>,
+    /// `PARTITIONED ON (...)` was written (Spark rejects it after
+    /// parsing).
+    pub partitioned_on: bool,
+    /// The first clause written twice, by Spark's check order (`COMMENT`,
+    /// `DEFAULT COLLATION`, `WITH SCHEMA`, `PARTITIONED ON`,
+    /// `TBLPROPERTIES`), if any.
+    pub duplicate_clause: Option<&'static str>,
+    /// The `AS query`; `None` for a datasource view (which has none).
+    pub query: Option<Box<Query>>,
+    /// Source text, from `CREATE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `name [COMMENT '...']`, or in a datasource (`USING`) view `name type
+/// [NOT NULL] [COMMENT '...']`, in a [`CreatePermanentView`] column list.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PermanentViewColumn {
+    /// The column alias.
+    pub name: ColumnName,
+    /// Its type (datasource views only).
+    pub data_type: Option<DataTypeSpec>,
+    /// `NOT NULL` (datasource views only).
+    pub not_null: bool,
+    /// Its comment, if written.
+    pub comment: Option<String>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `WITH SCHEMA ...` on a view: how the view tracks the schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SchemaBinding {
+    /// `WITH SCHEMA BINDING`.
+    Binding,
+    /// `WITH SCHEMA EVOLUTION`.
+    Evolution,
+    /// `WITH SCHEMA COMPENSATION`.
+    Compensation,
+    /// `WITH SCHEMA TYPE EVOLUTION`.
+    TypeEvolution,
+}
+
+/// `DROP VIEW [IF EXISTS] name` with a qualified or computed name (the
+/// legacy [`DropView`] node takes one plain part).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DropPermanentView {
+    /// `IF EXISTS`.
+    pub if_exists: bool,
+    /// The view name.
+    pub name: DdlName,
+    /// Source text, from `DROP` to the end of the statement.
+    pub span: Span,
+}
+
+/// `ALTER TABLE name ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterTable {
+    /// The table name.
+    pub table: DdlName,
+    /// What to change.
+    pub action: AlterTableAction,
+    /// Source text, from `ALTER` to the end of the statement.
+    pub span: Span,
+}
+
+/// What an [`AlterTable`] changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AlterTableAction {
+    /// `ADD [COLUMN|COLUMNS] ...`.
+    AddColumns(Vec<ColumnDef>),
+    /// `DROP [COLUMN|COLUMNS] ...`.
+    DropColumns(Vec<ColumnName>),
+    /// `RENAME [COLUMN] from TO to`.
+    RenameColumn {
+        /// The column to rename.
+        from: ColumnName,
+        /// The new name.
+        to: ColumnName,
+        /// Source text.
+        span: Span,
+    },
+    /// `RENAME TO name`.
+    RenameTo {
+        /// The new table name.
+        name: DdlName,
+        /// Source text.
+        span: Span,
+    },
+    /// `CHANGE [COLUMN] name ...` (the legacy column change).
+    ChangeColumn {
+        /// The column to change.
+        name: ColumnName,
+        /// How to change it.
+        action: ChangeColumnAction,
+        /// Source text.
+        span: Span,
+    },
+    /// `ALTER [COLUMN] name ...`.
+    AlterColumn {
+        /// The column to change.
+        name: ColumnName,
+        /// How to change it.
+        action: AlterColumnAction,
+        /// Source text.
+        span: Span,
+    },
+    /// `SET TBLPROPERTIES (...)`.
+    SetTblProperties(Vec<TableOption>),
+    /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
+    UnsetTblProperties {
+        /// `IF EXISTS`.
+        if_exists: bool,
+        /// The keys to unset (values, if written, are ignored).
+        keys: Vec<TableOption>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SET SERDEPROPERTIES (...)`.
+    SetSerdeProperties(Vec<TableOption>),
+    /// `PARTITION (...) SET SERDEPROPERTIES (...)`.
+    SetPartitionSerdeProperties {
+        /// The partition.
+        partition: PartitionSpec,
+        /// The properties.
+        properties: Vec<TableOption>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SET LOCATION '...'`.
+    SetLocation(String),
+    /// `ADD [IF NOT EXISTS] PARTITION ... [LOCATION ...] ...`.
+    AddPartition {
+        /// `IF NOT EXISTS`.
+        if_not_exists: bool,
+        /// The partitions to add, each with its `LOCATION`.
+        parts: Vec<PartitionWithLocation>,
+        /// Source text.
+        span: Span,
+    },
+    /// `DROP [IF EXISTS] PARTITION ... [PURGE]`.
+    DropPartition {
+        /// `IF EXISTS`.
+        if_exists: bool,
+        /// The partitions to drop.
+        specs: Vec<PartitionSpec>,
+        /// `PURGE`.
+        purge: bool,
+        /// Source text.
+        span: Span,
+    },
+    /// `PARTITION ... RENAME TO PARTITION ...`.
+    RenamePartition {
+        /// The partition to rename.
+        from: PartitionSpec,
+        /// The new specification.
+        to: PartitionSpec,
+        /// Source text.
+        span: Span,
+    },
+    /// `PARTITION ... SET LOCATION '...'`.
+    SetPartitionLocation {
+        /// The partition.
+        partition: PartitionSpec,
+        /// The new location.
+        location: String,
+        /// Source text.
+        span: Span,
+    },
+    /// `RECOVER PARTITIONS`.
+    RecoverPartitions,
+}
+
+/// The change of a legacy `ALTER TABLE ... CHANGE [COLUMN]` action.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ChangeColumnAction {
+    /// `TYPE type`.
+    Type(DataTypeSpec),
+    /// `COMMENT '...'`.
+    Comment(String),
+    /// `FIRST`.
+    First,
+    /// `AFTER column`.
+    After(ColumnName),
+    /// `SET NOT NULL`.
+    SetNotNull,
+    /// `DROP NOT NULL`.
+    DropNotNull,
+}
+
+/// The change of an `ALTER TABLE ... ALTER [COLUMN]` action.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AlterColumnAction {
+    /// `COMMENT '...'`.
+    Comment(String),
+    /// `SET NOT NULL`.
+    SetNotNull,
+    /// `DROP NOT NULL`.
+    DropNotNull,
+    /// `SET DEFAULT expr`.
+    SetDefault(Expr),
+    /// `DROP DEFAULT`.
+    DropDefault,
+}
+
+/// `ALTER VIEW name ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterView {
+    /// The view name.
+    pub name: DdlName,
+    /// What to change.
+    pub action: AlterViewAction,
+    /// Source text, from `ALTER` to the end of the statement.
+    pub span: Span,
+}
+
+/// What an [`AlterView`] changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AlterViewAction {
+    /// `AS query [WITH SCHEMA ...]`.
+    SetQuery {
+        /// The new query.
+        query: Box<Query>,
+        /// `WITH SCHEMA ...`, if written.
+        schema_binding: Option<SchemaBinding>,
+        /// Source text.
+        span: Span,
+    },
+    /// `WITH SCHEMA ...` without a query.
+    SetSchemaBinding(SchemaBinding),
+    /// `SET TBLPROPERTIES (...)`.
+    SetTblProperties(Vec<TableOption>),
+    /// `UNSET TBLPROPERTIES [IF EXISTS] (...)`.
+    UnsetTblProperties {
+        /// `IF EXISTS`.
+        if_exists: bool,
+        /// The keys to unset (values, if written, are ignored).
+        keys: Vec<TableOption>,
+        /// Source text.
+        span: Span,
+    },
+    /// `RENAME TO name`.
+    RenameTo {
+        /// The new view name.
+        name: DdlName,
+        /// Source text.
+        span: Span,
+    },
+}
+
+/// `ALTER DATABASE|SCHEMA|NAMESPACE name ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterNamespace {
+    /// Which keyword.
+    pub kind: NamespaceKind,
+    /// The namespace name.
+    pub name: DdlName,
+    /// What to change.
+    pub action: AlterNamespaceAction,
+    /// Source text, from `ALTER` to the end of the statement.
+    pub span: Span,
+}
+
+/// What an [`AlterNamespace`] changes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AlterNamespaceAction {
+    /// `SET PROPERTIES (...)` (namespaces say `PROPERTIES`, not
+    /// `TBLPROPERTIES`).
+    SetProperties(Vec<TableOption>),
+    /// `SET LOCATION '...'`.
+    SetLocation(String),
+    /// `DEFAULT COLLATION ...`.
+    DefaultCollation(ObjectName),
+}
+
+/// `PARTITION (key [= value], ...)` in a DDL or command statement: a
+/// value column holds a full expression, and a bare key reads its value
+/// dynamically.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartitionSpec {
+    /// The keys, in order.
+    pub parts: Vec<PartitionSpecPart>,
+    /// Source text, from `PARTITION` to `)`.
+    pub span: Span,
+}
+
+/// One `key [= value]` of a [`PartitionSpec`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartitionSpecPart {
+    /// The partition column.
+    pub key: Ident,
+    /// Its value; `None` for a bare key.
+    pub value: Option<Expr>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `PARTITION ... [LOCATION '...']` in `ALTER TABLE ... ADD PARTITION`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PartitionWithLocation {
+    /// The partition.
+    pub spec: PartitionSpec,
+    /// Its `LOCATION`, if written.
+    pub location: Option<String>,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `INSERT INTO|OVERWRITE ...`, or `FROM ... INSERT INTO ... INSERT INTO
+/// ...` (a multi-table insert).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Insert {
+    /// The shared `FROM` clause of a multi-table insert; `None` for a
+    /// single-table `INSERT`.
+    pub source: Option<FromClause>,
+    /// The rows to write; one for a single-table `INSERT`.
+    pub clauses: Vec<InsertClause>,
+    /// Source text, from `INSERT` (or `FROM`) to the end of the statement.
+    pub span: Span,
+}
+
+/// One `INSERT INTO|OVERWRITE ... query` of an [`Insert`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct InsertClause {
+    /// `OVERWRITE` (`false` for `INTO`).
+    pub overwrite: bool,
+    /// `WITH SCHEMA EVOLUTION`.
+    pub with_schema_evolution: bool,
+    /// The target table.
+    pub name: DdlName,
+    /// Its alias, if written (only with `REPLACE`).
+    pub target_alias: Option<Ident>,
+    /// `WITH (...)` target options.
+    pub target_options: Vec<TableOption>,
+    /// The target columns; empty for none.
+    pub columns: Vec<ColumnName>,
+    /// `PARTITION (...)`.
+    pub partition: Option<PartitionSpec>,
+    /// `IF NOT EXISTS` after the partition (Spark rejects it after
+    /// parsing for `INTO`, and for `OVERWRITE` with dynamic partitions).
+    pub if_not_exists: bool,
+    /// `REPLACE WHERE ...`.
+    pub replace_where: Option<Expr>,
+    /// `REPLACE ON ...`.
+    pub replace_on: Option<Expr>,
+    /// `REPLACE USING (...)` columns.
+    pub replace_using: Option<Vec<Ident>>,
+    /// `BY NAME`.
+    pub by_name: bool,
+    /// The rows to write.
+    pub query: Box<Query>,
+    /// Source text of the clause head, from `INSERT` to the query.
+    pub head_span: Span,
+    /// Source text, from `INSERT` to the end of the clause.
+    pub span: Span,
+}
+
+/// `DELETE FROM name [WHERE ...]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Delete {
+    /// The table to delete from.
+    pub table: DdlName,
+    /// Its alias, if written.
+    pub alias: Option<Ident>,
+    /// `WHERE ...`.
+    pub where_clause: Option<Expr>,
+    /// Source text, from `DELETE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `v = expr` in an [`Update`] or [`Merge`] action.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct UpdateAssignment {
+    /// The target column.
+    pub target: ObjectName,
+    /// Its new value.
+    pub value: Expr,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `UPDATE name [AS alias] SET ... [WHERE ...]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Update {
+    /// The table to update.
+    pub table: DdlName,
+    /// Its alias, if written.
+    pub alias: Option<Ident>,
+    /// The `SET` assignments.
+    pub assignments: Vec<UpdateAssignment>,
+    /// `WHERE ...`.
+    pub where_clause: Option<Expr>,
+    /// Source text, from `UPDATE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `MERGE INTO target USING source ON ... WHEN ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Merge {
+    /// The target table.
+    pub target: DdlName,
+    /// Its alias, if written.
+    pub target_alias: Option<Ident>,
+    /// The source.
+    pub source: MergeSource,
+    /// `ON ...`.
+    pub on: Expr,
+    /// The `WHEN ...` clauses, in order.
+    pub clauses: Vec<MergeClause>,
+    /// Source text, from `MERGE` to the end of the statement.
+    pub span: Span,
+}
+
+/// The source of a [`Merge`]: a table or a subquery, each with an
+/// optional alias.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MergeSource {
+    /// A table.
+    Table {
+        /// The table name.
+        name: DdlName,
+        /// Its alias, if written.
+        alias: Option<Ident>,
+        /// Source text.
+        span: Span,
+    },
+    /// A subquery.
+    Query {
+        /// The query.
+        query: Box<Query>,
+        /// Its alias, if written.
+        alias: Option<Ident>,
+        /// Source text.
+        span: Span,
+    },
+}
+
+/// One `WHEN ... THEN ...` of a [`Merge`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MergeClause {
+    /// Which rows it fires on.
+    pub matched: MergeMatched,
+    /// `AND ...`, if written.
+    pub condition: Option<Expr>,
+    /// What it does.
+    pub action: MergeAction,
+    /// Source text, from `WHEN` to the end of the clause.
+    pub span: Span,
+}
+
+/// Which rows a [`MergeClause`] fires on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MergeMatched {
+    /// `WHEN MATCHED`.
+    Matched,
+    /// `WHEN NOT MATCHED`.
+    NotMatched,
+    /// `WHEN NOT MATCHED BY TARGET`.
+    NotMatchedByTarget,
+    /// `WHEN NOT MATCHED BY SOURCE`.
+    NotMatchedBySource,
+}
+
+/// What a [`MergeClause`] does.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MergeAction {
+    /// `UPDATE SET ...`.
+    Update(Vec<UpdateAssignment>),
+    /// `UPDATE SET *` (only after `WHEN MATCHED`).
+    UpdateStar,
+    /// `DELETE`.
+    Delete,
+    /// `INSERT ...`.
+    Insert(MergeInsert),
+}
+
+/// The `INSERT` of a [`MergeClause`] not-matched action.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MergeInsert {
+    /// `INSERT *`.
+    Star,
+    /// `INSERT (columns) VALUES (...)`.
+    Values {
+        /// The target columns (dotted names), at least one.
+        columns: Vec<ObjectName>,
+        /// The row to insert.
+        values: Vec<Expr>,
+        /// Source text.
+        span: Span,
+    },
+}
+
+/// `TRUNCATE TABLE name [PARTITION ...]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Truncate {
+    /// The table to truncate.
+    pub table: DdlName,
+    /// `PARTITION ...`.
+    pub partition: Option<PartitionSpec>,
+    /// Source text, from `TRUNCATE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `SHOW ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Show {
+    /// What to show.
+    pub kind: ShowKind,
+    /// Source text, from `SHOW` to the end of the statement.
+    pub span: Span,
+}
+
+/// What a [`Show`] shows.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ShowKind {
+    /// `SHOW TABLES [IN name] [LIKE pattern]`.
+    Tables {
+        /// `IN name`, if written.
+        namespace: Option<DdlName>,
+        /// The pattern, if written.
+        pattern: Option<ShowPattern>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW TABLE EXTENDED [IN name] LIKE pattern [PARTITION ...]`.
+    TableExtended {
+        /// `IN name`, if written.
+        namespace: Option<DdlName>,
+        /// The pattern (`LIKE` itself is optional).
+        pattern: ShowPattern,
+        /// `PARTITION ...`, if written.
+        partition: Option<PartitionSpec>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW VIEWS [{FROM | IN} name] [LIKE pattern]`.
+    Views {
+        /// The namespace, if written.
+        namespace: Option<DdlName>,
+        /// The pattern, if written.
+        pattern: Option<ShowPattern>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW COLUMNS {FROM | IN} table [{FROM | IN} namespace]`.
+    Columns {
+        /// The table.
+        table: DdlName,
+        /// The namespace, if written.
+        namespace: Option<DdlName>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW [scope.] [USER|SYSTEM|ALL] FUNCTIONS [{FROM | IN} namespace]
+    /// [[LIKE] {pattern | name}]`.
+    Functions {
+        /// The scope, if written (never a computed name: Spark rejects
+        /// `IDENTIFIER(...)` here).
+        scope: Option<ObjectName>,
+        /// `USER`, `SYSTEM` or `ALL`, if written.
+        system: Option<FunctionScope>,
+        /// The namespace, if written.
+        namespace: Option<DdlName>,
+        /// The pattern, if written as a string.
+        pattern: Option<ShowPattern>,
+        /// The legacy pattern, if written as a (dotted) name: its last
+        /// part is the pattern, the others the namespace. Spark rejects
+        /// it beside a `FROM`/`IN` namespace.
+        legacy_pattern: Option<ObjectName>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW DATABASES|SCHEMAS|NAMESPACES [LIKE pattern]`.
+    Namespaces {
+        /// Which keyword.
+        kind: NamespaceKind,
+        /// The pattern, if written.
+        pattern: Option<ShowPattern>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW CREATE TABLE name [AS SERDE]`.
+    CreateTable {
+        /// The table or view.
+        name: DdlName,
+        /// `AS SERDE`.
+        serde: bool,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW TBLPROPERTIES name [(key)]`.
+    TblProperties {
+        /// The table or view.
+        name: DdlName,
+        /// The key, if written (a string literal or an identifier).
+        key: Option<String>,
+        /// The key as written.
+        key_span: Option<Span>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW PARTITIONS name [PARTITION ...]`.
+    Partitions {
+        /// The table.
+        name: DdlName,
+        /// `PARTITION ...`, if written.
+        partition: Option<PartitionSpec>,
+        /// Source text.
+        span: Span,
+    },
+    /// `SHOW CURRENT NAMESPACE|SCHEMA|DATABASE`.
+    CurrentNamespace {
+        /// Which keyword.
+        kind: NamespaceKind,
+        /// Source text.
+        span: Span,
+    },
+}
+
+/// `[LIKE] 'pattern'` in a [`Show`]: the `LIKE` keyword is optional.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ShowPattern {
+    /// Whether `LIKE` was written.
+    pub like: bool,
+    /// The pattern.
+    pub pattern: String,
+    /// Source text.
+    pub span: Span,
+}
+
+/// `USER`, `SYSTEM` or `ALL` in a [`ShowKind::Functions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FunctionScope {
+    /// `USER`.
+    User,
+    /// `SYSTEM`.
+    System,
+    /// `ALL`.
+    All,
+}
+
+/// `DESCRIBE ...` (`DESC` for `DESCRIBE`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Describe {
+    /// What to describe.
+    pub kind: DescribeKind,
+    /// Source text, from `DESCRIBE` to the end of the statement.
+    pub span: Span,
+}
+
+/// What a [`Describe`] describes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DescribeKind {
+    /// `DESCRIBE [TABLE] [EXTENDED|FORMATTED] table [PARTITION ...]
+    /// [column] [AS JSON]`.
+    Table {
+        /// `EXTENDED` or `FORMATTED`, if written.
+        mode: Option<DescribeMode>,
+        /// The table.
+        table: DdlName,
+        /// `PARTITION ...`, if written.
+        partition: Option<PartitionSpec>,
+        /// The column's name parts (a nested field is dotted); empty for
+        /// none.
+        column: Vec<ColumnName>,
+        /// `AS JSON`.
+        as_json: bool,
+        /// Source text.
+        span: Span,
+    },
+    /// `DESCRIBE FUNCTION [EXTENDED] name`.
+    Function {
+        /// `EXTENDED`, if written.
+        extended: bool,
+        /// The function.
+        name: DdlName,
+        /// Source text.
+        span: Span,
+    },
+    /// `DESCRIBE DATABASE|SCHEMA|NAMESPACE [EXTENDED] name`.
+    Namespace {
+        /// Which keyword.
+        kind: NamespaceKind,
+        /// `EXTENDED`, if written.
+        extended: bool,
+        /// The namespace.
+        name: DdlName,
+        /// Source text.
+        span: Span,
+    },
+    /// `DESCRIBE [QUERY] query`.
+    Query {
+        /// The query.
+        query: Box<Query>,
+        /// Source text.
+        span: Span,
+    },
+}
+
+/// `EXTENDED` or `FORMATTED` in a [`DescribeKind::Table`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DescribeMode {
+    /// `EXTENDED`.
+    Extended,
+    /// `FORMATTED`.
+    Formatted,
+}
+
+/// `CACHE ...`, `UNCACHE ...` or `CLEAR CACHE`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Cache {
+    /// What to do.
+    pub kind: CacheKind,
+    /// Source text, from `CACHE`, `UNCACHE` or `CLEAR` to the end of the
+    /// statement.
+    pub span: Span,
+}
+
+/// What a [`Cache`] does.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CacheKind {
+    /// `CACHE [LAZY] TABLE name [OPTIONS (...)] [[AS] query]`.
+    Cache {
+        /// `LAZY`.
+        lazy: bool,
+        /// The table.
+        name: DdlName,
+        /// `OPTIONS (...)`.
+        options: Vec<TableOption>,
+        /// The query caching the table; `None` for a plain `CACHE`.
+        query: Option<Box<Query>>,
+        /// Source text.
+        span: Span,
+    },
+    /// `UNCACHE TABLE [IF EXISTS] name`.
+    Uncache {
+        /// `IF EXISTS`.
+        if_exists: bool,
+        /// The table.
+        name: DdlName,
+        /// Source text.
+        span: Span,
+    },
+    /// `CLEAR CACHE`.
+    Clear,
+}
+
+/// `REFRESH ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Refresh {
+    /// What to refresh.
+    pub kind: RefreshKind,
+    /// Source text, from `REFRESH` to the end of the statement.
+    pub span: Span,
+}
+
+/// What a [`Refresh`] refreshes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RefreshKind {
+    /// `REFRESH TABLE name`.
+    Table {
+        /// The table.
+        name: DdlName,
+        /// Source text.
+        span: Span,
+    },
+    /// `REFRESH FUNCTION name`.
+    Function {
+        /// The function.
+        name: DdlName,
+        /// Source text.
+        span: Span,
+    },
+    /// `REFRESH path`: one string literal, or the rest of the statement as
+    /// an unquoted path.
+    Path {
+        /// The path.
+        path: String,
+        /// Source text.
+        span: Span,
+    },
+}
+
+/// `ANALYZE TABLE name [PARTITION ...] COMPUTE STATISTICS ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Analyze {
+    /// The table.
+    pub table: DdlName,
+    /// `PARTITION ...`, if written.
+    pub partition: Option<PartitionSpec>,
+    /// `NOSCAN`, if written.
+    pub noscan: bool,
+    /// Which columns to compute statistics for.
+    pub columns: AnalyzeColumns,
+    /// Source text, from `ANALYZE` to the end of the statement.
+    pub span: Span,
+}
+
+/// Which columns an [`Analyze`] computes statistics for.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AnalyzeColumns {
+    /// The whole table.
+    All,
+    /// `FOR ALL COLUMNS`.
+    ForAll,
+    /// `FOR COLUMNS c, ...`.
+    ForColumns(Vec<Ident>),
+}
+
+/// `MSCK REPAIR TABLE ...` or `REPAIR TABLE ...`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Repair {
+    /// Whether `MSCK` was written.
+    pub msck: bool,
+    /// The table.
+    pub table: DdlName,
+    /// `ADD`, `DROP` or `SYNC PARTITIONS`, if written.
+    pub action: Option<RepairAction>,
+    /// Source text, from `MSCK` or `REPAIR` to the end of the statement.
+    pub span: Span,
+}
+
+/// `ADD|DROP|SYNC PARTITIONS` in a [`Repair`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RepairAction {
+    /// `ADD PARTITIONS`.
+    Add,
+    /// `DROP PARTITIONS`.
+    Drop,
+    /// `SYNC PARTITIONS`.
+    Sync,
+}
+
+/// A resource kind for [`AddResource`] and [`ListResource`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ResourceType {
+    /// `JAR`.
+    Jar,
+    /// `FILE`.
+    File,
+    /// `ARCHIVE`.
+    Archive,
+}
+
+/// `ADD JAR[S]|FILE[S]|ARCHIVE[S] paths`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AddResource {
+    /// What to add.
+    pub kind: ResourceType,
+    /// The paths, quoted or not (quoted ones unescaped); may be empty.
+    pub paths: Vec<String>,
+    /// Source text, from `ADD` to the end of the statement.
+    pub span: Span,
+}
+
+/// `LIST JAR[S]|FILE[S]|ARCHIVE[S] [paths]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ListResource {
+    /// What to list.
+    pub kind: ResourceType,
+    /// The paths, quoted or not (quoted ones unescaped); empty for all.
+    pub paths: Vec<String>,
+    /// Source text, from `LIST` to the end of the statement.
     pub span: Span,
 }
 

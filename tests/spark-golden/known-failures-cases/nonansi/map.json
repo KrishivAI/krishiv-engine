@@ -1,0 +1,12 @@
+{
+  "cases": {
+    "fn-array": [
+      0
+    ],
+    "nested-interval-types": [
+      1
+    ]
+  },
+  "file": "nonansi/map",
+  "format_version": 1
+}

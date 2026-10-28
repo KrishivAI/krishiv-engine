@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "character_length#630819a954e3/ansi_on",
+      "reason": "SELECT character_length(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "character_length#630819a954e3/ansi_off",
+      "reason": "SELECT character_length(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "character_length#86662ee970bb/ansi_on",
+      "reason": "SELECT character_length(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "character_length#86662ee970bb/ansi_off",
+      "reason": "SELECT character_length(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "character_length"
+}

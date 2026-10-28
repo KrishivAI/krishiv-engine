@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "convert_timezone#147a06c5b92b/ansi_on",
+      "reason": "SELECT convert_timezone(INTERVAL '1-2' YEAR TO MONTH, timestamp_ntz'2021-12-05 15:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#147a06c5b92b/ansi_off",
+      "reason": "SELECT convert_timezone(INTERVAL '1-2' YEAR TO MONTH, timestamp_ntz'2021-12-05 15:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#2661b7e18ccc/ansi_on",
+      "reason": "SELECT convert_timezone(INTERVAL '1 02:03:04' DAY TO SECOND, 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#2661b7e18ccc/ansi_off",
+      "reason": "SELECT convert_timezone(INTERVAL '1 02:03:04' DAY TO SECOND, 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#31f607cee435/ansi_on",
+      "reason": "SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "convert_timezone#31f607cee435/ansi_off",
+      "reason": "SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "convert_timezone#3e6e01c59b02/ansi_on",
+      "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1 02:03:04' DAY TO SECOND, timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#3e6e01c59b02/ansi_off",
+      "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1 02:03:04' DAY TO SECOND, timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#4b75798678ba/ansi_on",
+      "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "convert_timezone#4b75798678ba/ansi_off",
+      "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "convert_timezone#7fa8f7d4a0f7/ansi_on",
+      "reason": "SELECT convert_timezone(INTERVAL '1 02:03:04' DAY TO SECOND, timestamp_ntz'2021-12-05 15:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#7fa8f7d4a0f7/ansi_off",
+      "reason": "SELECT convert_timezone(INTERVAL '1 02:03:04' DAY TO SECOND, timestamp_ntz'2021-12-05 15:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#b0dd48f6ba13/ansi_on",
+      "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1-2' YEAR TO MONTH, timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#b0dd48f6ba13/ansi_off",
+      "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1-2' YEAR TO MONTH, timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#cc1eb2d7ea80/ansi_on",
+      "reason": "SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "convert_timezone#cc1eb2d7ea80/ansi_off",
+      "reason": "SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "convert_timezone#d074d150b0ec/ansi_on",
+      "reason": "SELECT convert_timezone(INTERVAL '1-2' YEAR TO MONTH, 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#d074d150b0ec/ansi_off",
+      "reason": "SELECT convert_timezone(INTERVAL '1-2' YEAR TO MONTH, 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "convert_timezone#f9774a50969a/ansi_on",
+      "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "convert_timezone#f9774a50969a/ansi_off",
+      "reason": "SELECT convert_timezone('Europe/Brussels', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "convert_timezone"
+}

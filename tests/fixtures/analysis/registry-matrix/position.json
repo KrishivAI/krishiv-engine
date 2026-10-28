@@ -1,0 +1,86 @@
+{
+  "entries": [
+    {
+      "id": "position#401cb85e8a92/ansi_on",
+      "reason": "SELECT position('bar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#401cb85e8a92/ansi_off",
+      "reason": "SELECT position('bar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#45b179968e70/ansi_on",
+      "reason": "SELECT position('bar', 'foobarbar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "position#45b179968e70/ansi_off",
+      "reason": "SELECT position('bar', 'foobarbar', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "position#7d3113d0d8c7/ansi_on",
+      "reason": "SELECT position('bar', INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#7d3113d0d8c7/ansi_off",
+      "reason": "SELECT position('bar', INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#8062b7f85e1f/ansi_on",
+      "reason": "SELECT position('bar', 'foobarbar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "position#8062b7f85e1f/ansi_off",
+      "reason": "SELECT position('bar', 'foobarbar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "position#a474bf49e08d/ansi_on",
+      "reason": "SELECT position(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#a474bf49e08d/ansi_off",
+      "reason": "SELECT position(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#bf25e422a3c1/ansi_on",
+      "reason": "SELECT position('bar', INTERVAL '1 02:03:04' DAY TO SECOND, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#bf25e422a3c1/ansi_off",
+      "reason": "SELECT position('bar', INTERVAL '1 02:03:04' DAY TO SECOND, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#c81c387ac266/ansi_on",
+      "reason": "SELECT position('bar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#c81c387ac266/ansi_off",
+      "reason": "SELECT position('bar', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#d13b292f142a/ansi_on",
+      "reason": "SELECT position(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#d13b292f142a/ansi_off",
+      "reason": "SELECT position(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar', 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#e3cbd14e8d5e/ansi_on",
+      "reason": "SELECT position(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#e3cbd14e8d5e/ansi_off",
+      "reason": "SELECT position(INTERVAL '1 02:03:04' DAY TO SECOND, 'foobarbar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#e92d2fcdc3b1/ansi_on",
+      "reason": "SELECT position(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "position#e92d2fcdc3b1/ansi_off",
+      "reason": "SELECT position(INTERVAL '1-2' YEAR TO MONTH, 'foobarbar') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "position"
+}

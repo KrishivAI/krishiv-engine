@@ -1,0 +1,142 @@
+{
+  "entries": [
+    {
+      "id": "to_binary#0230c6193650/ansi_on",
+      "reason": "SELECT to_binary('abc', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#0230c6193650/ansi_off",
+      "reason": "SELECT to_binary('abc', CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#17ea191483b8/ansi_on",
+      "reason": "SELECT to_binary('abc', true) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#17ea191483b8/ansi_off",
+      "reason": "SELECT to_binary('abc', true) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#29d90641d1a0/ansi_on",
+      "reason": "SELECT to_binary('abc', map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#29d90641d1a0/ansi_off",
+      "reason": "SELECT to_binary('abc', map('a', 1)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#35b4d980b59d/ansi_on",
+      "reason": "SELECT to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#35b4d980b59d/ansi_off",
+      "reason": "SELECT to_binary('abc', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#3cf2a0779cfc/ansi_on",
+      "reason": "SELECT to_binary('abc', named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#3cf2a0779cfc/ansi_off",
+      "reason": "SELECT to_binary('abc', named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#414f2deb9e85/ansi_on",
+      "reason": "SELECT to_binary('abc', DATE'2024-02-29') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#414f2deb9e85/ansi_off",
+      "reason": "SELECT to_binary('abc', DATE'2024-02-29') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#43444ab19822/ansi_on",
+      "reason": "SELECT to_binary('abc', CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#43444ab19822/ansi_off",
+      "reason": "SELECT to_binary('abc', CAST(1.5 AS DECIMAL(38,18))) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#62203c3e758b/ansi_on",
+      "reason": "SELECT to_binary(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_binary#62203c3e758b/ansi_off",
+      "reason": "SELECT to_binary(INTERVAL '1 02:03:04' DAY TO SECOND, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_binary#63b111740dc1/ansi_on",
+      "reason": "SELECT to_binary(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_binary#63b111740dc1/ansi_off",
+      "reason": "SELECT to_binary(INTERVAL '1-2' YEAR TO MONTH, 'utf-8') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "to_binary#6742c217371d/ansi_on",
+      "reason": "SELECT to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#6742c217371d/ansi_off",
+      "reason": "SELECT to_binary('abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#94a597ad1e4e/ansi_on",
+      "reason": "SELECT to_binary('abc', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#94a597ad1e4e/ansi_off",
+      "reason": "SELECT to_binary('abc', array(1, 2)) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#94c4370a6b36/ansi_on",
+      "reason": "SELECT to_binary('abc', X'01') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#94c4370a6b36/ansi_off",
+      "reason": "SELECT to_binary('abc', X'01') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#acb28b2f4359/ansi_on",
+      "reason": "SELECT to_binary('abc', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#acb28b2f4359/ansi_off",
+      "reason": "SELECT to_binary('abc', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#d487010c04f1/ansi_on",
+      "reason": "SELECT to_binary('abc', 1.5D) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#d487010c04f1/ansi_off",
+      "reason": "SELECT to_binary('abc', 1.5D) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#d88c1ea1023e/ansi_on",
+      "reason": "SELECT to_binary('abc', CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#d88c1ea1023e/ansi_off",
+      "reason": "SELECT to_binary('abc', CAST(1.5 AS DECIMAL(10,2))) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#dafd9f9d9373/ansi_on",
+      "reason": "SELECT to_binary('abc', CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#dafd9f9d9373/ansi_off",
+      "reason": "SELECT to_binary('abc', CAST(1.5 AS FLOAT)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#ddb9bab4a193/ansi_on",
+      "reason": "SELECT to_binary('abc', TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    },
+    {
+      "id": "to_binary#ddb9bab4a193/ansi_off",
+      "reason": "SELECT to_binary('abc', TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.INVALID_ARG_VALUE"
+    }
+  ],
+  "format_version": 1,
+  "function": "to_binary"
+}

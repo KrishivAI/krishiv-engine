@@ -13,6 +13,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
     &SESSION_TIME_ZONE,
     &STORE_ASSIGNMENT_POLICY,
+    &MAP_KEY_DEDUP_POLICY,
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
@@ -31,6 +32,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
     &SPILL_ZSTD_LEVEL,
+    &SPILL_DROP_BEHIND_BYTES,
     &EXPERIMENTAL_IVM,
     &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
     &IO_STRICT_OPTIONS,
@@ -38,10 +40,13 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &FILES_OPEN_COST_IN_BYTES,
     &FILES_MIN_PARTITION_NUM,
     &FILES_MAX_PARTITION_NUM,
+    &BUCKETING_MAX_BUCKETS,
     &LEAF_NODE_DEFAULT_PARALLELISM,
     &IO_MAX_CONCURRENT_REQUESTS,
     &IO_BLOCKING_THREADS,
     &IO_COALESCE_BYTES,
+    &IO_COALESCE_WASTE_BYTES,
+    &IO_COALESCE_WASTE_DIVISOR,
     &IO_MAX_REQUEST_BYTES,
     &IO_PREFETCH_BYTES,
     &IO_LATE_MATERIALIZATION,
@@ -60,6 +65,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MAX_PASS_PERCENT,
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
+    &LEGACY_STATISTICAL_AGGREGATE,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -91,14 +97,22 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
+    ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
+    ("krishiv.io.coalesceWasteBytes", &IO_COALESCE_WASTE_BYTES),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
+    ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
+    ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
+    (
+        "krishiv.io.coalesceWasteDivisor",
+        &IO_COALESCE_WASTE_DIVISOR,
+    ),
     (
         "krishiv.memory.spillWaitTimeout",
         &MEMORY_SPILL_WAIT_TIMEOUT,
@@ -165,6 +179,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
     (
+        "spark.sql.legacy.statisticalAggregate",
+        &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
         "krishiv.runtimeFilter.adaptive.minRows",
         &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     ),
@@ -177,8 +195,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEAF_NODE_DEFAULT_PARALLELISM,
     ),
     (
+        "spark.sql.sources.bucketing.maxBuckets",
+        &BUCKETING_MAX_BUCKETS,
+    ),
+    (
+        "krishiv.sql.legacy.statisticalAggregate",
+        &LEGACY_STATISTICAL_AGGREGATE,
+    ),
+    (
         "krishiv.runtimeFilter.exactSet.maxValues",
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
+    ),
+    (
+        "krishiv.sql.sources.bucketing.maxBuckets",
+        &BUCKETING_MAX_BUCKETS,
     ),
     (
         "krishiv.experimental.unalignedCheckpoints",
@@ -243,6 +273,19 @@ pub static STORE_ASSIGNMENT_POLICY: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.storeAssignmentPolicy"),
+};
+
+/// Map key deduplication policy.
+pub static MAP_KEY_DEDUP_POLICY: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.mapKeyDedupPolicy",
+    value_type: ValueType::Enum(&["EXCEPTION", "LAST_WIN"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("EXCEPTION"))),
+    doc: "How duplicate map keys are handled by the map functions (`map`, `map_concat`, \
+          `map_from_arrays`, `map_from_entries`, `str_to_map`): `EXCEPTION` fails the query, \
+          `LAST_WIN` keeps the value inserted last.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.mapKeyDedupPolicy"),
 };
 
 /// Target partition size, replacing a fixed shuffle partition count.
@@ -486,6 +529,21 @@ pub static SPILL_ZSTD_LEVEL: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Spill-file page-cache drop-behind window.
+pub static SPILL_DROP_BEHIND_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.spill.dropBehindBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(8 << 20)),
+    doc: "How many bytes a spill writer writes before it asks the kernel to write them to disk \
+          and drop them from the page cache (Linux). Dirty spill pages count against a memory \
+          cgroup's limit and cannot be reclaimed until written back, so without this a spilling \
+          query can push its cgroup into the OOM killer. A finished file is written back and \
+          dropped too. `0` disables it; other platforms ignore it.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
 /// Experimental: incremental view maintenance.
 pub static EXPERIMENTAL_IVM: ConfigEntry = ConfigEntry {
     key: "krishiv.experimental.ivm",
@@ -568,6 +626,18 @@ pub static FILES_MAX_PARTITION_NUM: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.files.maxPartitionNum"),
 };
 
+/// `spark.sql.sources.bucketing.maxBuckets` (Spark's default: 100,000).
+pub static BUCKETING_MAX_BUCKETS: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.sources.bucketing.maxBuckets",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(100_000)),
+    doc: "Maximum `CLUSTERED BY ... INTO n BUCKETS` bucket count: a count above it fails \
+          with `INVALID_BUCKET_COUNT`.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.sources.bucketing.maxBuckets"),
+};
+
 /// `krishiv.sql.leafNodeDefaultParallelism`.
 pub static LEAF_NODE_DEFAULT_PARALLELISM: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.leafNodeDefaultParallelism",
@@ -613,7 +683,35 @@ pub static IO_COALESCE_BYTES: ConfigEntry = ConfigEntry {
     key: "krishiv.io.coalesceBytes",
     value_type: ValueType::Size,
     default: Some(ConfigValue::Size(MIB)),
-    doc: "Byte ranges of one file closer than this are fetched with one request.",
+    doc: "Byte ranges of one file closer than this are fetched with one request, as long as \
+          the request reads few enough bytes outside the ranges \
+          (`krishiv.io.coalesceWasteBytes`, `krishiv.io.coalesceWasteDivisor`).",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Gap bytes any coalesced request may read.
+pub static IO_COALESCE_WASTE_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.coalesceWasteBytes",
+    value_type: ValueType::Size,
+    default: None,
+    doc: "Bytes outside the requested ranges that any coalesced read may fetch (besides \
+          `krishiv.io.coalesceWasteDivisor`'s share). A read's whole span is reserved while it is \
+          in flight, so this trades bytes read for fewer requests. When unset: 64 KiB for local \
+          files, 1 MiB for object stores and HTTP, where a request costs latency.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// A coalesced request's share of gap bytes.
+pub static IO_COALESCE_WASTE_DIVISOR: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.coalesceWasteDivisor",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(16)),
+    doc: "A coalesced read may fetch up to 1/this of its bytes outside the requested ranges \
+          (or `krishiv.io.coalesceWasteBytes`, whichever is larger).",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
@@ -839,4 +937,17 @@ pub static WINDOW_GROUP_LIMIT_THRESHOLD: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.optimizer.windowGroupLimitThreshold"),
+};
+
+/// `spark.sql.legacy.statisticalAggregate`.
+pub static LEGACY_STATISTICAL_AGGREGATE: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.legacy.statisticalAggregate",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, `stddev_samp`, `var_samp`, `covar_samp` and `corr` of a single row, and \
+          `skewness` and `kurtosis` of values without variance, return NaN; when false they \
+          return NULL, as Spark 4 does.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.legacy.statisticalAggregate"),
 };

@@ -164,6 +164,31 @@ fn spill_entries_parse_and_default() {
 }
 
 #[test]
+fn map_key_dedup_policy_parses_and_defaults() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&MAP_KEY_DEDUP_POLICY).and_then(ConfigValue::as_str),
+        Some("EXCEPTION")
+    );
+    c.set("krishiv.sql.mapKeyDedupPolicy", "LAST_WIN").unwrap();
+    assert_eq!(
+        c.get(&MAP_KEY_DEDUP_POLICY).and_then(ConfigValue::as_str),
+        Some("LAST_WIN")
+    );
+    // The Spark alias sets the same entry.
+    c.set("spark.sql.mapKeyDedupPolicy", "EXCEPTION").unwrap();
+    assert_eq!(
+        c.get(&MAP_KEY_DEDUP_POLICY).and_then(ConfigValue::as_str),
+        Some("EXCEPTION")
+    );
+    assert!(c.set("spark.sql.mapKeyDedupPolicy", "FIRST_WIN").is_err());
+    assert_eq!(
+        c.get(&MAP_KEY_DEDUP_POLICY).and_then(ConfigValue::as_str),
+        Some("EXCEPTION")
+    );
+}
+
+#[test]
 fn invalid_values_are_typed_errors() {
     let mut c = Config::new();
     for (k, v) in [
@@ -395,6 +420,7 @@ fn positive_ints_reject_zero_and_negatives() {
         "spark.sql.files.minPartitionNum",
         "spark.sql.files.maxPartitionNum",
         "spark.sql.leafNodeDefaultParallelism",
+        "spark.sql.sources.bucketing.maxBuckets",
     ] {
         let mut c = Config::new();
         for bad in ["0", "-3", "x"] {

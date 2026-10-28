@@ -1,0 +1,16 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW v_user AS SELECT 'admin.admin' AS current_user
+SESSION	CREATE OR REPLACE TEMPORARY VIEW v_time AS SELECT CAST(0 AS INT) AS current_time
+READ	SELECT current_user FROM v_user
+READ	SELECT current_time FROM v_time
+READ	SELECT 'abc' AS current_user, current_user = current_user() AS function_won
+READ	SELECT (SELECT current_user) = current_user() AS function_won FROM v_user
+PARSE_ERROR	DECLARE current_user = 'abc'
+READ	SELECT current_user, current_user FROM v_user
+PARSE_ERROR	DROP TEMPORARY VARIABLE current_user
+READ	WITH t1 AS (SELECT 1 AS current_date)
+READ	WITH t1 AS (SELECT 1 AS current_timestamp)
+READ	WITH t1 AS (SELECT 1 AS user)
+READ	WITH t1 AS (SELECT 1 AS session_user)
+READ	SELECT typeof(grouping__id) FROM v_user GROUP BY current_user GROUPING SETS ((current_user))
+SESSION	DROP VIEW v_user
+SESSION	DROP VIEW v_time

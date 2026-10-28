@@ -1,0 +1,10 @@
+READ	select x'00' < x'0f'
+READ	select x'00' < x'ff'
+READ	select '1 ' = 1Y
+READ	select '\t1 ' = 1Y
+READ	select '1 ' = 1S
+READ	select '1 ' = 1
+READ	select ' 1' = 1L
+READ	select ' 1' = cast(1.0 as float)
+READ	select ' 1.0 ' = 1.0D
+READ	select ' 1.0 ' = 1.0BD

@@ -7,11 +7,12 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     AmbiguousReference, AssignmentArityMismatch, DatatypeMismatchFilterNotBoolean,
-    FailedToParseTooComplex, GroupByAggregate, GroupByPosAggregate, GroupByPosOutOfRange,
-    InvalidLimitLikeExpressionDataType, InvalidWhereCondition, JoinConditionIsNotBooleanType,
-    MissingAggregation, MissingGroupBy, OrderByPosOutOfRange, StarGroupByPos,
-    SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UnresolvedUsingColumnForJoin,
-    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    DatatypeMismatchInvalidOrderingType, FailedToParseTooComplex, GroupByAggregate,
+    GroupByPosAggregate, GroupByPosOutOfRange, InvalidLimitLikeExpressionDataType,
+    InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
+    OrderByPosOutOfRange, QualifyAggregateNotAllowed, QualifyRequiresWindowFunction,
+    StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UnresolvedAllInGroupBy,
+    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
     UnsupportedFeatureLateralColumnAliasInGroupBy,
 };
 
@@ -19,7 +20,7 @@ use super::analytics::Analytics;
 use super::bind::{BoundTable, same, unsupported};
 use super::catalog::quoted;
 use super::coerce::quoted_type;
-use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key};
+use super::exprs::{Bound, Cx, WindowUse, names, pretty, semantic_key, unresolved};
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, TableKind};
 use crate::{
@@ -456,6 +457,17 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
+        // A `QUALIFY` filter: lowering wraps its predicate (see
+        // `lower.rs`), so the analyzer tells it apart from `WHERE` and
+        // `HAVING`. Only SQL lowers one: a DataFrame filter has a plan id
+        // and no span, and never sits directly over its query's own
+        // projection the way a `QUALIFY` does.
+        if p.origin.sql.is_some()
+            && let Some(q) = qualify_expression(predicate)
+            && let Some(r) = self.qualify(p, input, &c, q, env)?
+        {
+            return Ok(r);
+        }
         // A `HAVING` over an aggregate with windows filters below them
         // (Spark's `UnresolvedHaving`: it cannot name a window's alias). Only
         // SQL has a `HAVING`: lowering stamps the filter with the span of
@@ -523,6 +535,207 @@ impl Resolver<'_> {
         self.projection(Origin::UNKNOWN, r, exprs, out.to_vec())
     }
 
+    /// A `QUALIFY` filter over the resolved select list `c`: `q` is the
+    /// wrapped predicate, `input` its unresolved `Filter` node. The
+    /// predicate reads the select output (aliases included) and the query
+    /// input's other columns, as Spark's does; window functions in either
+    /// go through [`Resolver::windowed`], the same extraction a `HAVING`
+    /// with window functions uses. `None` when the shape is not a
+    /// `QUALIFY`'s own (a wrapped predicate over anything but its query's
+    /// projection or aggregate), so the caller falls back to the
+    /// `WHERE`/`HAVING` paths.
+    fn qualify(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        c: &Rel,
+        q: &Arc<Expr>,
+        env: &Arc<Env>,
+    ) -> Result<Option<Rel>, AnalysisError> {
+        match &input.node {
+            PlanNode::Project { input: base, exprs } => {
+                let base = self.child(base, env)?;
+                let items = self.select_items(&base, exprs, env, "Project")?;
+                if items.iter().any(|b| b.agg.is_some()) {
+                    // A global aggregate (a `Project` lowering whose items
+                    // aggregate): qualify over the aggregate, as below.
+                    let agg =
+                        self.build_aggregate(p.origin, &base, Vec::new(), &items, true, None)?;
+                    return Ok(Some(self.qualify_agg(p, &agg, q, None, &agg.out, env)?));
+                }
+                Ok(Some(self.qualify_project(p, &base, &items, q, env)?))
+            }
+            PlanNode::Aggregate { .. } => {
+                // `GROUP BY` without `HAVING`: `c` is the aggregate.
+                if c.agg.is_none() {
+                    return Ok(None);
+                }
+                let out = c.out.to_vec();
+                Ok(Some(self.qualify_agg(p, c, q, None, &out, env)?))
+            }
+            PlanNode::Filter {
+                input: mid,
+                predicate,
+            } => {
+                // `HAVING` below `QUALIFY`: qualify over the aggregate the
+                // inner filter resolved.
+                if qualify_expression(predicate).is_some() {
+                    return Ok(None);
+                }
+                let inner = self.child(mid, env)?;
+                let Some(info) = inner.agg.clone() else {
+                    return Ok(None);
+                };
+                let having = info.having.clone().or_else(|| match &c.plan.node {
+                    PlanNode::Filter { predicate: h, .. } => Some(Arc::clone(h)),
+                    _ => None,
+                });
+                let Some(having) = having else {
+                    return Ok(None);
+                };
+                let out = c.out.to_vec();
+                Ok(Some(self.qualify_agg(
+                    p,
+                    &inner,
+                    q,
+                    Some(&having),
+                    &out,
+                    env,
+                )?))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// `QUALIFY` over a projection: the predicate reads the select output
+    /// and the input's other columns. `c` is the resolved projection (its
+    /// output is the select list); the filter is rebuilt below so the
+    /// predicate's windows extract beside the select list's.
+    fn qualify_project(
+        &mut self,
+        p: &LogicalPlan,
+        base: &Rel,
+        items: &[Bound],
+        q: &Arc<Expr>,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        Self::check_qualify_windows(q, items.iter().any(|b| b.win.is_some()), self)?;
+        // The select list's windows over the input, as
+        // [`Resolver::window_project`] computes them.
+        let exprs: Vec<Arc<Expr>> = items.iter().map(|b| Arc::clone(&b.expr)).collect();
+        let (below, exprs) = self.windowed(base, &exprs)?;
+        let items: Vec<Bound> = items
+            .iter()
+            .zip(exprs)
+            .map(|(b, expr)| Bound { expr, ..b.clone() })
+            .collect();
+        // The input's columns the select list drops pass through (the
+        // predicate and its windows may name them); names the select list
+        // outputs shadow the input's, as Spark resolves the output first.
+        let cs = self.ctx.conf.case_sensitive;
+        let outs: Vec<Attr> = items.iter().map(|b| out_attr(b, &base.out)).collect();
+        let pass: Vec<Attr> = base
+            .out
+            .iter()
+            .filter(|a| !outs.iter().any(|o| same(&o.col.name, &a.col.name, cs)))
+            .cloned()
+            .collect();
+        let wide = self.lateral_project(Origin::UNKNOWN, &below, &items, &pass);
+        let rels = [&wide];
+        let mut cx = Self::cx(&wide.out, &rels, env, "Filter");
+        cx.windows = WindowUse::Allowed;
+        let qb = self.bind(q, &cx)?;
+        boolean_filter(&qb, p.origin)?;
+        let (wrel, exprs) = self.windowed(&wide, std::slice::from_ref(&qb.expr))?;
+        let pred = exprs.into_iter().next().ok_or_else(|| {
+            AnalysisError::new(krishiv_common::error::FailedToParseTooComplex {}, p.origin)
+        })?;
+        let node = PlanNode::Filter {
+            input: Arc::clone(&wrel.plan),
+            predicate: pred,
+        };
+        let mut f = self.make(p.origin, node, wrel.out.to_vec(), &[&wrel]);
+        f.widen = Some(Arc::new(Widen::Through { child: wrel }));
+        Ok(self.restore(&f, &wide.out[..outs.len()]))
+    }
+
+    /// `QUALIFY` over an aggregate `agg` (its output is the select list):
+    /// the predicate resolves as a `HAVING` does (names read the output,
+    /// then grouping attributes, then the input; missing aggregates and
+    /// keys grow it), except windows are allowed and extracted above it.
+    /// `having` re-applies a `HAVING` below the windows when one filtered
+    /// the aggregate; `select_out` is the select list's output.
+    fn qualify_agg(
+        &mut self,
+        p: &LogicalPlan,
+        agg: &Rel,
+        q: &Arc<Expr>,
+        having: Option<&Arc<Expr>>,
+        select_out: &[Attr],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let windows = agg.agg.as_ref().is_some_and(|i| i.has_windows());
+        Self::check_qualify_windows(q, windows, self)?;
+        let (bounds, grown, _) = self.over_agg(agg, std::slice::from_ref(q), env, "Qualify")?;
+        let b = bounds.into_iter().next().ok_or_else(|| {
+            AnalysisError::new(krishiv_common::error::FailedToParseTooComplex {}, p.origin)
+        })?;
+        boolean_filter(&b, p.origin)?;
+        // With a `HAVING`, it filters the grown aggregate below the
+        // predicate's windows (as [`Resolver::having_below_windows`] does
+        // for the select list's).
+        let base = match having {
+            None => grown,
+            Some(h) => {
+                let info = grown.agg.as_ref().ok_or_else(|| {
+                    AnalysisError::new(krishiv_common::error::FailedToParseTooComplex {}, p.origin)
+                })?;
+                let info = AggInfo {
+                    having: Some(Arc::clone(h)),
+                    ..(**info).clone()
+                };
+                self.aggregate_rel(Origin::UNKNOWN, info, &[])?
+            }
+        };
+        let (wrel, exprs) = self.windowed(&base, std::slice::from_ref(&b.expr))?;
+        let pred = exprs.into_iter().next().ok_or_else(|| {
+            AnalysisError::new(krishiv_common::error::FailedToParseTooComplex {}, p.origin)
+        })?;
+        let node = PlanNode::Filter {
+            input: Arc::clone(&wrel.plan),
+            predicate: pred,
+        };
+        let mut f = self.make(p.origin, node, wrel.out.to_vec(), &[&wrel]);
+        f.widen = Some(Arc::new(Widen::Through { child: wrel }));
+        Ok(self.restore(&f, select_out))
+    }
+
+    /// Spark's `QUALIFY` checks on the predicate `q`: aggregates are not
+    /// allowed in it, and at least one window function must appear in it
+    /// or in the select list (`select_windows`).
+    fn check_qualify_windows(
+        q: &Arc<Expr>,
+        select_windows: bool,
+        r: &Resolver<'_>,
+    ) -> Result<(), AnalysisError> {
+        if let Some(a) = first_qualify_aggregate(q, r) {
+            let zone = r.ctx.conf.session_zone;
+            return Err(AnalysisError::new(
+                QualifyAggregateNotAllowed {
+                    aggregate_expr: format!("\"{}\"", pretty(&a, zone)),
+                },
+                a.origin,
+            ));
+        }
+        if !select_windows && !has_qualify_window(q) {
+            return Err(AnalysisError::new(
+                QualifyRequiresWindowFunction {},
+                q.origin,
+            ));
+        }
+        Ok(())
+    }
+
     /// Binds the top-level expressions of a filter or sort over `c`. Names
     /// `c` does not output, but a relation below it dropped (through
     /// projections, filters, sorts and limits, down to an aggregate's
@@ -531,7 +744,8 @@ impl Resolver<'_> {
     /// in Spark: a dropped column hides an outer one of its name. Returns
     /// the bound expressions and the relation they read, wider than `c`
     /// when something was added. `lenient`: a name `c` outputs several
-    /// times is looked up below.
+    /// times is looked up below (and, when the below holds no such name
+    /// either, stays ambiguous rather than unresolved).
     pub(super) fn bind_missing(
         &mut self,
         c: &Rel,
@@ -556,9 +770,19 @@ impl Resolver<'_> {
                 .name()
                 .starts_with("UNRESOLVED_COLUMN")
         };
+        // With leniency, duplicates in the output are looked up below it:
+        // the first try (without the below) reports them as ambiguous
+        // rather than unresolved, so retry on either when there is a below.
+        let ambiguous = |e: &AnalysisError| {
+            lenient
+                && e.error
+                    .error_class()
+                    .name()
+                    .starts_with("AMBIGUOUS_REFERENCE")
+        };
         match self.bind_all(exprs, &cx) {
             Ok(bounds) => return Ok((bounds, c.clone())),
-            Err(e) if !unresolved(&e) || lookup.is_empty() => return Err(e),
+            Err(e) if (!unresolved(&e) && !ambiguous(&e)) || lookup.is_empty() => return Err(e),
             Err(_) => {}
         }
         cx.extra = Some(&lookup);
@@ -736,10 +960,14 @@ impl Resolver<'_> {
 
     /// Expressions over an aggregate (`HAVING`, `ORDER BY`): names resolve
     /// against its output, then its grouping attributes; aggregate-function
-    /// arguments against its input. Aggregate calls the aggregate does not
-    /// compute yet, and grouping attributes it does not output, are added
-    /// to it (and passed up through the projections of lateral aliases
-    /// above it); the flag says whether its output grew.
+    /// arguments against its input. A name the output holds twice is looked
+    /// up among the grouping attributes instead of failing as ambiguous
+    /// (Spark resolves `HAVING`/`ORDER BY` to the grouping column there);
+    /// when the grouping attributes hold no such name either, the duplicate
+    /// outputs stay ambiguous rather than unresolved. Aggregate calls the
+    /// aggregate does not compute yet, and grouping attributes it does not
+    /// output, are added to it (and passed up through the projections of
+    /// lateral aliases above it); the flag says whether its output grew.
     pub(super) fn over_agg(
         &mut self,
         agg: &Rel,
@@ -753,10 +981,20 @@ impl Resolver<'_> {
         let rels = [agg];
         let mut cx = Self::cx(&agg.out, &rels, env, op);
         cx.extra = Some(&info.keys);
+        // A name the select list outputs twice is looked up among the
+        // grouping attributes, as Spark looks a name an `ORDER BY` output
+        // holds twice up below it: without leniency the duplicate outputs
+        // are `AMBIGUOUS_REFERENCE` where Spark resolves to the grouping
+        // column.
+        cx.lenient = true;
         cx.agg_scope = Some(&info.input.out);
         cx.grouping = info.analytics.is_some();
         if op == "Filter" {
             cx.windows = WindowUse::Having;
+        } else if op == "Qualify" {
+            // `QUALIFY` resolves like `HAVING`, but windows are allowed
+            // and extracted above the aggregate.
+            cx.windows = WindowUse::Allowed;
         }
         let mut memo = HashMap::new();
         let mut known: Vec<(u128, Attr)> = info
@@ -1036,11 +1274,62 @@ impl Resolver<'_> {
         // Spark resolves the select list first, then ordinals, then the
         // other keys.
         let items = self.select_items(&c, aggregates, env, "Aggregate")?;
-        let group = self.group_keys(&c, keys, &items, env)?;
+        // `GROUP BY ALL`: a lone unqualified `all` in SQL groups by the select
+        // list, unless a column or a select-list alias named `all` takes it
+        // (Spark resolves names first). A DataFrame `groupBy("all")` has no
+        // SQL span and never expands (`UNRESOLVED_COLUMN`, as in Spark).
+        let group = if p.origin.sql.is_some() && is_bare_all(keys) && !self.names_all(&c, &items) {
+            self.group_by_all(&items, keys[0].origin)?
+        } else {
+            self.group_keys(&c, keys, &items, env)?
+        };
         // No grouping (`HAVING` without `GROUP BY`): Spark's
         // `MISSING_GROUP_BY` for an ungrouped column.
         let global = group.is_empty();
         self.build_aggregate(p.origin, &c, group, &items, global, None)
+    }
+
+    /// Whether the input has a column, or (with `group_by_aliases`) the
+    /// select list an output, named `all`: then `GROUP BY ALL` names it.
+    fn names_all(&self, c: &Rel, items: &[Bound]) -> bool {
+        let cs = self.ctx.conf.case_sensitive;
+        c.out.iter().any(|a| same(&a.col.name, "all", cs))
+            || (self.ctx.conf.group_by_aliases
+                && items
+                    .iter()
+                    .any(|b| same(&out_attr(b, &c.out).col.name, "all", cs)))
+    }
+
+    /// `GROUP BY ALL` over the select list `items`, as Spark's
+    /// `ResolveReferencesInAggregate` infers it: every item without an
+    /// aggregate function groups (scalar subqueries count as groupable:
+    /// Spark's check does not look inside them); when nothing groups, an
+    /// item naming a column outside any aggregate cannot be inferred:
+    /// `UNRESOLVED_ALL_IN_GROUP_BY`. Select items stay named; grouping
+    /// uses the expression computing them. `origin` is the `GROUP BY ALL`
+    /// clause's, as lowering stamps it on the key.
+    fn group_by_all(
+        &mut self,
+        items: &[Bound],
+        origin: Origin,
+    ) -> Result<Vec<Bound>, AnalysisError> {
+        let mut group = Vec::new();
+        let mut bare = false;
+        for b in items {
+            let expr = match &b.expr.node {
+                ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => Arc::clone(expr),
+                _ => Arc::clone(&b.expr),
+            };
+            if contains_aggregate(&expr) {
+                bare = bare || contains_bare(&expr);
+            } else {
+                group.push(Bound { expr, ..b.clone() });
+            }
+        }
+        if group.is_empty() && bare {
+            return Err(AnalysisError::new(UnresolvedAllInGroupBy {}, origin));
+        }
+        Ok(group)
     }
 
     /// `SELECT *` with `GROUP BY n` is an error (Spark's
@@ -1482,8 +1771,35 @@ impl Resolver<'_> {
         }
         let rels = [&l, &r];
         let mut keys = None;
+        let mut kind = kind;
         let condition = match condition {
             JoinCondition::None => JoinCondition::None,
+            JoinCondition::Natural => {
+                // `NATURAL JOIN`: the common column names of the two
+                // inputs, then the `USING` path, so output order and
+                // outer-join coalescing are exactly the `USING` ones. With
+                // no common columns the join is a cross join, as Spark's
+                // is.
+                if matches!(kind, JoinKind::LeftSemi | JoinKind::LeftAnti) {
+                    // Spark fails here with a bare `requirement failed:
+                    // Unsupported natural join type LeftSemi` (no error class).
+                    return Err(unsupported(
+                        "NATURAL LEFT SEMI and LEFT ANTI joins",
+                        p.origin,
+                    ));
+                }
+                let commons = Self::common_columns(&l, &r, self.ctx.conf.case_sensitive);
+                if commons.is_empty() {
+                    if kind == JoinKind::Inner {
+                        kind = JoinKind::Cross;
+                    }
+                    JoinCondition::None
+                } else {
+                    let (cond, k) = self.using(&commons, &l, &r, env, p.origin, true)?;
+                    keys = Some(k);
+                    JoinCondition::On(cond)
+                }
+            }
             JoinCondition::On(e) => {
                 let scope: Vec<Attr> = l.out.iter().chain(r.out.iter()).cloned().collect();
                 let b = self.bind(e, &Self::cx(&scope, &rels, env, "Join"))?;
@@ -1502,7 +1818,7 @@ impl Resolver<'_> {
                 JoinCondition::On(b.expr)
             }
             JoinCondition::Using(cols) => {
-                let (cond, k) = self.using(cols, &l, &r, env, p.origin)?;
+                let (cond, k) = self.using(cols, &l, &r, env, p.origin, false)?;
                 keys = Some(k);
                 JoinCondition::On(cond)
             }
@@ -1520,7 +1836,32 @@ impl Resolver<'_> {
         self.using_project(p.origin, &j, kind, &keys, env)
     }
 
+    /// The common column names of a `NATURAL JOIN`'s inputs, as Spark's
+    /// `canonicalizedIntersect` computes them: in the left input's order,
+    /// each name as many times as both sides output it (a name the left
+    /// outputs twice and the right once is common once; resolving a name
+    /// always takes the first match, as Spark's key resolution does).
+    /// `case_sensitive` applies.
+    fn common_columns(l: &Rel, r: &Rel, case_sensitive: bool) -> Vec<String> {
+        let mut right: Vec<&str> = r.out.iter().map(|a| a.col.name.as_str()).collect();
+        let mut commons: Vec<String> = Vec::new();
+        for a in l.out.iter() {
+            if let Some(i) = right
+                .iter()
+                .position(|n| same(n, &a.col.name, case_sensitive))
+            {
+                right.remove(i);
+                commons.push(a.col.name.clone());
+            }
+        }
+        commons
+    }
+
     /// The condition of `USING (cols)`, and each column's two attributes.
+    /// A name resolves to the first match on each side when `lenient`
+    /// (a repeated `NATURAL JOIN` name pairs the first matches again, as
+    /// Spark's key resolution does); otherwise several matches are
+    /// ambiguous.
     fn using(
         &mut self,
         cols: &[String],
@@ -1528,6 +1869,7 @@ impl Resolver<'_> {
         r: &Rel,
         env: &Arc<Env>,
         origin: Origin,
+        lenient: bool,
     ) -> Result<(Arc<Expr>, Vec<Keys>), AnalysisError> {
         let cs = self.ctx.conf.case_sensitive;
         let side = |rel: &Rel, which: &str, name: &String| {
@@ -1538,6 +1880,7 @@ impl Resolver<'_> {
                 .collect();
             match hits[..] {
                 [a] => Ok(a.clone()),
+                [a, ..] if lenient => Ok(a.clone()),
                 [] => Err(AnalysisError::new(
                     UnresolvedUsingColumnForJoin {
                         col_name: quoted(std::slice::from_ref(name)),
@@ -1590,6 +1933,8 @@ impl Resolver<'_> {
         let call = Arc::new(
             Expr::new(ExprNode::Function(FunctionCall {
                 name: name.to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
                 args,
                 distinct: false,
                 filter: None,
@@ -1709,7 +2054,12 @@ impl Resolver<'_> {
     }
 
     /// The count of a `LIMIT` or `OFFSET` (`name`), checked as Spark does:
-    /// it must be a constant, an `INT`, not NULL and not negative.
+    /// it must be foldable (`IS_UNFOLDABLE` when it is not: a column, a
+    /// nondeterministic call, a subquery), then an `INT`, not NULL and not
+    /// negative. Columns resolve against the input's output (the select
+    /// list the limit sits on top of), so `LIMIT key` over an input holding `key` is
+    /// unfoldable rather than unresolved; a name the input outputs twice
+    /// stays ambiguous when nothing below resolves it.
     pub(super) fn limit_like(
         &mut self,
         e: &Arc<Expr>,
@@ -1718,14 +2068,16 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Arc<Expr>, AnalysisError> {
         // Columns resolve against the input (so `OFFSET id` is "not
-        // constant", as in Spark, not an unresolved column).
+        // constant", as in Spark, not an unresolved column). A name the
+        // input outputs twice is looked up below it, as for `ORDER BY`.
         let rels = [input];
-        let cx = Self::cx(
+        let mut cx = Self::cx(
             &input.out,
             &rels,
             env,
             if name == "limit" { "Limit" } else { "Offset" },
         );
+        cx.lenient = true;
         let b = self.bind(e, &cx)?;
         // Spark's order: foldable, then the type, then the value.
         let unfoldable = not_constant(&b.expr);
@@ -1760,6 +2112,44 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
+        // `ORDER BY ALL [ASC|DESC] [NULLS ...]`: every output column in
+        // order, with that direction (a column named `all` takes
+        // precedence, as Spark resolves it first). Only a global sort: in
+        // `SORT BY ALL` and `sortWithinPartitions("all")` it is an unknown
+        // column (`UNRESOLVED_COLUMN`, checked against Spark 4.2.0). Inside a window
+        // specification `all` stays a column: only the sort's own key
+        // expands here.
+        let expanded;
+        let order = if global
+            && order.len() == 1
+            && is_all(&order[0].expr)
+            && !c
+                .out
+                .iter()
+                .any(|a| same(&a.col.name, "all", self.ctx.conf.case_sensitive))
+            && !c.agg.as_ref().is_some_and(|agg| {
+                agg.keys
+                    .iter()
+                    .any(|a| same(&a.col.name, "all", self.ctx.conf.case_sensitive))
+                    || agg
+                        .input
+                        .out
+                        .iter()
+                        .any(|a| same(&a.col.name, "all", self.ctx.conf.case_sensitive))
+            }) {
+            let template = &order[0];
+            expanded = c
+                .out
+                .iter()
+                .map(|a| SortOrder {
+                    expr: col_expr(&a.col, template.expr.origin),
+                    ..template.clone()
+                })
+                .collect::<Vec<_>>();
+            &expanded[..]
+        } else {
+            order
+        };
         let mut exprs = Vec::new();
         for o in order {
             exprs.push(match &o.expr.node {
@@ -1796,8 +2186,51 @@ impl Resolver<'_> {
         }
         // Over an aggregate with windows, Spark's `ORDER BY` reads the
         // select list only (nothing resolves through the windows).
+        // A name the aggregate outputs twice is `UNRESOLVED_COLUMN` in
+        // `ORDER BY` (not `AMBIGUOUS_REFERENCE`): Spark lists the
+        // duplicates as proposals (checked against Spark 4.2.0).
+        // The lookup below a duplicated name reports it as ambiguous; an
+        // `ORDER BY` reports it as unresolved (Spark 4.2.0:
+        // `SELECT a AS k, b AS k FROM t ORDER BY k`), only `LIMIT` and
+        // `HAVING` say ambiguous. `AMBIGUOUS_REFERENCE` always carries its
+        // `name` parameter, so without one (or without a matching sort
+        // key) the error passes through unchanged.
+        let reported = |e: AnalysisError| -> AnalysisError {
+            if !e
+                .error
+                .error_class()
+                .name()
+                .starts_with("AMBIGUOUS_REFERENCE")
+            {
+                return e;
+            }
+            e.error
+                .message_parameters()
+                .iter()
+                .find_map(|(k, v)| (*k == "name").then(|| v.clone()))
+                .and_then(|name| {
+                    exprs.iter().find_map(|x| match &x.node {
+                        ExprNode::Column(col)
+                            if col.plan_id.is_none()
+                                && col.name.len() == 1
+                                && quoted(&col.name) == name =>
+                        {
+                            Some(unresolved(&col.name, &c.out, x.origin))
+                        }
+                        _ => None,
+                    })
+                })
+                .unwrap_or(e)
+        };
         let (bounds, below, extended) = if c.agg.as_ref().is_some_and(|i| !i.has_windows()) {
-            self.over_agg(&c, &exprs, env, "Sort")?
+            // The grouping attributes resolve a name the aggregate outputs
+            // twice (Spark 4.2.0: `SELECT 1 AS a, 2 AS a FROM t(a) GROUP BY a
+            // ORDER BY a` succeeds); with no grouping attribute of that name
+            // the duplicates are `UNRESOLVED_COLUMN` and not ambiguous.
+            match self.over_agg(&c, &exprs, env, "Sort") {
+                Ok(found) => found,
+                Err(e) => return Err(reported(e)),
+            }
         } else {
             // A name the select list outputs twice is looked up below it,
             // as Spark does.
@@ -1807,24 +2240,31 @@ impl Resolver<'_> {
                     (bounds, wide, extended)
                 }
                 // `HAVING ... ORDER BY`: the sort reads the aggregate below
-                // the filter, which grows what the sort needs.
+                // the filter, which grows what the sort needs. Duplicates in
+                // the select list are looked up below it first
+                // (`bind_missing` with leniency); when that is ambiguous
+                // too, the aggregate below still resolves grouping columns.
                 Err(e)
                     if e.error
                         .error_class()
                         .name()
-                        .starts_with("UNRESOLVED_COLUMN") =>
+                        .starts_with("UNRESOLVED_COLUMN")
+                        || e.error
+                            .error_class()
+                            .name()
+                            .starts_with("AMBIGUOUS_REFERENCE") =>
                 {
                     let Some((layers, inner)) = Self::through_to_agg(&c) else {
-                        return Err(e);
+                        return Err(reported(e));
                     };
                     // Over windows, Spark's `ORDER BY` reads the select list
                     // only: nothing resolves through them to the aggregate.
                     if inner.agg.as_ref().is_some_and(|i| i.has_windows()) {
-                        return Err(e);
+                        return Err(reported(e));
                     }
                     let Ok((bounds, grown, extended)) = self.over_agg(&inner, &exprs, env, "Sort")
                     else {
-                        return Err(e);
+                        return Err(reported(e));
                     };
                     let top = if extended {
                         self.rewrapped(&layers, grown)
@@ -1833,9 +2273,35 @@ impl Resolver<'_> {
                     };
                     (bounds, top, extended)
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(reported(e)),
             }
         };
+        // A map does not order (`INVALID_ORDERING_TYPE`, as `SortOrder`).
+        for (o, b) in order.iter().zip(&bounds) {
+            if let Some(t) =
+                b.ty.data_type
+                    .as_ref()
+                    .filter(|t| !super::coerce::orderable(t))
+            {
+                let direction = match o.direction {
+                    crate::SortDirection::Ascending => "ASC",
+                    crate::SortDirection::Descending => "DESC",
+                };
+                let nulls = match o.nulls {
+                    crate::NullOrdering::NullsFirst => "NULLS FIRST",
+                    crate::NullOrdering::NullsLast => "NULLS LAST",
+                };
+                let zone = self.ctx.conf.session_zone;
+                return Err(AnalysisError::new(
+                    DatatypeMismatchInvalidOrderingType {
+                        sql_expr: format!("\"{} {direction} {nulls}\"", pretty(&b.shown(), zone)),
+                        function_name: "`sortorder`".to_owned(),
+                        data_type: quoted_type(Some(t)),
+                    },
+                    o.expr.origin,
+                ));
+            }
+        }
         let node = PlanNode::Sort {
             input: Arc::clone(&below.plan),
             order: sorted(bounds.into_iter().map(|b| b.expr).collect()),
@@ -2036,6 +2502,154 @@ fn alias_id(e: &Expr) -> Option<AttrId> {
         ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => Some(output.id),
         _ => None,
     }
+}
+
+/// Whether `keys` is a lone `GROUP BY ALL` / `ORDER BY ALL`: one
+/// unqualified, unresolvable-by-shape column named `all` (case-insensitive;
+/// the analyzer resolves a real column first, so this only gates the
+/// expansion).
+fn is_bare_all(keys: &[Arc<Expr>]) -> bool {
+    matches!(keys, [k] if is_all(k))
+}
+
+/// Whether `e` is an unqualified column named `all` (case-insensitive)
+/// without a DataFrame owner.
+fn is_all(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Column(c) => {
+            c.plan_id.is_none() && matches!(&c.name[..], [n] if n.eq_ignore_ascii_case("all"))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `e` calls an aggregate function outside any subquery: a scalar
+/// subquery groups like any other value (checked against Spark 4.2.0),
+/// whatever it computes inside.
+fn contains_aggregate(e: &Arc<Expr>) -> bool {
+    let mut found = false;
+    contains_walk(e, false, &mut found, &mut |x, _| {
+        if matches!(&x.node, ExprNode::Subquery { .. }) {
+            Contains::Skip
+        } else if matches!(&x.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate)
+        {
+            Contains::Yes
+        } else {
+            Contains::No
+        }
+    });
+    found
+}
+
+/// Whether `e` names a column outside any aggregate call's arguments: an
+/// attribute, or a correlated (`OuterColumn`) reference inside a subquery
+/// (columns a subquery reads from its own scope do not count).
+fn contains_bare(e: &Arc<Expr>) -> bool {
+    let mut found = false;
+    contains_walk(e, false, &mut found, &mut |x, in_subquery| match &x.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+            Contains::Skip
+        }
+        ExprNode::Resolved(ResolvedExpr::Column(_)) if !in_subquery => Contains::Yes,
+        ExprNode::Resolved(ResolvedExpr::OuterColumn(_)) => Contains::Yes,
+        _ => Contains::No,
+    });
+    found
+}
+
+/// What a [`contains_walk`] visitor reports for a node.
+enum Contains {
+    /// Counts: stop the walk.
+    Yes,
+    /// Does not count: visit children.
+    No,
+    /// Does not count: skip the subtree (aggregate arguments).
+    Skip,
+}
+
+/// Walks `e` and the plans of the subqueries it holds, outside in;
+/// `in_subquery` says whether the node is inside a subquery plan. A
+/// visitor answering [`Contains::Yes`] stops the walk.
+fn contains_walk(
+    e: &Arc<Expr>,
+    in_subquery: bool,
+    found: &mut bool,
+    visit: &mut impl FnMut(&Arc<Expr>, bool) -> Contains,
+) {
+    let mut stack = vec![(Arc::clone(e), in_subquery)];
+    while let Some((x, inner)) = stack.pop() {
+        if *found {
+            return;
+        }
+        match visit(&x, inner) {
+            Contains::Yes => {
+                *found = true;
+                return;
+            }
+            Contains::Skip => continue,
+            Contains::No => {}
+        }
+        if let ExprNode::Subquery { plan, .. } = &x.node {
+            let mut plans = vec![Arc::clone(plan)];
+            while let Some(p) = plans.pop() {
+                let mut exprs = Vec::new();
+                p.for_each_expr(&mut |e| exprs.push(Arc::clone(e)));
+                stack.extend(exprs.into_iter().map(|e| (e, true)));
+                p.for_each_child(&mut |k| plans.push(Arc::clone(k)));
+            }
+            continue;
+        }
+        x.for_each_child(&mut |k| stack.push((Arc::clone(k), inner)));
+    }
+}
+/// The `QUALIFY` predicate of a wrapped filter predicate, if `e` is the
+/// wrapper lowering stamps (see `lower.rs`).
+fn qualify_expression(e: &Arc<Expr>) -> Option<&Arc<Expr>> {
+    match &e.node {
+        ExprNode::Function(f) if is_qualify_wrapper(&f.name) && f.args.len() == 1 => {
+            Some(&f.args[0])
+        }
+        _ => None,
+    }
+}
+
+/// Whether `name` is lowering's `QUALIFY` marker (see `lower.rs`): the
+/// analyzer resolves and strips it, so it is never a routine call.
+pub(super) fn is_qualify_wrapper(name: &str) -> bool {
+    name == "qualify"
+}
+
+/// The first aggregate call in a `QUALIFY` predicate, outside window
+/// expressions and subqueries (neither counts, as for the select list's
+/// own aggregates): `QUALIFY` forbids aggregates.
+fn first_qualify_aggregate(q: &Arc<Expr>, r: &Resolver<'_>) -> Option<Arc<Expr>> {
+    let mut stack = vec![Arc::clone(q)];
+    while let Some(x) = stack.pop() {
+        match &x.node {
+            ExprNode::Window(_) | ExprNode::Subquery { .. } => continue,
+            _ => {}
+        }
+        if r.is_aggregate(&x) {
+            return Some(x);
+        }
+        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
+    None
+}
+
+/// Whether a `QUALIFY` predicate holds a window expression, outside
+/// subqueries.
+fn has_qualify_window(q: &Arc<Expr>) -> bool {
+    let mut stack = vec![Arc::clone(q)];
+    while let Some(x) = stack.pop() {
+        match &x.node {
+            ExprNode::Subquery { .. } => continue,
+            ExprNode::Window(_) => return true,
+            _ => {}
+        }
+        x.for_each_child(&mut |k| stack.push(Arc::clone(k)));
+    }
+    false
 }
 
 /// Whether `e` calls an aggregate function. Subquery plans are not

@@ -1,0 +1,126 @@
+{
+  "entries": [
+    {
+      "id": "named_struct#10069c1652a0/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, CAST(X'C328FF' AS STRING), 2, \"c\", 3) | DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#10069c1652a0/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, CAST(X'C328FF' AS STRING), 2, \"c\", 3) | DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#1b1abab9147f/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", INTERVAL '1 02:03:04' DAY TO SECOND, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#1b1abab9147f/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", INTERVAL '1 02:03:04' DAY TO SECOND, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#29ab846d2b3f/ansi_on",
+      "reason": "SELECT named_struct(\"a\", INTERVAL '1 02:03:04' DAY TO SECOND, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#29ab846d2b3f/ansi_off",
+      "reason": "SELECT named_struct(\"a\", INTERVAL '1 02:03:04' DAY TO SECOND, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#2efbef58e4d3/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, CAST(X'C328FF' AS STRING), 3) | DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#2efbef58e4d3/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, CAST(X'C328FF' AS STRING), 3) | DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#4a85c6e980cf/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, INTERVAL '1-2' YEAR TO MONTH, 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#4a85c6e980cf/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, INTERVAL '1-2' YEAR TO MONTH, 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#4b78ad634ea3/ansi_on",
+      "reason": "SELECT named_struct(INTERVAL '1 02:03:04' DAY TO SECOND, 1, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#4b78ad634ea3/ansi_off",
+      "reason": "SELECT named_struct(INTERVAL '1 02:03:04' DAY TO SECOND, 1, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#522b3a196d19/ansi_on",
+      "reason": "SELECT named_struct(\"a\", INTERVAL '1-2' YEAR TO MONTH, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#522b3a196d19/ansi_off",
+      "reason": "SELECT named_struct(\"a\", INTERVAL '1-2' YEAR TO MONTH, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#5b050a9fcc05/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#5b050a9fcc05/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, INTERVAL '1-2' YEAR TO MONTH, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#694b2acc351e/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, INTERVAL '1 02:03:04' DAY TO SECOND, 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#694b2acc351e/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, INTERVAL '1 02:03:04' DAY TO SECOND, 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#8b8c4c74babd/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#8b8c4c74babd/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#933fd3e5ff75/ansi_on",
+      "reason": "SELECT named_struct(INTERVAL '1-2' YEAR TO MONTH, 1, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#933fd3e5ff75/ansi_off",
+      "reason": "SELECT named_struct(INTERVAL '1-2' YEAR TO MONTH, 1, \"b\", 2, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#c067a5924893/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#c067a5924893/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, \"c\", INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#ccdc4cc09597/ansi_on",
+      "reason": "SELECT named_struct(CAST(X'C328FF' AS STRING), 1, \"b\", 2, \"c\", 3) | DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#ccdc4cc09597/ansi_off",
+      "reason": "SELECT named_struct(CAST(X'C328FF' AS STRING), 1, \"b\", 2, \"c\", 3) | DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#e8ebefa519cf/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", INTERVAL '1-2' YEAR TO MONTH, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#e8ebefa519cf/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", INTERVAL '1-2' YEAR TO MONTH, \"c\", 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "named_struct#ea46b2608d1c/ansi_on",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    },
+    {
+      "id": "named_struct#ea46b2608d1c/ansi_off",
+      "reason": "SELECT named_struct(\"a\", 1, \"b\", 2, INTERVAL '1 02:03:04' DAY TO SECOND, 3) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CREATE_NAMED_STRUCT_WITHOUT_FOLDABLE_STRING"
+    }
+  ],
+  "format_version": 1,
+  "function": "named_struct"
+}

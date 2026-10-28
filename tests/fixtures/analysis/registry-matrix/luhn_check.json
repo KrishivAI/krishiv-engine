@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "luhn_check#33d56994b794/ansi_on",
+      "reason": "SELECT luhn_check(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "luhn_check#33d56994b794/ansi_off",
+      "reason": "SELECT luhn_check(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "luhn_check#75f5f800a83b/ansi_on",
+      "reason": "SELECT luhn_check(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "luhn_check#75f5f800a83b/ansi_off",
+      "reason": "SELECT luhn_check(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "luhn_check"
+}

@@ -351,7 +351,52 @@ fn run(mut cmd: Command, what: &str) -> Result<(), String> {
         .ok_or_else(|| format!("{what} failed"))
 }
 
-/// `xtask coverage [--no-branch] [--all-features] [--html]`: runs the suite
+/// Parsed `xtask coverage` flags.
+#[derive(Debug, PartialEq, Eq)]
+struct CoverageFlags {
+    branch: bool,
+    all: bool,
+    html: bool,
+    packages: Vec<String>,
+}
+
+impl CoverageFlags {
+    fn parse(flags: &[&str]) -> Result<Self, String> {
+        let mut o = Self {
+            branch: true,
+            all: false,
+            html: false,
+            packages: Vec::new(),
+        };
+        let mut it = flags.iter();
+        while let Some(f) = it.next() {
+            match *f {
+                "--no-branch" => o.branch = false,
+                "--all-features" => o.all = true,
+                "--html" => o.html = true,
+                "-p" | "--package" => o
+                    .packages
+                    .push((*it.next().ok_or("-p needs a package name")?).to_owned()),
+                other => return Err(format!("unknown flag {other}")),
+            }
+        }
+        Ok(o)
+    }
+}
+
+/// `--workspace`, or `-p NAME` per package.
+fn package_args(packages: &[String]) -> Vec<String> {
+    if packages.is_empty() {
+        vec!["--workspace".to_owned()]
+    } else {
+        packages
+            .iter()
+            .flat_map(|p| ["-p".to_owned(), p.clone()])
+            .collect()
+    }
+}
+
+/// `xtask coverage [--no-branch] [--all-features] [--html] [-p PACKAGE]...`: runs the suite
 /// under `cargo-llvm-cov`, writing `lcov.info` and `summary.json` (and an HTML
 /// report) under `<target>/coverage`. Branch coverage needs the nightly
 /// toolchain with `llvm-tools-preview`.
@@ -359,15 +404,12 @@ fn run(mut cmd: Command, what: &str) -> Result<(), String> {
 /// # Errors
 /// Returns an error for unknown flags or when a cargo step fails.
 pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
-    let (mut branch, mut all, mut html) = (true, false, false);
-    for f in flags {
-        match *f {
-            "--no-branch" => branch = false,
-            "--all-features" => all = true,
-            "--html" => html = true,
-            other => return Err(format!("unknown flag {other}")),
-        }
-    }
+    let CoverageFlags {
+        branch,
+        all,
+        html,
+        packages,
+    } = CoverageFlags::parse(flags)?;
     let dir = coverage_dir(root);
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     let base = |sub: &[&str]| {
@@ -383,13 +425,8 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
         c.args(["llvm-cov"]).args(sub).current_dir(root);
         c
     };
-    let mut test = base(&[
-        "nextest",
-        "--workspace",
-        "--locked",
-        "--no-tests=pass",
-        "--no-report",
-    ]);
+    let mut test = base(&["nextest", "--locked", "--no-tests=pass", "--no-report"]);
+    test.args(package_args(&packages));
     if all {
         test.arg("--all-features");
     }
@@ -533,6 +570,21 @@ pub fn run_diff_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn coverage_flags_collect_packages() {
+        let f = super::CoverageFlags::parse(&["--no-branch", "-p", "a", "--package", "b"]).unwrap();
+        assert!(!f.branch && !f.all && !f.html);
+        assert_eq!(super::package_args(&f.packages), ["-p", "a", "-p", "b"]);
+        assert_eq!(super::package_args(&[]), ["--workspace"]);
+        assert!(super::CoverageFlags::parse(&["-p"]).is_err());
+        assert!(super::CoverageFlags::parse(&["--bogus"]).is_err());
+        assert!(
+            super::CoverageFlags::parse(&["--all-features", "--html"])
+                .unwrap()
+                .html
+        );
+    }
+
     use super::*;
 
     const EXPORT: &str = r#"{"data":[{"files":[

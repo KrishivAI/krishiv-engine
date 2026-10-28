@@ -262,8 +262,9 @@ pub fn run_spdx(root: &Path) -> Result<(), String> {
     }
 }
 
-/// `xtask source-guard`: bans the parquet `object_store` adapters in `crates/`
-/// and confines `unsafe` in the kernel crates to `unsafe_*.rs` modules.
+/// `xtask source-guard`: bans the parquet `object_store` adapters in `crates/`,
+/// confines `unsafe` in the kernel crates to `unsafe_*.rs` modules, and
+/// requires a `// cluster-scope:` reason on every `Admin` statement-class arm.
 ///
 /// # Errors
 /// Returns each banned use with its location.
@@ -293,6 +294,11 @@ pub fn run_source_guard(root: &Path) -> Result<(), String> {
         for (line, marker) in lint::plan_handles_in(&rel, &text) {
             hits.push(format!(
                 "{rel}:{line}: `{marker}` in a physical-plan type: plans are data, live resources are resolved at instantiation (design P2-T171, I1)"
+            ));
+        }
+        for line in lint::unjustified_admin_arms(&text) {
+            hits.push(format!(
+                "{rel}:{line}: an `Admin` statement-class arm needs a `// cluster-scope: <reason>` comment (Admin is fail-closed, never a catch-all)"
             ));
         }
         if !lint::unsafe_allowed_in(&rel) {

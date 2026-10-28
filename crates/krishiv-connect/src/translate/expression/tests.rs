@@ -298,7 +298,7 @@ fn cast_errors() {
         err(&cast(None, 0)).error_class(),
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
     );
-    let e = err(&cast(Some(CastToType::TypeStr("array<int>".into())), 0));
+    let e = err(&cast(Some(CastToType::TypeStr("array<char(3)>".into())), 0));
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     let e = err(&cast(Some(CastToType::TypeStr("notatype".into())), 0));
     assert_eq!(e.error_class(), ErrorClass::UnsupportedDatatype);

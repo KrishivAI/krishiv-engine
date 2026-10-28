@@ -12,15 +12,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 use xtask::budgets::{self, Budgets};
+use xtask::codeql_proxy;
 use xtask::coverage;
 use xtask::dev;
 use xtask::docs::{self, Doc};
+use xtask::format_neutral;
 use xtask::layering;
 use xtask::policy::{self, DiffArgs};
 use xtask::precheck;
+use xtask::profile;
 use xtask::registry_coverage;
 
-const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | precheck [--base REF] [--fast] [--full] [--memory-cap SIZE] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--known-failures F]>";
+const USAGE: &str = "usage: cargo xtask <layering | docs-config [PATH] | docs-errors [PATH] | budgets [--build-time] [--measure-only | --write-baseline] | budgets --compare FILE [--baseline FILE] | wheel-sizes DIR [--budgets FILE] [--write | --measure-only FILE] | wheel-sizes --compare FILE [--budgets FILE | --baseline FILE] | setup [--install] | doctor | stack up|down|status [--kafka] | coverage [--no-branch] [--all-features] [--html] [-p PKG]... | coverage-summary [--markdown] [--json] [PATH] | diff-coverage --base REF [--head REF] [--lcov PATH[:PREFIX]]... [--fail-under PCT] | pr-size|changes|dco --base REF [--head REF] [--repo DIR] | workflow-lint [DIR] | spdx [ROOT] | source-guard [ROOT] | registry-coverage | check-format-neutral [ROOT] | profile <QUERY | -f FILE> [--table NAME=PATH]... [--conf KEY=VALUE]... [--tool auto|perf|samply] [--out DIR] [--no-flamegraph] | precheck [--base REF] [--fast] [--full] [--allow-stale] [--coverage-dependents] [--memory-cap SIZE] | codeql-proxy [--base REF] | golden [--tag T] [--jdk 17|21] [--manifest F] [--out F] [--engine reject-all|sql-parse|session] [--cases F] [--ratchet check|update] [--known-failures F]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +36,7 @@ fn main() -> ExitCode {
         ["layering"] => run_layering(),
         ["golden", flags @ ..] => run_golden(flags),
         ["precheck", flags @ ..] => precheck::run_precheck(&workspace_root(), flags),
+        ["codeql-proxy", flags @ ..] => codeql_proxy::run(&workspace_root(), flags),
         ["registry-coverage"] => registry_coverage::run(&workspace_root()),
         ["budgets", flags @ ..] => run_budgets(flags),
         ["wheel-sizes", "--compare", file, flags @ ..] => {
@@ -45,6 +49,7 @@ fn main() -> ExitCode {
         ["stack", action] => dev::run_stack(&workspace_root(), action, false),
         ["stack", action, "--kafka"] => dev::run_stack(&workspace_root(), action, true),
         ["coverage", flags @ ..] => coverage::run_coverage(&workspace_root(), flags),
+        ["profile", flags @ ..] => profile::run_profile(&workspace_root(), flags),
         ["coverage-summary", flags @ ..] => coverage::run_summary(&workspace_root(), flags),
         ["diff-coverage", flags @ ..] => coverage::run_diff_coverage(&workspace_root(), flags),
         ["pr-size", flags @ ..] => {
@@ -62,6 +67,8 @@ fn main() -> ExitCode {
         ["spdx", root] => policy::run_spdx(Path::new(root)),
         ["source-guard"] => policy::run_source_guard(&workspace_root()),
         ["source-guard", root] => policy::run_source_guard(Path::new(root)),
+        ["check-format-neutral"] => format_neutral::run_check(&workspace_root()),
+        ["check-format-neutral", root] => format_neutral::run_check(Path::new(root)),
         [cmd] | [cmd, _] if Doc::from_command(cmd).is_some() => run_docs(&args),
         _ => Err(USAGE.to_owned()),
     };

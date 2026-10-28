@@ -1,0 +1,10 @@
+{
+  "cases": {
+    "depends-on-command": [
+      7,
+      28
+    ]
+  },
+  "file": "name-precedence-in-order-by-and-having-with-conflicting-attributes",
+  "format_version": 1
+}
