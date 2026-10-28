@@ -159,6 +159,7 @@ pub struct FormatOptions {
     schema: &'static OptionSchema,
     values: BTreeMap<&'static str, Value>,
     ignored: Vec<String>,
+    write_seed: Option<String>,
 }
 
 impl fmt::Debug for FormatOptions {
@@ -167,6 +168,7 @@ impl fmt::Debug for FormatOptions {
             .field("format", &self.schema.format)
             .field("values", &self.values)
             .field("ignored", &self.ignored)
+            .field("write_seed", &self.write_seed)
             .finish()
     }
 }
@@ -242,6 +244,7 @@ impl OptionSchema {
                 schema: self,
                 values,
                 ignored,
+                write_seed: None,
             },
             warnings,
         ))
@@ -367,7 +370,26 @@ impl FormatOptions {
             schema,
             values,
             ignored: Vec::new(),
+            write_seed: None,
         }
+    }
+
+    /// These options for the write of one file, seeded with `seed`: text
+    /// unique to the file (its job UUID, task and file number). Formats
+    /// that need per-file entropy (Avro's sync marker) derive it from the
+    /// seed, so it stays reproducible for a job and unpredictable to the
+    /// rows' authors.
+    #[must_use]
+    pub fn with_write_seed(mut self, seed: impl Into<String>) -> Self {
+        self.write_seed = Some(seed.into());
+        self
+    }
+
+    /// The seed of the file being written, if the write has one (see
+    /// [`Self::with_write_seed`]).
+    #[must_use]
+    pub fn write_seed(&self) -> Option<&str> {
+        self.write_seed.as_deref()
     }
 
     /// The schema these options were parsed with.
