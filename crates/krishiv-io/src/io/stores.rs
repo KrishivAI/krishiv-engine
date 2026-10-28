@@ -1576,7 +1576,10 @@ mod tests {
         let url = id(&[(S3_ENDPOINT, "https://user:Canary-3@host:9000/x")]);
         assert_ne!(url, plain);
         for shown in [&secret, &referenced, &url] {
-            assert!(!shown.to_string().contains("Canary"), "{shown}");
+            assert!(
+                !shown.to_string().contains("Canary"),
+                "a store id carries a credential value"
+            );
         }
     }
 
