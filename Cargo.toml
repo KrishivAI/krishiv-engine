@@ -27,6 +27,11 @@ broken_intra_doc_links = "deny"
 [workspace.lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+# `clippy.toml` bans blocking calls, but only `krishiv-exec` denies the
+# lint (its crate root does): everywhere else a compute worker never runs,
+# including build scripts and benches, so the ban stays silent there even
+# under `-D warnings`.
+disallowed_methods = "allow"
 panic = "deny"
 # Exceptions only via `#[expect(lint, reason = "...")]`, never a bare `allow` (ADR 0029).
 allow_attributes = "deny"

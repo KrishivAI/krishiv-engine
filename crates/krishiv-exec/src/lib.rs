@@ -64,6 +64,11 @@
 //! ```
 
 #![forbid(unsafe_code)]
+// Yield discipline (P2-T061): no blocking calls on compute workers. The
+// banned paths live in the workspace `clippy.toml`; the textual backstop is
+// `xtask source-guard`. Deliberate blocking-pool use carries
+// `#[expect(clippy::disallowed_methods, reason = "...")]`.
+#![deny(clippy::disallowed_methods)]
 
 pub mod aggregate;
 mod cancel;

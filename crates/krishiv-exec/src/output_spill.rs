@@ -207,6 +207,10 @@ impl Spillable for OutputSpill {
 }
 
 #[cfg(all(test, not(loom)))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing via #[tokio::test]; never runs on a compute worker"
+)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

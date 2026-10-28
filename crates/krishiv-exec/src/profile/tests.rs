@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test-only fixture read; never runs on a compute worker"
+)]
 
 use std::borrow::Cow;
 use std::sync::Arc;

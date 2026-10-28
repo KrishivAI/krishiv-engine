@@ -270,6 +270,10 @@ fn literal(v: &ScalarValue, t: &arrow_schema::DataType) -> Option<Literal> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing; never runs on a compute worker"
+)]
 mod tests {
     use super::*;
 

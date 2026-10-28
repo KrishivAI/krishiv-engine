@@ -15,4 +15,29 @@ disallowed-methods = [
     { path = "prost::Message::merge", reason = "unbounded recursion: decode through krishiv_connect::wire" },
     { path = "prost::Message::merge_length_delimited", reason = "unbounded recursion: decode through krishiv_connect::wire" },
     { path = "prost_types::Any::to_msg", reason = "unbounded recursion: decode through krishiv_connect::wire" },
+    # Yield discipline (P2-T061): compute workers must never block. These
+    # paths are denied in `krishiv-exec` only (its crate root denies the
+    # lint); other crates do not deny it, so they are unaffected.
+    # `krishiv-io` reads through the async `IoScheduler` on the I/O runtime
+    # instead; work over ~1 ms that cannot yield goes through
+    # `TaskContext::run_blocking` on the bounded blocking pool. `xtask
+    # source-guard` scans for the same names textually.
+    { path = "tokio::runtime::Handle::block_on", reason = "a worker that blocks on a runtime stalls every query on its thread: await on the I/O runtime or use TaskContext::run_blocking" },
+    { path = "tokio::runtime::Runtime::block_on", reason = "a worker that blocks on a runtime stalls every query on its thread: await on the I/O runtime or use TaskContext::run_blocking" },
+    { path = "std::thread::sleep", reason = "a sleeping worker is a stall: await a timer, or sleep on the blocking pool through TaskContext::run_blocking" },
+    { path = "std::fs::read", reason = "sync file I/O blocks the worker: read through krishiv-io on the I/O runtime" },
+    { path = "std::fs::read_to_string", reason = "sync file I/O blocks the worker: read through krishiv-io on the I/O runtime" },
+    { path = "std::fs::write", reason = "sync file I/O blocks the worker: write through krishiv-io on the I/O runtime" },
+    { path = "std::fs::copy", reason = "sync file I/O blocks the worker: copy through krishiv-io on the I/O runtime" },
+    { path = "std::fs::create_dir", reason = "sync file I/O blocks the worker: use the async store instead" },
+    { path = "std::fs::create_dir_all", reason = "sync file I/O blocks the worker: use the async store instead" },
+    { path = "std::fs::remove_file", reason = "sync file I/O blocks the worker: use the async store instead" },
+    { path = "std::fs::remove_dir", reason = "sync file I/O blocks the worker: use the async store instead" },
+    { path = "std::fs::remove_dir_all", reason = "sync file I/O blocks the worker: use the async store instead" },
+    { path = "std::fs::rename", reason = "sync file I/O blocks the worker: use the async store instead" },
+    { path = "std::fs::metadata", reason = "sync file I/O blocks the worker: stat through krishiv-io on the I/O runtime" },
+    { path = "std::fs::canonicalize", reason = "sync file I/O blocks the worker: resolve paths without touching the filesystem on a worker" },
+    { path = "std::fs::File::open", reason = "sync file I/O blocks the worker (one pread on /proc/thread-self/schedstat per poll is the only exception): read through krishiv-io on the I/O runtime" },
+    { path = "std::fs::File::create", reason = "sync file I/O blocks the worker: write through krishiv-io on the I/O runtime" },
+    { path = "std::fs::OpenOptions::open", reason = "sync file I/O blocks the worker: open through krishiv-io on the I/O runtime" },
 ]

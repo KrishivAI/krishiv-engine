@@ -2,6 +2,10 @@
 //! Window group limit tests: the limited plan (a sort pruning its batches,
 //! then [`WindowGroupLimit`]) keeps exactly the rows the window's filter
 //! keeps, ties included; pruning and its switch-off; weights; plan checks.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing; never runs on a compute worker"
+)]
 
 use super::*;
 use crate::operators::SortMetrics;

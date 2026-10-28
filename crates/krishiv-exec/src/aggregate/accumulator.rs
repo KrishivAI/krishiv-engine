@@ -1910,6 +1910,10 @@ mod differential;
 /// The per-batch proofs (design P2-T160) against the per-row path.
 #[cfg(test)]
 #[cfg(not(loom))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only golden-file read; never runs on a compute worker"
+)]
 mod proof_tests {
     use super::*;
     use proptest::prelude::*;
