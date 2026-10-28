@@ -68,8 +68,9 @@
 //! The registry hands out raw stores; the caller registers them on the
 //! [`IoScheduler`], so every request still goes through
 //! the layer's retry, timeout, pacing and accounting wrappers unchanged.
-//! Cloud stores share [`StorePolicy::S3`]'s
-//! per-prefix pacing until per-service rates are calibrated. Multipart
+//! Each cloud scheme paces with its own [`StorePolicy`] (`S3`, `GCS`,
+//! `AZURE`); the GCS and Azure budgets are conservative starting points
+//! until per-service rates are calibrated. Multipart
 //! uploads rely on the cloud clients' own per-part retries (their default
 //! `RetryConfig` is left enabled), as `upload.rs` documents.
 
@@ -335,8 +336,19 @@ impl StoreRegistry {
         let url = parse_object_url(text)?;
         let store = self.store_with_options(&url, options)?;
         let id = effective_store_id(&url.store_id, options);
-        sched.register_store_with(id.clone(), store, StorePolicy::S3);
+        sched.register_store_with(id.clone(), store, policy_for(url.scheme));
         Ok((id, url.key, url.display))
+    }
+}
+
+/// The pacing policy of one cloud scheme: each scheme paces with its own
+/// budget (see [`StorePolicy`]), so a change to one service's rates never
+/// retunes another's.
+fn policy_for(scheme: ObjectScheme) -> StorePolicy {
+    match scheme {
+        ObjectScheme::S3 => StorePolicy::S3,
+        ObjectScheme::Gcs => StorePolicy::GCS,
+        ObjectScheme::Azure => StorePolicy::AZURE,
     }
 }
 
@@ -407,7 +419,7 @@ fn relevant_options<'a>(
 /// case-insensitively. Shared with [`crate::options`] (format option
 /// parsing skips these keys the same way).
 pub(crate) fn is_store_option(key: &str) -> bool {
-    key.len() > 3 && key[..3].eq_ignore_ascii_case("fs.")
+    key.len() > 3 && key.as_bytes()[..3].eq_ignore_ascii_case(b"fs.")
 }
 
 /// Finds `key` in the per-read `options`, ASCII case-insensitively.
@@ -486,7 +498,7 @@ fn path_style_access(
         return Ok(explicit);
     }
     Ok(text(config, options, S3_ENDPOINT)?
-        .map(|e| allows_http(Some(&e)) || e.contains("localhost")))
+        .map(|e| allows_http(Some(&e)) || e.to_ascii_lowercase().contains("localhost")))
 }
 
 /// The session value of an unregistered `key`: the exact session entry
@@ -599,9 +611,11 @@ fn text(
 }
 
 /// Whether `text` allows HTTP connections: only an `http://` endpoint does
-/// (emulators); anything else keeps the builders' HTTPS default.
+/// (emulators); anything else keeps the builders' HTTPS default. The scheme
+/// matches ASCII case-insensitively, over bytes (never slicing a `&str` at a
+/// non-boundary).
 fn allows_http(text: Option<&str>) -> bool {
-    text.is_some_and(|e| e.starts_with("http://"))
+    text.is_some_and(|e| e.len() >= 7 && e.as_bytes()[..7].eq_ignore_ascii_case(b"http://"))
 }
 
 /// Parses a `true`/`false` flag of `key`: the per-read option first, else
@@ -669,9 +683,7 @@ fn s3_store(
     use object_store::aws::AmazonS3Builder;
     let mut builder = AmazonS3Builder::from_env().with_bucket_name(&url.bucket);
     if let Some(endpoint) = text(config, options, S3_ENDPOINT)? {
-        if allows_http(Some(&endpoint)) {
-            builder = builder.with_allow_http(true);
-        }
+        builder = builder.with_allow_http(allows_http(Some(&endpoint)));
         builder = builder.with_endpoint(endpoint);
     }
     if let Some(key) = cred(config, options, S3_ACCESS_KEY)? {
@@ -755,9 +767,7 @@ fn azure_store(
         builder = builder.with_sas_authorization(pairs);
     }
     if let Some(endpoint) = text(config, options, AZURE_ENDPOINT)? {
-        if allows_http(Some(&endpoint)) {
-            builder = builder.with_allow_http(true);
-        }
+        builder = builder.with_allow_http(allows_http(Some(&endpoint)));
         builder = builder.with_endpoint(endpoint);
     }
     builder
@@ -839,12 +849,15 @@ fn dotted(
 }
 
 /// Splits a SAS token (`sv=..&sig=..`) into its query pairs, redacting any
-/// complaint: the token itself must never reach an error.
+/// complaint: the token itself must never reach an error. A leading `?` (as
+/// Azure portals copy it) and surrounding whitespace are ignored.
 fn sas_pairs(secret: &SecretString) -> Result<Vec<(String, String)>, String> {
+    let token = secret.expose_secret().trim();
+    let token = token.strip_prefix('?').unwrap_or(token);
     let mut pairs = Vec::new();
-    for part in secret.expose_secret().split('&') {
+    for part in token.split('&') {
         match part.split_once('=') {
-            Some((name, value)) if !name.is_empty() => {
+            Some((name, value)) if !name.is_empty() && !value.is_empty() => {
                 pairs.push((name.to_owned(), value.to_owned()));
             }
             _ => return Err("the Azure SAS token is not `name=value&...`".to_owned()),
@@ -1100,17 +1113,29 @@ mod tests {
     #[test]
     fn failures_name_keys_and_buckets_but_never_secrets() {
         // A store that cannot be built names what is missing, never a
-        // secret: no account here, however the key is set.
-        let registry = StoreRegistry::new(config(&[(AZURE_ACCOUNT_KEY, CANARY)]));
-        let url = parse_object_url("abfss://cont/k").unwrap();
-        let error = registry.store(&url).unwrap_err();
-        assert_eq!(
-            error.error_class(),
-            ErrorClass::KrishivObjectStoreRequestFailed
-        );
-        assert!(!error.to_string().contains(CANARY));
-        assert!(!format!("{error:?}").contains(CANARY));
-        assert!(!format!("{registry:?}").contains(CANARY));
+        // secret: no account here, however the key is set. Process
+        // environment can supply the missing account through the builders'
+        // `from_env` fallback, turning the expected failure into a success;
+        // skip that case (with a reason) instead of mutating the environment.
+        if std::env::var("AZURE_STORAGE_ACCOUNT_NAME")
+            .ok()
+            .is_some_and(|v| !v.is_empty())
+        {
+            println!(
+                "SKIP azure-missing-account: AZURE_STORAGE_ACCOUNT_NAME is set, so the builder succeeds"
+            );
+        } else {
+            let registry = StoreRegistry::new(config(&[(AZURE_ACCOUNT_KEY, CANARY)]));
+            let url = parse_object_url("abfss://cont/k").unwrap();
+            let error = registry.store(&url).unwrap_err();
+            assert_eq!(
+                error.error_class(),
+                ErrorClass::KrishivObjectStoreRequestFailed
+            );
+            assert!(!error.to_string().contains(CANARY));
+            assert!(!format!("{error:?}").contains(CANARY));
+            assert!(!format!("{registry:?}").contains(CANARY));
+        }
 
         // An invalid flag names the key; the value is only the marker.
         let registry = StoreRegistry::new(config(&[(S3_PATH_STYLE_ACCESS, CANARY)]));
@@ -1142,12 +1167,21 @@ mod tests {
             .unwrap_err();
         assert!(!error.to_string().contains(CANARY));
 
-        // Half a key pair is refused without echo.
-        let registry = StoreRegistry::new(config(&[(S3_SECRET_KEY, CANARY)]));
-        let error = registry
-            .store(&parse_object_url("s3://bucket/k").unwrap())
-            .unwrap_err();
-        assert!(!error.to_string().contains(CANARY));
+        // Half a key pair is refused without echo. As above, the environment
+        // can complete the pair (`AWS_ACCESS_KEY_ID` through `from_env`);
+        // skip that case with a reason instead of mutating the environment.
+        if std::env::var("AWS_ACCESS_KEY_ID")
+            .ok()
+            .is_some_and(|v| !v.is_empty())
+        {
+            println!("SKIP s3-half-key-pair: AWS_ACCESS_KEY_ID is set, so the builder succeeds");
+        } else {
+            let registry = StoreRegistry::new(config(&[(S3_SECRET_KEY, CANARY)]));
+            let error = registry
+                .store(&parse_object_url("s3://bucket/k").unwrap())
+                .unwrap_err();
+            assert!(!error.to_string().contains(CANARY));
+        }
     }
 
     #[test]
@@ -1395,5 +1429,66 @@ mod tests {
                 "{input}"
             );
         }
+    }
+
+    #[test]
+    fn store_option_keys_never_slice_mid_char() {
+        // `is_store_option` compares bytes, so keys with a multi-byte
+        // character at byte 3 never panic (e.g. `"ééx"`).
+        assert!(!is_store_option("ééx"));
+        assert!(!is_store_option("é"));
+        assert!(!is_store_option(""));
+        assert!(!is_store_option("fs"));
+        assert!(!is_store_option("fs."));
+        assert!(is_store_option("fs.a"));
+        assert!(is_store_option("FS.S3A.ENDPOINT"));
+        // `relevant_options` (which calls it) skips non-`fs.*` keys without
+        // panicking, whatever their bytes.
+        let options = read_options(&[("ééx", "1"), ("compression", "zstd")]);
+        assert!(relevant_options(&options).is_empty());
+        let options = read_options(&[("FS.S3A.ENDPOINT", "http://127.0.0.1:9000")]);
+        assert_eq!(relevant_options(&options).len(), 1);
+    }
+
+    #[test]
+    fn sas_tokens_allow_a_leading_question_mark() {
+        let with_mark = SecretString::new("?sv=2024-01-01&sig=abc".to_owned());
+        assert_eq!(
+            sas_pairs(&with_mark).unwrap(),
+            vec![
+                ("sv".to_owned(), "2024-01-01".to_owned()),
+                ("sig".to_owned(), "abc".to_owned())
+            ]
+        );
+        let without_mark = SecretString::new("sv=2024-01-01&sig=abc".to_owned());
+        assert_eq!(
+            sas_pairs(&without_mark).unwrap(),
+            vec![
+                ("sv".to_owned(), "2024-01-01".to_owned()),
+                ("sig".to_owned(), "abc".to_owned())
+            ]
+        );
+        // Empty names or values are not pairs.
+        for bad in ["", "?", "?&", "sv=&sig=abc", "sv=2024-01-01&sig="] {
+            assert!(
+                sas_pairs(&SecretString::new(bad.to_owned())).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn http_scheme_matches_ascii_case_insensitively() {
+        assert!(allows_http(Some("http://127.0.0.1:9000")));
+        assert!(allows_http(Some("HTTP://127.0.0.1:9000")));
+        assert!(!allows_http(Some("https://example.com")));
+        assert!(!allows_http(None));
+    }
+
+    #[test]
+    fn cloud_schemes_pace_with_their_own_policy() {
+        assert_eq!(policy_for(ObjectScheme::S3), StorePolicy::S3);
+        assert_eq!(policy_for(ObjectScheme::Gcs), StorePolicy::GCS);
+        assert_eq!(policy_for(ObjectScheme::Azure), StorePolicy::AZURE);
     }
 }

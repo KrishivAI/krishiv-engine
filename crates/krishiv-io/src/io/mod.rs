@@ -427,7 +427,7 @@ impl IoScheduler {
     }
 
     /// Registers (or replaces) the store `id` with a pacing `policy`
-    /// ([`StorePolicy::S3`] for S3).
+    /// (one [`StorePolicy`] per cloud scheme).
     pub fn register_store_with(
         &self,
         id: StoreId,
