@@ -243,7 +243,7 @@ mod init {
             };
             assert_eq!(got, (1000, 1, 0));
             assert!(
-                !crate::bounded(),
+                !super::super::bounded(),
                 "no limit: the memory-bound policy is off"
             );
         }

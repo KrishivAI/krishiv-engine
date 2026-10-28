@@ -93,7 +93,7 @@ async fn the_guard_spills_what_the_process_holds_beyond_the_allowance() {
     signal.set_spillable_bytes(held.size());
     signal.complete(target);
     request.await.unwrap().unwrap();
-    assert!(root.reserved() <= 48 * MIB, "{}", root.reserved());
+    assert_eq!(root.reserved(), 48 * MIB);
 
     // The excess is gone: so is the cut.
     OVERHEAD.store(allowance(LIMIT), Ordering::SeqCst);
