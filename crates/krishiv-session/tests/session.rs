@@ -1081,7 +1081,10 @@ fn avro_writes_read_back() {
     let out2 = dir.path().join("out2");
     let out2 = out2.to_str().unwrap().to_owned();
     block_on(people.write().format("avro").save(&out2)).unwrap();
-    assert_eq!(block_on(s.read().format("avro").load([out2.as_str()]).count()).unwrap(), 3);
+    assert_eq!(
+        block_on(s.read().format("avro").load([out2.as_str()]).count()).unwrap(),
+        3
+    );
     // Options flow through: an unknown codec fails before any task runs.
     assert_eq!(
         class(block_on(

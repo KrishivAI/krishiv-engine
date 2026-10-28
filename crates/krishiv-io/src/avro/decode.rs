@@ -1553,6 +1553,11 @@ impl Decoder for AvroDecoder {
         if self.done {
             return Ok(Step::Done);
         }
+        // One reader for the call, shared by every block it drains.
+        let meta = Arc::clone(&self.meta);
+        let datum = GenericDatumReader::builder(&meta.writer)
+            .build()
+            .map_err(|e| corrupt(format!("an unreadable schema: {e}")))?;
         loop {
             if self.batch_rows >= BATCH_ROWS {
                 return self.emit();
@@ -1572,10 +1577,6 @@ impl Decoder for AvroDecoder {
                 self.open_block(index)?;
                 self.next += 1;
             }
-            let meta = Arc::clone(&self.meta);
-            let datum = GenericDatumReader::builder(&meta.writer)
-                .build()
-                .map_err(|e| corrupt(format!("an unreadable schema: {e}")))?;
             while self.batch_rows < BATCH_ROWS {
                 if !self.decode_one(&datum)? {
                     self.open = None;
