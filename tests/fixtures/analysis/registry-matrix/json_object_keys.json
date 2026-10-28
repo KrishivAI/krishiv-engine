@@ -1,0 +1,126 @@
+{
+  "entries": [
+    {
+      "id": "json_object_keys#040f939b5f42/ansi_on",
+      "reason": "SELECT json_object_keys(1.5D) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#040f939b5f42/ansi_off",
+      "reason": "SELECT json_object_keys(1.5D) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#0ad91a755764/ansi_on",
+      "reason": "SELECT json_object_keys(CAST(1.5 AS FLOAT)) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#0ad91a755764/ansi_off",
+      "reason": "SELECT json_object_keys(CAST(1.5 AS FLOAT)) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#41ac5f5c93fe/ansi_on",
+      "reason": "SELECT json_object_keys(CAST(1 AS TINYINT)) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#41ac5f5c93fe/ansi_off",
+      "reason": "SELECT json_object_keys(CAST(1 AS TINYINT)) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#4448fa5b0c4d/ansi_on",
+      "reason": "SELECT json_object_keys(X'01') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#4448fa5b0c4d/ansi_off",
+      "reason": "SELECT json_object_keys(X'01') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#4928a8f5ca04/ansi_on",
+      "reason": "SELECT json_object_keys(CAST(1.5 AS DECIMAL(10,2))) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#4928a8f5ca04/ansi_off",
+      "reason": "SELECT json_object_keys(CAST(1.5 AS DECIMAL(10,2))) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#5f18f96b9d65/ansi_on",
+      "reason": "SELECT json_object_keys(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#5f18f96b9d65/ansi_off",
+      "reason": "SELECT json_object_keys(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#75a579a5fef9/ansi_on",
+      "reason": "SELECT json_object_keys(TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#75a579a5fef9/ansi_off",
+      "reason": "SELECT json_object_keys(TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#7dc9b3853554/ansi_on",
+      "reason": "SELECT json_object_keys(DATE'2024-02-29') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#7dc9b3853554/ansi_off",
+      "reason": "SELECT json_object_keys(DATE'2024-02-29') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#812063cff5bf/ansi_on",
+      "reason": "SELECT json_object_keys(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#812063cff5bf/ansi_off",
+      "reason": "SELECT json_object_keys(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#84991ac35a64/ansi_on",
+      "reason": "SELECT json_object_keys(1L) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#84991ac35a64/ansi_off",
+      "reason": "SELECT json_object_keys(1L) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#93a0a14dab9b/ansi_on",
+      "reason": "SELECT json_object_keys(CAST(1.5 AS DECIMAL(38,18))) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#93a0a14dab9b/ansi_off",
+      "reason": "SELECT json_object_keys(CAST(1.5 AS DECIMAL(38,18))) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#9466d3f1acb8/ansi_on",
+      "reason": "SELECT json_object_keys(CAST(1 AS SMALLINT)) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#9466d3f1acb8/ansi_off",
+      "reason": "SELECT json_object_keys(CAST(1 AS SMALLINT)) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#b4cf87994ff2/ansi_on",
+      "reason": "SELECT json_object_keys(1) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#b4cf87994ff2/ansi_off",
+      "reason": "SELECT json_object_keys(1) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#d7d85f6fcf2a/ansi_on",
+      "reason": "SELECT json_object_keys(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#d7d85f6fcf2a/ansi_off",
+      "reason": "SELECT json_object_keys(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#fafb651fe970/ansi_on",
+      "reason": "SELECT json_object_keys(true) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "json_object_keys#fafb651fe970/ansi_off",
+      "reason": "SELECT json_object_keys(true) | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "json_object_keys"
+}

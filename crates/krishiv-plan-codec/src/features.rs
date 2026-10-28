@@ -132,6 +132,7 @@ registry! {
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
     (window_offset_functions, WindowOffsetFunctions, POST_MIGRATION_READER_VERSION, Semantic, "The window functions `lag`, `lead` and `nth_value`."),
+    (write_plan, WritePlan, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` node's `WritePlan` (format, store, directory, job id and file limits): the file sink is built at instantiation from it with the task's partition and attempt."),
 }
 
 /// Ids retired at an epoch change: never reused.
@@ -215,6 +216,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
+            PhysNode::WriteFiles { write, .. } => write.is_some().then_some(Feature::WritePlan),
             PhysNode::Scan(_)
             | PhysNode::OneRow
             | PhysNode::Filter { .. }
@@ -225,7 +227,6 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::Aggregate { .. }
             | PhysNode::NestedLoopJoin(_)
             | PhysNode::Union { .. }
-            | PhysNode::WriteFiles { .. }
             | PhysNode::Exchange(_) => None,
         },
         Construct::Item(item) => match item {

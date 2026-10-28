@@ -21,6 +21,7 @@ from krishiv.sql._function_support import (
     _num_or_col,
     _one_of,
     _opt,
+    _opts,
 )
 from krishiv.sql.column import Column
 
@@ -102,7 +103,9 @@ __all__ = [
     "first_value",
     "floor",
     "format_number",
+    "from_json",
     "from_utc_timestamp",
+    "get_json_object",
     "getbit",
     "greatest",
     "hash",
@@ -119,6 +122,8 @@ __all__ = [
     "isnan",
     "isnotnull",
     "isnull",
+    "json_array_length",
+    "json_object_keys",
     "kurtosis",
     "lag",
     "last",
@@ -202,6 +207,7 @@ __all__ = [
     "row_number",
     "rpad",
     "rtrim",
+    "schema_of_json",
     "sec",
     "second",
     "session_user",
@@ -240,6 +246,7 @@ __all__ = [
     "toRadians",
     "to_binary",
     "to_char",
+    "to_json",
     "to_number",
     "to_utc_timestamp",
     "to_varchar",
@@ -666,9 +673,19 @@ def format_number(col: ColumnOrName, d: int) -> Column:
     return _call("format_number", _named(col, "col"), _lit(d, "d"))
 
 
+def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``from_json``."""
+    return _call("from_json", _named(col, "col"), _lit(schema, "schema"), *_opt(_opts, options, "options"))
+
+
 def from_utc_timestamp(timestamp: ColumnOrName, tz: Column | str) -> Column:
     """Calls the registry function ``from_utc_timestamp``."""
     return _call("from_utc_timestamp", _named(timestamp, "timestamp"), _lit(tz, "tz"))
+
+
+def get_json_object(col: ColumnOrName, path: str) -> Column:
+    """Calls the registry function ``get_json_object``."""
+    return _call("get_json_object", _named(col, "col"), _lit(path, "path"))
 
 
 def getbit(col: ColumnOrName, pos: ColumnOrName) -> Column:
@@ -750,6 +767,16 @@ def isnotnull(col: ColumnOrName) -> Column:
 def isnull(col: ColumnOrName) -> Column:
     """Calls the registry function ``isnull``."""
     return _call("isnull", _named(col, "col"))
+
+
+def json_array_length(col: ColumnOrName) -> Column:
+    """Calls the registry function ``json_array_length``."""
+    return _call("json_array_length", _named(col, "col"))
+
+
+def json_object_keys(col: ColumnOrName) -> Column:
+    """Calls the registry function ``json_object_keys``."""
+    return _call("json_object_keys", _named(col, "col"))
 
 
 def kurtosis(col: ColumnOrName) -> Column:
@@ -1183,6 +1210,11 @@ def rtrim(col: ColumnOrName, trim: ColumnOrName | None = None) -> Column:
     return _call("rtrim", *_opt(_named, trim, "trim"), _named(col, "col"))
 
 
+def schema_of_json(json: Column | str, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``schema_of_json``."""
+    return _call("schema_of_json", _lit(json, "json"), *_opt(_opts, options, "options"))
+
+
 def sec(col: ColumnOrName) -> Column:
     """Calls the registry function ``sec``."""
     return _call("sec", _named(col, "col"))
@@ -1386,6 +1418,11 @@ def to_binary(col: ColumnOrName, format: ColumnOrName | None = None) -> Column:
 def to_char(col: ColumnOrName, format: ColumnOrName) -> Column:
     """Calls the registry function ``to_char``."""
     return _call("to_char", _named(col, "col"), _named(format, "format"))
+
+
+def to_json(col: ColumnOrName, options: dict[str, str] | None = None) -> Column:
+    """Calls the registry function ``to_json``."""
+    return _call("to_json", _named(col, "col"), *_opt(_opts, options, "options"))
 
 
 def to_number(col: ColumnOrName, format: ColumnOrName) -> Column:

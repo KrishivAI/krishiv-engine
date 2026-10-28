@@ -230,3 +230,28 @@ fn an_int_parameter_takes_only_an_int_as_a_literal() {
     assert!(g.py.contains("_int_or_col(days, \"days\")"), "{}", g.py);
     assert!(g.py.contains("_num_or_col(col1, \"col1\")"), "{}", g.py);
 }
+
+#[test]
+fn dict_options_use_the_map_literal_conversion() {
+    let g = generated_for(&["from_json", "schema_of_json", "to_json"]);
+    assert!(g.py.contains(
+        "def from_json(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:"
+    ), "{}", g.py);
+    assert!(g.py.contains(
+        "return _call(\"from_json\", _named(col, \"col\"), _lit(schema, \"schema\"), *_opt(_opts, options, \"options\"))"
+    ), "{}", g.py);
+    assert!(g.py.contains(
+        "def schema_of_json(json: Column | str, options: dict[str, str] | None = None) -> Column:"
+    ), "{}", g.py);
+    assert!(g.py.contains(
+        "return _call(\"schema_of_json\", _lit(json, \"json\"), *_opt(_opts, options, \"options\"))"
+    ), "{}", g.py);
+    assert!(
+        g.py.contains(
+            "def to_json(col: ColumnOrName, options: dict[str, str] | None = None) -> Column:"
+        ),
+        "{}",
+        g.py
+    );
+    assert!(g.py.contains("    _opts,\n"), "{}", g.py);
+}

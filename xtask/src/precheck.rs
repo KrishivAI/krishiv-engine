@@ -599,6 +599,7 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
         vec![
             x(&["spdx"]),
             x(&["source-guard"]),
+            x(&["check-format-neutral"]),
             x(&["registry-coverage"]),
             x(&["dco", "--base", base]),
             Cmd::new(

@@ -127,6 +127,7 @@ def recorded(monkeypatch: pytest.MonkeyPatch) -> None:
     """The native builders record what they are given, so a call's shape can be compared."""
     monkeypatch.setattr(_native, "col", lambda name: ("col", name))
     monkeypatch.setattr(_native, "lit", lambda value: ("lit", value))
+    monkeypatch.setattr(_native, "map_literal", lambda pairs: ("map_literal", pairs))
     monkeypatch.setattr(_native, "call_function", lambda name, args: ("call", name, tuple(args)))
 
 
@@ -142,6 +143,9 @@ def _sample(name: str, p: inspect.Parameter) -> tuple[list[Any], list[tuple[str,
     annotation = str(p.annotation).removesuffix(" | None")
     if annotation in COLUMN_ANNOTATIONS:
         return [f"c_{p.name}"], [("col", f"c_{p.name}")]
+    if annotation == "dict[str, str]":
+        options = {"k_x": "v"}
+        return [options], [("map_literal", list(options.items()))]
     kind = next(k for k in annotation.split(" | ") if k != "Column")
     value = CHECKED_VALUES.get((name, p.name), LITERALS[kind])
     return [value], [("lit", value)]
@@ -228,6 +232,32 @@ PYSPARK_CALLS = [
         lambda: F.to_utc_timestamp("t", "UTC"),
         ("call", "to_utc_timestamp", (("col", "t"), ("lit", "UTC"))),
     ),
+    # A JSON string is a literal, not a column name; dictionary options are
+    # a map literal.
+    (
+        lambda: F.schema_of_json('{"a":1}'),
+        ("call", "schema_of_json", (("lit", '{"a":1}'),)),
+    ),
+    (
+        lambda: F.schema_of_json("c", {"primitivesAsString": "true"}),
+        (
+            "call",
+            "schema_of_json",
+            (("lit", "c"), ("map_literal", [("primitivesAsString", "true")])),
+        ),
+    ),
+    (
+        lambda: F.from_json("c", "a INT", {"mode": "FAILFAST"}),
+        (
+            "call",
+            "from_json",
+            (("col", "c"), ("lit", "a INT"), ("map_literal", [("mode", "FAILFAST")])),
+        ),
+    ),
+    (
+        lambda: F.to_json("c", {"ignoreNullFields": "false"}),
+        ("call", "to_json", (("col", "c"), ("map_literal", [("ignoreNullFields", "false")]))),
+    ),
     (lambda: F.make_date("y", "m", "d"), ("call", "make_date", (("col", "y"), ("col", "m"), ("col", "d")))),
     (
         lambda: F.convert_timezone(F.lit("UTC"), F.lit("Asia/Hong_Kong"), "ts"),
@@ -267,6 +297,19 @@ def test_argument_checks(recorded: None) -> None:
         F.date_add("d", 1.5)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError, match="len"):
         F.substring("s", 1, 2.0)  # ty: ignore[invalid-argument-type]
+    # JSON options take a `dict[str, str]`; anything else in the mapping is
+    # not an option.
+    with pytest.raises(errors.PySparkTypeError, match="options"):
+        F.from_json("c", "a INT", {"mode": 1})  # ty: ignore[invalid-argument-type]
+    with pytest.raises(errors.PySparkTypeError, match="options"):
+        F.to_json("c", {1: "x"})  # ty: ignore[invalid-argument-type]
+    # A Column of options passes through; any other scalar is a literal.
+    assert F.from_json("c", "a INT", F.col("o"))._c == (  # ty: ignore[invalid-argument-type]
+        "call",
+        "from_json",
+        (("col", "c"), ("lit", "a INT"), ("col", "o")),
+    )
+    assert F.to_json("c", "x")._c == ("call", "to_json", (("col", "c"), ("lit", "x")))
 
 
 def test_deprecated_names_warn_and_still_work(recorded: None) -> None:

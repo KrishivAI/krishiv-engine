@@ -60,9 +60,9 @@
 //! table of individual rows does not track.
 //!
 //! # Key formats (P2-T158)
-//! By default keys are arrow-row bytes indexed by the shared `KeyTable`.
-//! With `krishiv.exec.join.rowLayout` on (an internal setting, off by
-//! default, read when the join is instantiated), a join whose keys are all
+//! With `krishiv.exec.join.rowLayout` off, keys are arrow-row bytes indexed
+//! by the shared `KeyTable`. The setting is on by default (read when the
+//! join is instantiated): a join whose keys are all
 //! fixed-width (integers, dates, timestamps, decimals, floats, booleans)
 //! stores them as fixed-width rows ([`RowLayout`](crate::rows::RowLayout):
 //! Spark-normalized, NULL-safe; string keys keep arrow rows for now) with a
@@ -1042,18 +1042,20 @@ mod tests {
         assert_eq!(compact_views(ints.clone()).unwrap().data(), ints.data());
     }
 
-    /// The row layout is used only when asked for and when every key type
-    /// has a row encoding; other joins keep arrow rows.
+    /// The row layout is used by default when every key type
+    /// has a row encoding; other joins keep arrow rows, as does every join
+    /// with the setting off.
     #[test]
     fn the_row_layout_is_chosen_per_instance_and_key_types() {
-        let on = crate::ExecConfig {
-            join_row_layout: true,
+        let off = crate::ExecConfig {
+            join_row_layout: false,
             ..crate::ExecConfig::default()
         };
+        let on = crate::ExecConfig::default();
         let j =
             HashJoin::try_new(spec(JoinType::Inner, 1, false)).unwrap_or_else(|e| panic!("{e}"));
         assert!(j.0.hashing(&on).rows());
-        assert!(!j.0.hashing(&crate::ExecConfig::default()).rows());
+        assert!(!j.0.hashing(&off).rows());
         // hash, key rows, payload.
         assert_eq!(j.0.arena_schema(&j.0.hashing(&on)).fields().len(), 3);
         // A string key keeps arrow rows.

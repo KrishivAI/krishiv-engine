@@ -1773,6 +1773,7 @@ dependencies = [
  "loom",
  "proptest",
  "rustix",
+ "sha2",
  "tempfile",
  "thiserror",
  "tokio",

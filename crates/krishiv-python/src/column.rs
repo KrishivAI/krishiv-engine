@@ -190,6 +190,13 @@ pub(crate) fn literal(value: &Bound<'_, PyAny>) -> PyResult<PyColumn> {
     Ok(PyColumn::wrap(column))
 }
 
+/// A `MAP<STRING, STRING>` literal from its entries in order: the JSON
+/// options of one call, as the wrappers pass them.
+#[pyfunction(name = "map_literal")]
+pub(crate) fn map_literal(pairs: Vec<(String, String)>) -> PyColumn {
+    PyColumn::wrap(krishiv_session::functions::map_literal(pairs))
+}
+
 /// A call of the function `name` with `args` (resolved when queried).
 #[pyfunction(name = "call_function")]
 pub(crate) fn call(name: &str, args: Vec<PyColumn>) -> PyColumn {

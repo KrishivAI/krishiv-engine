@@ -38,6 +38,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<window::PyWindowSpec>()?;
     m.add_function(wrap_pyfunction!(column::column, m)?)?;
     m.add_function(wrap_pyfunction!(column::literal, m)?)?;
+    m.add_function(wrap_pyfunction!(column::map_literal, m)?)?;
     m.add_function(wrap_pyfunction!(column::call, m)?)?;
     m.add_function(wrap_pyfunction!(column::count_all, m)?)?;
     m.add_function(wrap_pyfunction!(column::count_distinct_of, m)?)?;
