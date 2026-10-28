@@ -287,7 +287,7 @@ def test_order_by_column_expressions(docs: DataFrame) -> None:
 
 def test_over_requires_a_window_spec() -> None:
     with pytest.raises(errors.PySparkTypeError) as excinfo:
-        F.sum("id").over("window")  # type: ignore[arg-type]
+        F.sum("id").over("window")  # ty: ignore[invalid-argument-type]
     assert excinfo.value.getCondition() == "NOT_EXPECTED_TYPE"
     assert excinfo.value.getMessageParameters() == {
         "arg_name": "window",
@@ -298,15 +298,15 @@ def test_over_requires_a_window_spec() -> None:
 
 def test_frame_bounds_require_ints() -> None:
     with pytest.raises(errors.PySparkTypeError) as excinfo:
-        Window.rowsBetween("1", 1)  # type: ignore[arg-type]
+        Window.rowsBetween("1", 1)  # ty: ignore[invalid-argument-type]
     assert excinfo.value.getCondition() == "NOT_EXPECTED_TYPE"
     with pytest.raises(errors.PySparkTypeError):
-        Window.orderBy().rangeBetween(0, 1.5)  # type: ignore[arg-type]
+        Window.orderBy().rangeBetween(0, 1.5)  # ty: ignore[invalid-argument-type]
 
 
 def test_partition_by_rejects_other_types() -> None:
     with pytest.raises(errors.PySparkTypeError):
-        Window.partitionBy(1)  # type: ignore[arg-type]
+        Window.partitionBy(1)  # ty: ignore[invalid-argument-type]
 
 
 def test_signatures_match_pyspark() -> None:
