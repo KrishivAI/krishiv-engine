@@ -313,6 +313,19 @@ fn render_function(row: &Row, params: &[Param]) -> (String, String) {
     if let Some(message) = row.deprecated {
         body.push_str(&format!("    _deprecated(\"{message}\")\n"));
     }
+    if row.py == "str_to_map" {
+        // PySpark sends the default pair delimiter when only `keyValueDelim`
+        // is given, so the third argument keeps its position.
+        body.push_str("    if pairDelim is None and keyValueDelim is not None:\n");
+        let defaulted = vec![
+            format!("\"{}\"", row.registry),
+            "_named(text, \"text\")".to_owned(),
+            "_lit(\",\", \"pairDelim\")".to_owned(),
+            "_named(keyValueDelim, \"keyValueDelim\")".to_owned(),
+        ];
+        body.push_str(&wrap("        return _call(", &defaulted, ")", 8));
+        body.push('\n');
+    }
     body.push_str(&wrap("    return _call(", &args, ")", 4));
     body.push('\n');
     let def = format!("{}\n{body}", wrap(&head, &declarations, ") -> Column:", 0));

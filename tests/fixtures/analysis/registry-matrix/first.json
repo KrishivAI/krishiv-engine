@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "first#020dbe3f574a/ansi_on",
-      "reason": "SELECT first(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
-      "id": "first#020dbe3f574a/ansi_off",
-      "reason": "SELECT first(col, map('a', 1)) FROM VALUES (NULL), (5), (20) AS tab(col) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has _LEGACY_ERROR_TEMP_1210"
-    },
-    {
       "id": "first#2c09bffba1c5/ansi_on",
       "reason": "SELECT first(col, INTERVAL '1-2' YEAR TO MONTH) FROM VALUES (NULL), (5), (20) AS tab(col) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has _LEGACY_ERROR_TEMP_1210"
     },
