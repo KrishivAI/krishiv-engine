@@ -72,8 +72,9 @@ fn in_constructor(path: &str, lines: &[&str], line: usize) -> bool {
             opened = false;
         }
         if inside {
-            depth += i64::try_from(l.bytes().filter(|&b| b == b'{').count()).unwrap_or(i64::MAX);
-            depth -= i64::try_from(l.bytes().filter(|&b| b == b'}').count()).unwrap_or(i64::MAX);
+            // Braces in strings and comments do not open or close the
+            // constructor body (as for test modules below).
+            depth += brace_delta(&strip_code(l));
             if depth > 0 {
                 opened = true;
             }
@@ -364,6 +365,12 @@ mod tests {
         // Only the real registry file is exempt, not any `registry.rs`.
         let other = "pub fn with_defaults() -> Self {\n    crate::parquet::X::new()\n}\n";
         assert_eq!(check_file("crates/other/src/registry.rs", other).len(), 1);
+        // Braces in strings and comments do not open or close the
+        // constructor body.
+        let tricky = "impl FormatRegistry {\n    pub fn with_defaults() -> Self {\n        let _ = \"{\"; // }\n        r.register(Arc::new(crate::parquet::ParquetFormat));\n    }\n}\nuse crate::parquet::After;\n";
+        let hits = check_file("crates/krishiv-io/src/registry.rs", tricky);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].line, 7);
     }
 
     #[test]

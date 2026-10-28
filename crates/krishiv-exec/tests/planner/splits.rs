@@ -601,6 +601,33 @@ fn splits_of_the_wrong_kind_are_rejected() {
 }
 
 #[test]
+fn batches_of_another_schema_are_rejected_at_split_time() {
+    // A `ScanSplits::Batches` entry naming a relation other than the
+    // scan's table fails in `with_memory_batches` with `INTERNAL_ERROR`,
+    // not later at projection or filter time.
+    let schema = int_schema();
+    let memory = MemoryTable::new(Arc::clone(&schema), int_batches(&schema, &[1]));
+    let factory = memory.scan().unwrap_or_else(|e| panic!("scan builds: {e}"));
+    let other = Arc::new(Schema::new(vec![
+        Field::new("id", ArrowType::Int32, false),
+        Field::new("s", ArrowType::Utf8View, false),
+    ]));
+    let data = RecordBatch::try_new(
+        Arc::clone(&other),
+        vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(arrow_array::StringViewArray::from_iter_values(["a"])),
+        ],
+    )
+    .unwrap();
+    let Err(e) = factory.with_memory_batches(vec![Batch::new(data)]) else {
+        panic!("mismatched batches were accepted")
+    };
+    assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+    assert!(e.to_string().contains("expected"), "{e}");
+}
+
+#[test]
 fn two_scans_of_the_same_memory_table_share_the_buffers() {
     use arrow_array::Array as _;
     let store = RelationStore::new();
