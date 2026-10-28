@@ -4,8 +4,10 @@
 #   - `Co-Authored-By:` lines naming an AI or assistant (Claude, Anthropic,
 #     noreply@anthropic.com, opencode, GPT, OpenAI, Copilot, Gemini, Kimi, GLM,
 #     Muse, Meta AI, DeepSeek, Qwen) or a bot (`[bot]` noreply address);
-#   - `Claude-Session:` lines, "Generated with", and the robot emoji.
-# Matching is case-insensitive and whole-word for names (so "Museum" passes).
+#   - `Claude-Session:` lines, "Generated with" as its own words, and the
+#     robot emoji.
+# Matching is case-insensitive and whole-word for names (so "Museum" passes)
+# and for "Generated with" (so "regenerated with the generator" passes).
 # Human co-authors stay allowed.
 #   check-ai-attribution.sh --message-file FILE   commit-msg hook
 #   check-ai-attribution.sh BASE HEAD             CI: every non-merge commit in
@@ -14,7 +16,7 @@
 set -euo pipefail
 
 coauthor_names='(^|[^a-z])(claude|anthropic|noreply@anthropic\.com|opencode|gpt|openai|copilot|gemini|kimi|glm|muse|meta ai|deepseek|qwen)([^a-z]|$)|\[bot\]'
-text_pattern="^[[:space:]]*co-authored-by:.*${coauthor_names}|^[[:space:]]*claude-session:|generated with"
+text_pattern="^[[:space:]]*co-authored-by:.*${coauthor_names}|^[[:space:]]*claude-session:|(^|[^a-z])generated with"
 robot='🤖'
 
 # check_text LABEL TEXT: prints each offending line, returns 1 when there is one.
