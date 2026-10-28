@@ -70,9 +70,10 @@
 //! aggregate never pays the per-partition fold. When it widens is a cost
 //! choice between that fold (a gather of the argument columns per touched
 //! partition, every batch) and the copy (every row of the table, once):
-//! - while the input is folded, when at least half of its rows so far made
-//!   a new row: the table grows with its input, so a late copy would cost
-//!   about a fold of every row anyway, and more memory at once;
+//! - while the input is folded, when after [`ADAPT_ROWS`] input rows at
+//!   least half of them have distinct keys: the table grows with its
+//!   input, so a late copy would cost about a fold of every row anyway,
+//!   and more memory at once;
 //! - otherwise when its input ends (`combine`, on each driver in
 //!   parallel): most rows find their group, so the fold would be paid on
 //!   every row for a copy of few groups.
@@ -431,10 +432,21 @@ impl RowTable {
     }
 
     /// Whether the table is due to widen while its input is still being
-    /// folded ([`wants_widen`](Self::wants_widen), and at least half of
-    /// the input rows so far made a new row): see the module's width docs.
+    /// folded ([`wants_widen`](Self::wants_widen), and after
+    /// [`ADAPT_ROWS`] input rows at least half of them have distinct keys):
+    /// see the module's width docs. Fewer rows say little (the first pass
+    /// over a key column is all new keys), and a fixed index counts its
+    /// keys with the input sample's sketch, not its rows: a full index that
+    /// is cleared makes rows of keys it has seen.
     pub(crate) fn wants_widen_early(&self) -> bool {
-        self.wants_widen() && self.groups.saturating_mul(2) >= self.rows_in
+        #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
+        let (groups, rows) = (self.groups as f64, self.rows_in as f64);
+        // The sample is 1/8 of the hashes.
+        let distinct = self
+            .adapt
+            .as_ref()
+            .map_or(groups, |a| a.sketch.estimate() * 8.0);
+        self.wants_widen() && self.rows_in >= ADAPT_ROWS && 2.0 * distinct >= rows
     }
 
     /// Spreads the rows (with their long key bytes) and states over
