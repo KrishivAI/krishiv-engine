@@ -29,6 +29,7 @@ GENERATED = PYTHON_DIR / "krishiv" / "sql"
 REGISTRY_NAME = {
     "bitwise_not": "~",
     "bitwiseNOT": "~",
+    "create_map": "map",
     "mean": "avg",
     "pow": "power",
     "shiftLeft": "shiftleft",
@@ -295,6 +296,13 @@ def test_argument_checks(recorded: None) -> None:
         F.from_json("c", "a INT", {"mode": 1})  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError, match="options"):
         F.to_json("c", {1: "x"})  # ty: ignore[invalid-argument-type]
+    # A Column of options passes through; any other scalar is a literal.
+    assert F.from_json("c", "a INT", F.col("o"))._c == (
+        "call",
+        "from_json",
+        (("col", "c"), ("lit", "a INT"), ("col", "o")),
+    )
+    assert F.to_json("c", "x")._c == ("call", "to_json", (("col", "c"), ("lit", "x")))
 
 
 def test_deprecated_names_warn_and_still_work(recorded: None) -> None:

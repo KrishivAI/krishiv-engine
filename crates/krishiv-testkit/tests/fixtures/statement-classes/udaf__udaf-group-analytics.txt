@@ -1,0 +1,39 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT a + b, b, udaf(a - b) FROM testData GROUP BY a + b, b WITH CUBE
+READ	SELECT a, b, udaf(b) FROM testData GROUP BY a, b WITH CUBE
+READ	SELECT a + b, b, udaf(a - b) FROM testData GROUP BY a + b, b WITH ROLLUP
+READ	SELECT a, b, udaf(b) FROM testData GROUP BY a, b WITH ROLLUP
+SESSION	CREATE OR REPLACE TEMPORARY VIEW courseSales AS SELECT * FROM VALUES
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY ROLLUP(course, year) ORDER BY course, year
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY ROLLUP(course, year, (course, year)) ORDER BY course, year
+PARSE_ERROR	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY ROLLUP(course, year, (course, year), ()) ORDER BY course, 
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY CUBE(course, year) ORDER BY course, year
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY CUBE(course, year, (course, year)) ORDER BY course, year
+PARSE_ERROR	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY CUBE(course, year, (course, year), ()) ORDER BY course, ye
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY course, year GROUPING SETS(course, year)
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY course, year GROUPING SETS(course, year, ())
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY course, year GROUPING SETS(course)
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY course, year GROUPING SETS(year)
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY course, CUBE(course, year) ORDER BY course, year
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY CUBE(course, year), ROLLUP(course, year) ORDER BY course, 
+READ	SELECT course, year, udaf(earnings) FROM courseSales GROUP BY CUBE(course, year), ROLLUP(course, year), GROUPING SETS(co
+READ	SELECT course, udaf(earnings) AS sum FROM courseSales
+READ	SELECT course, udaf(earnings) AS sum, GROUPING_ID(course, earnings) FROM courseSales
+READ	SELECT a + b AS k1, b AS k2, udaf(a - b) FROM testData GROUP BY CUBE(k1, k2)
+READ	SELECT a + b AS k, b, udaf(a - b) FROM testData GROUP BY ROLLUP(k, b)
+READ	SELECT a + b, b AS k, udaf(a - b) FROM testData GROUP BY a + b, k GROUPING SETS(k)
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, b, CUBE(a, b)
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, b, ROLLUP(a, b)
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY CUBE(a, b), ROLLUP(a, b)
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, CUBE(a, b), ROLLUP(b)
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS((a, b), (a), ())
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, CUBE(a, b), GROUPING SETS((a, b), (a), ())
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, CUBE(a, b), ROLLUP(a, b), GROUPING SETS((a, b), (a), ())
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS(ROLLUP(a, b))
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS(GROUPING SETS((a, b), (a), ()))
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS((a, b), GROUPING SETS(ROLLUP(a, b)))
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS((a, b, a, b), (a, b, a), (a, b))
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS(GROUPING SETS((a, b, a, b), (a, b, a), (a, b)))
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS(ROLLUP(a, b), CUBE(a, b))
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS(GROUPING SETS((a, b), (a), ()), GROUPING SETS((a, b), (a), 
+READ	SELECT a, b, udaf(1) FROM testData GROUP BY a, GROUPING SETS((a, b), (a), (), (a, b), (a), (b), ())

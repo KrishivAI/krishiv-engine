@@ -1,0 +1,46 @@
+SESSION	CREATE TEMPORARY VIEW grouping AS SELECT * FROM VALUES
+READ	SELECT a, b, c, count(d) FROM grouping GROUP BY a, b, c GROUPING SETS (())
+READ	SELECT a, b, c, count(d) FROM grouping GROUP BY a, b, c GROUPING SETS ((a))
+READ	SELECT a, b, c, count(d) FROM grouping GROUP BY a, b, c GROUPING SETS ((c))
+READ	SELECT a, b, c, d FROM grouping GROUP BY GROUPING SETS (a, b, c, d)
+READ	SELECT a, b FROM grouping GROUP BY GROUPING SETS (a, b, d + 1) ORDER BY `(d + 1)`
+READ	SELECT c1, sum(c2) FROM (VALUES ('x', 10, 0), ('y', 20, 0)) AS t (c1, c2, c3) GROUP BY GROUPING SETS (c1)
+READ	SELECT c1, sum(c2), grouping(c1) FROM (VALUES ('x', 10, 0), ('y', 20, 0)) AS t (c1, c2, c3) GROUP BY GROUPING SETS (c1)
+READ	SELECT c1, c2, Sum(c3), grouping__id
+READ	SELECT grouping(c1) FROM (VALUES ('x', 'a', 10), ('y', 'b', 20)) AS t (c1, c2, c3) GROUP BY GROUPING SETS (c1,c2)
+READ	SELECT -c1 AS c1 FROM (values (1,2), (3,2)) t(c1, c2) GROUP BY GROUPING SETS ((c1), (c1, c2))
+READ	SELECT a + b, b, sum(c) FROM (VALUES (1,1,1),(2,2,2)) AS t(a,b,c) GROUP BY GROUPING SETS ( (a + b), (b))
+READ	SELECT a + b, b, sum(c) FROM (VALUES (1,1,1),(2,2,2)) AS t(a,b,c) GROUP BY GROUPING SETS ( (a + b), (b + a), (b))
+READ	SELECT c1 AS col1, c2 AS col2
+PARSE_ERROR	SELECT a, b, c, count(d) FROM grouping GROUP BY WITH ROLLUP
+PARSE_ERROR	SELECT a, b, c, count(d) FROM grouping GROUP BY WITH CUBE
+READ	SELECT c1 FROM (values (1,2), (3,2)) t(c1, c2) GROUP BY GROUPING SETS (())
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) WHERE k > 100 GROUP BY GROUPING SETS (())
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) WHERE k > 100
+READ	SELECT count(*) AS c, grouping_id() AS g
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS (())
+READ	SELECT sum(v) AS total, avg(v) AS mean, max(v) AS hi, count(*) AS c
+READ	SELECT sum(v) AS total, avg(v) AS mean, max(v) AS hi, count(*) AS c
+READ	SELECT sum(v) AS total, avg(v) AS mean, max(v) AS hi, count(*) AS c
+READ	SELECT v, count(*) AS c FROM VALUES (10), (20), (30) AS t(v) WHERE v > 100 GROUP BY v
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS (()) HAVING grouping_id() = 0
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS (()) ORDER BY grouping_id()
+READ	SELECT grouping(k) FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS (())
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) HAVING grouping_id() = 0
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) ORDER BY grouping_id()
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) HAVING grouping(k) = 0
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) ORDER BY grouping(k)
+READ	SELECT count(*) AS c, grouping_id() AS g
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS ((), ()) HAVING grouping_id() = 0
+READ	SELECT count(*) AS c FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS ((), ()) ORDER BY grouping_id()
+READ	SELECT grouping(k) FROM VALUES (1), (2), (3) AS t(k) GROUP BY GROUPING SETS ((), ())
+SESSION	CREATE TEMPORARY VIEW grouping_grand_total AS
+READ	SELECT sum(v) AS total, avg(v) AS mean, max(v) AS hi, count(*) AS c
+READ	SELECT sum(v) AS total, avg(v) AS mean, max(v) AS hi, count(*) AS c
+READ	SELECT count(*) AS c, grouping_id() AS g
+SESSION	DROP VIEW grouping_grand_total
+READ	SELECT k1, k2, avg(v) FROM (VALUES (1,1,1),(2,2,2)) AS t(k1,k2,v) GROUP BY GROUPING SETS ((k1),(k1,k2),(k2,k1))
+READ	SELECT grouping__id, k1, k2, avg(v) FROM (VALUES (1,1,1),(2,2,2)) AS t(k1,k2,v) GROUP BY GROUPING SETS ((k1),(k1,k2),(k2
+READ	SELECT grouping(k1), k1, k2, avg(v) FROM (VALUES (1,1,1),(2,2,2)) AS t(k1,k2,v) GROUP BY GROUPING SETS ((k1),(k1,k2),(k2
+READ	SELECT grouping_id(k1, k2), avg(v) from (VALUES (1,1,1),(2,2,2)) AS t(k1,k2,v) GROUP BY k1, k2 GROUPING SETS ((k2, k1), 
+READ	SELECT CASE WHEN a IS NULL THEN count(b) WHEN b IS NULL THEN count(c) END

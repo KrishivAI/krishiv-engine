@@ -1,0 +1,34 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT a, udaf(b) FROM testData
+READ	SELECT udaf(a), udaf(b) FROM testData
+READ	SELECT a, udaf(b) FROM testData GROUP BY a
+READ	SELECT a, udaf(b) FROM testData GROUP BY b
+READ	SELECT udaf(a), udaf(b) FROM testData GROUP BY a
+READ	SELECT 'foo', udaf(a) FROM testData GROUP BY 1
+READ	SELECT 'foo', udaf(a) FROM testData WHERE a = 0 GROUP BY 1
+READ	SELECT 'foo', udaf(STRUCT(a)) FROM testData WHERE a = 0 GROUP BY 1
+READ	SELECT a + b, udaf(b) FROM testData GROUP BY a + b
+READ	SELECT a + 2, udaf(b) FROM testData GROUP BY a + 1
+READ	SELECT a + 1 + 1, udaf(b) FROM testData GROUP BY a + 1
+READ	SELECT SKEWNESS(a), KURTOSIS(a), udaf(a), udaf(a), AVG(a), VARIANCE(a), STDDEV(a), SUM(a), udaf(a)
+READ	SELECT udaf(DISTINCT b), udaf(DISTINCT b, c) FROM (SELECT 1 AS a, 2 AS b, 3 AS c) GROUP BY a
+READ	SELECT a AS k, udaf(b) FROM testData GROUP BY k
+READ	SELECT a AS k, udaf(b) FROM testData GROUP BY k HAVING k > 1
+READ	SELECT a AS k, udaf(non_existing) FROM testData GROUP BY k
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testDataHasSameNameWithAlias AS SELECT * FROM VALUES
+READ	SELECT k AS a, udaf(v) FROM testDataHasSameNameWithAlias GROUP BY a
+SESSION	set spark.sql.groupByAliases=false
+READ	SELECT a AS k, udaf(b) FROM testData GROUP BY k
+READ	SELECT a, udaf(1) FROM testData WHERE false GROUP BY a
+READ	SELECT udaf(1) FROM testData WHERE false
+READ	SELECT 1 FROM (SELECT udaf(1) FROM testData WHERE false) t
+READ	SELECT 1 from (
+READ	SELECT 1 FROM range(10) HAVING udaf(id) > 0
+SESSION	CREATE OR REPLACE TEMPORARY VIEW test_agg AS SELECT * FROM VALUES
+READ	SELECT udaf(v), some(v), any(v), bool_and(v), bool_or(v) FROM test_agg WHERE 1 = 0
+READ	SELECT udaf(v), some(v), any(v), bool_and(v), bool_or(v) FROM test_agg WHERE k = 4
+READ	SELECT udaf(v), some(v), any(v), bool_and(v), bool_or(v) FROM test_agg WHERE k = 5
+READ	SELECT k, udaf(v), some(v), any(v), bool_and(v), bool_or(v) FROM test_agg GROUP BY k
+READ	SELECT k, udaf(v) FROM test_agg GROUP BY k HAVING udaf(v) = false
+READ	SELECT k, udaf(v) FROM test_agg GROUP BY k HAVING udaf(v) IS NULL
+READ	SELECT k,

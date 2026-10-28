@@ -1,0 +1,9 @@
+SESSION	create temporary view t1 as select * from values
+SESSION	create temporary view t2 as select * from values
+READ	SELECT udf(k), udf(v) FROM t1 EXCEPT SELECT udf(k), udf(v) FROM t2
+READ	SELECT * FROM t1 EXCEPT SELECT * FROM t1 where udf(v) <> 1 and v <> udf(2)
+READ	SELECT * FROM t1 where udf(v) <> 1 and v <> udf(22) EXCEPT SELECT * FROM t1 where udf(v) <> 2 and v >= udf(3)
+READ	SELECT t1.* FROM t1, t2 where t1.k = t2.k
+READ	SELECT * FROM t2 where v >= udf(1) and udf(v) <> 22 EXCEPT SELECT * FROM t1
+READ	SELECT (SELECT min(udf(k)) FROM t2 WHERE t2.k = t1.k) min_t2 FROM t1
+READ	SELECT t1.k

@@ -10,11 +10,11 @@
     },
     {
       "id": "schema_of_json#0e5a632dd501/ansi_on",
-      "reason": "SELECT schema_of_json(map('a', 1), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(map('a', 1), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#0e5a632dd501/ansi_off",
-      "reason": "SELECT schema_of_json(map('a', 1), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(map('a', 1), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#19c6c7daec4e/ansi_on",
@@ -25,14 +25,6 @@
       "reason": "SELECT schema_of_json(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "schema_of_json#26cc6d599fdc/ansi_on",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#26cc6d599fdc/ansi_off",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
       "id": "schema_of_json#27ce8e5a35ba/ansi_on",
       "reason": "SELECT schema_of_json(array(1, 2)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
@@ -41,44 +33,28 @@
       "reason": "SELECT schema_of_json(array(1, 2)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
-      "id": "schema_of_json#2990bebab782/ansi_on",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_OPTIONS.NON_STRING_TYPE"
-    },
-    {
-      "id": "schema_of_json#2990bebab782/ansi_off",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_OPTIONS.NON_STRING_TYPE"
-    },
-    {
       "id": "schema_of_json#2b7751072a8a/ansi_on",
-      "reason": "SELECT schema_of_json(TIMESTAMP'2024-02-29 12:34:56.123456', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(TIMESTAMP'2024-02-29 12:34:56.123456', map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#2b7751072a8a/ansi_off",
-      "reason": "SELECT schema_of_json(TIMESTAMP'2024-02-29 12:34:56.123456', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(TIMESTAMP'2024-02-29 12:34:56.123456', map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#2dd44690e278/ansi_on",
-      "reason": "SELECT schema_of_json(X'01', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(X'01', map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#2dd44690e278/ansi_off",
-      "reason": "SELECT schema_of_json(X'01', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(X'01', map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#2eb3b98af717/ansi_on",
-      "reason": "SELECT schema_of_json(array(1, 2), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(array(1, 2), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#2eb3b98af717/ansi_off",
-      "reason": "SELECT schema_of_json(array(1, 2), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#309e8f65c267/ansi_on",
-      "reason": "SELECT schema_of_json(CAST(1 AS SMALLINT), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#309e8f65c267/ansi_off",
-      "reason": "SELECT schema_of_json(CAST(1 AS SMALLINT), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(array(1, 2), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#311c2af4e81c/ansi_on",
@@ -97,36 +73,12 @@
       "reason": "SELECT schema_of_json(named_struct('a', 1, 'b', 'x')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
-      "id": "schema_of_json#3600f03fcb24/ansi_on",
-      "reason": "SELECT schema_of_json(CAST(1.5 AS FLOAT), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#3600f03fcb24/ansi_off",
-      "reason": "SELECT schema_of_json(CAST(1.5 AS FLOAT), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#395a58f933a9/ansi_on",
-      "reason": "SELECT schema_of_json('abc', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#395a58f933a9/ansi_off",
-      "reason": "SELECT schema_of_json('abc', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
       "id": "schema_of_json#513d6feace3a/ansi_on",
       "reason": "SELECT schema_of_json(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#513d6feace3a/ansi_off",
       "reason": "SELECT schema_of_json(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "schema_of_json#5bd23aa58525/ansi_on",
-      "reason": "SELECT schema_of_json('1', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#5bd23aa58525/ansi_off",
-      "reason": "SELECT schema_of_json('1', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
     {
       "id": "schema_of_json#6361bc336a64/ansi_on",
@@ -138,11 +90,11 @@
     },
     {
       "id": "schema_of_json#67c0ef7ef1ed/ansi_on",
-      "reason": "SELECT schema_of_json(named_struct('a', 1, 'b', 'x'), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(named_struct('a', 1, 'b', 'x'), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#67c0ef7ef1ed/ansi_off",
-      "reason": "SELECT schema_of_json(named_struct('a', 1, 'b', 'x'), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(named_struct('a', 1, 'b', 'x'), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#69fa63f18e7f/ansi_on",
@@ -151,14 +103,6 @@
     {
       "id": "schema_of_json#69fa63f18e7f/ansi_off",
       "reason": "SELECT schema_of_json(X'01') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "schema_of_json#726c8c1f21e9/ansi_on",
-      "reason": "SELECT schema_of_json('', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#726c8c1f21e9/ansi_off",
-      "reason": "SELECT schema_of_json('', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
     {
       "id": "schema_of_json#79cbcf87b991/ansi_on",
@@ -177,14 +121,6 @@
       "reason": "SELECT schema_of_json('[{\"col\":01}]', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
-      "id": "schema_of_json#80511f2962a1/ansi_on",
-      "reason": "SELECT schema_of_json('Ä€日本語😀é', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#80511f2962a1/ansi_off",
-      "reason": "SELECT schema_of_json('Ä€日本語😀é', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
       "id": "schema_of_json#84e6e89fd692/ansi_on",
       "reason": "SELECT schema_of_json(CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
@@ -193,68 +129,20 @@
       "reason": "SELECT schema_of_json(CAST(X'C328FF' AS STRING)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
-      "id": "schema_of_json#89b80c2da26d/ansi_on",
-      "reason": "SELECT schema_of_json(true, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#89b80c2da26d/ansi_off",
-      "reason": "SELECT schema_of_json(true, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#8c7773d8db15/ansi_on",
-      "reason": "SELECT schema_of_json(1L, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#8c7773d8db15/ansi_off",
-      "reason": "SELECT schema_of_json(1L, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#98d05f5f62de/ansi_on",
-      "reason": "SELECT schema_of_json(CAST(1.5 AS DECIMAL(38,18)), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#98d05f5f62de/ansi_off",
-      "reason": "SELECT schema_of_json(CAST(1.5 AS DECIMAL(38,18)), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
       "id": "schema_of_json#9fe240b2c74e/ansi_on",
-      "reason": "SELECT schema_of_json(CAST(X'C328FF' AS STRING), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(CAST(X'C328FF' AS STRING), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#9fe240b2c74e/ansi_off",
-      "reason": "SELECT schema_of_json(CAST(X'C328FF' AS STRING), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(CAST(X'C328FF' AS STRING), map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#a20200c4e7f8/ansi_on",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', CAST(map() AS map<string,string>)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+      "reason": "SELECT schema_of_json('[{\"col\":01}]', CAST(map() AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
       "id": "schema_of_json#a20200c4e7f8/ansi_off",
-      "reason": "SELECT schema_of_json('[{\"col\":01}]', CAST(map() AS map<string,string>)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "schema_of_json#a26d7dca08e9/ansi_on",
-      "reason": "SELECT schema_of_json(CAST(NULL AS string), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
-    },
-    {
-      "id": "schema_of_json#a26d7dca08e9/ansi_off",
-      "reason": "SELECT schema_of_json(CAST(NULL AS string), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
-    },
-    {
-      "id": "schema_of_json#a3a64bc57f0d/ansi_on",
-      "reason": "SELECT schema_of_json(1, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#a3a64bc57f0d/ansi_off",
-      "reason": "SELECT schema_of_json(1, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#a6ea2a165145/ansi_on",
-      "reason": "SELECT schema_of_json(CAST(1.5 AS DECIMAL(10,2)), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#a6ea2a165145/ansi_off",
-      "reason": "SELECT schema_of_json(CAST(1.5 AS DECIMAL(10,2)), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json('[{\"col\":01}]', CAST(map() AS map<string,string>)) | resolves to string where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
       "id": "schema_of_json#a82e41cdfa95/ansi_on",
@@ -263,14 +151,6 @@
     {
       "id": "schema_of_json#a82e41cdfa95/ansi_off",
       "reason": "SELECT schema_of_json(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
-    },
-    {
-      "id": "schema_of_json#b1fb51ff2175/ansi_on",
-      "reason": "SELECT schema_of_json(1.5D, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#b1fb51ff2175/ansi_off",
-      "reason": "SELECT schema_of_json(1.5D, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
     {
       "id": "schema_of_json#bbd5f122b60a/ansi_on",
@@ -282,51 +162,27 @@
     },
     {
       "id": "schema_of_json#cdbb8be1c4a4/ansi_on",
-      "reason": "SELECT schema_of_json(DATE'2024-02-29', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(DATE'2024-02-29', map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#cdbb8be1c4a4/ansi_off",
-      "reason": "SELECT schema_of_json(DATE'2024-02-29', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(DATE'2024-02-29', map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#d3e60fa80942/ansi_on",
-      "reason": "SELECT schema_of_json(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(map('a', 1)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#d3e60fa80942/ansi_off",
-      "reason": "SELECT schema_of_json(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(map('a', 1)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#dc2f6e558990/ansi_on",
-      "reason": "SELECT schema_of_json(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
     {
       "id": "schema_of_json#dc2f6e558990/ansi_off",
-      "reason": "SELECT schema_of_json(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#e149543ff17e/ansi_on",
-      "reason": "SELECT schema_of_json(NULL, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
-    },
-    {
-      "id": "schema_of_json#e149543ff17e/ansi_off",
-      "reason": "SELECT schema_of_json(NULL, map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
-    },
-    {
-      "id": "schema_of_json#e1d2c764d00d/ansi_on",
-      "reason": "SELECT schema_of_json(' \\t a\\u3000\\n ', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#e1d2c764d00d/ansi_off",
-      "reason": "SELECT schema_of_json(' \\t a\\u3000\\n ', map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#ff5bed902408/ansi_on",
-      "reason": "SELECT schema_of_json(CAST(1 AS TINYINT), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "schema_of_json#ff5bed902408/ansi_off",
-      "reason": "SELECT schema_of_json(CAST(1 AS TINYINT), map('allowNumericLeadingZeros', 'true')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
+      "reason": "SELECT schema_of_json(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', map('allowNumericLeadingZeros', 'true')) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     }
   ],
   "format_version": 1,

@@ -50,6 +50,7 @@ pub mod hash;
 pub mod integer;
 pub mod json;
 pub mod list;
+pub mod map;
 pub mod math;
 pub mod number_format;
 pub mod ops;

@@ -10,10 +10,12 @@ use krishiv_common::error::{
     CannotResolveDataframeColumn, CannotResolveStarExpand, DatatypeMismatchBinaryOpDiffTypes,
     DatatypeMismatchBinaryOpWrongType, DatatypeMismatchCastWithConfSuggestion,
     DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
+    DatatypeMismatchCreateMapKeyDiffTypes, DatatypeMismatchCreateMapValueDiffTypes,
     DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
     DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchInputSizeNotOne,
-    DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
-    DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+    DatatypeMismatchInvalidOrderingType, DatatypeMismatchMapConcatDiffTypes,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
+    DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
     FailedToParseTooComplex, InternalError, InvalidAggregateFilterNotBoolean,
     InvalidExtractBaseFieldType,
@@ -31,7 +33,7 @@ use super::analytics::GroupingFn;
 use super::bind::{addr, qualified_parts, same, unsupported};
 use super::builtins::{NamedDefault, NamedParam, named_signature};
 use super::catalog::quoted;
-use super::coerce::{self, Arg, BadCast, Mismatch, ordinal, quoted_type};
+use super::coerce::{self, Arg, BadCast, Mismatch, list_types, ordinal, quoted_type};
 use super::fold;
 use super::resolve::{Attr, Env, RESOLVE_STEP, Rel, Resolver};
 use super::suggest::closest;
@@ -65,7 +67,10 @@ pub(super) struct Cx<'s> {
     /// sets (see `analytics`).
     pub(super) grouping: bool,
     /// A name `scope` holds several times is looked up further rather
-    /// than ambiguous (Spark's `ORDER BY` over a select list).
+    /// than ambiguous (Spark's `ORDER BY` over a select list, `HAVING` and
+    /// `ORDER BY` over an aggregate's duplicate outputs among its grouping
+    /// attributes); when nothing further holds it either, the duplicates
+    /// stay ambiguous rather than unresolved.
     pub(super) lenient: bool,
     /// Whether names may resolve in enclosing queries.
     pub(super) outer: bool,
@@ -1761,7 +1766,12 @@ impl Resolver<'_> {
     /// session's settings, with `ansi` for the arithmetic: shared with
     /// every other fold of the pass.
     pub(super) fn fold(&self, e: &Arc<Expr>, ansi: bool) -> Option<Constant> {
-        let conf = fold::Conf::new(ansi, self.ctx.conf.decimal_precision_loss, self.ctx.profile);
+        let conf = fold::Conf::new(
+            ansi,
+            self.ctx.conf.decimal_precision_loss,
+            self.ctx.conf.map_key_dedup_last_win,
+            self.ctx.profile,
+        );
         fold::constant(e, conf, &mut self.folds.borrow_mut())
     }
 
@@ -2814,6 +2824,24 @@ impl Resolver<'_> {
                 }
                 .into()
             }
+            Mismatch::CreateMapKeyDiff(types) => DatatypeMismatchCreateMapKeyDiffTypes {
+                sql_expr,
+                function_name: "`map`".to_owned(),
+                data_type: list_types(&types),
+            }
+            .into(),
+            Mismatch::CreateMapValueDiff(types) => DatatypeMismatchCreateMapValueDiffTypes {
+                sql_expr,
+                function_name: "`map`".to_owned(),
+                data_type: list_types(&types),
+            }
+            .into(),
+            Mismatch::MapConcatDiffTypes(types) => DatatypeMismatchMapConcatDiffTypes {
+                sql_expr,
+                function_name: "`map_concat`".to_owned(),
+                data_type: list_types(&types),
+            }
+            .into(),
             Mismatch::InvalidOrdering(t) => DatatypeMismatchInvalidOrderingType {
                 sql_expr,
                 function_name: quoted(&[function.to_owned()]),
@@ -2888,13 +2916,31 @@ impl Resolver<'_> {
             Some(input) if in_agg => (input, None),
             _ => (cx.scope, cx.extra),
         };
+        // With leniency (an `ORDER BY` over duplicate outputs, a `HAVING`
+        // or `ORDER BY` over an aggregate whose select list repeats a
+        // name), duplicates in the first level are looked up below it; when
+        // nothing below resolves them either, they stay ambiguous rather
+        // than unresolved.
+        let mut lenient_dup = false;
         for (i, level) in [Some(scope), extra].into_iter().enumerate() {
             let Some(level) = level else { continue };
             let lenient = cx.lenient && i == 0;
-            if let Some((a, used)) = self.find(level, &c.name, origin, lenient)? {
-                self.used(&a);
-                return self.resolve_attr(&a, used, &c.name, origin, None);
+            match self.find(level, &c.name, origin, lenient) {
+                Ok(Some((a, used))) => {
+                    self.used(&a);
+                    return self.resolve_attr(&a, used, &c.name, origin, None);
+                }
+                Ok(None) => {
+                    lenient_dup = lenient_dup || lenient;
+                }
+                Err(e) => return Err(e),
             }
+        }
+        if lenient_dup {
+            // Duplicates in the first level, nothing below resolved them:
+            // they stay ambiguous rather than unresolved, before a
+            // function, alias, outer column or session variable can match.
+            self.find(scope, &c.name, origin, false)?;
         }
         // A name no input column has may be a function written without
         // parentheses (what the parser leaves a column unless ANSI reserved

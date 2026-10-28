@@ -70,7 +70,9 @@ pub fn read_json(
         if json.is_null(i) {
             out.append_null().map_err(|e| match e {
                 Fault::Internal(e) => e,
-                Fault::Poison => InternalError {
+                // Appending `NULL` never reads a value, so a row can neither
+                // poison nor seal here.
+                Fault::Poison | Fault::Sealed => InternalError {
                     message: "appending a NULL JSON row poisoned it".to_owned(),
                 }
                 .into(),
@@ -80,18 +82,21 @@ pub fn read_json(
         let text = json.value(i);
         let mut lexer = Lexer::new(text, opts.lexer());
         match read_top(&mut lexer, &mut out, &ctx) {
-            Ok(()) => {}
-            Err(Fault::Poison) if fail_fast => {
+            Err(Fault::Poison | Fault::Sealed) if fail_fast => {
                 return Err(MalformedRecordInParsingWithoutSuggestion {
                     bad_record: text.to_owned(),
                     fail_fast_mode: "FAILFAST".to_owned(),
                 }
                 .into());
             }
+            // A clean row, or one that sealed itself as `NULL`: complete.
+            Ok(()) | Err(Fault::Sealed) => {}
             Err(Fault::Poison) => {
                 append_malformed(&mut out).map_err(|e| match e {
                     Fault::Internal(e) => e,
-                    Fault::Poison => InternalError {
+                    // A poisoned row appends nothing, so the fallback
+                    // cannot seal either.
+                    Fault::Poison | Fault::Sealed => InternalError {
                         message: "a poisoned JSON row poisoned its fallback".to_owned(),
                     }
                     .into(),
@@ -123,9 +128,15 @@ fn append_malformed(out: &mut Builder) -> Result<(), Fault> {
 
 /// What reading one value can report.
 enum Fault {
-    /// A conversion failure: the enclosing array, map or row is `NULL` (a
-    /// struct field catches it and is `NULL` instead).
+    /// A conversion failure with nothing appended: the enclosing array, map
+    /// or row is `NULL` (a struct field catches it and is `NULL` instead).
     Poison,
+    /// A failed list or map sealed itself as `NULL`: the junk it appended
+    /// before failing lies inside its own `NULL` range, so the row is
+    /// complete and the caller must not append again. A struct field, a
+    /// list element and the top level all treat this as a finished `NULL`;
+    /// only `FAILFAST` still fails the row.
+    Sealed,
     /// An unreachable state (a kernel called with a type it does not
     /// read).
     Internal(KrishivError),
@@ -263,8 +274,11 @@ fn read_struct(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
                 let body = text.get(start..end).ok_or(Poison)?;
                 let mut sub = Lexer::new(body, ctx.opts.lexer());
                 match read_value(&mut sub, child, ctx) {
-                    Ok(()) => {}
-                    Err(Fault::Poison) if fail_fast => return Err(Poison.into()),
+                    Err(Fault::Poison | Fault::Sealed) if fail_fast => {
+                        return Err(Poison.into());
+                    }
+                    // The field sealed itself as `NULL`: it is complete.
+                    Ok(()) | Err(Fault::Sealed) => {}
                     Err(Fault::Poison) => child.append_null()?,
                     Err(Fault::Internal(e)) => return Err(Fault::Internal(e)),
                 }
@@ -291,13 +305,16 @@ fn read_nested(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Resul
                 return Err(internal("a list value for a list builder".to_owned()));
             };
             match read_value(lexer, values, ctx) {
-                Ok(()) => {
+                Err(Fault::Poison | Fault::Sealed)
+                    if matches!(ctx.opts.mode, ParseMode::FailFast) =>
+                {
+                    Err(Poison.into())
+                }
+                // The wrapped value sealed itself as `NULL`: it is the element.
+                Ok(()) | Err(Fault::Sealed) => {
                     offsets.push(values.len_total()?);
                     out.set_valid(true);
                     Ok(())
-                }
-                Err(Fault::Poison) if matches!(ctx.opts.mode, ParseMode::FailFast) => {
-                    Err(Poison.into())
                 }
                 Err(Fault::Poison) => {
                     offsets.push(values.len_total()?);
@@ -342,18 +359,33 @@ fn read_list(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<
     loop {
         match read_value(lexer, values, ctx) {
             Ok(()) => {}
-            Err(Fault::Poison) => {
+            // A sealed element is already a `NULL` inside this row's range:
+            // the row still fails, without appending again.
+            Err(Fault::Sealed | Fault::Poison) => {
                 ok = false;
                 break;
             }
             Err(Fault::Internal(e)) => return Err(Fault::Internal(e)),
         }
-        lexer.skip_trivia()?;
-        if lexer.eat(Token::Comma)? {
-            continue;
-        }
-        if lexer.eat(Token::CloseBracket)? {
+        if lexer.skip_trivia().is_err() {
+            ok = false;
             break;
+        }
+        match lexer.eat(Token::Comma) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(_) => {
+                ok = false;
+                break;
+            }
+        }
+        match lexer.eat(Token::CloseBracket) {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(_) => {
+                ok = false;
+                break;
+            }
         }
         ok = false;
         break;
@@ -362,13 +394,13 @@ fn read_list(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<
         if matches!(ctx.opts.mode, ParseMode::FailFast) {
             return Err(Poison.into());
         }
-        // Drain to the closing bracket so the caller's cursor is placed.
-        // Values appended before the failure fall inside this row's range,
-        // which is `NULL` and so never read.
-        drain_to_close(lexer, b']')?;
+        // Seal the row as `NULL`: values appended before the failure fall
+        // inside its range, which is `NULL` and so never read. Draining is
+        // best-effort (the caller aborts, so the cursor is never used).
         offsets.push(values.len_total()?);
         out.set_valid(false);
-        return Ok(());
+        let _ = drain_to_close(lexer, b']');
+        return Err(Fault::Sealed);
     }
     offsets.push(values.len_total()?);
     out.set_valid(true);
@@ -425,14 +457,30 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
         return Ok(());
     }
     loop {
-        let key = match lexer.raw_key()? {
-            RawKey::Quoted(raw) => lexer.unescape(raw).ok_or(Poison)?,
-            RawKey::Bare(word) => word.to_owned(),
+        let key = match lexer.raw_key() {
+            Ok(RawKey::Quoted(raw)) => match lexer.unescape(raw) {
+                Some(key) => key,
+                None => {
+                    ok = false;
+                    break;
+                }
+            },
+            Ok(RawKey::Bare(word)) => word.to_owned(),
+            Err(_) => {
+                ok = false;
+                break;
+            }
         };
-        lexer.skip_trivia()?;
-        if !lexer.eat(Token::Colon)? {
+        if lexer.skip_trivia().is_err() {
             ok = false;
             break;
+        }
+        match lexer.eat(Token::Colon) {
+            Ok(true) => {}
+            Ok(false) | Err(_) => {
+                ok = false;
+                break;
+            }
         }
         // The key converts first (a bad key fails before the value is
         // read); the converted key is appended whatever the value does, so
@@ -445,6 +493,12 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
         append_key(keys, key);
         match read_value(lexer, values, ctx) {
             Ok(()) => {}
+            // A sealed value is already a `NULL` slot: the row still
+            // fails, without appending again.
+            Err(Fault::Sealed) => {
+                ok = false;
+                break;
+            }
             Err(Fault::Poison) => {
                 values.append_null()?;
                 ok = false;
@@ -452,12 +506,25 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
             }
             Err(Fault::Internal(e)) => return Err(Fault::Internal(e)),
         }
-        lexer.skip_trivia()?;
-        if lexer.eat(Token::Comma)? {
-            continue;
-        }
-        if lexer.eat(Token::CloseBrace)? {
+        if lexer.skip_trivia().is_err() {
+            ok = false;
             break;
+        }
+        match lexer.eat(Token::Comma) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(_) => {
+                ok = false;
+                break;
+            }
+        }
+        match lexer.eat(Token::CloseBrace) {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(_) => {
+                ok = false;
+                break;
+            }
         }
         ok = false;
         break;
@@ -466,10 +533,13 @@ fn read_map(lexer: &mut Lexer<'_>, out: &mut Builder, ctx: &Ctx<'_>) -> Result<(
         if matches!(ctx.opts.mode, ParseMode::FailFast) {
             return Err(Poison.into());
         }
-        drain_to_close(lexer, b'}')?;
+        // Seal the row as `NULL`: entries appended before the failure fall
+        // inside its range, which is `NULL` and so never read. Draining is
+        // best-effort (the caller aborts, so the cursor is never used).
         offsets.push(values.len_total()?);
         out.set_valid(false);
-        return Ok(());
+        let _ = drain_to_close(lexer, b'}');
+        return Err(Fault::Sealed);
     }
     offsets.push(values.len_total()?);
     out.set_valid(true);

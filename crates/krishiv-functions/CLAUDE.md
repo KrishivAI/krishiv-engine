@@ -23,8 +23,8 @@ Spark-compatible function library: scalar, aggregate, window and generator funct
   `Arc<dyn ScalarFunction>` (`return_type`, `invoke(&[Arg], rows)`), IR-free (Arrow types only) so the physical planner
   (krishiv-exec) calls it per batch. Arguments arrive after the analyzer's implicit casts; strings/binary in any Arrow
   carrier (read as `Utf8`/`Binary`), results in plain carriers. One family module per kernel family (`string`, `chars`, `codec`,
-  `datetime`, `math`, `arith`, `hash`, `session`, `regex`), each with `NAMES` and a `bind` over the argument shape. `BindOptions` holds ANSI, `KernelCtx` (Spark
-  version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`) and `decimalOperations.allowPrecisionLoss`. `round`/`ceil`/`floor` bind
+  `datetime`, `math`, `arith`, `hash`, `session`, `regex`, `map`), each with `NAMES` and a `bind` over the argument shape. `BindOptions` holds ANSI, `KernelCtx` (Spark
+  version), session zone, the query start instant (`current_date`, `current_timestamp`, `localtimestamp`), the session user (`current_user`, `user`, `session_user`; family `session`), `decimalOperations.allowPrecisionLoss` and `spark.sql.mapKeyDedupPolicy` (the map family). `round`/`ceil`/`floor` bind
   their scale from a `BindArg::Literal`. Operators, `CAST` and aggregates are not bound here.
 
 - `python_wrappers`: generates `python/krishiv/sql/_generated_functions.py` and `.pyi` (PySpark names and parameters) from the
@@ -41,7 +41,7 @@ Paths are relative to this crate.
 - `src/registry/conditional.rs` conditional evaluators; `src/registry/hashing.rs` hash signatures
 - `src/registry/catalog.rs` catalog rows loaded from `vendored/spark-functions.tsv`
 - `src/scalar/mod.rs` `bind_scalar`; `src/scalar/args.rs` argument handling shared by bindings
-- `src/scalar/{string,chars,codec,datetime,math,arith,hash,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
+- `src/scalar/{string,chars,codec,datetime,math,arith,hash,map,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
 - `vendored/spark-functions.tsv` generated from Spark runs; never edit by hand
 
 ## Extension points
@@ -106,6 +106,6 @@ Paths are relative to this crate.
   (`spark.sql.legacy.javaCharsets` and `...codingErrorAction` are not read) and report unmappable input. `split_part`/`substring_index`
   with `Int.MIN` return the algorithm's value where the JVM raises; `initcap`/`mask` classify non-ASCII with the toolchain's Unicode
   data (pinned by `toolchain_unicode_is_pinned`). A string is always valid UTF-8 here, so the validators only fail on `binary` input.
-  Not implemented (`KnownUnsupported`): `format_string`/`printf`, `parse_url`/`try_parse_url`, `sentences`, `split`, `str_to_map`
-  (array/map results or a Java formatter), `collate`/`collation`/`collations`, `randstr` (no seeded random source), and the
+  Not implemented (`KnownUnsupported`): `format_string`/`printf`, `parse_url`/`try_parse_url`, `sentences`, `split`
+  (array results or a Java formatter), `collate`/`collation`/`collations`, `randstr` (no seeded random source), and the
   `decode(expr, search, result, ...)` form (analysis error `KRISHIV_UNSUPPORTED_FEATURE`).

@@ -21,6 +21,7 @@ mod defs;
 mod hashing;
 mod hof;
 mod json;
+mod map;
 mod math;
 mod misc;
 mod number;

@@ -2,8 +2,8 @@
 //! Tests for the workflow, SPDX and banned-identifier lints.
 
 use xtask::lint::{
-    banned_idents_in, confined_idents_in, has_spdx_header, plan_handles_in, unsafe_allowed_in,
-    unsafe_lines, unsafe_sites_per_crate, workflow_violations,
+    banned_idents_in, confined_idents_in, has_spdx_header, plan_handles_in, unjustified_admin_arms,
+    unsafe_allowed_in, unsafe_lines, unsafe_sites_per_crate, workflow_violations,
 };
 
 #[test]
@@ -334,4 +334,30 @@ fn physical_plan_types_hold_no_live_handles() {
     assert!(plan_handles_in("crates/krishiv-exec/src/physical/mod.rs", "// a Mutex\n").is_empty());
     assert!(plan_handles_in("crates/krishiv-exec/src/physical/instantiate.rs", node).is_empty());
     assert!(plan_handles_in("crates/krishiv-exec/src/runner.rs", node).is_empty());
+}
+
+#[test]
+fn admin_arms_need_a_cluster_scope_reason() {
+    let text = "use x::StatementClass;
+fn classify(s: &S) -> StatementClass {
+    match s {
+        S::Read => StatementClass::Read,
+        // cluster-scope: loads code into the process.
+        S::AddJar(_) => StatementClass::Admin,
+        S::Clear => StatementClass::Admin, // cluster-scope: drops every cache.
+        S::A
+        // cluster-scope: shared caches.
+        | S::B => StatementClass::Admin,
+        S::Refresh(_) => StatementClass::Admin,
+        // cluster-scope:
+        S::Bare => Admin,
+        // a reason that is not a cluster-scope one
+        S::Other => StatementClass::Admin,
+        S::Wide => StatementClass::AdminLike,
+    }
+}
+";
+    assert_eq!(unjustified_admin_arms(text), [11, 13, 15]);
+    // `=> Admin` counts only where the file names the class.
+    assert!(unjustified_admin_arms("match a { X => Admin }").is_empty());
 }

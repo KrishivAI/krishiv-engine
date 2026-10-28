@@ -1,0 +1,40 @@
+SESSION	CREATE TEMP VIEW variant_test_data AS
+READ	select int_price_variant:price from variant_test_data
+READ	select int_price_variant:price::decimal(5, 2) from variant_test_data
+READ	select int_price_variant:price::string from variant_test_data
+READ	select double_price_variant:price::decimal(3, 2) from variant_test_data
+READ	select multi_field_variant:name, multi_field_variant:age, multi_field_variant:city from variant_test_data
+READ	select multi_field_variant:name::string, multi_field_variant:age::int, multi_field_variant:active::boolean from variant_
+READ	select multi_field_variant:['name'] from variant_test_data
+READ	select multi_field_variant:['age'] from variant_test_data
+READ	select array_value_variant:item[0].model from variant_test_data
+READ	select array_value_variant:item[0].price from variant_test_data
+READ	select array_value_variant:item[1].model from variant_test_data
+READ	select array_value_variant:item[1].price from variant_test_data
+READ	select array_variant:[0].id from variant_test_data
+READ	select array_variant:[0].name from variant_test_data
+READ	select array_variant:[1].id from variant_test_data
+READ	select array_variant:[1].name from variant_test_data
+READ	select nested_variant:metadata.version from variant_test_data
+READ	select nested_variant:metadata.tags[0] from variant_test_data
+READ	select nested_variant:metadata.nested.level from variant_test_data
+READ	select nested_variant:metadata.nested.value from variant_test_data
+READ	select nested_variant:metadata['version'] from variant_test_data
+READ	select nested_variant:metadata['tags'] from variant_test_data
+READ	select special_chars_variant:`field-name`::string from variant_test_data
+READ	select special_chars_variant:['field-name']::string from variant_test_data
+READ	select special_chars_variant:field_name::string from variant_test_data
+READ	select special_chars_variant:['field_name']::string from variant_test_data
+READ	select special_chars_variant:`field.name`::string from variant_test_data
+READ	select special_chars_variant:['field.name']::string from variant_test_data
+READ	select multi_field_variant:scores[0]::int + multi_field_variant:scores[1]::int from variant_test_data
+READ	select count(*) from (select explode(cast(multi_field_variant:scores as array<int>)) as score from variant_test_data)
+READ	select * from variant_test_data
+PARSE_ERROR	select multi_field_variant:* from variant_test_data
+READ	select typeof(multi_field_variant:name) from variant_test_data
+READ	select typeof(multi_field_variant:age) from variant_test_data
+READ	select typeof(multi_field_variant:active) from variant_test_data
+READ	select typeof(multi_field_variant:scores) from variant_test_data
+READ	select isnull(multi_field_variant:missing_field) from variant_test_data
+READ	select isnotnull(multi_field_variant:name) from variant_test_data
+READ	select coalesce(multi_field_variant:missing_field, 'default_value') from variant_test_data

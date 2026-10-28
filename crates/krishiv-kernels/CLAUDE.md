@@ -56,6 +56,11 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   view, offset and narrow-decimal carriers hash as their values), key groups (top 12 bits) and key-group-range
   partitioning (`partition_of`, `key_group_range`, `radix`). It is a format: `tests/routing.rs` pins golden vectors, and a
   change is a new version and a new plan-codec feature, never an edit.
+- `map` (P2-T029): the map functions over `MapArray`/`ListArray`/`StructArray` (offsets and child values, never
+  boxed): `map`, `map_concat`, `map_contains_key`, `map_keys`, `map_values`, `map_entries`, `map_from_arrays`,
+  `map_from_entries` and `str_to_map`. Keys compare with Spark's equality and hash with the observable Murmur3
+  (NaN equals NaN, `-0.0` equals `0.0`); a null key is `NULL_MAP_KEY`, a repeat `DUPLICATED_MAP_KEY` under
+  `EXCEPTION` and last-wins under `LAST_WIN`.
 - `datetime` (P2-T025a): `date_add`/`date_sub`/`date_diff` (ANSI: `ARITHMETIC_OVERFLOW` past the `int` range, a documented divergence from Spark; legacy: Java `int` wrap; `try_*`: NULL),
   field extraction (`DatePart`: `year`, `month`, `day`, `extract`/`date_part` incl. ISO week and `SECOND` as
   `decimal(8,6)`), `date`/`timestamp` ± interval (`date_add_months` clamps the day; `timestamp_add_day_time` adds whole
@@ -91,6 +96,7 @@ Paths are relative to this crate.
 - `src/integer.rs`, `src/decimal.rs`, `src/float.rs` arithmetic kernels; `src/compare.rs` comparisons
 - `src/cast.rs` Spark CAST on Arrow carriers; `src/string.rs` string kernels
 - `src/hash.rs` and `src/hash/murmur3.rs` Murmur3 (seed 42), `src/hash/xxh64.rs` xxhash64, `src/hash/routing.rs` `H_kg`
+- `src/map.rs` map functions over nested arrays
 - `src/datetime.rs` date and timestamp kernels; `src/math.rs` double functions, `src/math/fdlibm.rs` ports
 - `src/reference.rs` row-at-a-time oracle for property tests
 

@@ -33,14 +33,6 @@
       "reason": "SELECT json_array_length(DATE'2024-02-29') | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "json_array_length#3f5d9052e1b4/ansi_on",
-      "reason": "SELECT json_array_length(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "json_array_length#3f5d9052e1b4/ansi_off",
-      "reason": "SELECT json_array_length(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "json_array_length#52ca46cba839/ansi_on",
       "reason": "SELECT json_array_length(TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to int where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

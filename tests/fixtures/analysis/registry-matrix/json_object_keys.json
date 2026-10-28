@@ -49,14 +49,6 @@
       "reason": "SELECT json_object_keys(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "json_object_keys#6cb977488e0a/ansi_on",
-      "reason": "SELECT json_object_keys(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "json_object_keys#6cb977488e0a/ansi_off",
-      "reason": "SELECT json_object_keys(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "json_object_keys#75a579a5fef9/ansi_on",
       "reason": "SELECT json_object_keys(TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to array<string> where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

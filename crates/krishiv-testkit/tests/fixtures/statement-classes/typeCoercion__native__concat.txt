@@ -1,0 +1,14 @@
+READ	SELECT (col1 || col2 || col3) col
+READ	SELECT ((col1 || col2) || (col3 || col4) || col5) col
+READ	SELECT ((col1 || col2) || (col3 || col4)) col
+SESSION	set spark.sql.function.concatBinaryAsString=true
+READ	SELECT (col1 || col2) col
+READ	SELECT (col1 || col2 || col3 || col4) col
+READ	SELECT ((col1 || col2) || (col3 || col4)) col
+SESSION	set spark.sql.function.concatBinaryAsString=false
+READ	SELECT (col1 || col2) col
+READ	SELECT (col1 || col2 || col3 || col4) col
+READ	SELECT ((col1 || col2) || (col3 || col4)) col
+SESSION	CREATE TEMPORARY VIEW various_arrays AS SELECT * FROM VALUES (
+READ	SELECT
+READ	SELECT

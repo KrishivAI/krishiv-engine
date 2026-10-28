@@ -412,3 +412,51 @@ fn read_decimal_map_keys_cover_sign_and_exponent() {
     let out = read(&[Some("{\"1ex\":1}")], &target, &opts);
     assert!(out.as_any().downcast_ref::<MapArray>().unwrap().is_null(0));
 }
+
+#[test]
+fn malformed_rows_do_not_contaminate_later_rows() {
+    use arrow_array::cast::AsArray as _;
+    let opts = JsonOptions::new();
+    let map_int = map_of(
+        Field::new("key", DataType::Utf8View, false),
+        Field::new("value", DataType::Int32, true),
+    );
+    // A malformed map row seals itself as NULL: the entry it appended
+    // before failing must not leak into the next row's range (Spark reads
+    // row two as `{"b":2}`, not `{"a":1,"b":2}`).
+    let out = read(&[Some("{\"a\":1,}"), Some("{\"b\":2}")], &map_int, &opts);
+    let map = out.as_any().downcast_ref::<MapArray>().unwrap();
+    assert!(map.is_null(0));
+    assert!(!map.is_null(1));
+    assert_eq!(map.value_length(1), 1);
+    assert_eq!(map.keys().as_string_view().value(0), "a");
+    assert_eq!(map.keys().as_string_view().value(1), "b");
+    assert_eq!(map.values().as_primitive::<Int32Type>().value(1), 2);
+    // A truncated list row is the same: the next row reads clean.
+    let list_int = list_of(Arc::new(Field::new("element", DataType::Int32, true)));
+    let out = read(&[Some("[1,2"), Some("[3]")], &list_int, &opts);
+    let list = out.as_any().downcast_ref::<ListArray>().unwrap();
+    assert!(list.is_null(0));
+    assert!(!list.is_null(1));
+    assert_eq!(list.value_length(1), 1);
+    let start = usize::try_from(list.value_offsets()[1]).unwrap_or(usize::MAX);
+    assert_eq!(list.values().as_primitive::<Int32Type>().value(start), 3);
+    // A failing map inside a struct field is sealed the same way.
+    let nested = struct_of(vec![Field::new("m", map_int.clone(), true)]);
+    let out = read(
+        &[Some("{\"m\":{\"a\":1,}}"), Some("{\"m\":{\"b\":2}}")],
+        &nested,
+        &opts,
+    );
+    let st = out.as_any().downcast_ref::<StructArray>().unwrap();
+    let maps = st.column(0).as_any().downcast_ref::<MapArray>().unwrap();
+    assert!(maps.is_null(0));
+    assert!(!maps.is_null(1));
+    assert_eq!(maps.value_length(1), 1);
+    assert_eq!(maps.keys().as_string_view().value(1), "b");
+    // In FAILFAST mode every malformed row still fails the read.
+    let mut fail = JsonOptions::new();
+    fail.mode = krishiv_kernels::json::ParseMode::FailFast;
+    assert!(read_json(&strs(&[Some("{\"a\":1,}")]), &map_int, &fail, &zone(), 0).is_err());
+    assert!(read_json(&strs(&[Some("[1,2")]), &list_int, &fail, &zone(), 0).is_err());
+}

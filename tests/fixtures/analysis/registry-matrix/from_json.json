@@ -1,68 +1,12 @@
 {
   "entries": [
     {
-      "id": "from_json#03296e8cc8d7/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#03296e8cc8d7/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
       "id": "from_json#04e787a8dc3b/ansi_on",
       "reason": "SELECT from_json(INTERVAL '1-2' YEAR TO MONTH, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "from_json#04e787a8dc3b/ansi_off",
       "reason": "SELECT from_json(INTERVAL '1-2' YEAR TO MONTH, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#09aaf55ddcef/ansi_on",
-      "reason": "SELECT from_json(NULL, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#09aaf55ddcef/ansi_off",
-      "reason": "SELECT from_json(NULL, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#0a5d9ab0ab4d/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', array(1, 2), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#0a5d9ab0ab4d/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', array(1, 2), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#0e3edc194c2c/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', ' \\t a\\u3000\\n ', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has UNSUPPORTED_DATATYPE"
-    },
-    {
-      "id": "from_json#0e3edc194c2c/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', ' \\t a\\u3000\\n ', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has UNSUPPORTED_DATATYPE"
-    },
-    {
-      "id": "from_json#198bcffecce8/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', map('a', 1), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#198bcffecce8/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', map('a', 1), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#1d22755c370a/ansi_on",
-      "reason": "SELECT from_json(named_struct('a', 1, 'b', 'x'), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#1d22755c370a/ansi_off",
-      "reason": "SELECT from_json(named_struct('a', 1, 'b', 'x'), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#2126dfb12d96/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', named_struct('a', 1, 'b', 'x'), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#2126dfb12d96/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', named_struct('a', 1, 'b', 'x'), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
     },
     {
       "id": "from_json#2819fdc1cb81/ansi_on",
@@ -73,46 +17,6 @@
       "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', INTERVAL '1 02:03:04' DAY TO SECOND, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
     },
     {
-      "id": "from_json#2ca8ad12ba2d/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_OPTIONS.NON_STRING_TYPE"
-    },
-    {
-      "id": "from_json#2ca8ad12ba2d/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_OPTIONS.NON_STRING_TYPE"
-    },
-    {
-      "id": "from_json#2d58b40c0268/ansi_on",
-      "reason": "SELECT from_json(1L, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#2d58b40c0268/ansi_off",
-      "reason": "SELECT from_json(1L, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#308750808360/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1.5 AS DECIMAL(38,18)), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#308750808360/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1.5 AS DECIMAL(38,18)), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#3164f4b28095/ansi_on",
-      "reason": "SELECT from_json(array(1, 2), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#3164f4b28095/ansi_off",
-      "reason": "SELECT from_json(array(1, 2), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#33ad4322f6ae/ansi_on",
-      "reason": "SELECT from_json('Ä€日本語😀é', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#33ad4322f6ae/ansi_off",
-      "reason": "SELECT from_json('Ä€日本語😀é', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
       "id": "from_json#372ce3f68bc0/ansi_on",
       "reason": "SELECT from_json(INTERVAL '1 02:03:04' DAY TO SECOND, 'a INT, b DOUBLE') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -121,68 +25,12 @@
       "reason": "SELECT from_json(INTERVAL '1 02:03:04' DAY TO SECOND, 'a INT, b DOUBLE') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "from_json#3c53606535bb/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', DATE'2024-02-29', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#3c53606535bb/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', DATE'2024-02-29', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
       "id": "from_json#4290fdd4a771/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', CAST(map() AS map<string,string>)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
+      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', CAST(map() AS map<string,string>)) | resolves to struct<time:timestamp> where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
       "id": "from_json#4290fdd4a771/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', CAST(map() AS map<string,string>)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "from_json#44878fe41e5b/ansi_on",
-      "reason": "SELECT from_json(map('a', 1), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#44878fe41e5b/ansi_off",
-      "reason": "SELECT from_json(map('a', 1), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#52790a688274/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 1L, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#52790a688274/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 1L, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#54382789e00b/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1.5 AS FLOAT), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#54382789e00b/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1.5 AS FLOAT), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#574df8c09605/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', X'01', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#574df8c09605/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', X'01', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#57dcb6df5eba/ansi_on",
-      "reason": "SELECT from_json(1, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#57dcb6df5eba/ansi_off",
-      "reason": "SELECT from_json(1, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#5827ef337d6a/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', TIMESTAMP'2024-02-29 12:34:56.123456', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#5827ef337d6a/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', TIMESTAMP'2024-02-29 12:34:56.123456', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
+      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', CAST(map() AS map<string,string>)) | resolves to struct<time:timestamp> where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
       "id": "from_json#5a31d64c6c27/ansi_on",
@@ -193,124 +41,12 @@
       "reason": "SELECT from_json('{\"a\":1, \"b\":0.8}', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
     },
     {
-      "id": "from_json#5bc6f9e9af9a/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 1.5D, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#5bc6f9e9af9a/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 1.5D, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#6106e6c97b50/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 1, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#6106e6c97b50/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 1, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#611abe778dd9/ansi_on",
-      "reason": "SELECT from_json('abc', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#611abe778dd9/ansi_off",
-      "reason": "SELECT from_json('abc', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#66cfcd7ea930/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', true, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#66cfcd7ea930/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', true, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#6aaf93ae2931/ansi_on",
-      "reason": "SELECT from_json(CAST(1 AS TINYINT), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#6aaf93ae2931/ansi_off",
-      "reason": "SELECT from_json(CAST(1 AS TINYINT), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#6cbd97251a95/ansi_on",
-      "reason": "SELECT from_json(TIMESTAMP'2024-02-29 12:34:56.123456', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#6cbd97251a95/ansi_off",
-      "reason": "SELECT from_json(TIMESTAMP'2024-02-29 12:34:56.123456', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#70f06299f0a1/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1.5 AS DECIMAL(10,2)), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#70f06299f0a1/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1.5 AS DECIMAL(10,2)), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#75b66c751458/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(NULL AS string), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#75b66c751458/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(NULL AS string), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#77530c848ab1/ansi_on",
-      "reason": "SELECT from_json('', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#77530c848ab1/ansi_off",
-      "reason": "SELECT from_json('', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#782bb446aede/ansi_on",
-      "reason": "SELECT from_json(map('a', 1), 'a INT, b DOUBLE') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#782bb446aede/ansi_off",
-      "reason": "SELECT from_json(map('a', 1), 'a INT, b DOUBLE') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#7c23a56e2ade/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1 AS TINYINT), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#7c23a56e2ade/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1 AS TINYINT), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
       "id": "from_json#7e8336f369c2/ansi_on",
       "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
       "id": "from_json#7e8336f369c2/ansi_off",
       "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
-    },
-    {
-      "id": "from_json#8cb2b14d8c4f/ansi_on",
-      "reason": "SELECT from_json('1', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#8cb2b14d8c4f/ansi_off",
-      "reason": "SELECT from_json('1', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#8e093602f208/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1 AS SMALLINT), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#8e093602f208/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', CAST(1 AS SMALLINT), map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#920b58547761/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#920b58547761/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
     },
     {
       "id": "from_json#993ce22bf270/ansi_on",
@@ -321,22 +57,6 @@
       "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'time Timestamp', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_OPTIONS.NON_MAP_FUNCTION"
     },
     {
-      "id": "from_json#9a7390bd506d/ansi_on",
-      "reason": "SELECT from_json(CAST(NULL AS string), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#9a7390bd506d/ansi_off",
-      "reason": "SELECT from_json(CAST(NULL AS string), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#9b37eadf24ab/ansi_on",
-      "reason": "SELECT from_json(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#9b37eadf24ab/ansi_off",
-      "reason": "SELECT from_json(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "from_json#9c643990e613/ansi_on",
       "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
     },
@@ -345,116 +65,12 @@
       "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', INTERVAL '1-2' YEAR TO MONTH, map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
     },
     {
-      "id": "from_json#a3785c061106/ansi_on",
-      "reason": "SELECT from_json(CAST(1.5 AS FLOAT), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#a3785c061106/ansi_off",
-      "reason": "SELECT from_json(CAST(1.5 AS FLOAT), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#b3efa0ad4fc2/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'Ä€日本語😀é', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_IDENTIFIER"
-    },
-    {
-      "id": "from_json#b3efa0ad4fc2/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'Ä€日本語😀é', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_IDENTIFIER"
-    },
-    {
-      "id": "from_json#b4faad538320/ansi_on",
-      "reason": "SELECT from_json(1.5D, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#b4faad538320/ansi_off",
-      "reason": "SELECT from_json(1.5D, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#b58bb64156d4/ansi_on",
-      "reason": "SELECT from_json(CAST(1.5 AS DECIMAL(38,18)), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#b58bb64156d4/ansi_off",
-      "reason": "SELECT from_json(CAST(1.5 AS DECIMAL(38,18)), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "from_json#b6929e393556/ansi_on",
       "reason": "SELECT from_json(INTERVAL '1-2' YEAR TO MONTH, 'a INT, b DOUBLE') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "from_json#b6929e393556/ansi_off",
       "reason": "SELECT from_json(INTERVAL '1-2' YEAR TO MONTH, 'a INT, b DOUBLE') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#c2b5ddcac208/ansi_on",
-      "reason": "SELECT from_json(X'01', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#c2b5ddcac208/ansi_off",
-      "reason": "SELECT from_json(X'01', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#c655025bf59e/ansi_on",
-      "reason": "SELECT from_json(DATE'2024-02-29', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#c655025bf59e/ansi_off",
-      "reason": "SELECT from_json(DATE'2024-02-29', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#c88bd713959f/ansi_on",
-      "reason": "SELECT from_json('{\"a\":1, \"b\":0.8}', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#c88bd713959f/ansi_off",
-      "reason": "SELECT from_json('{\"a\":1, \"b\":0.8}', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#d16f4ffbf4e6/ansi_on",
-      "reason": "SELECT from_json(CAST(1.5 AS DECIMAL(10,2)), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#d16f4ffbf4e6/ansi_off",
-      "reason": "SELECT from_json(CAST(1.5 AS DECIMAL(10,2)), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#de35e3f9385f/ansi_on",
-      "reason": "SELECT from_json(CAST(1 AS SMALLINT), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#de35e3f9385f/ansi_off",
-      "reason": "SELECT from_json(CAST(1 AS SMALLINT), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#df39fd03eab6/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'abc', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has UNSUPPORTED_DATATYPE"
-    },
-    {
-      "id": "from_json#df39fd03eab6/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', 'abc', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has UNSUPPORTED_DATATYPE"
-    },
-    {
-      "id": "from_json#e392534c36b0/ansi_on",
-      "reason": "SELECT from_json(' \\t a\\u3000\\n ', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#e392534c36b0/ansi_off",
-      "reason": "SELECT from_json(' \\t a\\u3000\\n ', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#e5fb35ba7dd1/ansi_on",
-      "reason": "SELECT from_json(CAST(X'C328FF' AS STRING), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#e5fb35ba7dd1/ansi_off",
-      "reason": "SELECT from_json(CAST(X'C328FF' AS STRING), 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "from_json#e628ea028f58/ansi_on",
-      "reason": "SELECT from_json(true, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#e628ea028f58/ansi_off",
-      "reason": "SELECT from_json(true, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "from_json#e6ee6264824e/ansi_on",
@@ -471,14 +87,6 @@
     {
       "id": "from_json#e789bcba3333/ansi_off",
       "reason": "SELECT from_json(INTERVAL '1 02:03:04' DAY TO SECOND, 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "from_json#f9b3766c7bbc/ansi_on",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', NULL, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
-    },
-    {
-      "id": "from_json#f9b3766c7bbc/ansi_off",
-      "reason": "SELECT from_json('{\"time\":\"26/08/2015\"}', NULL, map('timestampFormat', 'dd/MM/yyyy')) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has INVALID_SCHEMA.NON_STRING_LITERAL"
     }
   ],
   "format_version": 1,

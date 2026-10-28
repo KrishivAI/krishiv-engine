@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "space#70281a1865ed/ansi_on",
-      "reason": "SELECT concat(space(map('a', 1)), '1') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "space#70281a1865ed/ansi_off",
-      "reason": "SELECT concat(space(map('a', 1)), '1') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "space#d7685f028956/ansi_on",
       "reason": "SELECT concat(space(INTERVAL '1 02:03:04' DAY TO SECOND), '1') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

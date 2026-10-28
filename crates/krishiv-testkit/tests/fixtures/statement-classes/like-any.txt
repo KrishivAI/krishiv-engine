@@ -1,0 +1,14 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW like_any_table AS SELECT * FROM (VALUES
+READ	SELECT company FROM like_any_table WHERE company LIKE ANY ('%oo%', '%in', 'fa%')
+READ	SELECT company FROM like_any_table WHERE company LIKE ANY ('microsoft', '%yoo%')
+READ	select
+READ	SELECT company FROM like_any_table WHERE company LIKE ANY ('%zz%', pat)
+READ	SELECT company FROM like_any_table WHERE company NOT LIKE ANY ('%oo%', '%in', 'fa%')
+READ	SELECT company FROM like_any_table WHERE company NOT LIKE ANY ('microsoft', '%yoo%')
+READ	SELECT company FROM like_any_table WHERE company NOT LIKE ANY ('%oo%', 'fa%')
+READ	SELECT company FROM like_any_table WHERE NOT company LIKE ANY ('%oo%', 'fa%')
+READ	SELECT company FROM like_any_table WHERE company LIKE ANY ('%oo%', NULL)
+READ	SELECT company FROM like_any_table WHERE company NOT LIKE ANY ('%oo%', NULL)
+READ	SELECT company FROM like_any_table WHERE company LIKE ANY (NULL, NULL)
+READ	SELECT company FROM like_any_table WHERE company NOT LIKE ANY (NULL, NULL)
+PARSE_ERROR	SELECT company FROM like_any_table WHERE company LIKE ANY ()

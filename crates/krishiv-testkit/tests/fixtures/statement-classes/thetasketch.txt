@@ -1,0 +1,116 @@
+DDL	DROP TABLE IF EXISTS t_int_1_5_through_7_11
+DDL	CREATE TABLE t_int_1_5_through_7_11 AS
+DDL	DROP TABLE IF EXISTS t_long_1_5_through_7_11
+DDL	CREATE TABLE t_long_1_5_through_7_11 AS
+DDL	DROP TABLE IF EXISTS t_double_1_1_1_4_through_1_5_1_8
+DDL	CREATE TABLE t_double_1_1_1_4_through_1_5_1_8 AS
+DDL	DROP TABLE IF EXISTS t_float_1_1_1_4_through_1_5_1_8
+DDL	CREATE TABLE t_float_1_1_1_4_through_1_5_1_8 AS
+DDL	DROP TABLE IF EXISTS t_string_a_d_through_e_h
+DDL	CREATE TABLE t_string_a_d_through_e_h AS
+DDL	DROP TABLE IF EXISTS t_binary_a_b_through_e_f
+DDL	CREATE TABLE t_binary_a_b_through_e_f AS
+DDL	DROP TABLE IF EXISTS t_array_int_1_3_through_4_6
+DDL	CREATE TABLE t_array_int_1_3_through_4_6 AS
+DDL	DROP TABLE IF EXISTS t_array_long_1_3_through_4_6
+DDL	CREATE TABLE t_array_long_1_3_through_4_6 AS
+DDL	DROP TABLE IF EXISTS t_string_collation
+DDL	CREATE TABLE t_string_collation AS
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1)) AS result FROM t_int_1_5_through_7_11
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1)) FROM t_array_int_1_3_through_4_6
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col2)) FROM t_array_long_1_3_through_4_6
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1)) FROM t_binary_a_b_through_e_f
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1)) FROM t_double_1_1_1_4_through_1_5_1_8
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col2)) FROM t_float_1_1_1_4_through_1_5_1_8
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1, 22)) FROM t_int_1_5_through_7_11
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1)) FROM t_long_1_5_through_7_11
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1)) FROM t_string_a_d_through_e_h
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(
+READ	SELECT theta_sketch_estimate(theta_union_agg(sketch, 15))
+READ	SELECT theta_sketch_estimate(theta_union_agg(sketch, 12))
+READ	SELECT theta_sketch_estimate(theta_union_agg(sketch, 14))
+READ	SELECT theta_sketch_estimate(theta_union_agg(sketch, 10))
+READ	SELECT theta_sketch_estimate(theta_union_agg(sketch, 6))
+READ	SELECT theta_sketch_estimate(theta_union_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_union_agg(sketch, 12))
+READ	SELECT theta_sketch_estimate(theta_union_agg(sketch, 16))
+READ	SELECT theta_sketch_estimate(theta_intersection_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_intersection_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_intersection_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_intersection_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_intersection_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_intersection_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_intersection_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_intersection_agg(sketch))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(CAST(col AS DOUBLE)))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(CAST(col AS FLOAT)))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col))
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1)) utf8_b FROM t_string_collation
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1 COLLATE UTF8_LCASE)) utf8_lc FROM t_string_collation
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1 COLLATE UNICODE)) unicode FROM t_string_collation
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1 COLLATE UNICODE_CI)) unicode_ci FROM t_string_collation
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1 COLLATE UTF8_BINARY_RTRIM)) utf8_b_rt FROM t_string_collation
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1 COLLATE UTF8_LCASE_RTRIM)) utf8_lc_rt FROM t_string_collation
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1 COLLATE UNICODE_RTRIM)) unicode_rt FROM t_string_collation
+READ	SELECT theta_sketch_estimate(theta_sketch_agg(col1 COLLATE UNICODE_CI_RTRIM)) unicode_ci_rt FROM t_string_collation
+READ	WITH sketches AS (
+READ	SELECT theta_sketch_agg(col, 2)
+READ	SELECT theta_sketch_agg(col, 40)
+READ	SELECT theta_union_agg(sketch, 3)
+READ	SELECT theta_union_agg(sketch, 27)
+READ	SELECT theta_sketch_agg(col, CAST(NULL AS INT)) AS lg_nom_entries_is_null
+READ	SELECT theta_sketch_agg(col, CAST(col AS INT)) AS lg_nom_entries_non_constant
+READ	SELECT theta_sketch_agg(col, '15')
+READ	SELECT theta_union(1, 2)
+READ	SELECT theta_intersection(1, 2)
+READ	SELECT theta_difference(1, 2)
+READ	SELECT theta_union(
+READ	SELECT theta_intersection(
+READ	SELECT theta_sketch_estimate(CAST('abc' AS BINARY))
+READ	SELECT theta_union(CAST('abc' AS BINARY), CAST('def' AS BINARY))
+READ	SELECT theta_intersection(CAST('abc' AS BINARY), CAST('def' AS BINARY))
+READ	SELECT theta_difference(CAST('abc' AS BINARY), CAST('def' AS BINARY))
+READ	SELECT theta_union_agg(buffer, 15)
+READ	SELECT theta_intersection_agg(buffer)
+DDL	DROP TABLE IF EXISTS t_int_1_5_through_7_11
+DDL	DROP TABLE IF EXISTS t_long_1_5_through_7_11
+DDL	DROP TABLE IF EXISTS t_double_1_1_1_4_through_1_5_1_8
+DDL	DROP TABLE IF EXISTS t_float_1_1_1_4_through_1_5_1_8
+DDL	DROP TABLE IF EXISTS t_string_a_d_through_e_h
+DDL	DROP TABLE IF EXISTS t_binary_a_b_through_e_f
+DDL	DROP TABLE IF EXISTS t_array_int_1_3_through_4_6
+DDL	DROP TABLE IF EXISTS t_array_long_1_3_through_4_6
+DDL	DROP TABLE IF EXISTS t_string_collation

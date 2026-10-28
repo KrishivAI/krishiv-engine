@@ -592,6 +592,7 @@ mod bitwise;
 mod calendar;
 mod families;
 mod json;
+mod map;
 mod misc;
 mod number;
 mod predicate;

@@ -3,13 +3,14 @@
 //!
 //! Each subquery is planned as its own pipeline ending in a
 //! [`SubquerySink`], a dependency of the pipeline that evaluates the
-//! expression: its `finalize` stores the value in a [`Slot`] the
-//! expression reads, so the value is there before the first batch is
-//! evaluated (Spark computes such subqueries before the main plan too).
+//! expression: its `finalize` publishes the value to the instantiation's
+//! [`ValueService`], whose subscription the expression reads, so the value
+//! is there before the first batch is evaluated (Spark computes such
+//! subqueries before the main plan too).
 //! Spark's semantics: a scalar subquery with no row is NULL, with more
 //! than one row it fails with `SCALAR_SUBQUERY_TOO_MANY_ROWS`.
 
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, new_null_array};
 use arrow_schema::DataType as ArrowType;
@@ -22,11 +23,9 @@ use super::eval::{PhysExpr, Value};
 use crate::context::TaskContext;
 use crate::error::Result;
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus};
+use crate::physical::{SubqueryId, ValueId, Version};
 use crate::pipeline::{ExecNode, PipelineBuilder};
-
-/// The value of one subquery, set once its pipeline finalized.
-#[derive(Debug, Default)]
-pub(crate) struct Slot(OnceLock<ArrayRef>);
+use crate::values::{self, Partial, Producer, Subscription, ValueService};
 
 /// Scalar (the first column of at most one row) or `EXISTS`.
 pub(crate) use crate::physical::SubqueryValueKind as Kind;
@@ -34,17 +33,28 @@ pub(crate) use crate::physical::SubqueryValueKind as Kind;
 /// Collects a subquery's rows and publishes its value.
 #[derive(Debug)]
 pub(crate) struct SubquerySink {
+    id: SubqueryId,
     kind: Kind,
     data_type: ArrowType,
-    slot: Arc<Slot>,
+    values: Arc<dyn ValueService>,
+    producer: Producer,
 }
 
 impl SubquerySink {
-    pub(crate) fn new(kind: Kind, data_type: ArrowType, slot: Arc<Slot>) -> Arc<Self> {
+    /// The sink of subquery `id`, publishing to `values` as `producer`.
+    pub(crate) fn new(
+        id: SubqueryId,
+        kind: Kind,
+        data_type: ArrowType,
+        values: Arc<dyn ValueService>,
+        producer: Producer,
+    ) -> Arc<Self> {
         Arc::new(Self {
+            id,
             kind,
             data_type,
-            slot,
+            values,
+            producer,
         })
     }
 }
@@ -114,10 +124,17 @@ impl Sink for SubquerySink {
                     Kind::Exists => Arc::new(BooleanArray::from(vec![false])),
                     Kind::Scalar => new_null_array(&self.data_type, 1),
                 });
-            self.slot
-                .0
-                .set(value)
-                .map_err(|_| internal("a subquery ran twice"))
+            self.values
+                .publish(Partial {
+                    value: ValueId::Subquery(self.id),
+                    version: Version::BATCH,
+                    producer: self.producer,
+                    payload: values::Value::Subquery(value),
+                })
+                .and_then(|p| match p {
+                    values::Publication::Ignored => Err(internal("a subquery ran twice")),
+                    values::Publication::Waiting | values::Publication::Complete => Ok(()),
+                })
         })
     }
 }
@@ -126,7 +143,8 @@ impl Sink for SubquerySink {
 #[derive(Debug)]
 pub(crate) struct SubqueryValue {
     pub(crate) kind: Kind,
-    pub(crate) slot: Arc<Slot>,
+    /// The subquery's value, from the instantiation's value service.
+    pub(crate) value: Arc<dyn Subscription>,
     pub(crate) data_type: ArrowType,
 }
 
@@ -142,13 +160,15 @@ impl PhysExpr for SubqueryValue {
     }
 
     fn eval(&self, _batch: &RecordBatch, _partition: u32) -> Result<Value> {
-        let v = self
-            .slot
-            .0
-            .get()
+        let (_, v) = self
+            .value
+            .current()
             .ok_or_else(|| internal("a subquery read before it ran"))?;
-        if v.data_type() != &self.data_type {
-            return Err(internal("a subquery value of another type"));
+        let values::Value::Subquery(v) = v.as_ref() else {
+            return Err(internal("a subquery value of another kind"));
+        };
+        if v.data_type() != &self.data_type || v.len() != 1 {
+            return Err(internal("a subquery value of another type or length"));
         }
         Ok(Value::Scalar(Arc::clone(v)))
     }

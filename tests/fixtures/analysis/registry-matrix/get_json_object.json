@@ -33,14 +33,6 @@
       "reason": "SELECT get_json_object('{\"a\":\"b\"}', TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "get_json_object#2af4111a22b0/ansi_on",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#2af4111a22b0/ansi_off",
-      "reason": "SELECT get_json_object('{\"a\":\"b\"}', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "get_json_object#3060e6e97e54/ansi_on",
       "reason": "SELECT get_json_object('{\"a\":\"b\"}', CAST(1 AS TINYINT)) | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -207,14 +199,6 @@
     {
       "id": "get_json_object#c89703ae4b5d/ansi_off",
       "reason": "SELECT get_json_object(CAST(1 AS TINYINT), '$.a') | resolves to string where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#db4733f79761/ansi_on",
-      "reason": "SELECT get_json_object(map('a', 1), '$.a') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "get_json_object#db4733f79761/ansi_off",
-      "reason": "SELECT get_json_object(map('a', 1), '$.a') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "get_json_object#df4cb10fa22c/ansi_on",

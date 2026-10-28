@@ -1,0 +1,15 @@
+SESSION	create temporary view t1 as select * from values
+SESSION	create temporary view t2 as select * from values
+READ	SELECT * FROM t1 EXCEPT SELECT * FROM t2
+READ	SELECT * FROM t1 EXCEPT SELECT * FROM t1 where v <> 1 and v <> 2
+READ	SELECT * FROM t1 where v <> 1 and v <> 22 EXCEPT SELECT * FROM t1 where v <> 2 and v >= 3
+READ	SELECT t1.* FROM t1, t2 where t1.k = t2.k
+READ	SELECT * FROM t2 where v >= 1 and v <> 22 EXCEPT SELECT * FROM t1
+READ	SELECT (SELECT min(k) FROM t2 WHERE t2.k = t1.k) min_t2 FROM t1
+READ	SELECT t1.k
+SESSION	CREATE OR REPLACE TEMPORARY VIEW t3 AS VALUES (decimal(1)) tbl(v)
+READ	SELECT t.v FROM (
+READ	SELECT SUM(t.v) FROM (
+SESSION	DROP VIEW IF EXISTS t1
+SESSION	DROP VIEW IF EXISTS t2
+SESSION	DROP VIEW IF EXISTS t3

@@ -844,6 +844,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(windows());
     out.extend(super::conditional::specs());
     out.extend(super::json::specs());
+    out.extend(super::map::specs());
     out.extend(super::math::specs());
     out.extend(super::hashing::specs());
     out.extend(super::bitwise::specs());
