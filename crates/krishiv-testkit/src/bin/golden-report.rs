@@ -12,7 +12,8 @@
 //!   `krishiv-session` ([`krishiv_testkit::golden::session_engine`]).
 //! * `--cases FILE` writes every statement that did not pass, with why.
 //! * `--ratchet check` compares the run with the frozen baseline
-//!   (`tests/spark-golden/known-failures.json`) and fails on any difference;
+//!   (`tests/spark-golden/known-failures.json` with its per-category and per-file directories)
+//!   and fails on any difference;
 //!   `--ratchet update` rewrites the baseline: passing statements leave it, new failures are
 //!   classified by its rules (the command fails, writing nothing, if a failure matches no rule).
 #![forbid(unsafe_code)]

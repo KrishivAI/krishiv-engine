@@ -1,0 +1,20 @@
+{
+  "category": "generators",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature (multi-name aliases|LATERAL VIEW)",
+      "order": 350
+    },
+    {
+      "family": [
+        "generator",
+        "table"
+      ],
+      "order": 450
+    }
+  ],
+  "summary": "generators: explode, LATERAL VIEW, multi-name aliases, stack, inline",
+  "task": "P2-T034"
+}

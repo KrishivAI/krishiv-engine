@@ -2,12 +2,13 @@
 //! Split test manifests: one small JSON file per key.
 //!
 //! The analysis manifests (`tests/fixtures/analysis/`) and the golden
-//! baseline (`tests/spark-golden/known-failures-cases/`) each used to be a
-//! single JSON file, so any two PRs touching different functions, coercion
-//! rules or golden files conflicted on the same lines. They are now
+//! baseline (`tests/spark-golden/known-failures-cases/` and
+//! `known-failures-categories/`) each used to be a single JSON file, so any
+//! two PRs touching different functions, coercion rules, golden files or
+//! failure categories conflicted on the same lines. They are now
 //! directories with one file per key (function name, coercion input file,
-//! golden input file); two PRs touching different keys never touch the same
-//! file. The tests read the whole directory (sorted, so deterministic);
+//! golden input file, category); two PRs touching different keys never touch
+//! the same file. The tests read the whole directory (sorted, so deterministic);
 //! totals and counts are computed from what they read, never stored.
 //!
 //! [`sync_json_dir`] is the update mode (`KRISHIV_UPDATE_MANIFEST=1`, the
