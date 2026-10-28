@@ -825,6 +825,11 @@ fn m_expr(e: &mut Arc<Expr>, w: &mut Walk) -> bool {
                         name: format!("{name}x"),
                         id: *id,
                     },
+                    // A UDF at another version resolves differently.
+                    FunctionId::Udf { name, version } => FunctionId::Udf {
+                        name: name.clone(),
+                        version: version.wrapping_add(1),
+                    },
                 };
                 site!(w, *id = other);
                 site!(w, flip(kind, FunctionKind::Scalar, FunctionKind::Window));

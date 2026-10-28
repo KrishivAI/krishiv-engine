@@ -20,11 +20,17 @@ use arrow_array::types::{
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
     Int8Array, Int16Array, Int32Array, Int64Array, StringArray, TimestampMicrosecondArray,
+    new_null_array,
 };
 use arrow_schema::{DataType as ArrowType, TimeUnit};
+use krishiv_functions::scalar::{Arg, bind_udf};
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
-use krishiv_plan::{Builtin, CastMode, Expr, ExprNode, Literal, ResolvedFunction};
+use krishiv_plan::{
+    Builtin, CastMode, Expr, ExprNode, FunctionId, FunctionKind, Literal, LogicalPlan, PlanNode,
+    ResolvedExpr, ResolvedFunction,
+};
 use krishiv_types::{DataType, DecimalType};
+use krishiv_udf_sdk::UdfLibrary;
 
 use crate::expr::{builtin, data_type, is_deterministic, lit, nullable, recall, same};
 
@@ -370,6 +376,7 @@ fn arrow_type(t: &DataType) -> Option<ArrowType> {
     })
 }
 
+/// A literal as a one-row array of its type's Arrow form.
 fn to_array(l: &Literal) -> Option<ArrayRef> {
     Some(match l {
         Literal::Boolean(v) => Arc::new(BooleanArray::from(vec![*v])),
@@ -450,6 +457,189 @@ fn fold_cast(l: &Literal, to: &DataType, mode: CastMode) -> Option<Literal> {
     };
     let out = cast(input.as_ref(), &target, &opts).ok()?;
     from_array(out.as_ref(), to)
+}
+
+/// What UDF folding evaluates with: the session's library and the plain
+/// values a UDF call may read (ANSI flag, session time zone). The partition
+/// index is always zero when folding: a UDF reading it must declare itself
+/// nondeterministic, and nondeterministic calls never fold.
+pub(crate) struct UdfFoldCtx<'a> {
+    /// The session's UDFs, resolved by (name, version).
+    pub(crate) library: &'a UdfLibrary,
+    /// `spark.sql.ansi.enabled`.
+    pub(crate) ansi: bool,
+    /// The session time zone as a fixed offset in seconds, when it is one.
+    pub(crate) zone: Option<i32>,
+}
+
+/// `p` with every deterministic scalar session-UDF call of literal
+/// arguments folded to its value (nested calls fold bottom-up). Anything
+/// else is unchanged: a failure, an unregistered version or a result the
+/// literals cannot hold leaves the call in the plan, so the error surfaces
+/// at execution. An aggregate grouping by expressions is left alone, as in
+/// `fold_node`: folding either side could break the output matching.
+pub(crate) fn fold_plan(p: Arc<LogicalPlan>, ctx: &UdfFoldCtx<'_>) -> Arc<LogicalPlan> {
+    if let PlanNode::Aggregate { grouping, .. } = &p.node
+        && !super::groups_by_columns(grouping)
+    {
+        return p;
+    }
+    let out = p.map_expressions(|e| {
+        e.transform_up(&mut |x| Ok::<_, std::convert::Infallible>(fold_udf(&x, ctx)))
+    });
+    match out {
+        Ok(v) => v,
+        Err(never) => match never {},
+    }
+}
+
+/// One UDF folding step: a deterministic scalar session-UDF call whose
+/// arguments are all literals becomes its value, through the same binding
+/// execution uses. Anything else is unchanged.
+fn fold_udf(e: &Arc<Expr>, ctx: &UdfFoldCtx<'_>) -> Arc<Expr> {
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return Arc::clone(e);
+    };
+    let FunctionId::Udf { name, version } = &f.id else {
+        return Arc::clone(e);
+    };
+    if f.kind != FunctionKind::Scalar
+        || !f.deterministic
+        || f.distinct
+        || f.filter.is_some()
+        || !f
+            .args
+            .iter()
+            .all(|a| matches!(a.node, ExprNode::Literal(_)))
+    {
+        return Arc::clone(e);
+    }
+    let Some(udf) = ctx.library.get_versioned(name, *version) else {
+        return Arc::clone(e);
+    };
+    let literals: Vec<ArrayRef> = match f
+        .args
+        .iter()
+        .map(|a| match &a.node {
+            ExprNode::Literal(l) => udf_array(l),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    {
+        Some(literals) => literals,
+        None => return Arc::clone(e),
+    };
+    let arg_types: Vec<ArrowType> = literals.iter().map(|a| a.data_type().clone()).collect();
+    let Ok(bound) = bind_udf(
+        &udf,
+        &arg_types,
+        &f.data_type,
+        f.nullable,
+        ctx.ansi,
+        ctx.zone,
+    ) else {
+        return Arc::clone(e);
+    };
+    let args: Vec<Arg> = literals.into_iter().map(Arg::Scalar).collect();
+    let Ok(out) = bound.invoke(&args, 1) else {
+        return Arc::clone(e);
+    };
+    udf_literal(&out, &f.data_type).unwrap_or_else(|| Arc::clone(e))
+}
+
+/// A literal as a one-row array, for UDF arguments: every scalar literal
+/// (intervals have no UDF form).
+fn udf_array(l: &Literal) -> Option<ArrayRef> {
+    Some(match l {
+        Literal::Null(None) => Arc::new(arrow_array::NullArray::new(1)),
+        Literal::Null(Some(t)) => new_null_array(&t.to_arrow(), 1),
+        Literal::Boolean(v) => Arc::new(BooleanArray::from(vec![*v])),
+        Literal::Byte(v) => Arc::new(Int8Array::from(vec![*v])),
+        Literal::Short(v) => Arc::new(Int16Array::from(vec![*v])),
+        Literal::Integer(v) => Arc::new(Int32Array::from(vec![*v])),
+        Literal::Long(v) => Arc::new(Int64Array::from(vec![*v])),
+        Literal::Float(v) => Arc::new(Float32Array::from(vec![*v])),
+        Literal::Double(v) => Arc::new(Float64Array::from(vec![*v])),
+        Literal::Decimal {
+            unscaled,
+            data_type,
+        } => Arc::new(
+            Decimal128Array::from(vec![*unscaled])
+                .with_precision_and_scale(
+                    data_type.precision(),
+                    i8::try_from(data_type.scale()).ok()?,
+                )
+                .ok()?,
+        ),
+        Literal::String(v) => Arc::new(StringArray::from(vec![v.as_str()])),
+        Literal::Binary(v) => Arc::new(arrow_array::BinaryArray::from_iter_values([v.as_slice()])),
+        Literal::Date(v) => Arc::new(Date32Array::from(vec![*v])),
+        Literal::Timestamp(v) => Arc::new(
+            TimestampMicrosecondArray::from(vec![*v])
+                .with_data_type(DataType::Timestamp.to_arrow()),
+        ),
+        Literal::TimestampNtz(v) => Arc::new(TimestampMicrosecondArray::from(vec![*v])),
+        // Intervals and any future literal kind have no UDF form.
+        _ => return None,
+    })
+}
+
+/// A one-row UDF result as the literal of type `t`: `None` for an array
+/// the literals cannot hold (binary views aside, every plain carrier).
+fn udf_literal(a: &ArrayRef, t: &DataType) -> Option<Arc<Expr>> {
+    if a.len() != 1 {
+        return None;
+    }
+    if a.is_null(0) {
+        return Some(lit(match t {
+            DataType::Null => Literal::Null(None),
+            _ => Literal::Null(Some(t.clone())),
+        }));
+    }
+    let literal = match (t, a.data_type()) {
+        (DataType::Boolean, _) => Literal::Boolean(a.as_boolean_opt()?.value(0)),
+        (DataType::Byte, _) => Literal::Byte(a.as_primitive_opt::<Int8Type>()?.value(0)),
+        (DataType::Short, _) => Literal::Short(a.as_primitive_opt::<Int16Type>()?.value(0)),
+        (DataType::Integer, _) => Literal::Integer(a.as_primitive_opt::<Int32Type>()?.value(0)),
+        (DataType::Long, _) => Literal::Long(a.as_primitive_opt::<Int64Type>()?.value(0)),
+        (DataType::Float, _) => Literal::Float(a.as_primitive_opt::<Float32Type>()?.value(0)),
+        (DataType::Double, _) => Literal::Double(a.as_primitive_opt::<Float64Type>()?.value(0)),
+        (DataType::Decimal(d), ArrowType::Decimal128(p, s))
+            if *p == d.precision() && i8::try_from(d.scale()).ok() == Some(*s) =>
+        {
+            Literal::Decimal {
+                unscaled: a.as_primitive_opt::<Decimal128Type>()?.value(0),
+                data_type: DecimalType::try_new(u32::from(*p), u32::from(d.scale())).ok()?,
+            }
+        }
+        (DataType::String, ArrowType::Utf8) => {
+            Literal::String(a.as_string_opt::<i32>()?.value(0).to_owned())
+        }
+        (DataType::String, ArrowType::Utf8View) => {
+            Literal::String(a.as_string_view_opt()?.value(0).to_owned())
+        }
+        (DataType::String, ArrowType::LargeUtf8) => {
+            Literal::String(a.as_string_opt::<i64>()?.value(0).to_owned())
+        }
+        (DataType::Binary, ArrowType::Binary) => {
+            Literal::Binary(a.as_binary_opt::<i32>()?.value(0).to_owned())
+        }
+        (DataType::Binary, ArrowType::BinaryView) => {
+            Literal::Binary(a.as_binary_view_opt()?.value(0).to_owned())
+        }
+        (DataType::Binary, ArrowType::LargeBinary) => {
+            Literal::Binary(a.as_binary_opt::<i64>()?.value(0).to_owned())
+        }
+        (DataType::Date, _) => Literal::Date(a.as_primitive_opt::<Date32Type>()?.value(0)),
+        (DataType::Timestamp, ArrowType::Timestamp(TimeUnit::Microsecond, _)) => {
+            Literal::Timestamp(a.as_primitive_opt::<TimestampMicrosecondType>()?.value(0))
+        }
+        (DataType::TimestampNtz, ArrowType::Timestamp(TimeUnit::Microsecond, None)) => {
+            Literal::TimestampNtz(a.as_primitive_opt::<TimestampMicrosecondType>()?.value(0))
+        }
+        _ => return None,
+    };
+    Some(lit(literal))
 }
 
 #[cfg(test)]

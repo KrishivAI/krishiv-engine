@@ -263,6 +263,16 @@ impl Conditional {
     }
 }
 
+/// Whether `entry` is a built-in (a canonical operator or a registry
+/// function), rather than a session UDF. Every special-cased built-in path
+/// (`assert_true`'s default message, the `Conditional` rewrites, `ntile`'s
+/// folding) goes through this one rule: built-ins win over a same-name
+/// session UDF for unqualified names, and a qualified call to the session
+/// UDF reaches the UDF.
+fn is_builtin_entry(entry: &FunctionEntry) -> bool {
+    !matches!(entry.id, FunctionId::Udf { .. })
+}
+
 /// Whether `t` is a numeric type.
 fn is_conditional_numeric(t: &DataType) -> bool {
     matches!(
@@ -677,12 +687,20 @@ impl Resolver<'_> {
                     // A lambda binds where it is used: a higher-order
                     // call binds its array and lambda children itself
                     // (see `hof`), while a lambda anywhere else is no
-                    // higher-order call's argument.
+                    // higher-order call's argument. Only unqualified and
+                    // builtin-qualified calls take the higher-order path:
+                    // a session-qualified UDF named like one (`session.filter`,
+                    // ...) runs the UDF.
+                    let hof = |f: &FunctionCall| {
+                        (f.unqualified().is_some()
+                            || super::bind::is_builtin_qualifier(&f.qualifier))
+                        .then(|| super::hof::Hof::of(&f.name))
+                        .flatten()
+                    };
                     if let ExprNode::Function(f) = &x.node
-                        && (super::hof::Hof::of(&f.name).is_some()
-                            || super::hof::has_direct_lambda(f))
+                        && (hof(f).is_some() || super::hof::has_direct_lambda(f))
                     {
-                        let Some(h) = super::hof::Hof::of(&f.name) else {
+                        let Some(h) = hof(f) else {
                             return Err(super::hof::not_higher_order(&f.name, x.origin));
                         };
                         let kids = self.child_ctx(&x, ctx);
@@ -756,10 +774,24 @@ impl Resolver<'_> {
 
     pub(super) fn is_aggregate(&self, e: &Expr) -> bool {
         match &e.node {
-            ExprNode::Function(f) => matches!(
-                self.ctx.functions.lookup(std::slice::from_ref(&f.name), self.ctx.profile),
-                FunctionLookup::Found(entry) if entry.kind == FunctionKind::Aggregate
-            ),
+            ExprNode::Function(f) => {
+                // A session-qualified call (`session.f`) resolves through
+                // its full qualifier (UDFs only), as resolution does; any
+                // other call resolves by its bare name.
+                let name;
+                let lookup: &[String] = if super::bind::is_session_qualifier(&f.qualifier) {
+                    let mut parts = f.qualifier.clone();
+                    parts.push(f.name.clone());
+                    name = parts;
+                    &name
+                } else {
+                    std::slice::from_ref(&f.name)
+                };
+                matches!(
+                    self.ctx.functions.lookup(lookup, self.ctx.profile),
+                    FunctionLookup::Found(entry) if entry.kind == FunctionKind::Aggregate
+                )
+            }
             ExprNode::Resolved(ResolvedExpr::Function(f)) => f.kind == FunctionKind::Aggregate,
             _ => false,
         }
@@ -777,7 +809,9 @@ impl Resolver<'_> {
         if !f.args.iter().any(|a| matches!(a.node, ExprNode::Star(_))) {
             return Ok(None);
         }
-        let count_star = f.name.eq_ignore_ascii_case("count")
+        let count_star = f
+            .unqualified()
+            .is_some_and(|n| n.eq_ignore_ascii_case("count"))
             && matches!(&f.args[..], [a] if matches!(&a.node, ExprNode::Star(s) if s.qualifier.is_empty() && s.plan_id.is_none()));
         let struct_star =
             f.name.eq_ignore_ascii_case("struct") || f.name.eq_ignore_ascii_case("named_struct");
@@ -1262,14 +1296,21 @@ impl Resolver<'_> {
                     return Err(super::windows::window_in_filter(filter, e.origin));
                 }
                 // `builtin.f` / `system.builtin.f` resolve to the builtin;
+                // `session.f` / `system.session.f` reach a session UDF only;
                 // any other qualifier is an unresolved routine.
+                // Grouping functions are never qualified.
                 let (parts, builtin) = qualified_parts(f, &self.b.search_path, e.origin)?;
+                let session_qualified = super::bind::is_session_qualifier(&f.qualifier);
                 let lookup_name = builtin.as_deref().unwrap_or(&f.name);
                 // A call of a function with a named-parameter signature is
                 // rearranged into positional order (Spark's
                 // `FunctionBuilderBase` rearrangement), filling defaults; any
                 // other call with named arguments is unsupported.
-                let signature = named_signature(lookup_name);
+                let signature = if session_qualified {
+                    None
+                } else {
+                    named_signature(lookup_name)
+                };
                 let mut kids = kids.to_vec();
                 if signature.is_some() {
                     let filter = kids.get(n).cloned();
@@ -1291,10 +1332,10 @@ impl Resolver<'_> {
                     ));
                 }
                 let n = kids.len() - usize::from(f.filter.is_some());
-                if let Some(which) = GroupingFn::from_name(lookup_name) {
+                if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
-                if let Some(op) = builtin_op(lookup_name, n) {
+                if !session_qualified && let Some(op) = builtin_op(lookup_name, n) {
                     // `ILIKE` and `LIKE|ILIKE ANY|SOME|ALL` are rewritten to
                     // the calls they denote, keeping Spark's display name.
                     if op == Builtin::ILike {
@@ -1305,25 +1346,60 @@ impl Resolver<'_> {
                     }
                     return self.operator_call(op, e.origin, &kids[..n]);
                 }
-                let entry = match self.ctx.functions.lookup(
-                    std::slice::from_ref(&lookup_name.to_owned()),
-                    self.ctx.profile,
-                ) {
-                    FunctionLookup::Found(entry) => entry,
-                    FunctionLookup::KnownUnsupported => {
-                        return Err(unsupported(
-                            format!("function {}", parts.join(".")),
-                            e.origin,
-                        ));
+                let entry = if session_qualified {
+                    match self.ctx.functions.lookup(&parts, self.ctx.profile) {
+                        FunctionLookup::Found(entry) => entry,
+                        FunctionLookup::KnownUnsupported => {
+                            return Err(unsupported(
+                                format!("function {}", parts.join(".")),
+                                e.origin,
+                            ));
+                        }
+                        FunctionLookup::NotFound => {
+                            return Err(AnalysisError::new(
+                                UnresolvedRoutine {
+                                    routine_name: quoted(&parts),
+                                    search_path: self.b.search_path.clone(),
+                                },
+                                e.origin,
+                            ));
+                        }
                     }
-                    FunctionLookup::NotFound => {
-                        return Err(AnalysisError::new(
-                            UnresolvedRoutine {
-                                routine_name: quoted(&parts),
-                                search_path: self.b.search_path.clone(),
-                            },
-                            e.origin,
-                        ));
+                } else {
+                    match self.ctx.functions.lookup(
+                        std::slice::from_ref(&lookup_name.to_owned()),
+                        self.ctx.profile,
+                    ) {
+                        // A builtin-qualified call (`builtin.f`,
+                        // `system.builtin.f`) reaches built-ins only: a
+                        // session UDF of the same name stays unresolved.
+                        FunctionLookup::Found(entry)
+                            if builtin.is_some() && matches!(entry.id, FunctionId::Udf { .. }) =>
+                        {
+                            return Err(AnalysisError::new(
+                                UnresolvedRoutine {
+                                    routine_name: quoted(&parts),
+                                    search_path: self.b.search_path.clone(),
+                                },
+                                e.origin,
+                            ));
+                        }
+                        FunctionLookup::Found(entry) => entry,
+                        FunctionLookup::KnownUnsupported => {
+                            return Err(unsupported(
+                                format!("function {}", parts.join(".")),
+                                e.origin,
+                            ));
+                        }
+                        FunctionLookup::NotFound => {
+                            return Err(AnalysisError::new(
+                                UnresolvedRoutine {
+                                    routine_name: quoted(&parts),
+                                    search_path: self.b.search_path.clone(),
+                                },
+                                e.origin,
+                            ));
+                        }
                     }
                 };
                 if !window_fn {
@@ -1333,7 +1409,10 @@ impl Resolver<'_> {
                 // contributes its name, a struct field its field name), so a
                 // call with any named child becomes `named_struct(name, ...)`
                 // with `colN` defaults; all-default calls stay `struct`.
-                if entry.id.name() == "struct"
+                // Only for the built-in: a qualified session UDF named
+                // `struct` runs the UDF.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "struct"
                     && let Some(rewritten) = self.struct_names(f, &kids[..n], e.origin)
                 {
                     // The children are bound already, and rebinding a
@@ -1357,72 +1436,91 @@ impl Resolver<'_> {
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
                 // Spark's constructor materializes the default message, so
                 // the schema names it (`assert_true(true, 'true' is not
-                // true!)`) and the kernel raises it.
+                // true!)`) and the kernel raises it. Only for the built-in:
+                // a qualified session UDF named `assert_true` takes its
+                // arguments as written.
+                // Only for built-ins: a qualified session UDF named `assert_true`
+                // takes its arguments as written, as do the other built-in
+                // constructors below and the conditional rewrites.
                 let mut owned: Vec<Bound>;
-                let (kids, n) = if entry.id.name() == "assert_true" && n == 1 {
-                    owned = kids.clone();
-                    owned.insert(
-                        1,
-                        assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
-                    );
-                    (&owned[..], 2)
-                } else if entry.id.name() == "mask" && (1..5).contains(&n) {
-                    owned = kids[..n].to_vec();
-                    owned.extend(MASK_DEFAULTS.iter().skip(n - 1).map(|d| match d {
-                        Some(text) => default_argument(
-                            Literal::String((*text).to_owned()),
-                            DataType::String,
+                let (kids, n) =
+                    if is_builtin_entry(&entry) && entry.id.name() == "assert_true" && n == 1 {
+                        owned = kids.clone();
+                        owned.insert(
+                            1,
+                            assert_message(&owned[0], e.origin, self.ctx.conf.session_zone),
+                        );
+                        (&owned[..], 2)
+                    } else if is_builtin_entry(&entry)
+                        && entry.id.name() == "mask"
+                        && (1..5).contains(&n)
+                    {
+                        owned = kids[..n].to_vec();
+                        owned.extend(MASK_DEFAULTS.iter().skip(n - 1).map(|d| match d {
+                            Some(text) => default_argument(
+                                Literal::String((*text).to_owned()),
+                                DataType::String,
+                                false,
+                                e.origin,
+                            ),
+                            None => default_argument(
+                                Literal::Null(Some(DataType::String)),
+                                DataType::String,
+                                true,
+                                e.origin,
+                            ),
+                        }));
+                        if let Some(filter) = kids.get(n) {
+                            owned.push(filter.clone());
+                        }
+                        (&owned[..], 5)
+                    } else if is_builtin_entry(&entry)
+                        && matches!(entry.id.name(), "locate" | "position")
+                        && n == 2
+                    {
+                        // `locate(sub, str)` is `locate(sub, str, 1)`.
+                        owned = kids[..n].to_vec();
+                        owned.push(default_argument(
+                            Literal::Integer(1),
+                            DataType::Integer,
                             false,
                             e.origin,
-                        ),
-                        None => default_argument(
-                            Literal::Null(Some(DataType::String)),
-                            DataType::String,
-                            true,
-                            e.origin,
-                        ),
-                    }));
-                    if let Some(filter) = kids.get(n) {
-                        owned.push(filter.clone());
-                    }
-                    (&owned[..], 5)
-                } else if matches!(entry.id.name(), "locate" | "position") && n == 2 {
-                    // `locate(sub, str)` is `locate(sub, str, 1)`.
-                    owned = kids[..n].to_vec();
-                    owned.push(default_argument(
-                        Literal::Integer(1),
-                        DataType::Integer,
-                        false,
-                        e.origin,
-                    ));
-                    if let Some(filter) = kids.get(n) {
-                        owned.push(filter.clone());
-                    }
-                    (&owned[..], 3)
-                } else if entry.id.name() == "named_struct" && n > 0 {
-                    owned = kids.clone();
-                    // A foldable name that is not a literal becomes one, so
-                    // the executor binds it (the result rule already read it
-                    // folded; the shown form keeps the written argument for
-                    // error quotes).
-                    for k in owned.iter_mut().step_by(2) {
-                        if !matches!(k.expr.node, ExprNode::Literal(_))
-                            && let Some(Constant::String(name)) =
-                                self.fold(&k.expr, self.ctx.conf.ansi)
-                        {
-                            let lit = Arc::new(
-                                Expr::new(ExprNode::Literal(Literal::String(name)))
-                                    .with_origin(k.expr.origin),
-                            );
-                            k.shown = Some(Arc::clone(&k.expr));
-                            k.expr = lit;
+                        ));
+                        if let Some(filter) = kids.get(n) {
+                            owned.push(filter.clone());
                         }
-                    }
-                    (&owned[..], n)
-                } else {
-                    (&kids[..], n)
-                };
-                if let Some(which) = Conditional::of(lookup_name) {
+                        (&owned[..], 3)
+                    } else if is_builtin_entry(&entry) && entry.id.name() == "named_struct" && n > 0
+                    {
+                        owned = kids.clone();
+                        // A foldable name that is not a literal becomes one, so
+                        // the executor binds it (the result rule already read it
+                        // folded; the shown form keeps the written argument for
+                        // error quotes).
+                        for k in owned.iter_mut().step_by(2) {
+                            if !matches!(k.expr.node, ExprNode::Literal(_))
+                                && let Some(Constant::String(name)) =
+                                    self.fold(&k.expr, self.ctx.conf.ansi)
+                            {
+                                let lit = Arc::new(
+                                    Expr::new(ExprNode::Literal(Literal::String(name)))
+                                        .with_origin(k.expr.origin),
+                                );
+                                k.shown = Some(Arc::clone(&k.expr));
+                                k.expr = lit;
+                            }
+                        }
+                        (&owned[..], n)
+                    } else {
+                        (&kids[..], n)
+                    };
+                // Only for built-ins: a qualified session UDF named like a
+                // conditional (`session.nvl`, `system.session.nvl`, ...) runs
+                // the UDF, while a bare `nvl` runs the built-in (which wins
+                // the search path).
+                if is_builtin_entry(&entry)
+                    && let Some(which) = Conditional::of(lookup_name)
+                {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
@@ -1430,15 +1528,20 @@ impl Resolver<'_> {
                 // The registry lookup is ASCII case-insensitive and
                 // `id.name()` is the canonical lower-case name, so a
                 // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
-                let is_schema_of_csv = entry.id.name() == "schema_of_csv";
-                if lookup_name.eq_ignore_ascii_case("mask") {
+                // Only for the built-in: a qualified session UDF of the
+                // same name runs the UDF.
+                let is_schema_of_csv =
+                    is_builtin_entry(&entry) && entry.id.name() == "schema_of_csv";
+                if is_builtin_entry(&entry) && entry.id.name() == "mask" {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
                 // `typeof(x)` is Spark's `RuntimeReplaceable`; its type
-                // name is known once the call is typed.
-                let is_typeof = entry.id.name() == "typeof";
+                // name is known once the call is typed. Only for the
+                // built-in: a qualified session UDF named `typeof` runs
+                // the UDF.
+                let is_typeof = is_builtin_entry(&entry) && entry.id.name() == "typeof";
                 let call = ResolvedFunction {
                     id: entry.id,
                     kind: entry.kind,
@@ -1450,7 +1553,7 @@ impl Resolver<'_> {
                     deterministic: entry.deterministic,
                 };
                 let expr = rebuilt(ExprNode::Resolved(ResolvedExpr::Function(call)));
-                let shown = self.call_shown(lookup_name, &expr, kids, &call_kids);
+                let shown = self.call_shown(&parts, &expr, kids, &call_kids);
                 // `typeof(x)` is Spark's `RuntimeReplaceable`: the analyzer
                 // replaces it with the type name literal, keeping the call
                 // as the shown form (the executor gets no type logic).
@@ -1677,14 +1780,16 @@ impl Resolver<'_> {
 
     /// `ntile`'s bucket count as the literal it folds to (`ntile(1 + 1)`):
     /// the window operator reads a literal. The rule above checked it is an
-    /// `int` constant.
+    /// `int` constant. Only for the built-in: a session UDF named `ntile`
+    /// keeps its arguments as written.
     #[inline(never)]
     fn folded_ntile(
         entry: &FunctionEntry,
         constants: &[Option<Constant>],
         mut kids: Vec<Bound>,
     ) -> Vec<Bound> {
-        if entry.id.name() == "ntile"
+        if is_builtin_entry(entry)
+            && entry.id.name() == "ntile"
             && let (Some(Some(Constant::Integral(n))), Some(k)) =
                 (constants.first(), kids.first_mut())
             && let Ok(n) = i32::try_from(*n)
@@ -1753,7 +1858,7 @@ impl Resolver<'_> {
     #[inline(never)]
     fn call_shown(
         &self,
-        name: &str,
+        name: &[String],
         expr: &Expr,
         kids: &[Bound],
         cast: &[Bound],
@@ -1771,15 +1876,22 @@ impl Resolver<'_> {
             self.ctx.conf.decimal_precision_loss,
             self.ctx.conf.map_key_dedup_last_win,
             self.ctx.profile,
+            self.ctx.conf.session_zone,
         );
-        fold::constant(e, conf, &mut self.folds.borrow_mut())
+        fold::constant(
+            e,
+            conf,
+            &mut self.folds.borrow_mut(),
+            self.ctx.functions.as_ref(),
+        )
     }
 
-    fn legacy_day_count(&self, name: &str, kids: &[Bound]) -> Option<Vec<Bound>> {
+    fn legacy_day_count(&self, name: &[String], kids: &[Bound]) -> Option<Vec<Bound>> {
+        let last = name.last().map(String::as_str).unwrap_or("");
         if self.ctx.conf.ansi
             || !["date_add", "dateadd", "date_sub"]
                 .iter()
-                .any(|n| name.eq_ignore_ascii_case(n))
+                .any(|n| last.eq_ignore_ascii_case(n))
         {
             return None;
         }
@@ -3681,14 +3793,13 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             } else {
                 format!("{}.{name}", qualifier.join("."))
             };
-            call(
-                &qualified,
-                Builtin::from_name(name),
-                *distinct,
-                k,
-                Some(arg_names),
-                None,
-            )
+            // Operators are never qualified, so only a bare name matches.
+            let op = if qualifier.is_empty() {
+                Builtin::from_name(name)
+            } else {
+                None
+            };
+            call(&qualified, op, *distinct, k, Some(arg_names), None)
         }
         // Spark's `lag`/`lead` show `input, offset, default`, and
         // `nth_value` `input, offset` then ` ignore nulls` when set.
@@ -3721,6 +3832,7 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             let op = match &f.id {
                 FunctionId::Builtin(b) => Some(*b),
                 FunctionId::Registry { name, .. } => builtin_op(name, f.args.len()),
+                FunctionId::Udf { .. } => None,
             };
             let n = f.args.len().min(k.len());
             let text = call(
@@ -4289,7 +4401,89 @@ const fn frame_shape(b: &crate::FrameBound) -> u8 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use super::super::{Arity, Constant, ResultType};
     use super::*;
+    use super::{Bound, Resolver};
+    use crate::{
+        AttrId, BoundColumn, Expr, ExprNode, FunctionCall, FunctionId, FunctionKind, Literal,
+        ResolvedExpr,
+    };
+    use krishiv_types::DataType;
+
+    /// A `FunctionEntry` for `id`: what the session registry builds for the
+    /// built-in window function `ntile` and for a session UDF of that name.
+    fn entry(id: FunctionId) -> super::super::FunctionEntry {
+        let result: ResultType = Arc::new(|_| {
+            Ok(super::super::ArgType {
+                data_type: None,
+                nullable: true,
+            })
+        });
+        super::super::FunctionEntry {
+            id,
+            kind: FunctionKind::Scalar,
+            arity: Arity::any(),
+            inputs: super::super::Inputs::Any,
+            result,
+            deterministic: true,
+        }
+    }
+
+    /// One bound `1 + 1` argument, as `typed_call` passes it.
+    fn kid() -> Bound {
+        let one = || Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(1))));
+        Bound {
+            expr: Arc::new(Expr::new(ExprNode::Function(FunctionCall {
+                name: "+".to_owned(),
+                qualifier: Vec::new(),
+                arg_names: Vec::new(),
+                args: vec![one(), one()],
+                distinct: false,
+                filter: None,
+            }))),
+            ty: super::super::ArgType {
+                data_type: Some(DataType::Integer),
+                nullable: false,
+            },
+            agg: None,
+            win: None,
+            outer: None,
+            lateral: Vec::new(),
+            shown: None,
+        }
+    }
+
+    /// `ntile`'s bucket count folds to its literal for the built-in only: a
+    /// session UDF named `ntile` keeps its arguments as written. The
+    /// difference is analyzer-level (the optimizer folds `1 + 1` either
+    /// way), so it is checked here rather than through query results.
+    #[test]
+    fn folded_ntile_only_folds_for_builtins() {
+        let constants = vec![Some(Constant::Integral(2))];
+        let builtin = entry(FunctionId::Registry {
+            name: "ntile".to_owned(),
+            id: 0,
+        });
+        let folded = Resolver::folded_ntile(&builtin, &constants, vec![kid()]);
+        assert!(
+            matches!(&folded[0].expr.node, ExprNode::Literal(Literal::Integer(2))),
+            "the built-in folds its bucket count"
+        );
+        let udf = entry(FunctionId::Udf {
+            name: "ntile".to_owned(),
+            version: 1,
+        });
+        let kept = Resolver::folded_ntile(&udf, &constants, vec![kid()]);
+        assert!(
+            matches!(
+                &kept[0].expr.node,
+                ExprNode::Function(f) if f.name == "+" && f.qualifier.is_empty()
+            ),
+            "a session UDF keeps its argument as written"
+        );
+    }
 
     #[test]
     fn a_map_literal_types_and_prints_as_a_string_map() {
@@ -4401,5 +4595,54 @@ mod tests {
             suggestions("str", params.into_iter()),
             "`str` `otherChar` `digitChar`"
         );
+    }
+
+    /// Operators are never qualified: only a bare name matches an operator,
+    /// so `session.+` prints as written.
+    #[test]
+    fn qualified_operators_print_as_written() {
+        let qualified = Expr::new(ExprNode::Function(FunctionCall {
+            name: "+".to_owned(),
+            qualifier: vec!["session".to_owned()],
+            args: vec![
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(1)))),
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(2)))),
+            ],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+        }));
+        assert_eq!(pretty(&qualified, None), "session.+(1, 2)");
+        let bare = Expr::new(ExprNode::Function(FunctionCall {
+            name: "+".to_owned(),
+            qualifier: Vec::new(),
+            args: vec![
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(1)))),
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Integer(2)))),
+            ],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+        }));
+        assert_eq!(pretty(&bare, None), "(1 + 2)");
+    }
+
+    /// The test helper's result rule answers typeless and nullable.
+    #[test]
+    fn test_entries_answer_without_a_type() {
+        use krishiv_functions::signature::CallTypes;
+        let call = CallTypes::new(&[], &[]);
+        for id in [
+            FunctionId::Builtin(Builtin::Add),
+            FunctionId::Udf {
+                name: "my_udf".to_owned(),
+                version: 1,
+            },
+        ] {
+            let e = entry(id);
+            let ty = (e.result)(&call).unwrap();
+            assert_eq!(ty.data_type, None);
+            assert!(ty.nullable);
+        }
     }
 }

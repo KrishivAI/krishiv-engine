@@ -1690,7 +1690,7 @@ fn takes_null_treatment(name: &str) -> bool {
 fn is_predicate(e: &IrExpr) -> bool {
     match &e.node {
         ExprNode::Function(f) => matches!(
-            Builtin::from_name(&f.name),
+            f.unqualified().and_then(Builtin::from_name),
             Some(
                 Builtin::Eq
                     | Builtin::EqNullSafe

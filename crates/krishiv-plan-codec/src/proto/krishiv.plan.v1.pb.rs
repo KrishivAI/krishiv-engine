@@ -834,19 +834,24 @@ pub struct Function {
     pub nullable: bool,
     #[prost(bool, tag = "9")]
     pub deterministic: bool,
-    /// A canonical operator name (`==`, `and`, ...), or a registry function.
-    #[prost(oneof = "function::Id", tags = "1, 2")]
+    /// A canonical operator name (`==`, `and`, ...), a registry function, or
+    /// a session UDF.
+    #[prost(oneof = "function::Id", tags = "1, 2, 10")]
     pub id: ::core::option::Option<function::Id>,
 }
 /// Nested message and enum types in `Function`.
 pub mod function {
-    /// A canonical operator name (`==`, `and`, ...), or a registry function.
+    /// A canonical operator name (`==`, `and`, ...), a registry function, or
+    /// a session UDF.
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Id {
         #[prost(string, tag = "1")]
         Builtin(::prost::alloc::string::String),
         #[prost(message, tag = "2")]
         Registry(super::RegistryFunction),
+        /// feature: rust_udf
+        #[prost(message, tag = "10")]
+        Udf(super::UdfFunction),
     }
 }
 /// A function of the registry, by name and registry id. A worker must run
@@ -857,6 +862,16 @@ pub struct RegistryFunction {
     pub name: ::prost::alloc::string::String,
     #[prost(uint32, tag = "2")]
     pub id: u32,
+}
+/// A session-registered native Rust UDF, by name and implementation
+/// version. A worker must hold the same version to run the plan.
+/// feature: rust_udf
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UdfFunction {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub version: u64,
 }
 /// A Spark type.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

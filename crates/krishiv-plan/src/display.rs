@@ -650,7 +650,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
         })) => {
             let op = match id {
                 FunctionId::Builtin(b) => Some(*b),
-                FunctionId::Registry { .. } => None,
+                FunctionId::Registry { .. } | FunctionId::Udf { .. } => None,
             };
             call(id.name(), op, args, &[], *distinct, filter.as_deref(), out);
         }

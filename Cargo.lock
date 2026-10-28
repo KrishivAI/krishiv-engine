@@ -1522,6 +1522,7 @@ dependencies = [
  "krishiv-plan",
  "krishiv-sql",
  "krishiv-types",
+ "krishiv-udf-sdk",
  "loom",
  "object_store",
  "proptest",
@@ -1548,6 +1549,7 @@ dependencies = [
  "krishiv-common",
  "krishiv-kernels",
  "krishiv-types",
+ "krishiv-udf-sdk",
  "regex-automata",
  "regex-syntax",
 ]
@@ -1639,6 +1641,7 @@ dependencies = [
  "krishiv-plan",
  "krishiv-sql",
  "krishiv-types",
+ "krishiv-udf-sdk",
  "proptest",
  "serde_json",
 ]
@@ -1656,6 +1659,7 @@ dependencies = [
  "krishiv-io",
  "krishiv-kernels",
  "krishiv-types",
+ "krishiv-udf-sdk",
  "proptest",
  "serde_json",
  "thiserror",
@@ -1724,12 +1728,14 @@ dependencies = [
  "insta",
  "krishiv-common",
  "krishiv-exec",
+ "krishiv-functions",
  "krishiv-io",
  "krishiv-memory",
  "krishiv-optimizer",
  "krishiv-plan",
  "krishiv-sql",
  "krishiv-types",
+ "krishiv-udf-sdk",
  "object_store",
  "parquet",
  "serde_json",
@@ -1818,6 +1824,10 @@ dependencies = [
 [[package]]
 name = "krishiv-udf-sdk"
 version = "0.1.0-alpha"
+dependencies = [
+ "arrow-array",
+ "krishiv-types",
+]
 
 [[package]]
 name = "krishiv-ui-assets"
