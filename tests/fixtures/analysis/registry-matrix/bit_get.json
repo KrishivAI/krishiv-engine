@@ -25,22 +25,6 @@
       "reason": "SELECT bit_get(INTERVAL '1 02:03:04' DAY TO SECOND, 0) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "bit_get#9e9ba98e7b02/ansi_on",
-      "reason": "SELECT bit_get(map('a', 1), 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_get#9e9ba98e7b02/ansi_off",
-      "reason": "SELECT bit_get(map('a', 1), 0) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_get#ce44b5105527/ansi_on",
-      "reason": "SELECT bit_get(11, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "bit_get#ce44b5105527/ansi_off",
-      "reason": "SELECT bit_get(11, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "bit_get#d65837d86911/ansi_on",
       "reason": "SELECT bit_get(11, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

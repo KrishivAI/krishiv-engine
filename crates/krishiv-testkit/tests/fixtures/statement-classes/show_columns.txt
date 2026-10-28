@@ -1,0 +1,25 @@
+DDL	CREATE DATABASE showdb
+SESSION	USE showdb
+DDL	CREATE TABLE showcolumn1 (col1 int, `col 2` int) USING json
+DDL	CREATE TABLE showcolumn2 (price int, qty int, year int, month int) USING parquet partitioned by (year, month)
+SESSION	CREATE TEMPORARY VIEW showColumn3 (col3 int, `col 4` int) USING json
+DDL	CREATE GLOBAL TEMP VIEW showColumn4 AS SELECT 1 as col1, 'abc' as `col 5`
+READ	SHOW COLUMNS IN showcolumn1
+READ	SHOW COLUMNS IN showdb.showcolumn1
+READ	SHOW COLUMNS IN showcolumn1 FROM showdb
+READ	SHOW COLUMNS IN showcolumn2 IN showdb
+READ	SHOW COLUMNS IN badtable FROM showdb
+READ	SHOW COLUMNS IN showdb.showcolumn1 from SHOWDB
+READ	SHOW COLUMNS IN showdb.showcolumn1 FROM baddb
+READ	SHOW COLUMNS IN showcolumn3
+READ	SHOW COLUMNS IN showdb.showcolumn3
+READ	SHOW COLUMNS IN showcolumn3 FROM showdb
+READ	SHOW COLUMNS IN showcolumn4
+READ	SHOW COLUMNS IN global_temp.showcolumn4
+READ	SHOW COLUMNS IN showcolumn4 FROM global_temp
+DDL	DROP TABLE showcolumn1
+DDL	DROP TABLE showColumn2
+SESSION	DROP VIEW  showcolumn3
+DDL	DROP VIEW  global_temp.showcolumn4
+SESSION	use default
+DDL	DROP DATABASE showdb

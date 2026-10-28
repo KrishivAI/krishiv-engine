@@ -17,36 +17,12 @@
       "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "parse_url#6a6783c67e72/ansi_on",
-      "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#6a6783c67e72/ansi_off",
-      "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "parse_url#7e07c0898f86/ansi_on",
       "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "parse_url#7e07c0898f86/ansi_off",
       "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#81533c28fb16/ansi_on",
-      "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#81533c28fb16/ansi_off",
-      "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#85e9171235fd/ansi_on",
-      "reason": "SELECT parse_url(map('a', 1), 'HOST') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#85e9171235fd/ansi_off",
-      "reason": "SELECT parse_url(map('a', 1), 'HOST') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "parse_url#8d44c1f74ada/ansi_on",
@@ -71,22 +47,6 @@
     {
       "id": "parse_url#c943054aa066/ansi_off",
       "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#c9d56ad4c5d4/ansi_on",
-      "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', map('a', 1), 'query') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#c9d56ad4c5d4/ansi_off",
-      "reason": "SELECT parse_url('http://spark.apache.org/path?query=1', map('a', 1), 'query') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#ce48003b52e3/ansi_on",
-      "reason": "SELECT parse_url(map('a', 1), 'QUERY', 'query') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "parse_url#ce48003b52e3/ansi_off",
-      "reason": "SELECT parse_url(map('a', 1), 'QUERY', 'query') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "parse_url#d412104dc89e/ansi_on",

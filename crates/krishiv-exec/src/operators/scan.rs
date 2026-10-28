@@ -404,6 +404,16 @@ impl ScanPushdown for MemoryScan {
     }
 
     fn with_memory_batches(&self, batches: Vec<Batch>) -> Result<Arc<dyn ScanPushdown>> {
+        if let Some(bad) = batches
+            .iter()
+            .find(|b| b.schema().fields() != self.table.fields())
+        {
+            return Err(internal(format!(
+                "scan batch has fields {:?}, expected {:?}",
+                bad.schema().fields(),
+                self.table.fields()
+            )));
+        }
         Ok(Arc::new(Self {
             table: Arc::clone(&self.table),
             batches: batches.into(),

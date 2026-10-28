@@ -10,11 +10,11 @@
     },
     {
       "id": "schema_of_csv#6dd58f097201/ansi_on",
-      "reason": "SELECT schema_of_csv(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT schema_of_csv(map('a', 1)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "schema_of_csv#6dd58f097201/ansi_off",
-      "reason": "SELECT schema_of_csv(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+      "reason": "SELECT schema_of_csv(map('a', 1)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "schema_of_csv#738ea2cc8e60/ansi_on",

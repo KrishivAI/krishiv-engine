@@ -1,0 +1,32 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW basic_data AS SELECT * FROM VALUES
+READ	SELECT max_by(name, score, 3) FROM basic_data
+READ	SELECT min_by(name, score, 3) FROM basic_data
+READ	SELECT max_by(name, score, 1) FROM basic_data
+READ	SELECT min_by(name, score, 1) FROM basic_data
+READ	SELECT max_by(name, score, 10) FROM basic_data
+READ	SELECT min_by(name, score, 10) FROM basic_data
+SESSION	CREATE OR REPLACE TEMPORARY VIEW dept_data AS SELECT * FROM VALUES
+READ	SELECT dept, max_by(emp, salary, 2) FROM dept_data GROUP BY dept ORDER BY dept
+READ	SELECT dept, min_by(emp, salary, 2) FROM dept_data GROUP BY dept ORDER BY dept
+SESSION	CREATE OR REPLACE TEMPORARY VIEW null_data AS SELECT * FROM VALUES
+READ	SELECT max_by(x, y, 2) FROM null_data
+READ	SELECT min_by(x, y, 2) FROM null_data
+SESSION	CREATE OR REPLACE TEMPORARY VIEW null_value_data AS SELECT * FROM VALUES
+READ	SELECT max_by(x, y, 2) FROM null_value_data
+READ	SELECT min_by(x, y, 2) FROM null_value_data
+SESSION	CREATE OR REPLACE TEMPORARY VIEW typed_data AS SELECT * FROM VALUES
+READ	SELECT max_by(name, score, 2) FROM typed_data
+READ	SELECT min_by(name, score, 2) FROM typed_data
+SESSION	CREATE OR REPLACE TEMPORARY VIEW date_data AS SELECT * FROM VALUES
+READ	SELECT max_by(event, event_date, 2) FROM date_data
+READ	SELECT min_by(event, event_date, 2) FROM date_data
+READ	SELECT dept, emp, salary,
+READ	SELECT max_by(name, score, 0) FROM basic_data
+READ	SELECT max_by(name, score, -1) FROM basic_data
+READ	SELECT max_by(name, score, 100001) FROM basic_data
+SESSION	DROP VIEW basic_data
+SESSION	DROP VIEW dept_data
+SESSION	DROP VIEW null_data
+SESSION	DROP VIEW null_value_data
+SESSION	DROP VIEW typed_data
+SESSION	DROP VIEW date_data

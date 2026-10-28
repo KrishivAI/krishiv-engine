@@ -1,0 +1,30 @@
+SESSION	CREATE TEMPORARY VIEW tenk2 AS SELECT * FROM tenk1
+DDL	CREATE TABLE empsalary (
+WRITE	INSERT INTO empsalary VALUES
+DDL	create table datetimes (
+WRITE	insert into datetimes values
+READ	WITH cte (x) AS (
+READ	WITH cte (x) AS (
+READ	WITH cte (x) AS (
+READ	WITH cte (x) AS (
+READ	SELECT count(*) OVER (PARTITION BY four) FROM (SELECT * FROM tenk1 UNION ALL SELECT * FROM tenk2)s LIMIT 0
+DDL	create table t1 (f1 int, f2 int) using parquet
+WRITE	insert into t1 values (1,1),(1,2),(2,2)
+READ	select f1, sum(f1) over (partition by f1
+READ	select f1, sum(f1) over (partition by f1 order by f2
+READ	select f1, sum(f1) over (partition by f1, f1 order by f2
+READ	select f1, sum(f1) over (partition by f1, f2 order by f2
+READ	SELECT rank() OVER (ORDER BY length('abc'))
+READ	SELECT * FROM empsalary WHERE row_number() OVER (ORDER BY salary) < 10
+READ	SELECT * FROM empsalary INNER JOIN tenk1 ON row_number() OVER (ORDER BY salary) < 10
+READ	SELECT rank() OVER (ORDER BY 1), count(*) FROM empsalary GROUP BY 1
+PARSE_ERROR	SELECT * FROM rank() OVER (ORDER BY random())
+READ	SELECT * FROM empsalary WHERE (rank() OVER (ORDER BY random())) > 10
+READ	SELECT * FROM empsalary WHERE rank() OVER (ORDER BY random())
+PARSE_ERROR	select rank() OVER (PARTITION BY four, ORDER BY ten) FROM tenk1
+READ	SELECT range(1, 100) OVER () FROM empsalary
+READ	SELECT ntile(0) OVER (ORDER BY ten), ten, four FROM tenk1
+READ	SELECT nth_value(four, 0) OVER (ORDER BY ten), ten, four FROM tenk1
+DDL	DROP TABLE empsalary
+DDL	DROP TABLE datetimes
+DDL	DROP TABLE t1

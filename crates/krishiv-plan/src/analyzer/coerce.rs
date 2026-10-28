@@ -101,6 +101,12 @@ pub(super) enum Mismatch {
     /// `DATA_DIFF_TYPES`: the argument types; whether Spark lists them as
     /// `["A", "B"]` (else `("A" or "B")`).
     DataDiff(Vec<Option<DataType>>, bool),
+    /// `CREATE_MAP_KEY_DIFF_TYPES`: the key types of `map`.
+    CreateMapKeyDiff(Vec<Option<DataType>>),
+    /// `CREATE_MAP_VALUE_DIFF_TYPES`: the value types of `map`.
+    CreateMapValueDiff(Vec<Option<DataType>>),
+    /// `MAP_CONCAT_DIFF_TYPES`: the argument types of `map_concat`.
+    MapConcatDiffTypes(Vec<Option<DataType>>),
     /// `INVALID_ORDERING_TYPE`: a type that does not order (a map).
     InvalidOrdering(DataType),
     /// A coercion Krishiv does not implement.
@@ -251,6 +257,16 @@ fn complex(x: &DataType, y: &DataType, rules: Rules, how: Nested) -> Option<Data
         }
         _ => None,
     }
+}
+
+/// An untyped `NULL` as an array: `array<null>`.
+fn null_array() -> DataType {
+    ArrayType::new(DataType::Null, true).into()
+}
+
+/// An untyped `NULL` as a map: `map<null, null>`.
+fn null_map() -> DataType {
+    MapType::new(DataType::Null, DataType::Null, true).into()
 }
 
 /// An element of a nested type as an argument: `void` is an untyped NULL.
@@ -861,6 +877,9 @@ pub(super) fn inputs(
 ) -> Result<Vec<Option<DataType>>, Mismatch> {
     match inputs {
         Inputs::Common => common_casts(args, args, Rules::of(call)),
+        Inputs::Map => map_casts(args, Rules::of(call)),
+        Inputs::MapConcat => map_concat_casts(args, Rules::of(call)),
+        Inputs::MapContainsKey => map_contains_key_casts(args, call),
         Inputs::CommonNoStrings => {
             let typed = args.iter().filter(|a| a.ty.is_some());
             let strings = typed
@@ -979,6 +998,95 @@ fn common_casts(
     Ok(args.iter().map(|a| cast_to(a.ty, t.as_ref())).collect())
 }
 
+/// `map(k1, v1, ...)`: the keys (even positions) and the values (odd) each
+/// meet at their common type (`CREATE_MAP_KEY_DIFF_TYPES` and
+/// `CREATE_MAP_VALUE_DIFF_TYPES` when either side has none).
+fn map_casts(args: &[Arg<'_>], rules: Rules) -> Result<Vec<Option<DataType>>, Mismatch> {
+    let keys: Vec<Arg<'_>> = args.iter().step_by(2).copied().collect();
+    let values: Vec<Arg<'_>> = args.iter().skip(1).step_by(2).copied().collect();
+    let key_type = common_all(&keys, rules)
+        .ok_or_else(|| Mismatch::CreateMapKeyDiff(keys.iter().map(|a| a.ty.cloned()).collect()))?;
+    let value_type = common_all(&values, rules).ok_or_else(|| {
+        Mismatch::CreateMapValueDiff(values.iter().map(|a| a.ty.cloned()).collect())
+    })?;
+    Ok(args
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let to = if i % 2 == 0 { &key_type } else { &value_type };
+            cast_to(a.ty, to.as_ref())
+        })
+        .collect())
+}
+
+/// `map_concat(m1, ...)`: every argument must be a map
+/// (`MAP_CONCAT_DIFF_TYPES` otherwise, an untyped `NULL` included). With
+/// ANSI the maps must share the type ignoring nullability; without it they
+/// meet at their common type (`DATA_DIFF_TYPES` either way).
+fn map_concat_casts(args: &[Arg<'_>], rules: Rules) -> Result<Vec<Option<DataType>>, Mismatch> {
+    if args.iter().any(|a| !matches!(a.ty, Some(DataType::Map(_)))) {
+        return Err(Mismatch::MapConcatDiffTypes(
+            args.iter().map(|a| a.ty.cloned()).collect(),
+        ));
+    }
+    if rules.ansi {
+        let same = match args.first() {
+            None => true,
+            Some(first) => args.iter().all(|a| match (&first.ty, &a.ty) {
+                (Some(x), Some(y)) => x.equals_ignore_nullability(y),
+                _ => false,
+            }),
+        };
+        if !same {
+            return Err(Mismatch::DataDiff(
+                args.iter().map(|a| a.ty.cloned()).collect(),
+                false,
+            ));
+        }
+        return Ok(vec![None; args.len()]);
+    }
+    common_casts(args, args, rules)
+}
+
+/// `map_contains_key(map, key)`: the key meets the map's key type without
+/// string promotion, and both are cast to the wider key type; no casts when
+/// there is none (the result rule reports it).
+fn map_contains_key_casts(
+    args: &[Arg<'_>],
+    call: &CallTypes<'_>,
+) -> Result<Vec<Option<DataType>>, Mismatch> {
+    let [map, key] = args else {
+        return Ok(vec![None; args.len()]);
+    };
+    let wider = match (&map.ty, &key.ty) {
+        (Some(DataType::Map(m)), Some(k)) => {
+            let wider = wider_type_without_string_promotion(
+                &elem(m.key_type()),
+                &elem(k),
+                call.case_sensitive(),
+            );
+            match wider {
+                Some(Some(w)) => {
+                    if m.key_type().equals_ignore_nullability(&w) && !orderable(m.key_type()) {
+                        return Err(Mismatch::InvalidOrdering(m.key_type().clone()));
+                    }
+                    Some((m.value_type().clone(), m.value_contains_null(), w))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let Some((value_type, value_contains_null, wider)) = wider else {
+        return Ok(vec![None; args.len()]);
+    };
+    let map_type = MapType::new(wider.clone(), value_type, value_contains_null);
+    Ok(vec![
+        cast_to(map.ty, Some(&map_type.into())),
+        cast_to(key.ty, Some(&wider)),
+    ])
+}
+
 /// The literal `0` of `zeroifnull` and `nullifzero`.
 fn hidden_zero() -> Arg<'static> {
     Arg {
@@ -1009,7 +1117,9 @@ fn declared(types: &[InputType], args: &[Arg<'_>]) -> Result<Vec<Option<DataType
 fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType>> {
     use DataType as T;
     match (from, want) {
-        (_, InputType::Any) => Some(from.cloned()),
+        (_, InputType::Any)
+        | (Some(DataType::Map(_)), InputType::Map)
+        | (Some(DataType::Array(_)), InputType::Array) => Some(from.cloned()),
         (Some(t), InputType::Numeric { .. }) if is_numeric(t) => Some(Some(t.clone())),
         (None | Some(T::String), InputType::Numeric { .. }) => Some(Some(T::Double)),
         // A type of the collection stays; another takes the first member
@@ -1025,6 +1135,13 @@ fn implicit(from: Option<&DataType>, want: &InputType) -> Option<Option<DataType
         }),
         (None, InputType::Exact(t) | InputType::Strict(t)) => Some(Some(t.clone())),
         (Some(f), InputType::Strict(t)) => (f == t).then(|| Some(t.clone())),
+        (None, InputType::Map) => Some(Some(null_map())),
+        (None, InputType::Array) => Some(Some(null_array())),
+        // A nested type casts to another only element by element, where a
+        // target that may not hold NULL needs a source that has none.
+        (Some(f), InputType::Exact(t)) if f.is_nested() && t.is_nested() => {
+            nested_cast(f, t, CastMode::Ansi).then(|| Some(t.clone()))
+        }
         (Some(f), InputType::Exact(t)) => {
             let from_string = is_numeric(t)
                 || matches!(
@@ -1285,6 +1402,13 @@ pub(super) fn ordinal(i: usize) -> String {
 /// `NULL`.
 pub(super) fn quoted_type(t: Option<&DataType>) -> String {
     format!("\"{}\"", t.map_or_else(|| "VOID".to_owned(), DataType::sql))
+}
+
+/// Types as Spark's `CREATE_MAP_*_DIFF_TYPES` and `MAP_CONCAT_DIFF_TYPES`
+/// list them: `["INT", "STRING"]`.
+pub(super) fn list_types(types: &[Option<DataType>]) -> String {
+    let types: Vec<String> = types.iter().map(|t| quoted_type(t.as_ref())).collect();
+    format!("[{}]", types.join(", "))
 }
 
 #[cfg(test)]

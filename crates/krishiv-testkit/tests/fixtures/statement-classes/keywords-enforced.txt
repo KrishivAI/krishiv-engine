@@ -1,0 +1,2 @@
+READ	SELECT * from SQL_KEYWORDS()
+READ	SELECT keyword from SQL_KEYWORDS() WHERE reserved

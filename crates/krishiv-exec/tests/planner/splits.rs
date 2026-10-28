@@ -88,6 +88,7 @@ fn scan_plan(table: Arc<dyn TableProvider>, nullable: bool) -> (PhysicalPlan, Ar
             zone: None,
             query_start_micros: 0,
             user: Arc::from("u"),
+            map_key_dedup_last_win: false,
         },
     );
     let tables = Arc::new(Stub { table });

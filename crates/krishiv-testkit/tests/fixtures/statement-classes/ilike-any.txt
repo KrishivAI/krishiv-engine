@@ -1,0 +1,14 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW ilike_any_table AS SELECT * FROM (VALUES
+READ	SELECT company FROM ilike_any_table WHERE company ILIKE ANY ('%oo%', '%IN', 'fA%')
+READ	SELECT company FROM ilike_any_table WHERE company ILIKE ANY ('microsoft', '%yoo%')
+READ	select
+READ	SELECT company FROM ilike_any_table WHERE company ILIKE ANY ('%zZ%', pat)
+READ	SELECT company FROM ilike_any_table WHERE company NOT ILIKE ANY ('%oO%', '%iN', 'fa%')
+READ	SELECT company FROM ilike_any_table WHERE company NOT ILIKE ANY ('microsoft', '%yOo%')
+READ	SELECT company FROM ilike_any_table WHERE company NOT ILIKE ANY ('%oo%', 'Fa%')
+READ	SELECT company FROM ilike_any_table WHERE NOT company ILIKE ANY ('%OO%', 'fa%')
+READ	SELECT company FROM ilike_any_table WHERE company ILIKE ANY ('%oO%', NULL)
+READ	SELECT company FROM ilike_any_table WHERE company NOT ILIKE ANY ('%oo%', NULL)
+READ	SELECT company FROM ilike_any_table WHERE company ILIKE ANY (NULL, NULL)
+READ	SELECT company FROM ilike_any_table WHERE company NOT ILIKE ANY (NULL, NULL)
+PARSE_ERROR	SELECT company FROM ilike_any_table WHERE company ILIKE ANY ()

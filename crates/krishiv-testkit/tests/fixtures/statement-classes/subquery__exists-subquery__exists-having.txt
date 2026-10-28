@@ -1,0 +1,8 @@
+SESSION	CREATE TEMPORARY VIEW EMP(id, emp_name, hiredate, salary, dept_id) AS VALUES
+SESSION	CREATE TEMPORARY VIEW DEPT(dept_id, dept_name, state) AS VALUES
+SESSION	CREATE TEMPORARY VIEW BONUS(emp_name, bonus_amt) AS VALUES
+READ	SELECT dept_id, count(*)
+READ	SELECT *
+READ	SELECT dept_id,
+READ	SELECT *
+READ	SELECT *

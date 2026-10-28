@@ -1,0 +1,103 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+DDL	CREATE TABLE t1(col1 TIMESTAMP, col2 STRING)
+READ	SELECT a, COUNT(b) FROM testData
+READ	SELECT COUNT(a), COUNT(b) FROM testData
+READ	SELECT a, COUNT(b) FROM testData GROUP BY a
+READ	SELECT a, COUNT(b) FROM testData GROUP BY b
+READ	SELECT COUNT(a), COUNT(b) FROM testData GROUP BY a
+READ	SELECT 'foo', COUNT(a) FROM testData GROUP BY 1
+READ	SELECT 'foo' FROM testData WHERE a = 0 GROUP BY 1
+READ	SELECT 'foo', APPROX_COUNT_DISTINCT(a) FROM testData WHERE a = 0 GROUP BY 1
+READ	SELECT 'foo', MAX(STRUCT(a)) FROM testData WHERE a = 0 GROUP BY 1
+READ	SELECT a + b, COUNT(b) FROM testData GROUP BY a + b
+READ	SELECT a + 2, COUNT(b) FROM testData GROUP BY a + 1
+READ	SELECT a + 1 + 1, COUNT(b) FROM testData GROUP BY a + 1
+READ	SELECT count(1) FROM testData GROUP BY struct(a + 0.1 AS aa)
+READ	SELECT SKEWNESS(a), KURTOSIS(a), MIN(a), MAX(a), AVG(a), VARIANCE(a), STDDEV(a), SUM(a), COUNT(a)
+READ	SELECT COUNT(DISTINCT b), COUNT(DISTINCT b, c) FROM (SELECT 1 AS a, 2 AS b, 3 AS c) GROUP BY a
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testDataHasSameNameWithAlias AS SELECT * FROM VALUES
+READ	SELECT k AS a, COUNT(v) FROM testDataHasSameNameWithAlias GROUP BY a
+SESSION	set spark.sql.groupByAliases=false
+READ	SELECT a, COUNT(1) FROM testData WHERE false GROUP BY a
+READ	SELECT COUNT(1) FROM testData WHERE false
+READ	SELECT 1 FROM (SELECT COUNT(1) FROM testData WHERE false) t
+READ	SELECT 1 from (
+READ	SELECT corr(DISTINCT x, y), corr(DISTINCT y, x), count(*)
+READ	SELECT 1 FROM range(10) HAVING true
+READ	SELECT 1 FROM range(10) HAVING MAX(id) > 0
+READ	SELECT id FROM range(10) HAVING id > 0
+SESSION	SET spark.sql.legacy.parser.havingWithoutGroupByAsWhere=true
+READ	SELECT 1 FROM range(10) HAVING true
+READ	SELECT 1 FROM range(10) HAVING MAX(id) > 0
+READ	SELECT id FROM range(10) HAVING id > 0
+SESSION	SET spark.sql.legacy.parser.havingWithoutGroupByAsWhere=false
+SESSION	CREATE OR REPLACE TEMPORARY VIEW test_agg AS SELECT * FROM VALUES
+READ	SELECT every(v), some(v), any(v), bool_and(v), bool_or(v) FROM test_agg WHERE 1 = 0
+READ	SELECT every(v), some(v), any(v), bool_and(v), bool_or(v) FROM test_agg WHERE k = 4
+READ	SELECT every(v), some(v), any(v), bool_and(v), bool_or(v) FROM test_agg WHERE k = 5
+READ	SELECT k, every(v), some(v), any(v), bool_and(v), bool_or(v) FROM test_agg GROUP BY k
+READ	SELECT k, every(v) FROM test_agg GROUP BY k HAVING every(v) = false
+READ	SELECT k, every(v) FROM test_agg GROUP BY k HAVING every(v) IS NULL
+READ	SELECT k,
+READ	SELECT k,
+READ	SELECT every(1)
+READ	SELECT some(1S)
+READ	SELECT any(1L)
+READ	SELECT every("true")
+READ	SELECT bool_and(1.0)
+READ	SELECT bool_or(1.0D)
+READ	SELECT k, v, every(v) OVER (PARTITION BY k ORDER BY v) FROM test_agg
+READ	SELECT k, v, some(v) OVER (PARTITION BY k ORDER BY v) FROM test_agg
+READ	SELECT k, v, any(v) OVER (PARTITION BY k ORDER BY v) FROM test_agg
+READ	SELECT k, v, bool_and(v) OVER (PARTITION BY k ORDER BY v) FROM test_agg
+READ	SELECT k, v, bool_or(v) OVER (PARTITION BY k ORDER BY v) FROM test_agg
+READ	SELECT count(*) FROM test_agg HAVING count(*) > 1L
+READ	SELECT k, max(v) FROM test_agg GROUP BY k HAVING max(v) = true
+READ	SELECT * FROM (SELECT COUNT(*) AS cnt FROM test_agg) WHERE cnt > 1L
+READ	SELECT count(*) FROM test_agg WHERE count(*) > 1L
+READ	SELECT count(*) FROM test_agg WHERE count(*) + 1L > 1L
+READ	SELECT count(*) FROM test_agg WHERE k = 1 or k = 2 or count(*) + 1L > 1L or max(k) > 1
+READ	SELECT AVG(DISTINCT decimal_col), SUM(DISTINCT decimal_col) FROM VALUES (CAST(1 AS DECIMAL(9, 0))) t(decimal_col)
+READ	SELECT not(a IS NULL), count(*) AS c
+READ	SELECT if(not(a IS NULL), rand(0), 1), count(*) AS c
+READ	SELECT
+READ	SELECT histogram_numeric(col, 3) FROM VALUES (1), (2), (3) AS tab(col)
+READ	SELECT histogram_numeric(col, 3) FROM VALUES (1L), (2L), (3L) AS tab(col)
+READ	SELECT histogram_numeric(col, 3) FROM VALUES (1F), (2F), (3F) AS tab(col)
+READ	SELECT histogram_numeric(col, 3) FROM VALUES (1D), (2D), (3D) AS tab(col)
+READ	SELECT histogram_numeric(col, 3) FROM VALUES (1S), (2S), (3S) AS tab(col)
+READ	SELECT histogram_numeric(col, 3) FROM VALUES
+READ	SELECT histogram_numeric(col, 3) FROM VALUES
+READ	SELECT histogram_numeric(col, 3) FROM VALUES
+READ	SELECT histogram_numeric(col, 3) FROM VALUES
+READ	SELECT histogram_numeric(col, 3) FROM VALUES
+READ	SELECT histogram_numeric(col, 3) FROM VALUES (TIMESTAMP '2017-03-01 00:00:00'),
+READ	SELECT histogram_numeric(col, 3) FROM VALUES (INTERVAL '100-00' YEAR TO MONTH),
+READ	SELECT histogram_numeric(col, 3) FROM VALUES (INTERVAL '12 20:4:0' DAY TO SECOND),
+READ	SELECT histogram_numeric(col, 3)
+READ	SELECT histogram_numeric(col, 3)
+READ	SELECT histogram_numeric(col, 3)
+READ	SELECT
+READ	SELECT
+READ	SELECT c * 2 AS d
+READ	SELECT col1, count(*) AS cnt
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT count(*)
+READ	SELECT col1 FROM t1 GROUP BY ALL HAVING first(col2) = 'a'
+READ	SELECT col1 FROM t1 GROUP BY col1 HAVING EXISTS (SELECT first(t1.col2) == 0)
+READ	SELECT col1 FROM t1 GROUP BY ALL HAVING last(col2) = 'a'
+READ	SELECT col1 FROM t1 GROUP BY col1 HAVING EXISTS (SELECT last(t1.col2) == 0)
+READ	SELECT col1 FROM t1 GROUP BY ALL HAVING any_value(col2) = 'a'
+READ	SELECT col1 FROM t1 GROUP BY col1 HAVING EXISTS (SELECT any_value(t1.col2) == 0)
+DDL	DROP TABLE t1

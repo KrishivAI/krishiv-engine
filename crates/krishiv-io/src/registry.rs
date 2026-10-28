@@ -28,7 +28,7 @@ pub const SPARK_FILE_SOURCES: &[&str] = &[
     "csv",
     "text",
     "binaryfile",
-    "xml",
+    "image",
     "libsvm",
 ];
 
@@ -130,6 +130,29 @@ impl FormatRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spark_file_sources_match_sparks_builtins() {
+        // `xml` is the external spark-xml package, not a built-in; `image`
+        // is a built-in image source.
+        assert!(!is_spark_file_source("xml"));
+        assert!(!is_spark_file_source("XML"));
+        assert!(!is_spark_file_source("delta"));
+        for name in [
+            "parquet",
+            "orc",
+            "avro",
+            "json",
+            "csv",
+            "text",
+            "binaryfile",
+            "binaryFile",
+            "image",
+            "libsvm",
+        ] {
+            assert!(is_spark_file_source(name), "{name}");
+        }
+    }
 
     #[test]
     fn unknown_names_fail_with_data_source_not_found() {

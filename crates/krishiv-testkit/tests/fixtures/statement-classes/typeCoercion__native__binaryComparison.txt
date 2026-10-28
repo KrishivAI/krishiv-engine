@@ -1,0 +1,265 @@
+SESSION	CREATE TEMPORARY VIEW t AS SELECT 1
+READ	SELECT cast(1 as binary) = '1' FROM t
+READ	SELECT cast(1 as binary) > '2' FROM t
+READ	SELECT cast(1 as binary) >= '2' FROM t
+READ	SELECT cast(1 as binary) < '2' FROM t
+READ	SELECT cast(1 as binary) <= '2' FROM t
+READ	SELECT cast(1 as binary) <> '2' FROM t
+READ	SELECT cast(1 as binary) = cast(null as string) FROM t
+READ	SELECT cast(1 as binary) > cast(null as string) FROM t
+READ	SELECT cast(1 as binary) >= cast(null as string) FROM t
+READ	SELECT cast(1 as binary) < cast(null as string) FROM t
+READ	SELECT cast(1 as binary) <= cast(null as string) FROM t
+READ	SELECT cast(1 as binary) <> cast(null as string) FROM t
+READ	SELECT '1' = cast(1 as binary) FROM t
+READ	SELECT '2' > cast(1 as binary) FROM t
+READ	SELECT '2' >= cast(1 as binary) FROM t
+READ	SELECT '2' < cast(1 as binary) FROM t
+READ	SELECT '2' <= cast(1 as binary) FROM t
+READ	SELECT '2' <> cast(1 as binary) FROM t
+READ	SELECT cast(null as string) = cast(1 as binary) FROM t
+READ	SELECT cast(null as string) > cast(1 as binary) FROM t
+READ	SELECT cast(null as string) >= cast(1 as binary) FROM t
+READ	SELECT cast(null as string) < cast(1 as binary) FROM t
+READ	SELECT cast(null as string) <= cast(1 as binary) FROM t
+READ	SELECT cast(null as string) <> cast(1 as binary) FROM t
+READ	SELECT cast(1 as tinyint) = '1' FROM t
+READ	SELECT cast(1 as tinyint) > '2' FROM t
+READ	SELECT cast(1 as tinyint) >= '2' FROM t
+READ	SELECT cast(1 as tinyint) < '2' FROM t
+READ	SELECT cast(1 as tinyint) <= '2' FROM t
+READ	SELECT cast(1 as tinyint) <> '2' FROM t
+READ	SELECT cast(1 as tinyint) = cast(null as string) FROM t
+READ	SELECT cast(1 as tinyint) > cast(null as string) FROM t
+READ	SELECT cast(1 as tinyint) >= cast(null as string) FROM t
+READ	SELECT cast(1 as tinyint) < cast(null as string) FROM t
+READ	SELECT cast(1 as tinyint) <= cast(null as string) FROM t
+READ	SELECT cast(1 as tinyint) <> cast(null as string) FROM t
+READ	SELECT '1' = cast(1 as tinyint) FROM t
+READ	SELECT '2' > cast(1 as tinyint) FROM t
+READ	SELECT '2' >= cast(1 as tinyint) FROM t
+READ	SELECT '2' < cast(1 as tinyint) FROM t
+READ	SELECT '2' <= cast(1 as tinyint) FROM t
+READ	SELECT '2' <> cast(1 as tinyint) FROM t
+READ	SELECT cast(null as string) = cast(1 as tinyint) FROM t
+READ	SELECT cast(null as string) > cast(1 as tinyint) FROM t
+READ	SELECT cast(null as string) >= cast(1 as tinyint) FROM t
+READ	SELECT cast(null as string) < cast(1 as tinyint) FROM t
+READ	SELECT cast(null as string) <= cast(1 as tinyint) FROM t
+READ	SELECT cast(null as string) <> cast(1 as tinyint) FROM t
+READ	SELECT cast(1 as smallint) = '1' FROM t
+READ	SELECT cast(1 as smallint) > '2' FROM t
+READ	SELECT cast(1 as smallint) >= '2' FROM t
+READ	SELECT cast(1 as smallint) < '2' FROM t
+READ	SELECT cast(1 as smallint) <= '2' FROM t
+READ	SELECT cast(1 as smallint) <> '2' FROM t
+READ	SELECT cast(1 as smallint) = cast(null as string) FROM t
+READ	SELECT cast(1 as smallint) > cast(null as string) FROM t
+READ	SELECT cast(1 as smallint) >= cast(null as string) FROM t
+READ	SELECT cast(1 as smallint) < cast(null as string) FROM t
+READ	SELECT cast(1 as smallint) <= cast(null as string) FROM t
+READ	SELECT cast(1 as smallint) <> cast(null as string) FROM t
+READ	SELECT '1' = cast(1 as smallint) FROM t
+READ	SELECT '2' > cast(1 as smallint) FROM t
+READ	SELECT '2' >= cast(1 as smallint) FROM t
+READ	SELECT '2' < cast(1 as smallint) FROM t
+READ	SELECT '2' <= cast(1 as smallint) FROM t
+READ	SELECT '2' <> cast(1 as smallint) FROM t
+READ	SELECT cast(null as string) = cast(1 as smallint) FROM t
+READ	SELECT cast(null as string) > cast(1 as smallint) FROM t
+READ	SELECT cast(null as string) >= cast(1 as smallint) FROM t
+READ	SELECT cast(null as string) < cast(1 as smallint) FROM t
+READ	SELECT cast(null as string) <= cast(1 as smallint) FROM t
+READ	SELECT cast(null as string) <> cast(1 as smallint) FROM t
+READ	SELECT cast(1 as int) = '1' FROM t
+READ	SELECT cast(1 as int) > '2' FROM t
+READ	SELECT cast(1 as int) >= '2' FROM t
+READ	SELECT cast(1 as int) < '2' FROM t
+READ	SELECT cast(1 as int) <= '2' FROM t
+READ	SELECT cast(1 as int) <> '2' FROM t
+READ	SELECT cast(1 as int) = cast(null as string) FROM t
+READ	SELECT cast(1 as int) > cast(null as string) FROM t
+READ	SELECT cast(1 as int) >= cast(null as string) FROM t
+READ	SELECT cast(1 as int) < cast(null as string) FROM t
+READ	SELECT cast(1 as int) <= cast(null as string) FROM t
+READ	SELECT cast(1 as int) <> cast(null as string) FROM t
+READ	SELECT '1' = cast(1 as int) FROM t
+READ	SELECT '2' > cast(1 as int) FROM t
+READ	SELECT '2' >= cast(1 as int) FROM t
+READ	SELECT '2' < cast(1 as int) FROM t
+READ	SELECT '2' <> cast(1 as int) FROM t
+READ	SELECT '2' <= cast(1 as int) FROM t
+READ	SELECT cast(null as string) = cast(1 as int) FROM t
+READ	SELECT cast(null as string) > cast(1 as int) FROM t
+READ	SELECT cast(null as string) >= cast(1 as int) FROM t
+READ	SELECT cast(null as string) < cast(1 as int) FROM t
+READ	SELECT cast(null as string) <> cast(1 as int) FROM t
+READ	SELECT cast(null as string) <= cast(1 as int) FROM t
+READ	SELECT cast(1 as bigint) = '1' FROM t
+READ	SELECT cast(1 as bigint) > '2' FROM t
+READ	SELECT cast(1 as bigint) >= '2' FROM t
+READ	SELECT cast(1 as bigint) < '2' FROM t
+READ	SELECT cast(1 as bigint) <= '2' FROM t
+READ	SELECT cast(1 as bigint) <> '2' FROM t
+READ	SELECT cast(1 as bigint) = cast(null as string) FROM t
+READ	SELECT cast(1 as bigint) > cast(null as string) FROM t
+READ	SELECT cast(1 as bigint) >= cast(null as string) FROM t
+READ	SELECT cast(1 as bigint) < cast(null as string) FROM t
+READ	SELECT cast(1 as bigint) <= cast(null as string) FROM t
+READ	SELECT cast(1 as bigint) <> cast(null as string) FROM t
+READ	SELECT '1' = cast(1 as bigint) FROM t
+READ	SELECT '2' > cast(1 as bigint) FROM t
+READ	SELECT '2' >= cast(1 as bigint) FROM t
+READ	SELECT '2' < cast(1 as bigint) FROM t
+READ	SELECT '2' <= cast(1 as bigint) FROM t
+READ	SELECT '2' <> cast(1 as bigint) FROM t
+READ	SELECT cast(null as string) = cast(1 as bigint) FROM t
+READ	SELECT cast(null as string) > cast(1 as bigint) FROM t
+READ	SELECT cast(null as string) >= cast(1 as bigint) FROM t
+READ	SELECT cast(null as string) < cast(1 as bigint) FROM t
+READ	SELECT cast(null as string) <= cast(1 as bigint) FROM t
+READ	SELECT cast(null as string) <> cast(1 as bigint) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > '2' FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= '2' FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < '2' FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> '2' FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= '2' FROM t
+READ	SELECT cast(1 as decimal(10, 0)) = cast(null as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) > cast(null as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) >= cast(null as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) < cast(null as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <> cast(null as string) FROM t
+READ	SELECT cast(1 as decimal(10, 0)) <= cast(null as string) FROM t
+READ	SELECT '1' = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT '2' > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT '2' >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT '2' < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT '2' <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT '2' <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(null as string) = cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(null as string) > cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(null as string) >= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(null as string) < cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(null as string) <= cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(null as string) <> cast(1 as decimal(10, 0)) FROM t
+READ	SELECT cast(1 as double) = '1' FROM t
+READ	SELECT cast(1 as double) > '2' FROM t
+READ	SELECT cast(1 as double) >= '2' FROM t
+READ	SELECT cast(1 as double) < '2' FROM t
+READ	SELECT cast(1 as double) <= '2' FROM t
+READ	SELECT cast(1 as double) <> '2' FROM t
+READ	SELECT cast(1 as double) = cast(null as string) FROM t
+READ	SELECT cast(1 as double) > cast(null as string) FROM t
+READ	SELECT cast(1 as double) >= cast(null as string) FROM t
+READ	SELECT cast(1 as double) < cast(null as string) FROM t
+READ	SELECT cast(1 as double) <= cast(null as string) FROM t
+READ	SELECT cast(1 as double) <> cast(null as string) FROM t
+READ	SELECT '1' = cast(1 as double) FROM t
+READ	SELECT '2' > cast(1 as double) FROM t
+READ	SELECT '2' >= cast(1 as double) FROM t
+READ	SELECT '2' < cast(1 as double) FROM t
+READ	SELECT '2' <= cast(1 as double) FROM t
+READ	SELECT '2' <> cast(1 as double) FROM t
+READ	SELECT cast(null as string) = cast(1 as double) FROM t
+READ	SELECT cast(null as string) > cast(1 as double) FROM t
+READ	SELECT cast(null as string) >= cast(1 as double) FROM t
+READ	SELECT cast(null as string) < cast(1 as double) FROM t
+READ	SELECT cast(null as string) <= cast(1 as double) FROM t
+READ	SELECT cast(null as string) <> cast(1 as double) FROM t
+READ	SELECT cast(1 as float) = '1' FROM t
+READ	SELECT cast(1 as float) > '2' FROM t
+READ	SELECT cast(1 as float) >= '2' FROM t
+READ	SELECT cast(1 as float) < '2' FROM t
+READ	SELECT cast(1 as float) <= '2' FROM t
+READ	SELECT cast(1 as float) <> '2' FROM t
+READ	SELECT cast(1 as float) = cast(null as string) FROM t
+READ	SELECT cast(1 as float) > cast(null as string) FROM t
+READ	SELECT cast(1 as float) >= cast(null as string) FROM t
+READ	SELECT cast(1 as float) < cast(null as string) FROM t
+READ	SELECT cast(1 as float) <= cast(null as string) FROM t
+READ	SELECT cast(1 as float) <> cast(null as string) FROM t
+READ	SELECT '1' = cast(1 as float) FROM t
+READ	SELECT '2' > cast(1 as float) FROM t
+READ	SELECT '2' >= cast(1 as float) FROM t
+READ	SELECT '2' < cast(1 as float) FROM t
+READ	SELECT '2' <= cast(1 as float) FROM t
+READ	SELECT '2' <> cast(1 as float) FROM t
+READ	SELECT cast(null as string) = cast(1 as float) FROM t
+READ	SELECT cast(null as string) > cast(1 as float) FROM t
+READ	SELECT cast(null as string) >= cast(1 as float) FROM t
+READ	SELECT cast(null as string) < cast(1 as float) FROM t
+READ	SELECT cast(null as string) <= cast(1 as float) FROM t
+READ	SELECT cast(null as string) <> cast(1 as float) FROM t
+READ	SELECT '1996-09-09' = date('1996-09-09') FROM t
+READ	SELECT '1996-9-10' > date('1996-09-09') FROM t
+READ	SELECT '1996-9-10' >= date('1996-09-09') FROM t
+READ	SELECT '1996-9-10' < date('1996-09-09') FROM t
+READ	SELECT '1996-9-10' <= date('1996-09-09') FROM t
+READ	SELECT '1996-9-10' <> date('1996-09-09') FROM t
+READ	SELECT cast(null as string) = date('1996-09-09') FROM t
+READ	SELECT cast(null as string)> date('1996-09-09') FROM t
+READ	SELECT cast(null as string)>= date('1996-09-09') FROM t
+READ	SELECT cast(null as string)< date('1996-09-09') FROM t
+READ	SELECT cast(null as string)<= date('1996-09-09') FROM t
+READ	SELECT cast(null as string)<> date('1996-09-09') FROM t
+READ	SELECT date('1996-09-09') = '1996-09-09' FROM t
+READ	SELECT date('1996-9-10') > '1996-09-09' FROM t
+READ	SELECT date('1996-9-10') >= '1996-09-09' FROM t
+READ	SELECT date('1996-9-10') < '1996-09-09' FROM t
+READ	SELECT date('1996-9-10') <= '1996-09-09' FROM t
+READ	SELECT date('1996-9-10') <> '1996-09-09' FROM t
+READ	SELECT date('1996-09-09') = cast(null as string) FROM t
+READ	SELECT date('1996-9-10') > cast(null as string) FROM t
+READ	SELECT date('1996-9-10') >= cast(null as string) FROM t
+READ	SELECT date('1996-9-10') < cast(null as string) FROM t
+READ	SELECT date('1996-9-10') <= cast(null as string) FROM t
+READ	SELECT date('1996-9-10') <> cast(null as string) FROM t
+READ	SELECT '1996-09-09 12:12:12.4' = timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT '1996-09-09 12:12:12.5' > timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT '1996-09-09 12:12:12.5' >= timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT '1996-09-09 12:12:12.5' < timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT '1996-09-09 12:12:12.5' <= timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT '1996-09-09 12:12:12.5' <> timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT cast(null as string) = timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT cast(null as string) > timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT cast(null as string) >= timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT cast(null as string) < timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT cast(null as string) <= timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT cast(null as string) <> timestamp('1996-09-09 12:12:12.4') FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.4' )= '1996-09-09 12:12:12.4' FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )> '1996-09-09 12:12:12.4' FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )>= '1996-09-09 12:12:12.4' FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )< '1996-09-09 12:12:12.4' FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )<= '1996-09-09 12:12:12.4' FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )<> '1996-09-09 12:12:12.4' FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.4' )= cast(null as string) FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )> cast(null as string) FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )>= cast(null as string) FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )< cast(null as string) FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )<= cast(null as string) FROM t
+READ	SELECT timestamp('1996-09-09 12:12:12.5' )<> cast(null as string) FROM t
+READ	SELECT ' ' = X'0020' FROM t
+READ	SELECT ' ' > X'001F' FROM t
+READ	SELECT ' ' >= X'001F' FROM t
+READ	SELECT ' ' < X'001F' FROM t
+READ	SELECT ' ' <= X'001F' FROM t
+READ	SELECT ' ' <> X'001F' FROM t
+READ	SELECT cast(null as string) = X'0020' FROM t
+READ	SELECT cast(null as string) > X'001F' FROM t
+READ	SELECT cast(null as string) >= X'001F' FROM t
+READ	SELECT cast(null as string) < X'001F' FROM t
+READ	SELECT cast(null as string) <= X'001F' FROM t
+READ	SELECT cast(null as string) <> X'001F' FROM t
+READ	SELECT X'0020' = ' ' FROM t
+READ	SELECT X'001F' > ' ' FROM t
+READ	SELECT X'001F' >= ' ' FROM t
+READ	SELECT X'001F' < ' ' FROM t
+READ	SELECT X'001F' <= ' ' FROM t
+READ	SELECT X'001F' <> ' ' FROM t
+READ	SELECT X'0020' = cast(null as string) FROM t
+READ	SELECT X'001F' > cast(null as string) FROM t
+READ	SELECT X'001F' >= cast(null as string) FROM t
+READ	SELECT X'001F' < cast(null as string) FROM t
+READ	SELECT X'001F' <= cast(null as string) FROM t
+READ	SELECT X'001F' <> cast(null as string) FROM t

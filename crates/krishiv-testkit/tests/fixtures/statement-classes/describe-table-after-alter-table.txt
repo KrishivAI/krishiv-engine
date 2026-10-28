@@ -1,0 +1,12 @@
+DDL	CREATE TABLE table_with_comment (a STRING, b INT, c STRING, d STRING) USING parquet COMMENT 'added'
+READ	DESC FORMATTED table_with_comment
+DDL	ALTER TABLE table_with_comment SET TBLPROPERTIES("comment"= "modified comment", "type"= "parquet")
+READ	DESC FORMATTED table_with_comment
+DDL	DROP TABLE table_with_comment
+DDL	CREATE TABLE table_comment (a STRING, b INT) USING parquet
+READ	DESC FORMATTED table_comment
+DDL	ALTER TABLE table_comment SET TBLPROPERTIES(comment = "added comment")
+READ	DESC formatted table_comment
+DDL	ALTER TABLE table_comment UNSET TBLPROPERTIES IF EXISTS ('comment')
+READ	DESC FORMATTED table_comment
+DDL	DROP TABLE table_comment

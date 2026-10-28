@@ -1,0 +1,95 @@
+READ	select not true
+READ	select ! true
+READ	select not null::boolean
+READ	select true and true
+READ	select true and false
+READ	select false and true
+READ	select false and false
+READ	select true and null::boolean
+READ	select false and null::boolean
+READ	select null::boolean and true
+READ	select null::boolean and false
+READ	select null::boolean and null::boolean
+READ	select true or true
+READ	select true or false
+READ	select false or true
+READ	select false or false
+READ	select true or null::boolean
+READ	select false or null::boolean
+READ	select null::boolean or true
+READ	select null::boolean or false
+READ	select null::boolean or null::boolean
+READ	select 1 = 1
+READ	select 1 = '1'
+READ	select 1.0 = '1'
+READ	select 1.5 = '1.51'
+READ	select 1 > '1'
+READ	select 2 > '1.0'
+READ	select 2 > '2.0'
+READ	select 2 > '2.2'
+READ	select '1.5' > 0.5
+READ	select to_date('2009-07-30 04:17:52') > to_date('2009-07-30 04:17:52')
+READ	select to_date('2009-07-30 04:17:52') > '2009-07-30 04:17:52'
+READ	select 1 >= '1'
+READ	select 2 >= '1.0'
+READ	select 2 >= '2.0'
+READ	select 2.0 >= '2.2'
+READ	select '1.5' >= 0.5
+READ	select to_date('2009-07-30 04:17:52') >= to_date('2009-07-30 04:17:52')
+READ	select to_date('2009-07-30 04:17:52') >= '2009-07-30 04:17:52'
+READ	select 1 < '1'
+READ	select 2 < '1.0'
+READ	select 2 < '2.0'
+READ	select 2.0 < '2.2'
+READ	select 0.5 < '1.5'
+READ	select to_date('2009-07-30 04:17:52') < to_date('2009-07-30 04:17:52')
+READ	select to_date('2009-07-30 04:17:52') < '2009-07-30 04:17:52'
+READ	select 1 <= '1'
+READ	select 2 <= '1.0'
+READ	select 2 <= '2.0'
+READ	select 2.0 <= '2.2'
+READ	select 0.5 <= '1.5'
+READ	select to_date('2009-07-30 04:17:52') <= to_date('2009-07-30 04:17:52')
+READ	select to_date('2009-07-30 04:17:52') <= '2009-07-30 04:17:52'
+READ	select to_date('2017-03-01') = to_timestamp('2017-03-01 00:00:00')
+READ	select to_timestamp('2017-03-01 00:00:01') > to_date('2017-03-01')
+READ	select to_timestamp('2017-03-01 00:00:01') >= to_date('2017-03-01')
+READ	select to_date('2017-03-01') < to_timestamp('2017-03-01 00:00:01')
+READ	select to_date('2017-03-01') <= to_timestamp('2017-03-01 00:00:01')
+READ	select 1 in (1, 2, 3)
+READ	select 1 in (1, 2, 3, null)
+READ	select 1 in (1.0, 2.0, 3.0)
+READ	select 1 in (1.0, 2.0, 3.0, null)
+READ	select 1 in ('2', '3', '4')
+READ	select 1 in ('2', '3', '4', null)
+READ	select null in (1, 2, 3)
+READ	select null in (1, 2, null)
+READ	select 1 not in (1, 2, 3)
+READ	select 1 not in (1, 2, 3, null)
+READ	select 1 not in (1.0, 2.0, 3.0)
+READ	select 1 not in (1.0, 2.0, 3.0, null)
+READ	select 1 not in ('2', '3', '4')
+READ	select 1 not in ('2', '3', '4', null)
+READ	select null not in (1, 2, 3)
+READ	select null not in (1, 2, null)
+PARSE_ERROR	select 1 in ()
+PARSE_ERROR	select 1 not in ()
+READ	select 1 between 0 and 2
+READ	select 0.5 between 0 and 1
+READ	select 2.0 between '1.0' and '3.0'
+READ	select 'b' between 'a' and 'c'
+READ	select to_timestamp('2022-12-26 00:00:01') between to_date('2022-03-01') and to_date('2022-12-31')
+READ	select rand(123) between 0.1 AND 0.2
+READ	select 1 not between 0 and 2
+READ	select 0.5 not between 0 and 1
+READ	select 2.0 not between '1.0' and '3.0'
+READ	select 'b' not between 'a' and 'c'
+READ	select to_timestamp('2022-12-26 00:00:01') not between to_date('2022-03-01') and to_date('2022-12-31')
+READ	select rand(123) not between 0.1 AND 0.2
+SESSION	set spark.sql.legacy.bangEqualsNot=true
+READ	select 1 ! between 0 and 2
+READ	select 1 ! in (3, 4)
+READ	select 'hello' ! like 'world'
+READ	select 1 is ! null
+READ	select false is ! true
+SESSION	set spark.sql.legacy.bangEqualsNot=false

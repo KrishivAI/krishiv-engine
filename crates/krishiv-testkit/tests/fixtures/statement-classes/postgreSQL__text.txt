@@ -1,0 +1,42 @@
+READ	SELECT string('this is a text string') = string('this is a text string') AS true
+READ	SELECT string('this is a text string') = string('this is a text strin') AS `false`
+DDL	CREATE TABLE TEXT_TBL (f1 string) USING parquet
+WRITE	INSERT INTO TEXT_TBL VALUES ('doh!')
+WRITE	INSERT INTO TEXT_TBL VALUES ('hi de ho neighbor')
+READ	SELECT '' AS two, * FROM TEXT_TBL
+READ	select length(42)
+READ	select string('four: ') || 2+2
+READ	select 'four: ' || 2+2
+READ	select 3 || 4.0
+READ	/*
+READ	select concat(1,2,3,'hello',true, false, to_date('20100309','yyyyMMdd'))
+READ	select concat_ws('#','one')
+READ	select concat_ws('#',1,2,3,'hello',true, false, to_date('20100309','yyyyMMdd'))
+READ	select concat_ws(',',10,20,null,30)
+READ	select concat_ws('',10,20,null,30)
+READ	select concat_ws(NULL,10,20,null,30) is null
+READ	select reverse('abcde')
+READ	select i, left('ahoj', i), right('ahoj', i) from range(-5, 6) t(i) order by i
+READ	/*
+READ	select format_string('Hello')
+READ	select format_string('Hello %s', 'World')
+READ	select format_string('Hello %%')
+READ	select format_string('Hello %%%%')
+READ	select format_string('Hello %s %s', 'World')
+READ	select format_string('Hello %s')
+READ	select format_string('Hello %x', 20)
+READ	select format_string('%1$s %3$s', 1, 2, 3)
+READ	select format_string('%1$s %12$s', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+READ	select format_string('%1$s %4$s', 1, 2, 3)
+READ	select format_string('%1$s %13$s', 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+READ	select format_string('%0$s', 'Hello')
+READ	select format_string('Hello %s %1$s %s', 'World', 'Hello again')
+READ	select format_string('Hello %s %s, %2$s %2$s', 'World', 'Hello again')
+READ	select format_string('>>%10s<<', 'Hello')
+READ	select format_string('>>%10s<<', NULL)
+READ	select format_string('>>%10s<<', '')
+READ	select format_string('>>%-10s<<', '')
+READ	select format_string('>>%-10s<<', 'Hello')
+READ	select format_string('>>%-10s<<', NULL)
+READ	select format_string('>>%1$10s<<', 'Hello')
+DDL	DROP TABLE TEXT_TBL

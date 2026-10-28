@@ -1,0 +1,4 @@
+READ	select date'999999-03-18', date'-0001-1-28', date'0015'
+READ	select make_date(999999, 3, 18), make_date(-1, 1, 28)
+READ	select timestamp'-1969-12-31 16:00:00', timestamp'-0015-03-18 16:00:00', timestamp'-000001', timestamp'99999-03-18T12:03
+READ	select make_timestamp(-1969, 12, 31, 16, 0, 0.0), make_timestamp(-15, 3, 18, 16, 0, 0.0), make_timestamp(99999, 3, 18, 1

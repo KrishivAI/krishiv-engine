@@ -1,10 +1,5 @@
 {
   "categories": {
-    "analyzer-bugs": {
-      "kind": "bug",
-      "owner": "analyzer follow-up of P2-T071a",
-      "summary": "analyzer resolution differs from Spark: an unused CTE definition over a missing relation is not analyzed, so TABLE_OR_VIEW_NOT_FOUND is not raised (cte#16, cte#24), GROUP BY a backquoted output alias `1`, LIMIT over a column reports UNRESOLVED_COLUMN instead of IS_UNFOLDABLE"
-    },
     "cast-matrix": {
       "kind": "unsupported",
       "summary": "the full cast matrix: casts not in P2a, cast-named functions, region time zones",
@@ -44,11 +39,6 @@
       "kind": "unsupported",
       "summary": "JSON functions",
       "task": "P2-T031"
-    },
-    "fn-map": {
-      "kind": "unsupported",
-      "summary": "map functions",
-      "task": "P2-T029"
     },
     "fn-misc": {
       "kind": "unsupported",
@@ -202,21 +192,6 @@
       "file": "^transform$"
     },
     {
-      "category": "analyzer-bugs",
-      "detail": "AMBIGUOUS_REFERENCE",
-      "file": "^cte$"
-    },
-    {
-      "category": "analyzer-bugs",
-      "detail": "UNRESOLVED_COLUMN.*`1`",
-      "file": "^group-by-alias$"
-    },
-    {
-      "category": "analyzer-bugs",
-      "detail": "UNRESOLVED_COLUMN.*`key`",
-      "file": "^limit$"
-    },
-    {
       "category": "datetime",
       "detail": "WRONG_NUM_ARGS.*`(date_add|dateadd|datediff|date_diff)`|Cannot resolve routine `(timestampadd|timestampdiff|timediff)`"
     },
@@ -360,12 +335,6 @@
       ]
     },
     {
-      "category": "fn-map",
-      "family": [
-        "map"
-      ]
-    },
-    {
       "category": "fn-json",
       "family": [
         "json"
@@ -411,11 +380,6 @@
     {
       "category": "output-names",
       "detail": "^schema "
-    },
-    {
-      "category": "analyzer-bugs",
-      "detail": "^no error",
-      "file": "^cte$"
     }
   ],
   "spark_tag": "v4.2.0"

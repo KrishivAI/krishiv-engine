@@ -1,0 +1,49 @@
+SESSION	create temporary view t1 as select * from values
+SESSION	create temporary view t2 as select * from values
+SESSION	create temporary view t3 as select * from values
+READ	SELECT (SELECT min(t3d) FROM t3) min_t3d,
+READ	SELECT   t1a, count(*)
+READ	SELECT (SELECT min(t3d) FROM t3) min_t3d,
+READ	SELECT (SELECT min(t3c) FROM t3) min_t3d
+READ	SELECT q1.t1a, q2.t2a, q1.min_t3d, q2.avg_t3d
+READ	SELECT (SELECT min(t3d) FROM t3 WHERE t3.t3a = t1.t1a) min_t3d,
+READ	SELECT (SELECT min(t3d) FROM t3 WHERE t3a = t1a) min_t3d
+READ	SELECT t1a, t1b
+READ	SELECT t1a,
+READ	SELECT t1c, (SELECT t1c) FROM t1
+READ	SELECT t1c, (SELECT t1c WHERE t1c = 8) FROM t1
+READ	SELECT t1c, t1d, (SELECT c + d FROM (SELECT t1c AS c, t1d AS d)) FROM t1
+READ	SELECT t1c, (SELECT SUM(c) FROM (SELECT t1c AS c)) FROM t1
+READ	SELECT t1a, (SELECT SUM(t2b) FROM t2 JOIN (SELECT t1a AS a) ON t2a = a) FROM t1
+SESSION	CREATE OR REPLACE TEMPORARY VIEW t1 AS VALUES (0, 1), (1, 2) t1(c1, c2)
+SESSION	CREATE OR REPLACE TEMPORARY VIEW t2 AS VALUES (0, 2), (0, 3) t2(c1, c2)
+READ	SELECT c1, (WITH t AS (SELECT 1 AS a) SELECT a + c1 FROM t) FROM t1
+READ	SELECT c1, (WITH t AS (SELECT * FROM t2 WHERE c1 = t1.c1) SELECT SUM(c2) FROM t) FROM t1
+READ	SELECT c1, (
+READ	SELECT c1, (
+READ	WITH v AS (SELECT * FROM t2)
+READ	WITH t AS (SELECT 1 AS a)
+READ	WITH
+READ	SELECT (SELECT a FROM (SELECT 1 AS a UNION ALL SELECT 2 AS a) t) AS b
+SESSION	CREATE OR REPLACE TEMP VIEW t1(c1, c2) AS (VALUES (0, 1), (1, 2))
+SESSION	CREATE OR REPLACE TEMP VIEW t2(c1, c2) AS (VALUES (0, 2), (0, 3))
+SESSION	CREATE OR REPLACE TEMP VIEW students(id, name, major, year) AS (VALUES
+SESSION	CREATE OR REPLACE TEMP VIEW exams(sid, course, curriculum, grade, date) AS (VALUES
+READ	SELECT students.name, exams.course
+READ	SELECT (SELECT min(c2) FROM t2 WHERE t1.c1 > t2.c1) FROM t1
+READ	SELECT (SELECT min(c2) FROM t2 WHERE t1.c1 >= t2.c1 AND t1.c2 < t2.c2) FROM t1
+READ	SELECT (SELECT count(*) FROM t2 WHERE t1.c1 > t2.c1) FROM t1
+READ	SELECT c, (
+READ	SELECT c, (
+READ	SELECT *, (SELECT count(1) is null FROM t2 WHERE t1.c1 = t2.c1) FROM t1
+READ	select (select f from (select false as f, max(c2) from t1 where t1.c1 = t1.c1)) from t2
+SESSION	set spark.sql.optimizer.optimizeOneRowRelationSubquery.alwaysInline=false
+READ	WITH T AS (SELECT 1 AS a)
+SESSION	set spark.sql.optimizer.optimizeOneRowRelationSubquery.alwaysInline=true
+READ	select * from (
+READ	SELECT c1, c2, (SELECT count(*) cnt FROM t1 t2 WHERE t1.c1 = t2.c1 HAVING cnt = 0) FROM t1
+READ	SELECT (SELECT t1.* FROM VALUES(2) AS t2(col1) LIMIT 1) FROM VALUES(1) AS t1(col1)
+READ	SELECT (SELECT t1.s.* FROM VALUES(2) AS t2(col1) LIMIT 1)
+READ	SELECT (SELECT * FROM VALUES(2) AS t2(col1) LIMIT 1) FROM VALUES(1) AS t1(col1)
+READ	SELECT (SELECT t1.* FROM (SELECT 3 AS col1) AS t1 LIMIT 1) FROM VALUES(1) AS t1(col1)
+READ	SELECT (SELECT * FROM (SELECT t1.* FROM VALUES(2) AS t2(col1) LIMIT 1)) FROM VALUES(1) AS t1(col1)

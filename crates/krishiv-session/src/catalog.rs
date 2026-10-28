@@ -402,8 +402,15 @@ impl QueryCatalog {
     }
 
     /// The scan splits of one stage over `plan`: one [`TaskSpec`] per task
-    /// of `tasks`, dealing every scan's files (or relation batches) in
-    /// contiguous index ranges, deterministically.
+    /// of `tasks`, dealing the streaming pipeline's scans (or relation
+    /// batches) in contiguous index ranges, deterministically.
+    ///
+    /// Only the scans of the probe or streaming pipeline are split: the
+    /// build side of any join and the plans of scalar and `EXISTS`
+    /// subqueries read whole (no entry), so a task joins its probe share
+    /// against the full build and evaluates subqueries over full inputs.
+    /// Splitting those would join `t_i` against only its build share or
+    /// evaluate `(SELECT max(x) FROM u)` over part of `u`.
     ///
     /// The files are the opened listing (listed once, before planning);
     /// their partitions are planned here with `total_slots` worker slots,
@@ -438,15 +445,9 @@ impl QueryCatalog {
         let partitions = u32::try_from(tasks).map_err(|_| InternalError {
             message: format!("a stage of {tasks} tasks"),
         })?;
-        // The plan's scans, in id order: the assignment is deterministic.
-        let mut scans = Vec::new();
-        let mut stack = vec![plan.root()];
-        while let Some(node) = stack.pop() {
-            if let PhysNode::Scan(scan) = node {
-                scans.push(scan);
-            }
-            stack.extend(node.children());
-        }
+        // The streaming pipeline's scans, in id order: the assignment is
+        // deterministic. Builds and subquery plans read whole.
+        let mut scans = streaming_scans(plan.root());
         scans.sort_by_key(|s| s.id);
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
         for scan in scans {
@@ -653,6 +654,42 @@ fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
     }
     plan.for_each_expr(&mut |e| in_expr(e, out));
     plan.for_each_child(&mut |c| collect_scans(c, out));
+}
+
+/// The scans of the streaming pipeline of `root`: those a task splits.
+/// Joins contribute only their probe side and nodes only their streaming
+/// input; subquery plans and join builds read whole (no entry), so tasks
+/// join probe shares against full builds and evaluate subqueries over full
+/// inputs.
+fn streaming_scans(root: &PhysNode) -> Vec<&krishiv_exec::physical::ScanNode> {
+    fn go<'a>(node: &'a PhysNode, out: &mut Vec<&'a krishiv_exec::physical::ScanNode>) {
+        match node {
+            PhysNode::Scan(scan) => out.push(scan),
+            PhysNode::OneRow => {}
+            PhysNode::Filter { input, .. }
+            | PhysNode::Project { input, .. }
+            | PhysNode::ReplicateRows { input, .. }
+            | PhysNode::Expand { input, .. }
+            | PhysNode::Limit { input, .. }
+            | PhysNode::Sort { input, .. }
+            | PhysNode::TopN { input, .. }
+            | PhysNode::Window { input, .. }
+            | PhysNode::WindowGroupLimit { input, .. }
+            | PhysNode::Aggregate { input, .. }
+            | PhysNode::WriteFiles { input, .. } => go(input, out),
+            PhysNode::Exchange(e) => go(&e.input, out),
+            PhysNode::HashJoin(join) => go(&join.probe, out),
+            PhysNode::NestedLoopJoin(join) => go(&join.probe, out),
+            PhysNode::Union { inputs } => {
+                for input in inputs {
+                    go(input, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    go(root, &mut out);
+    out
 }
 
 /// The table `name`: the one this query already loaded, so every spelling
@@ -1827,6 +1864,75 @@ mod tests {
     }
 
     #[test]
+    fn task_specs_splits_only_the_streaming_pipeline() {
+        // Broadcast builds and scalar subqueries read whole: tasks join
+        // probe shares against the full build and evaluate the subquery
+        // over its full input, so their union is the single run.
+        let session = Session::new().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batches_of = |values: Vec<i32>| {
+            values
+                .chunks(3)
+                .map(|chunk| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from(chunk.to_vec()))],
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        session
+            .register_batches("t", Arc::clone(&schema), batches_of((0..14).collect()))
+            .unwrap();
+        session
+            .register_batches("u", Arc::clone(&schema), batches_of((0..14).collect()))
+            .unwrap();
+        session
+            .register_batches("v", Arc::clone(&schema), batches_of(vec![5]))
+            .unwrap();
+        let sql = "SELECT t.id FROM t JOIN u ON t.id = u.id WHERE t.id > (SELECT max(id) FROM v)";
+        let whole = table_ids(&session, sql);
+        assert_eq!(whole, (6..14).collect::<Vec<_>>());
+        let df = block_on(session.sql(sql)).unwrap();
+        let analysis = block_on(df.analysis()).unwrap();
+        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
+        for tasks in [2_usize, 3_usize] {
+            let specs = analysis
+                .env
+                .catalog
+                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
+                .unwrap();
+            assert_eq!(specs.len(), tasks);
+            // Only the streaming scan is dealt ranges; builds and the
+            // subquery's scan read whole (no entry).
+            let streaming = streaming_scans(physical.root());
+            assert_eq!(streaming.len(), 1, "one streaming scan");
+            for task in &specs {
+                assert_eq!(task.scans.len(), 1, "probe only: {task:?}");
+                assert!(
+                    task.scans.contains_key(&streaming[0].id),
+                    "the streaming scan: {task:?}"
+                );
+            }
+            let mut union = Vec::new();
+            for task in &specs {
+                union.extend(ids_of(
+                    &block_on(session.run_task(&physical, &analysis.env, task)).unwrap(),
+                ));
+            }
+            union.sort_unstable();
+            assert_eq!(union, whole, "{tasks} tasks");
+        }
+        drop(analysis);
+        drop(df);
+    }
+
+    #[test]
     fn task_specs_rejects_no_tasks() {
         let session = Session::new().unwrap();
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1907,6 +2013,7 @@ mod tests {
                 zone: None,
                 query_start_micros: 0,
                 user: Arc::from("u"),
+                map_key_dedup_last_win: false,
             },
         )
     }

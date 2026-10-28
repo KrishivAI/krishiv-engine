@@ -1758,14 +1758,14 @@ pub fn writer(fx: &dyn FormatFixture) -> SuiteResult {
 /// Check 13: dynamic-filter pruning.
 ///
 /// A `Final` membership filter on `i` plus a range filter on `i` prune only
-/// the units they prove empty: every row passing both filters is still
-/// read, and the filtered scan restricted to passing rows equals the
-/// unfiltered scan restricted the same way. Formats without statistics
-/// (CSV, JSON lines: [`FormatFixture::footerless`]) cannot prune by
-/// statistics, so only the soundness half applies to them.
+/// soundly: every row passing both filters is still read. A scan with only
+/// the dynamic filter isolates its path: it returns the same passing rows
+/// and, where the format keeps statistics, prunes units. Formats without
+/// statistics (CSV, JSON lines: [`FormatFixture::footerless`]) cannot prune
+/// by statistics, so only the soundness halves apply to them.
 ///
 /// # Errors
-/// A dropped matching row, or a pruned unit that was not provably empty.
+/// A dropped matching row.
 pub fn dynamic_filter_pruning(fx: &dyn FormatFixture) -> SuiteResult {
     use arrow_array::types::Int32Type;
     let env = Env::new(None)?;
@@ -1857,19 +1857,21 @@ pub fn dynamic_filter_pruning(fx: &dyn FormatFixture) -> SuiteResult {
             "dynamic pruning dropped matching row {ri}"
         );
     }
+    let all = indexes(&unfiltered)?;
+    let unfiltered_restricted: std::collections::HashSet<i64> =
+        all.intersection(&want).copied().collect();
+    ensure!(
+        unfiltered_restricted == want,
+        "the unfiltered scan missed a row"
+    );
     // The filtered scan restricted to passing rows is the unfiltered scan
-    // restricted the same way: pruning dropped only provably empty units.
+    // restricted the same way.
     let restricted: std::collections::HashSet<i64> = got.intersection(&want).copied().collect();
     ensure!(
-        restricted == want,
+        restricted == unfiltered_restricted,
         "a surviving unit hid a matching row ({} vs {})",
         restricted.len(),
-        want.len()
-    );
-    let all = indexes(&unfiltered)?;
-    ensure!(
-        want.iter().all(|r| all.contains(r)),
-        "the unfiltered scan missed a row"
+        unfiltered_restricted.len()
     );
     // Where the format keeps statistics, the filters prune something.
     let o = env.options(fx, &[])?;
@@ -1877,6 +1879,41 @@ pub fn dynamic_filter_pruning(fx: &dyn FormatFixture) -> SuiteResult {
         ensure!(
             rows(&filtered) < rows(&unfiltered),
             "no unit pruned by the dynamic or range filter"
+        );
+    }
+    // The dynamic filter in isolation: no range predicate, so only the
+    // membership filter can prune. A format that discards
+    // `ScanRequest::dynamic` still passes the combined scan above via the
+    // range predicate alone.
+    let mut dynamic_only = base;
+    dynamic_only
+        .dynamic
+        .push(ScanFilter::new(Arc::clone(&filter), &schema).ok_or("no column i")?);
+    let dynamic_scanned = env
+        .scan(fx, &file, &dynamic_only, None, ScanOptions::default())
+        .map_err(|e| e.to_string())?;
+    let got_dynamic = indexes(&dynamic_scanned)?;
+    let mut want_dynamic = std::collections::HashSet::new();
+    for row in 0..input.num_rows() {
+        if ints.is_null(row) || !key_set.contains(&ints.value(row)) {
+            continue;
+        }
+        want_dynamic.insert(i64::try_from(row).map_err(|e| e.to_string())?);
+    }
+    ensure!(
+        !want_dynamic.is_empty(),
+        "the dynamic filter matches no row"
+    );
+    for ri in &want_dynamic {
+        ensure!(
+            got_dynamic.contains(ri),
+            "dynamic pruning dropped matching row {ri}"
+        );
+    }
+    if !fx.footerless() && fx.format().capabilities(&o).statistics {
+        ensure!(
+            rows(&dynamic_scanned) < rows(&unfiltered),
+            "no unit pruned by the dynamic filter alone"
         );
     }
     ensure!(env.root.reserved() == 0, "memory held after scans");

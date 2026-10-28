@@ -4,10 +4,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use krishiv_common::error::FailedToParseTooComplex;
+use krishiv_common::error::{FailedToParseTooComplex, TableOrViewNotFound};
 use krishiv_common::stack::on_big_stack;
 
-use super::bind::{Bindings, addr, same, unsupported};
+use super::bind::{Bindings, BoundTable, addr, same, unsupported};
+use super::catalog::quoted;
 use super::exprs::{Bound, Cx};
 use super::ops::col_expr;
 use super::{AnalysisContext, AnalysisError, SecurableUse};
@@ -859,8 +860,10 @@ impl Resolver<'_> {
     /// Only definitions the input needs (transitively) are resolved:
     /// Spark does not analyze a CTE the query never references, so an
     /// unused definition's column errors (like `AMBIGUOUS_REFERENCE`)
-    /// never fail the query. Table existence still fails even when unused,
-    /// but that comes from Bind, which visits every definition.
+    /// never fail the query. Table existence still fails even when unused:
+    /// every non-shadowed table read of an unused definition is checked
+    /// against what Bind loaded, so a missing relation raises
+    /// `TABLE_OR_VIEW_NOT_FOUND` at its read, as Spark does.
     #[inline(never)]
     fn with_cte(
         &mut self,
@@ -871,15 +874,16 @@ impl Resolver<'_> {
     ) -> Result<Rel, AnalysisError> {
         let o = p.origin;
         let needed = Self::needed_ctes(input, ctes, &env.ctes, self.ctx.conf.case_sensitive);
-        if !needed.iter().any(|b| *b) {
-            return self.rel(input, env);
-        }
         let mut visible = env.ctes.clone();
         let mut scope = env.ctes_id;
         let mut defs = Vec::new();
         let mut rels = Vec::new();
         for (c, keep) in ctes.iter().zip(needed.iter()) {
             if !keep {
+                // An unused definition is never resolved, but its tables
+                // are: a missing relation fails the query even though no
+                // column error of the definition does.
+                self.check_unused_cte(c)?;
                 continue;
             }
             let e = self.env(visible.clone(), scope, env.outer.clone());
@@ -892,6 +896,9 @@ impl Resolver<'_> {
             scope = self.ctes_id();
             rels.push(r);
         }
+        if defs.is_empty() {
+            return self.rel(input, env);
+        }
         let e = self.env(visible, scope, env.outer.clone());
         let i = self.rel(input, &e)?;
         let node = PlanNode::WithCte {
@@ -903,6 +910,54 @@ impl Resolver<'_> {
         let mut r = self.make(o, node, i.out.to_vec(), &kids);
         r.carriers = Arc::clone(&i.carriers);
         Ok(r)
+    }
+
+    /// The tables of an unused CTE definition, checked as Spark checks
+    /// them: every non-shadowed table read (Bind already resolved the
+    /// shadowing, so a read it did not record is a CTE read) must name a
+    /// table Bind found, else `TABLE_OR_VIEW_NOT_FOUND` at the read.
+    /// Column errors are never raised here: the definition is not
+    /// resolved, only walked for its reads (subquery plans and nested
+    /// `WITH` bodies included).
+    fn check_unused_cte(&self, c: &Cte) -> Result<(), AnalysisError> {
+        use crate::walk::{Node, visit_distinct};
+        use std::ops::ControlFlow;
+        let mut missing: Option<AnalysisError> = None;
+        // A `PlanNode::Sql` has no relation children: its reads live in the
+        // lowered plan Bind stored, so walk those too.
+        let mut roots: Vec<&LogicalPlan> = vec![&c.plan];
+        while let Some(root) = roots.pop() {
+            let _ = visit_distinct(Node::Plan(root), |node| {
+                let Node::Plan(p) = node else {
+                    return ControlFlow::Continue(());
+                };
+                if let PlanNode::Sql { .. } = &p.node
+                    && let Some(lowered) = self.b.sql.get(&addr(p))
+                {
+                    roots.push(lowered);
+                }
+                if let PlanNode::Read(ReadSource::Table { name, .. }) = &p.node
+                    && let Some(BoundTable::Missing) = self.b.tables.get(name)
+                {
+                    missing = Some(AnalysisError::new(
+                        TableOrViewNotFound {
+                            relation_name: quoted(name),
+                            search_path: self.b.search_path.clone(),
+                        },
+                        p.origin,
+                    ));
+                    return ControlFlow::Break(());
+                }
+                ControlFlow::Continue(())
+            });
+            if missing.is_some() {
+                break;
+            }
+        }
+        if let Some(e) = missing {
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// Which definitions of `ctes` the input needs, transitively: a

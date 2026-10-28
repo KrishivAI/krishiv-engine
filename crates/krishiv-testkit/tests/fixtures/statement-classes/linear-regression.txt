@@ -1,0 +1,35 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testRegression AS SELECT * FROM VALUES
+READ	SELECT regr_count(y, x) FROM testRegression
+READ	SELECT regr_count(y, x) FROM testRegression WHERE x IS NOT NULL
+READ	SELECT k, count(*), regr_count(y, x) FROM testRegression GROUP BY k
+READ	SELECT k, count(*) FILTER (WHERE x IS NOT NULL), regr_count(y, x) FROM testRegression GROUP BY k
+READ	SELECT regr_r2(y, x) FROM testRegression
+READ	SELECT regr_r2(y, x) FROM testRegression WHERE x IS NOT NULL
+READ	SELECT k, corr(y, x), regr_r2(y, x) FROM testRegression GROUP BY k
+READ	SELECT k, corr(y, x) FILTER (WHERE x IS NOT NULL), regr_r2(y, x) FROM testRegression GROUP BY k
+READ	SELECT regr_avgx(y, x), regr_avgy(y, x) FROM testRegression
+READ	SELECT regr_avgx(y, x), regr_avgy(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL
+READ	SELECT k, avg(x), avg(y), regr_avgx(y, x), regr_avgy(y, x) FROM testRegression GROUP BY k
+READ	SELECT k, avg(x) FILTER (WHERE x IS NOT NULL AND y IS NOT NULL), avg(y) FILTER (WHERE x IS NOT NULL AND y IS NOT NULL), 
+READ	SELECT regr_sxx(y, x) FROM testRegression
+READ	SELECT regr_sxx(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL
+READ	SELECT k, regr_sxx(y, x) FROM testRegression GROUP BY k
+READ	SELECT k, regr_sxx(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL GROUP BY k
+READ	SELECT regr_sxy(y, x) FROM testRegression
+READ	SELECT regr_sxy(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL
+READ	SELECT k, regr_sxy(y, x) FROM testRegression GROUP BY k
+READ	SELECT k, regr_sxy(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL GROUP BY k
+READ	SELECT regr_syy(y, x) FROM testRegression
+READ	SELECT regr_syy(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL
+READ	SELECT k, regr_syy(y, x) FROM testRegression GROUP BY k
+READ	SELECT k, regr_syy(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL GROUP BY k
+READ	SELECT regr_slope(y, x) FROM testRegression
+READ	SELECT regr_slope(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL
+READ	SELECT k, regr_slope(y, x) FROM testRegression GROUP BY k
+READ	SELECT k, regr_slope(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL GROUP BY k
+READ	SELECT regr_intercept(y, x) FROM testRegression
+READ	SELECT regr_intercept(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL
+READ	SELECT k, regr_intercept(y, x) FROM testRegression GROUP BY k
+READ	SELECT k, regr_intercept(y, x) FROM testRegression WHERE x IS NOT NULL AND y IS NOT NULL GROUP BY k
+READ	SELECT regr_r2(k, x) FROM testRegression where k=2
+READ	SELECT regr_r2(y, k) FROM testRegression where k=2

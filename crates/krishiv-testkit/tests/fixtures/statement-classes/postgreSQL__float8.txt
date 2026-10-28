@@ -1,0 +1,95 @@
+DDL	CREATE TABLE FLOAT8_TBL(f1 double) USING parquet
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('    0.0   '))
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('1004.30  '))
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('   -34.84'))
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('1.2345678901234e+200'))
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('1.2345678901234e-200'))
+READ	SELECT double('10e400')
+READ	SELECT double('-10e400')
+READ	SELECT double('10e-400')
+READ	SELECT double('-10e-400')
+READ	SELECT double('NaN')
+READ	SELECT double('nan')
+READ	SELECT double('   NAN  ')
+READ	SELECT double('infinity')
+READ	SELECT double('          -INFINiTY   ')
+READ	SELECT double('N A N')
+READ	SELECT double('NaN x')
+READ	SELECT double(' INFINITY    x')
+READ	SELECT double('Infinity') + 100.0
+READ	SELECT double('Infinity') / double('Infinity')
+READ	SELECT double('NaN') / double('NaN')
+READ	SELECT double(decimal('nan'))
+READ	SELECT '' AS five, * FROM FLOAT8_TBL
+READ	SELECT '' AS four, f.* FROM FLOAT8_TBL f WHERE f.f1 <> '1004.3'
+READ	SELECT '' AS one, f.* FROM FLOAT8_TBL f WHERE f.f1 = '1004.3'
+READ	SELECT '' AS three, f.* FROM FLOAT8_TBL f WHERE '1004.3' > f.f1
+READ	SELECT '' AS three, f.* FROM FLOAT8_TBL f WHERE  f.f1 < '1004.3'
+READ	SELECT '' AS four, f.* FROM FLOAT8_TBL f WHERE '1004.3' >= f.f1
+READ	SELECT '' AS four, f.* FROM FLOAT8_TBL f WHERE  f.f1 <= '1004.3'
+READ	SELECT '' AS three, f.f1, f.f1 * '-10' AS x
+READ	SELECT '' AS three, f.f1, f.f1 + '-10' AS x
+READ	SELECT '' AS three, f.f1, f.f1 / '-10' AS x
+READ	SELECT '' AS three, f.f1, f.f1 - '-10' AS x
+READ	SELECT '' AS five, f.f1, round(f.f1) AS round_f1
+READ	select ceil(f1) as ceil_f1 from float8_tbl f
+READ	select ceiling(f1) as ceiling_f1 from float8_tbl f
+READ	select floor(f1) as floor_f1 from float8_tbl f
+READ	select sign(f1) as sign_f1 from float8_tbl f
+READ	SELECT sqrt(double('64')) AS eight
+READ	SELECT power(double('144'), double('0.5'))
+READ	SELECT power(double('NaN'), double('0.5'))
+READ	SELECT power(double('144'), double('NaN'))
+READ	SELECT power(double('NaN'), double('NaN'))
+READ	SELECT power(double('-1'), double('NaN'))
+READ	SELECT power(double('1'), double('NaN'))
+READ	SELECT power(double('NaN'), double('0'))
+READ	SELECT '' AS three, f.f1, exp(ln(f.f1)) AS exp_ln_f1
+READ	SELECT '' AS five, * FROM FLOAT8_TBL
+SESSION	CREATE TEMPORARY VIEW UPDATED_FLOAT8_TBL as
+READ	SELECT '' AS bad, f.f1 * '1e200' from UPDATED_FLOAT8_TBL f
+READ	SELECT '' AS five, * FROM UPDATED_FLOAT8_TBL
+READ	SELECT sinh(double('1'))
+READ	SELECT cosh(double('1'))
+READ	SELECT tanh(double('1'))
+READ	SELECT asinh(double('1'))
+READ	SELECT acosh(double('2'))
+READ	SELECT atanh(double('0.5'))
+READ	SELECT sinh(double('Infinity'))
+READ	SELECT sinh(double('-Infinity'))
+READ	SELECT sinh(double('NaN'))
+READ	SELECT cosh(double('Infinity'))
+READ	SELECT cosh(double('-Infinity'))
+READ	SELECT cosh(double('NaN'))
+READ	SELECT tanh(double('Infinity'))
+READ	SELECT tanh(double('-Infinity'))
+READ	SELECT tanh(double('NaN'))
+READ	SELECT asinh(double('Infinity'))
+READ	SELECT asinh(double('-Infinity'))
+READ	SELECT asinh(double('NaN'))
+READ	SELECT acosh(double('Infinity'))
+READ	SELECT acosh(double('-Infinity'))
+READ	SELECT acosh(double('NaN'))
+READ	SELECT atanh(double('Infinity'))
+READ	SELECT atanh(double('-Infinity'))
+READ	SELECT atanh(double('NaN'))
+WRITE	TRUNCATE TABLE FLOAT8_TBL
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('0.0'))
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('-34.84'))
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('-1004.30'))
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('-1.2345678901234e+200'))
+WRITE	INSERT INTO FLOAT8_TBL VALUES (double('-1.2345678901234e-200'))
+READ	SELECT '' AS five, * FROM FLOAT8_TBL
+READ	SELECT smallint(double('32767.4'))
+READ	SELECT smallint(double('32767.6'))
+READ	SELECT smallint(double('-32768.4'))
+READ	SELECT smallint(double('-32768.6'))
+READ	SELECT int(double('2147483647.4'))
+READ	SELECT int(double('2147483647.6'))
+READ	SELECT int(double('-2147483648.4'))
+READ	SELECT int(double('-2147483648.6'))
+READ	SELECT bigint(double('9223372036854773760'))
+READ	SELECT bigint(double('9223372036854775807'))
+READ	SELECT bigint(double('-9223372036854775808.5'))
+READ	SELECT bigint(double('-9223372036854780000'))
+DDL	DROP TABLE FLOAT8_TBL

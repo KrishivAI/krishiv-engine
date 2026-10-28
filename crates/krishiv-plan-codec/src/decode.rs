@@ -297,6 +297,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         zone: env.zone,
         query_start_micros: env.query_start_micros,
         user: Arc::from(env.user.as_str()),
+        map_key_dedup_last_win: env.map_key_dedup_last_win.unwrap_or(false),
     };
     Ok(
         PhysicalPlan::new(root, schema_from(&m.schema)?, explain, env)
@@ -998,6 +999,9 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
     }
     if m.job_uuid.is_empty() {
         return Err(corrupt("a write plan without a job id"));
+    }
+    if m.store.is_empty() {
+        return Err(corrupt("a write plan without a store"));
     }
     Ok(WritePlan {
         format: m.format.clone(),

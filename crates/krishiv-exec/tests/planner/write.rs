@@ -132,6 +132,7 @@ fn query_results_are_written_committed_and_read_back() {
             zone: None,
             query_start_micros: 0,
             user: Arc::from("u"),
+            map_key_dedup_last_win: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
@@ -170,6 +171,7 @@ fn query_results_are_written_committed_and_read_back() {
             zone: None,
             query_start_micros: 0,
             user: Arc::from("u"),
+            map_key_dedup_last_win: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))
@@ -178,6 +180,11 @@ fn query_results_are_written_committed_and_read_back() {
         .with_config(Arc::new(Config::new()));
     let e = krishiv_exec::physical::instantiate_task(&bad_plan, &worker, &TaskSpec::whole())
         .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion,
+        "invalid option surfaces: {e}"
+    );
     assert!(
         e.to_string().contains("bogus"),
         "invalid option surfaces: {e}"
@@ -192,7 +199,41 @@ fn query_results_are_written_committed_and_read_back() {
         partitions: 4,
         ..TaskSpec::whole()
     };
-    let _ = krishiv_exec::physical::instantiate_task(&plan, &worker, &task).expect("task 3 runs");
+    let node =
+        krishiv_exec::physical::instantiate_task(&plan, &worker, &task).expect("task 3 runs");
+    let mem: Arc<dyn krishiv_memory::MemoryPool> =
+        krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default());
+    let query = krishiv_exec::QueryContext::new(
+        krishiv_exec::QueryId(3),
+        krishiv_exec::WorkloadClass::Batch,
+        krishiv_exec::ExecConfig::default(),
+        mem.child("q3", None),
+    );
+    let runner = krishiv_exec::QueryRunner::new(
+        krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig::default()).unwrap(),
+    );
+    let batches = rt.block_on(async {
+        use futures::StreamExt as _;
+        let mut stream = runner.execute(node, Arc::clone(&query)).await.unwrap();
+        let mut out = Vec::new();
+        while let Some(b) = stream.next().await {
+            out.push(b.unwrap().into_parts().0);
+        }
+        query.finished().await;
+        out
+    });
+    assert_eq!(batches.len(), 1, "partition 3 writes one file");
+    let path = batches[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringViewArray>()
+        .unwrap()
+        .value(0)
+        .to_owned();
+    assert!(
+        path.starts_with("result/part-00003-job-1-c000"),
+        "partition 3 names its file: {path}"
+    );
 }
 
 /// Two tasks of one stage write disjoint files named by their partition;
@@ -292,6 +333,7 @@ fn two_tasks_write_disjoint_files_named_by_partition() {
                 zone: None,
                 query_start_micros: 0,
                 user: Arc::from("u"),
+                map_key_dedup_last_win: false,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -468,6 +510,7 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
                 zone: None,
                 query_start_micros: 0,
                 user: Arc::from("u"),
+                map_key_dedup_last_win: false,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -544,6 +587,8 @@ fn a_retried_attempt_leaves_no_orphan_after_commit() {
     };
     let committed = run_attempt(0);
     let uncommitted = run_attempt(1);
+    // Both attempts wrote; only attempt 0 commits.
+    w.note_attempt(1);
     // Both attempts wrote; only attempt 0 commits.
     let listed: Vec<String> = rt
         .block_on(io.list(&id, &StorePath::from("retry")))
@@ -660,6 +705,7 @@ fn empty_partitions_write_no_file_except_partition_zero_commits_one() {
                 zone: None,
                 query_start_micros: 0,
                 user: Arc::from("u"),
+                map_key_dedup_last_win: false,
             },
         );
         let worker = WorkerContext::new(Arc::clone(&tables) as _)
@@ -736,6 +782,7 @@ fn a_write_without_a_write_plan_is_refused() {
             zone: None,
             query_start_micros: 0,
             user: Arc::from("u"),
+            map_key_dedup_last_win: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()));
@@ -782,6 +829,7 @@ fn a_write_without_a_configuration_is_refused() {
             zone: None,
             query_start_micros: 0,
             user: Arc::from("u"),
+            map_key_dedup_last_win: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new()))

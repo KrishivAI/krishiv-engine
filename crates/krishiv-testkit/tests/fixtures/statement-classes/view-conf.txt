@@ -1,0 +1,11 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+SESSION	SET spark.sql.ansi.enabled = false
+SESSION	CREATE TEMPORARY VIEW view_ansi AS SELECT ColumnA + 1 FROM testData
+SESSION	SET spark.sql.ansi.enabled = true
+READ	SELECT * FROM view_ansi
+SESSION	SET spark.sql.caseSensitive = false
+SESSION	CREATE TEMPORARY VIEW view_case_sensitivity AS SELECT CoLuMNa FROM testData
+SESSION	SET spark.sql.caseSensitive = true
+READ	SELECT * FROM view_case_sensitivity
+SESSION	DROP VIEW IF EXISTS view_ansi
+SESSION	DROP VIEW IF EXISTS view_case_sensitivity

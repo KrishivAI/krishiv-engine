@@ -1,0 +1,17 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW view1 AS SELECT 2 AS i1
+READ	SELECT view1.* FROM view1
+READ	SELECT * FROM view1
+READ	SELECT view1.i1 FROM view1
+READ	SELECT i1 FROM view1
+READ	SELECT a.i1 FROM view1 AS a
+READ	SELECT i1 FROM view1 AS a
+SESSION	DROP VIEW view1
+DDL	CREATE OR REPLACE GLOBAL TEMPORARY VIEW view1 as SELECT 1 as i1
+READ	SELECT * FROM global_temp.view1
+READ	SELECT global_temp.view1.* FROM global_temp.view1
+READ	SELECT i1 FROM global_temp.view1
+READ	SELECT global_temp.view1.i1 FROM global_temp.view1
+READ	SELECT view1.i1 FROM global_temp.view1
+READ	SELECT a.i1 FROM global_temp.view1 AS a
+READ	SELECT i1 FROM global_temp.view1 AS a
+DDL	DROP VIEW global_temp.view1

@@ -58,40 +58,39 @@ pub fn is_exempt_path(rel: &str) -> bool {
 /// Whether the line is inside `with_defaults` of the registry constructor
 /// (the one exemption): `false` outside `registry.rs`.
 fn in_constructor(path: &str, lines: &[&str], line: usize) -> bool {
-    if !path.ends_with("crates/krishiv-io/src/registry.rs") && !path.ends_with("registry.rs") {
+    if path != "crates/krishiv-io/src/registry.rs" {
         return false;
     }
     let mut depth = 0_i64;
     let mut inside = false;
+    let mut opened = false;
     for (i, l) in lines.iter().enumerate() {
         let n = i + 1;
         if l.contains("fn with_defaults") {
             inside = true;
             depth = 0;
+            opened = false;
         }
         if inside {
             depth += i64::try_from(l.bytes().filter(|&b| b == b'{').count()).unwrap_or(i64::MAX);
             depth -= i64::try_from(l.bytes().filter(|&b| b == b'}').count()).unwrap_or(i64::MAX);
-            if n == line {
-                return true;
+            if depth > 0 {
+                opened = true;
             }
-            if depth <= 0 && n > line_of_fn(lines, "fn with_defaults") {
-                // Left the function without hitting the line: only lines
-                // between the fn start and its closing brace count.
+            if n == line {
+                return opened && depth > 0;
+            }
+            if opened && depth <= 0 {
+                // Left the function: only lines between the fn start and
+                // its closing brace count.
                 if n >= line {
                     return false;
                 }
+                inside = false;
             }
         }
     }
     false
-}
-
-fn line_of_fn(lines: &[&str], pat: &str) -> usize {
-    lines
-        .iter()
-        .position(|l| l.contains(pat))
-        .map_or(usize::MAX, |i| i + 1)
 }
 
 /// Violations in one file's text (empty when exempt).
@@ -132,35 +131,115 @@ pub fn check_file(path: &str, text: &str) -> Vec<Violation> {
 fn test_region_lines(lines: &[&str]) -> std::collections::HashSet<usize> {
     let mut out = std::collections::HashSet::new();
     let mut pending_cfg = false;
-    let mut depth: Option<i64> = None;
-    for (i, line) in lines.iter().enumerate() {
+    let mut pending_mod_brace = false;
+    let mut depths: Vec<i64> = Vec::new();
+    for (i, raw) in lines.iter().enumerate() {
         let n = i + 1;
-        let trimmed = line.trim_start();
-        if trimmed.starts_with("#[cfg(test)]") {
-            pending_cfg = true;
+        let line = strip_code(raw);
+        // `#[cfg(test)]` and `mod` on one line, or the attribute alone.
+        if line.contains("#[cfg(test)]") {
+            if is_mod_decl(&line) {
+                // Inline (`{`) or out-of-line (`;`): only inline counts.
+                if line.contains('{') {
+                    out.insert(n);
+                    depths.push(brace_delta(&line));
+                } else if !line.contains(';') {
+                    pending_mod_brace = true;
+                    out.insert(n);
+                }
+            } else {
+                pending_cfg = true;
+            }
             continue;
         }
         if pending_cfg {
-            if trimmed.starts_with("mod ") {
-                let opens =
-                    i64::try_from(line.bytes().filter(|&b| b == b'{').count()).unwrap_or(i64::MAX);
-                let closes =
-                    i64::try_from(line.bytes().filter(|&b| b == b'}').count()).unwrap_or(i64::MAX);
-                out.insert(n);
-                depth = (opens - closes > 0).then_some(opens - closes);
-            }
             pending_cfg = false;
+            if is_mod_decl(&line) {
+                if line.contains('{') {
+                    out.insert(n);
+                    depths.push(brace_delta(&line));
+                } else if !line.contains(';') {
+                    pending_mod_brace = true;
+                    out.insert(n);
+                }
+                continue;
+            }
+            // Not a module: the attribute belonged to something else.
+        }
+        if pending_mod_brace {
+            out.insert(n);
+            let delta = brace_delta(&line);
+            if line.contains('{') {
+                depths.push(delta);
+                pending_mod_brace = false;
+            } else if line.contains(';') {
+                // `mod tests;`: out-of-line, no inline region.
+                pending_mod_brace = false;
+            }
             continue;
         }
-        if let Some(d) = depth {
+        if let Some(d) = depths.last_mut() {
             out.insert(n);
-            let opens =
-                i64::try_from(line.bytes().filter(|&b| b == b'{').count()).unwrap_or(i64::MAX);
-            let closes =
-                i64::try_from(line.bytes().filter(|&b| b == b'}').count()).unwrap_or(i64::MAX);
-            let nd = d + opens - closes;
-            depth = (nd > 0).then_some(nd);
+            *d += brace_delta(&line);
+            if *d <= 0 {
+                depths.pop();
+            }
         }
+    }
+    out
+}
+
+/// Whether `line` (code without strings/comments) declares a module.
+fn is_mod_decl(line: &str) -> bool {
+    let cleaned = line.replace(['(', ')', '{', '}', ';', ','], " ");
+    let tokens = cleaned.split_whitespace().peekable();
+    for tok in tokens {
+        if tok == "mod" {
+            return true;
+        }
+        // `pub mod`, `pub(crate) mod`, `pub(super) mod`: skip qualifiers.
+        if tok == "pub" {
+            continue;
+        }
+        if tok.starts_with("pub") {
+            continue;
+        }
+    }
+    false
+}
+
+/// The brace delta of `line`, ignoring braces in strings and comments.
+fn brace_delta(line: &str) -> i64 {
+    let opens = line.bytes().filter(|&b| b == b'{').count();
+    let closes = line.bytes().filter(|&b| b == b'}').count();
+    i64::try_from(opens).unwrap_or(i64::MAX) - i64::try_from(closes).unwrap_or(i64::MAX)
+}
+
+/// `line` without `//` comments and `"..."` string contents (braces there
+/// do not open test modules or constructor bodies).
+fn strip_code(line: &str) -> String {
+    let code = match line.find("//") {
+        Some(i) => &line[..i],
+        None => line,
+    };
+    let mut out = String::with_capacity(code.len());
+    let mut in_str = false;
+    let mut escape = false;
+    for c in code.chars() {
+        if in_str {
+            if escape {
+                escape = false;
+            } else if c == '\\' {
+                escape = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        } else if c == '"' {
+            in_str = true;
+            continue;
+        }
+        out.push(c);
     }
     out
 }
@@ -180,9 +259,8 @@ pub fn run_check(root: &Path) -> Result<(), String> {
             .display()
             .to_string()
             .replace('\\', "/");
-        let Ok(text) = std::fs::read_to_string(path) else {
-            continue;
-        };
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         hits.extend(check_file(&rel, &text));
     }
     if hits.is_empty() {
@@ -198,9 +276,11 @@ pub fn run_check(root: &Path) -> Result<(), String> {
 }
 
 fn collect(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries =
-        std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
-    let mut entries: Vec<_> = entries.flatten().collect();
+    let read = std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?;
+    let mut entries: Vec<std::fs::DirEntry> = Vec::new();
+    for entry in read {
+        entries.push(entry.map_err(|e| format!("cannot read an entry in {}: {e}", dir.display()))?);
+    }
     entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
         let path = entry.path();
@@ -273,5 +353,48 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn the_constructor_exemption_ends_at_its_closing_brace() {
+        let after = "impl FormatRegistry {\n    pub fn with_defaults() -> Self {\n        Self::new()\n    }\n}\nuse crate::parquet::ParquetFormat;\n";
+        let hits = check_file("crates/krishiv-io/src/registry.rs", after);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].line, 6);
+        // Only the real registry file is exempt, not any `registry.rs`.
+        let other = "pub fn with_defaults() -> Self {\n    crate::parquet::X::new()\n}\n";
+        assert_eq!(check_file("crates/other/src/registry.rs", other).len(), 1);
+    }
+
+    #[test]
+    fn test_modules_count_whatever_their_header_shape() {
+        for (text, line) in [
+            (
+                "#[cfg(test)]\nmod tests {\nuse parquet::X;\n}\nuse parquet::Y;\n",
+                5,
+            ),
+            (
+                "#[cfg(test)] mod tests {\nuse parquet::X;\n}\nuse parquet::Y;\n",
+                4,
+            ),
+            (
+                "#[cfg(test)]\npub mod tests {\nuse parquet::X;\n}\nuse parquet::Y;\n",
+                5,
+            ),
+            (
+                "#[cfg(test)]\nmod tests\n{\nuse parquet::X;\n}\nuse parquet::Y;\n",
+                6,
+            ),
+        ] {
+            let hits = check_file("crates/krishiv-exec/src/files.rs", text);
+            assert_eq!(hits.len(), 1, "{text:?}: {hits:?}");
+            assert_eq!(hits[0].line, line);
+        }
+        // Braces in strings and comments do not close the test module.
+        let tricky =
+            "#[cfg(test)]\nmod tests {\nlet s = \"{\"; // }\nuse parquet::X;\n}\nuse parquet::Y;\n";
+        let hits = check_file("crates/krishiv-exec/src/files.rs", tricky);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].line, 6);
     }
 }

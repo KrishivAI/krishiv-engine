@@ -1,0 +1,61 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT explode(array(a, b)) AS elem FROM testData
+READ	SELECT explode(array(a, b)) AS elem, 'Spark' FROM testData
+READ	SELECT explode(array(a, b)) AS null, null FROM testData
+READ	SELECT explode(array(1, 2)) AS null, null, 'column'
+READ	SELECT explode(map(1, 'a', 2, 'b'))
+READ	SELECT explode(struct(1, 'a', 2, 'b'))
+READ	SELECT explode(1)
+READ	SELECT explode(null)
+READ	SELECT explode(cast (null as array<int>))
+READ	SELECT explode_outer(array(a, b)) AS elem FROM testData
+READ	SELECT explode_outer(array(a, b)) AS elem, 'Spark' FROM testData
+READ	SELECT explode_outer(array(a, b)) AS null, null FROM testData
+READ	SELECT explode_outer(array(1, 2)) AS null, null, 'column'
+READ	SELECT explode_outer(map(1, 'a', 2, 'b'))
+READ	SELECT explode_outer(struct(1, 'a', 2, 'b'))
+READ	SELECT explode_outer(1)
+READ	SELECT explode_outer(null)
+READ	SELECT explode_outer(cast (null as array<int>))
+READ	SELECT posexplode(array(a, b)) AS elem FROM testData
+READ	SELECT posexplode(array(a, b)) AS (elem, elem2) FROM testData
+READ	SELECT posexplode(array(a, b)) AS (null, null) FROM testData
+READ	SELECT posexplode(array(1, 2)) AS (null, null, column)
+READ	SELECT posexplode(map(1, 'a', 2, 'b'))
+READ	SELECT posexplode(struct(1, 'a', 2, 'b'))
+READ	SELECT posexplode(1)
+READ	SELECT posexplode(null)
+READ	SELECT posexplode(cast (null as array<int>))
+READ	SELECT posexplode_outer(array(a, b)) AS elem FROM testData
+READ	SELECT posexplode_outer(array(a, b)) AS (elem, elem2) FROM testData
+READ	SELECT posexplode_outer(array(a, b)) AS (null, null) FROM testData
+READ	SELECT posexplode_outer(array(1, 2)) AS (null, null, column)
+READ	SELECT posexplode_outer(map(1, 'a', 2, 'b'))
+READ	SELECT posexplode_outer(struct(1, 'a', 2, 'b'))
+READ	SELECT posexplode_outer(1)
+READ	SELECT posexplode_outer(null)
+READ	SELECT posexplode_outer(cast (null as array<int>))
+READ	SELECT inline(array(struct(1, 'a')))
+READ	SELECT inline(array(struct(null, 'a'), struct(null, 'b')))
+READ	SELECT inline(array(struct(a, 'a'), struct(a, 'b'))) FROM testData
+READ	SELECT inline(array(struct(a, 'a'), struct(b, 'b'))) FROM testData
+READ	SELECT inline(1)
+READ	SELECT inline(array(1, 'a'))
+READ	SELECT inline(struct(1, 'a'))
+READ	SELECT inline_outer(array(struct(1, 'a')))
+READ	SELECT inline_outer(array(struct(null, 'a'), struct(null, 'b')))
+READ	SELECT inline_outer(array(struct(a, 'a'), struct(a, 'b'))) FROM testData
+READ	SELECT inline_outer(array(struct(a, 'a'), struct(b, 'b'))) FROM testData
+READ	SELECT inline_outer(1)
+READ	SELECT inline_outer(array(1, 'a'))
+READ	SELECT inline_outer(struct(1, 'a'))
+READ	select json_tuple('{"a": 1, "b": 2}', 'a', 'b')
+READ	select json_tuple()
+READ	select json_tuple('{"a": 1}')
+READ	select json_tuple('{"a": 1}', 1)
+READ	select json_tuple('{"a": 1}', null)
+READ	select stack(1, 1, 2, 3)
+READ	select stack(2, 1, 1.1, 'a', 2, 2.2, 'b')
+READ	select stack(2, 1, 1.1, null, 2, null, 'b')
+READ	select stack()
+READ	select stack(2, explode(array(1, 2, 3)))

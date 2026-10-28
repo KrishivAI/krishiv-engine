@@ -87,42 +87,6 @@ pub struct RelationRef {
     pub hash: RelationHash,
 }
 
-/// The weights of one stored batch.
-#[derive(Debug, Clone, PartialEq)]
-enum StoredWeights {
-    /// Every row has this weight.
-    Const(i64),
-    /// One weight per row.
-    Column(Vec<i64>),
-}
-
-impl StoredWeights {
-    /// The weights of `batch`.
-    fn of(batch: &Batch) -> Self {
-        match batch.weights() {
-            Weights::Const(c) => Self::Const(*c),
-            Weights::Column(column) => Self::Column(column.values().to_vec()),
-        }
-    }
-
-    /// The bytes hashed with the data: the constant, or the values.
-    fn hash_bytes(&self, out: &mut Vec<u8>) {
-        match self {
-            Self::Const(c) => {
-                out.push(0);
-                out.extend_from_slice(&c.to_le_bytes());
-            }
-            Self::Column(values) => {
-                out.push(1);
-                out.extend_from_slice(&values.len().to_le_bytes());
-                for v in values {
-                    out.extend_from_slice(&v.to_le_bytes());
-                }
-            }
-        }
-    }
-}
-
 /// One stored relation: its schema and its batches, shared.
 struct Entry {
     schema: SchemaRef,
@@ -211,9 +175,18 @@ impl RelationStore {
         schema: &SchemaRef,
         batches: &[Batch],
     ) -> Result<RelationLease, KrishivError> {
-        let ipc = encode(schema, batches)?;
-        let stored: Vec<StoredWeights> = batches.iter().map(StoredWeights::of).collect();
-        let hash = hash_relation(&ipc, &stored);
+        let hash = hash_streaming(schema, batches)?;
+        {
+            let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((_, owners)) = entries.map.get_mut(&hash) {
+                *owners += 1;
+                return Ok(RelationLease {
+                    store: Arc::clone(self),
+                    hash,
+                    batches: batches.len(),
+                });
+            }
+        }
         let mut reservation = self.consumer.reservation();
         reservation.try_grow(decoded_bytes(batches))?;
         let entry = Entry {
@@ -440,19 +413,51 @@ fn decode_records(ipc: &[u8]) -> Result<(SchemaRef, Vec<RecordBatch>), KrishivEr
 }
 
 /// The content hash: SHA-256 over the IPC bytes (which carry the schema and
-/// the values) plus the weights.
-fn hash_relation(ipc: &[u8], weights: &[StoredWeights]) -> RelationHash {
-    let mut hasher = Sha256::new();
-    hasher.update(ipc);
-    let mut w = Vec::new();
-    for weight in weights {
-        weight.hash_bytes(&mut w);
+/// the values) plus the weights, streamed without materializing the IPC.
+fn hash_streaming(schema: &SchemaRef, batches: &[Batch]) -> Result<RelationHash, KrishivError> {
+    struct HashWrite<'a>(&'a mut Sha256);
+    impl std::io::Write for HashWrite<'_> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            use sha2::Digest as _;
+            self.0.update(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
     }
-    hasher.update(&w);
+    let mut hasher = Sha256::new();
+    {
+        let mut writer = StreamWriter::try_new(HashWrite(&mut hasher), schema.as_ref())
+            .map_err(|e| internal(format!("cannot encode a relation's schema: {e}")))?;
+        for b in batches {
+            writer
+                .write(b.data())
+                .map_err(|e| internal(format!("cannot encode a relation's batches: {e}")))?;
+        }
+        writer
+            .finish()
+            .map_err(|e| internal(format!("cannot finish a relation's encoding: {e}")))?;
+    }
+    for b in batches {
+        match b.weights() {
+            Weights::Const(c) => {
+                hasher.update([0]);
+                hasher.update(c.to_le_bytes());
+            }
+            Weights::Column(column) => {
+                hasher.update([1]);
+                hasher.update(column.len().to_le_bytes());
+                for v in column.values().iter() {
+                    hasher.update(v.to_le_bytes());
+                }
+            }
+        }
+    }
     let digest = hasher.finalize();
     let mut hash = [0_u8; 32];
     hash.copy_from_slice(&digest);
-    RelationHash(hash)
+    Ok(RelationHash(hash))
 }
 
 /// `INTERNAL_ERROR_MEMORY`, for a broken invariant (not a user error).

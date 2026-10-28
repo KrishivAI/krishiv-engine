@@ -1,0 +1,25 @@
+SESSION	create temporary view int4_tbl as select * from values
+SESSION	CREATE OR REPLACE TEMPORARY VIEW bitwise_test AS SELECT * FROM VALUES
+READ	SELECT BIT_AND(b1) AS n1, BIT_OR(b2)  AS n2 FROM bitwise_test where 1 = 0
+READ	SELECT BIT_AND(b4) AS n1, BIT_OR(b4)  AS n2 FROM bitwise_test where b4 is null
+READ	SELECT
+READ	SELECT
+READ	SELECT
+SESSION	CREATE OR REPLACE TEMPORARY VIEW bool_test AS SELECT * FROM VALUES
+READ	SELECT BOOL_AND(b1) AS n1, BOOL_OR(b3) AS n2 FROM bool_test WHERE 1 = 0
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	select min(udf(unique1)) from tenk1
+READ	select udf(max(unique1)) from tenk1
+READ	select max(unique1) from tenk1 where udf(unique1) < 42
+READ	select max(unique1) from tenk1 where unique1 > udf(42)
+READ	select max(unique1) from tenk1 where udf(unique1) > 42000
+READ	select max(tenthous) from tenk1 where udf(thousand) = 33
+READ	select min(tenthous) from tenk1 where udf(thousand) = 33
+READ	select distinct max(udf(unique2)) from tenk1
+READ	select max(unique2) from tenk1 order by udf(1)
+READ	select max(unique2) from tenk1 order by max(udf(unique2))
+READ	select udf(max(udf(unique2))) from tenk1 order by udf(max(unique2))+1
+READ	select t1.max_unique2, udf(g) from (select max(udf(unique2)) as max_unique2 FROM tenk1) t1 LATERAL VIEW explode(array(1,
+READ	select udf(max(100)) from tenk1

@@ -229,7 +229,7 @@ fn a_reader_without_write_plan_refuses_the_plan_by_name() {
 }
 
 #[test]
-fn a_write_plan_without_a_format_or_job_id_is_corrupt() {
+fn a_write_plan_without_a_format_job_id_or_store_is_corrupt() {
     let m = message("write_files_with_plan");
     let edit = |f: &dyn Fn(&mut pb::WritePlan)| {
         let mut m = m.clone();
@@ -250,6 +250,7 @@ fn a_write_plan_without_a_format_or_job_id_is_corrupt() {
         &edit(&|w| w.job_uuid.clear()),
         "a write plan without a job id",
     );
+    corrupt(&edit(&|w| w.store.clear()), "a write plan without a store");
     // An absent `write` is a plan written before the `write_plan`
     // feature, not corruption: it decodes to the legacy plan.
     let mut missing = message("write_files_with_plan");
@@ -427,7 +428,11 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             "window_ranking" | "window_aggregates" => 4,
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
-            "window_group_limit" | "nested_types" | "struct_field" | "lambda_functions" => 6,
+            "window_group_limit"
+            | "nested_types"
+            | "struct_field"
+            | "lambda_functions"
+            | "map_key_dedup_policy" => 6,
             n if n.starts_with("hash_join_right") => POST_MIGRATION_READER_VERSION,
             "hash_join_existence"
             | "hash_join_single_match"
