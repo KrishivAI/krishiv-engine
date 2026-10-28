@@ -1,0 +1,34 @@
+SESSION	create temp view v (c) as values (1), (null)
+SESSION	create temp view v_empty (e) as select 1 where false
+DDL	create table t(c int) using json
+WRITE	insert into t values (1), (null)
+DDL	create table t2(d int) using json
+WRITE	insert into t2 values (2)
+DDL	create table t_empty(e int) using json
+SESSION	set spark.sql.legacy.nullInEmptyListBehavior = false
+READ	select c, c in (select e from t_empty) from t
+READ	select c, c in (select e from v_empty) from v
+READ	select c, c not in (select e from t_empty) from t
+READ	select c, c not in (select e from v_empty) from v
+READ	select null in (select e from t_empty)
+READ	select null in (select e from v_empty)
+READ	select null not in (select e from t_empty)
+READ	select null not in (select e from v_empty)
+READ	select * from t left join t2 on (t.c in (select e from t_empty)) is null
+READ	select * from t left join t2 on (t.c not in (select e from t_empty)) is null
+SESSION	set spark.sql.optimizer.optimizeUncorrelatedInSubqueriesInJoinCondition.enabled=true
+READ	select * from t left join t2 on (t.c in (select e from t_empty)) is null
+READ	select * from t left join t2 on (t.c not in (select e from t_empty)) is null
+SESSION	set spark.sql.legacy.nullInEmptyListBehavior = true
+SESSION	set spark.sql.optimizer.optimizeUncorrelatedInSubqueriesInJoinCondition.enabled=false
+READ	select null in (select e from t_empty)
+READ	select null in (select e from v_empty)
+READ	select null not in (select e from t_empty)
+READ	select null not in (select e from v_empty)
+READ	select * from t left join t2 on (t.c in (select e from t_empty)) is null
+READ	select * from t left join t2 on (t.c not in (select e from t_empty)) is null
+SESSION	reset spark.sql.legacy.nullInEmptyListBehavior
+SESSION	reset spark.sql.optimizer.optimizeUncorrelatedInSubqueriesInJoinCondition.enabled
+DDL	drop table t
+DDL	drop table t2
+DDL	drop table t_empty

@@ -1,0 +1,15 @@
+SESSION	CREATE TEMPORARY VIEW grouping AS SELECT * FROM VALUES
+READ	SELECT a, b, c, udaf(d) FROM grouping GROUP BY a, b, c GROUPING SETS (())
+READ	SELECT a, b, c, udaf(d) FROM grouping GROUP BY a, b, c GROUPING SETS ((a))
+READ	SELECT a, b, c, udaf(d) FROM grouping GROUP BY a, b, c GROUPING SETS ((c))
+READ	SELECT c1, udaf(c2) FROM (VALUES ('x', 10, 0), ('y', 20, 0)) AS t (c1, c2, c3) GROUP BY GROUPING SETS (c1)
+READ	SELECT c1, udaf(c2), grouping(c1) FROM (VALUES ('x', 10, 0), ('y', 20, 0)) AS t (c1, c2, c3) GROUP BY GROUPING SETS (c1)
+READ	SELECT c1, c2, udaf(c3), grouping__id
+READ	SELECT a + b, b, udaf(c) FROM (VALUES (1,1,1),(2,2,2)) AS t(a,b,c) GROUP BY GROUPING SETS ( (a + b), (b))
+READ	SELECT a + b, b, udaf(c) FROM (VALUES (1,1,1),(2,2,2)) AS t(a,b,c) GROUP BY GROUPING SETS ( (a + b), (b + a), (b))
+PARSE_ERROR	SELECT a, b, c, udaf(d) FROM grouping GROUP BY WITH ROLLUP
+PARSE_ERROR	SELECT a, b, c, udaf(d) FROM grouping GROUP BY WITH CUBE
+READ	SELECT k1, k2, udaf(v) FROM (VALUES (1,1,1),(2,2,2)) AS t(k1,k2,v) GROUP BY GROUPING SETS ((k1),(k1,k2),(k2,k1))
+READ	SELECT grouping__id, k1, k2, udaf(v) FROM (VALUES (1,1,1),(2,2,2)) AS t(k1,k2,v) GROUP BY GROUPING SETS ((k1),(k1,k2),(k
+READ	SELECT grouping(k1), k1, k2, udaf(v) FROM (VALUES (1,1,1),(2,2,2)) AS t(k1,k2,v) GROUP BY GROUPING SETS ((k1),(k1,k2),(k
+READ	SELECT grouping_id(k1, k2), udaf(v) from (VALUES (1,1,1),(2,2,2)) AS t(k1,k2,v) GROUP BY k1, k2 GROUPING SETS ((k2, k1),

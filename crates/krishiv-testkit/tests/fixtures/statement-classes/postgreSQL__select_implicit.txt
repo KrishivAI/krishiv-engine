@@ -1,0 +1,38 @@
+DDL	CREATE TABLE test_missing_target (a int, b int, c string, d string) using parquet
+WRITE	INSERT INTO test_missing_target VALUES (0, 1, 'XXXX', 'A')
+WRITE	INSERT INTO test_missing_target VALUES (1, 2, 'ABAB', 'b')
+WRITE	INSERT INTO test_missing_target VALUES (2, 2, 'ABAB', 'c')
+WRITE	INSERT INTO test_missing_target VALUES (3, 3, 'BBBB', 'D')
+WRITE	INSERT INTO test_missing_target VALUES (4, 3, 'BBBB', 'e')
+WRITE	INSERT INTO test_missing_target VALUES (5, 3, 'bbbb', 'F')
+WRITE	INSERT INTO test_missing_target VALUES (6, 4, 'cccc', 'g')
+WRITE	INSERT INTO test_missing_target VALUES (7, 4, 'cccc', 'h')
+WRITE	INSERT INTO test_missing_target VALUES (8, 4, 'CCCC', 'I')
+WRITE	INSERT INTO test_missing_target VALUES (9, 4, 'CCCC', 'j')
+READ	SELECT c, count(*) FROM test_missing_target GROUP BY test_missing_target.c ORDER BY c
+READ	SELECT count(*) FROM test_missing_target GROUP BY test_missing_target.c ORDER BY c
+READ	SELECT count(*) FROM test_missing_target GROUP BY a ORDER BY b
+READ	SELECT count(*) FROM test_missing_target GROUP BY b ORDER BY b
+READ	SELECT test_missing_target.b, count(*)
+READ	SELECT c FROM test_missing_target ORDER BY a
+READ	SELECT count(*) FROM test_missing_target GROUP BY b ORDER BY b desc
+READ	SELECT count(*) FROM test_missing_target ORDER BY 1 desc
+READ	SELECT c, count(*) FROM test_missing_target GROUP BY 1 ORDER BY 1
+READ	SELECT c, count(*) FROM test_missing_target GROUP BY 3
+READ	SELECT count(*) FROM test_missing_target x, test_missing_target y
+READ	SELECT a, a FROM test_missing_target
+READ	SELECT a/2, a/2 FROM test_missing_target
+READ	SELECT a/2, a/2 FROM test_missing_target
+READ	SELECT x.b, count(*) FROM test_missing_target x, test_missing_target y
+READ	SELECT count(*) FROM test_missing_target x, test_missing_target y
+READ	SELECT a%2, count(b) FROM test_missing_target
+READ	SELECT count(c) FROM test_missing_target
+READ	SELECT count(a) FROM test_missing_target GROUP BY a ORDER BY b
+READ	SELECT count(b) FROM test_missing_target GROUP BY b/2 ORDER BY b/2
+READ	SELECT lower(test_missing_target.c), count(c)
+READ	SELECT a FROM test_missing_target ORDER BY upper(d)
+READ	SELECT count(b) FROM test_missing_target
+READ	SELECT count(x.a) FROM test_missing_target x, test_missing_target y
+READ	SELECT x.b/2, count(x.b) FROM test_missing_target x, test_missing_target y
+READ	SELECT count(b) FROM test_missing_target x, test_missing_target y
+DDL	DROP TABLE test_missing_target

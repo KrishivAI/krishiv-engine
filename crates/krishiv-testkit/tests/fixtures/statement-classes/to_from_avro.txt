@@ -1,0 +1,10 @@
+DDL	create table t as
+SESSION	declare avro_schema string
+SESSION	set variable avro_schema =
+READ	select from_avro(s, 42, map()) from t
+READ	select from_avro(s, avro_schema, 42) from t
+READ	select to_avro(s, 42) from t
+READ	select to_avro(s, avro_schema) as result from t
+READ	select from_avro(result, avro_schema, map()).u from (select null as result)
+SESSION	drop temporary variable avro_schema
+DDL	drop table t

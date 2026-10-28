@@ -1,0 +1,111 @@
+# One statement per line: branch label, expected class, SQL (tab-separated).
+# Every Statement variant and every parser branch the classifier distinguishes has a line
+# (`tests/classify.rs` checks coverage against `src/ast.rs`).
+Query	READ	SELECT a FROM t
+Query	READ	WITH c AS (SELECT * FROM t) SELECT * FROM c
+Query	READ	SELECT 1 -- ; DROP TABLE t
+Query	READ	SELECT /*+ BROADCAST(t) */ * FROM t /* ; DROP TABLE t */
+Query	READ	SELECT * FROM parquet.`/data/x`
+Query	READ	SELECT * FROM v1 JOIN (SELECT * FROM v2) USING (k)
+Query	READ	SELECT * FROM IDENTIFIER('t')
+Query	READ	FROM t SELECT a
+Explain::Simple	READ	EXPLAIN SELECT 1
+Explain::Extended	READ	EXPLAIN EXTENDED SELECT 1
+Explain::Formatted	READ	EXPLAIN FORMATTED SELECT 1
+Explain::Codegen	READ	EXPLAIN CODEGEN SELECT 1
+Explain::Cost	READ	EXPLAIN COST SELECT 1
+Explain::Verbose	READ	EXPLAIN VERBOSE SELECT 1
+Explain::Simple	READ	EXPLAIN INSERT INTO t SELECT 1
+Explain::Simple	READ	EXPLAIN DROP TABLE t
+Explain::Analyze	READ	EXPLAIN ANALYZE SELECT 1
+Explain::Analyze	WRITE	EXPLAIN ANALYZE INSERT INTO t SELECT 1
+Explain::Analyze	DDL	EXPLAIN ANALYZE DROP TABLE t
+Explain::Analyze	SESSION	EXPLAIN ANALYZE SET a = b
+Explain::Analyze	ADMIN	EXPLAIN ANALYZE CLEAR CACHE
+Set::All	SESSION	SET
+Set::Verbose	SESSION	SET -v
+Set::Show	SESSION	SET spark.sql.ansi.enabled
+Set::Assign	SESSION	SET spark.sql.ansi.enabled = false
+Set::TimeZone	SESSION	SET TIME ZONE 'UTC'
+Reset	SESSION	RESET
+Reset	SESSION	RESET spark.sql.ansi.enabled
+CreateView	SESSION	CREATE TEMPORARY VIEW v AS SELECT * FROM t
+CreateView	SESSION	CREATE OR REPLACE TEMP VIEW v AS SELECT * FROM v0
+DropView	SESSION	DROP VIEW v
+CreateTable	DDL	CREATE TABLE t (a INT) USING parquet
+CreateTable	DDL	CREATE TABLE t USING parquet AS SELECT * FROM s
+CreateTable	DDL	CREATE OR REPLACE TABLE db.t (a INT)
+CreateTable::temporary	SESSION	CREATE TEMPORARY TABLE t USING parquet OPTIONS (path '/data/x')
+CreateTableLike	DDL	CREATE TABLE t LIKE s
+DropTable	DDL	DROP TABLE IF EXISTS t
+DropTable	DDL	DROP TABLE IDENTIFIER('t')
+CreateNamespace	DDL	CREATE DATABASE d
+CreateNamespace	DDL	CREATE SCHEMA IF NOT EXISTS cat.d
+DropNamespace	DDL	DROP NAMESPACE d CASCADE
+Use	SESSION	USE d
+Use	SESSION	USE NAMESPACE d
+DeclareVariable	SESSION	DECLARE v INT DEFAULT 1
+SetVariable::Single	SESSION	SET VARIABLE v = 2
+SetVariable::Row	SESSION	SET VAR (v) = (SELECT max(a) FROM t)
+DropVariable	SESSION	DROP TEMPORARY VARIABLE v
+CreatePermanentView	DDL	CREATE VIEW db.v AS SELECT * FROM t
+CreatePermanentView::temporary	SESSION	CREATE TEMPORARY VIEW v USING parquet OPTIONS (path '/data/x')
+CreatePermanentView::global	DDL	CREATE GLOBAL TEMPORARY VIEW v AS SELECT 1
+DropPermanentView	DDL	DROP VIEW db.v
+DropPermanentView	DDL	DROP VIEW global_temp.v
+AlterTable::AddColumns	DDL	ALTER TABLE t ADD COLUMNS (b INT)
+AlterTable::DropColumns	DDL	ALTER TABLE t DROP COLUMN b
+AlterTable::RenameColumn	DDL	ALTER TABLE t RENAME COLUMN a TO b
+AlterTable::RenameTo	DDL	ALTER TABLE t RENAME TO u
+AlterTable::ChangeColumn	DDL	ALTER TABLE t CHANGE COLUMN a COMMENT 'c'
+AlterTable::AlterColumn	DDL	ALTER TABLE t ALTER COLUMN a SET NOT NULL
+AlterTable::SetTblProperties	DDL	ALTER TABLE t SET TBLPROPERTIES ('k' = 'v')
+AlterTable::UnsetTblProperties	DDL	ALTER TABLE t UNSET TBLPROPERTIES ('k')
+AlterTable::SetSerdeProperties	DDL	ALTER TABLE t SET SERDEPROPERTIES ('k' = 'v')
+AlterTable::SetPartitionSerdeProperties	DDL	ALTER TABLE t PARTITION (p = 1) SET SERDEPROPERTIES ('k' = 'v')
+AlterTable::SetLocation	DDL	ALTER TABLE t SET LOCATION '/data/t'
+AlterTable::AddPartition	DDL	ALTER TABLE t ADD PARTITION (p = 1)
+AlterTable::DropPartition	DDL	ALTER TABLE t DROP PARTITION (p = 1)
+AlterTable::RenamePartition	DDL	ALTER TABLE t PARTITION (p = 1) RENAME TO PARTITION (p = 2)
+AlterTable::SetPartitionLocation	DDL	ALTER TABLE t PARTITION (p = 1) SET LOCATION '/data/p'
+AlterTable::RecoverPartitions	DDL	ALTER TABLE t RECOVER PARTITIONS
+AlterView::SetQuery	DDL	ALTER VIEW v AS SELECT 1
+AlterView::SetSchemaBinding	DDL	ALTER VIEW v WITH SCHEMA BINDING
+AlterView::SetTblProperties	DDL	ALTER VIEW v SET TBLPROPERTIES ('k' = 'v')
+AlterView::UnsetTblProperties	DDL	ALTER VIEW v UNSET TBLPROPERTIES ('k')
+AlterView::RenameTo	DDL	ALTER VIEW v RENAME TO w
+AlterNamespace::SetProperties	DDL	ALTER DATABASE d SET PROPERTIES (k = 'v')
+AlterNamespace::SetLocation	DDL	ALTER DATABASE d SET LOCATION '/data/d'
+Insert	WRITE	INSERT INTO t SELECT * FROM s
+Insert	WRITE	INSERT OVERWRITE TABLE t VALUES (1)
+Insert	WRITE	FROM s INSERT INTO t SELECT a INSERT INTO u SELECT b
+Delete	WRITE	DELETE FROM t WHERE a = 1
+Update	WRITE	UPDATE t SET a = 1 WHERE b = 2
+Merge::Table	WRITE	MERGE INTO t USING s ON t.k = s.k WHEN MATCHED THEN DELETE
+Merge::Query	WRITE	MERGE INTO t USING (SELECT * FROM s) AS s ON t.k = s.k WHEN NOT MATCHED THEN INSERT *
+Truncate	WRITE	TRUNCATE TABLE t
+Show::Tables	READ	SHOW TABLES
+Show::TableExtended	READ	SHOW TABLE EXTENDED LIKE 't*'
+Show::Views	READ	SHOW VIEWS IN d
+Show::Columns	READ	SHOW COLUMNS IN t
+Show::Functions	READ	SHOW FUNCTIONS
+Show::Namespaces	READ	SHOW DATABASES
+Show::CreateTable	READ	SHOW CREATE TABLE t
+Show::TblProperties	READ	SHOW TBLPROPERTIES t
+Show::Partitions	READ	SHOW PARTITIONS t
+Show::CurrentNamespace	READ	SHOW CURRENT NAMESPACE
+Describe::Table	READ	DESCRIBE TABLE t
+Describe::Function	READ	DESCRIBE FUNCTION abs
+Describe::Namespace	READ	DESCRIBE DATABASE d
+Describe::Query	READ	DESCRIBE QUERY SELECT * FROM t
+Cache::Cache	SESSION	CACHE TABLE t
+Cache::Cache	SESSION	CACHE LAZY TABLE c AS SELECT * FROM t
+Cache::Uncache	SESSION	UNCACHE TABLE IF EXISTS t
+Cache::Clear	ADMIN	CLEAR CACHE
+Refresh::Table	ADMIN	REFRESH TABLE t
+Refresh::Function	ADMIN	REFRESH FUNCTION f
+Refresh::Path	ADMIN	REFRESH '/data/x'
+Analyze	WRITE	ANALYZE TABLE t COMPUTE STATISTICS
+Repair	DDL	MSCK REPAIR TABLE t
+AddResource	ADMIN	ADD JAR '/tmp/a.jar'
+ListResource	READ	LIST JARS

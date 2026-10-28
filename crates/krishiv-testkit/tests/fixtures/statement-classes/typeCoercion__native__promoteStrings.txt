@@ -1,0 +1,316 @@
+SESSION	CREATE TEMPORARY VIEW t AS SELECT 1
+READ	SELECT '1' + cast(1 as tinyint)                         FROM t
+READ	SELECT '1' + cast(1 as smallint)                        FROM t
+READ	SELECT '1' + cast(1 as int)                             FROM t
+READ	SELECT '1' + cast(1 as bigint)                          FROM t
+READ	SELECT '1' + cast(1 as float)                           FROM t
+READ	SELECT '1' + cast(1 as double)                          FROM t
+READ	SELECT '1' + cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' + '1'                                        FROM t
+READ	SELECT '1' + cast('1' as binary)                        FROM t
+READ	SELECT '1' + cast(1 as boolean)                         FROM t
+READ	SELECT '1' + cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' + cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT '1' - cast(1 as tinyint)                         FROM t
+READ	SELECT '1' - cast(1 as smallint)                        FROM t
+READ	SELECT '1' - cast(1 as int)                             FROM t
+READ	SELECT '1' - cast(1 as bigint)                          FROM t
+READ	SELECT '1' - cast(1 as float)                           FROM t
+READ	SELECT '1' - cast(1 as double)                          FROM t
+READ	SELECT '1' - cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' - '1'                                        FROM t
+READ	SELECT '1' - cast('1' as binary)                        FROM t
+READ	SELECT '1' - cast(1 as boolean)                         FROM t
+READ	SELECT '1' - cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' - cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT '1' * cast(1 as tinyint)                         FROM t
+READ	SELECT '1' * cast(1 as smallint)                        FROM t
+READ	SELECT '1' * cast(1 as int)                             FROM t
+READ	SELECT '1' * cast(1 as bigint)                          FROM t
+READ	SELECT '1' * cast(1 as float)                           FROM t
+READ	SELECT '1' * cast(1 as double)                          FROM t
+READ	SELECT '1' * cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' * '1'                                        FROM t
+READ	SELECT '1' * cast('1' as binary)                        FROM t
+READ	SELECT '1' * cast(1 as boolean)                         FROM t
+READ	SELECT '1' * cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' * cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT '1' / cast(1 as tinyint)                         FROM t
+READ	SELECT '1' / cast(1 as smallint)                        FROM t
+READ	SELECT '1' / cast(1 as int)                             FROM t
+READ	SELECT '1' / cast(1 as bigint)                          FROM t
+READ	SELECT '1' / cast(1 as float)                           FROM t
+READ	SELECT '1' / cast(1 as double)                          FROM t
+READ	SELECT '1' / cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' / '1'                                        FROM t
+READ	SELECT '1' / cast('1' as binary)                        FROM t
+READ	SELECT '1' / cast(1 as boolean)                         FROM t
+READ	SELECT '1' / cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' / cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT '1' % cast(1 as tinyint)                         FROM t
+READ	SELECT '1' % cast(1 as smallint)                        FROM t
+READ	SELECT '1' % cast(1 as int)                             FROM t
+READ	SELECT '1' % cast(1 as bigint)                          FROM t
+READ	SELECT '1' % cast(1 as float)                           FROM t
+READ	SELECT '1' % cast(1 as double)                          FROM t
+READ	SELECT '1' % cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' % '1'                                        FROM t
+READ	SELECT '1' % cast('1' as binary)                        FROM t
+READ	SELECT '1' % cast(1 as boolean)                         FROM t
+READ	SELECT '1' % cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' % cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT pmod('1', cast(1 as tinyint))                         FROM t
+READ	SELECT pmod('1', cast(1 as smallint))                        FROM t
+READ	SELECT pmod('1', cast(1 as int))                             FROM t
+READ	SELECT pmod('1', cast(1 as bigint))                          FROM t
+READ	SELECT pmod('1', cast(1 as float))                           FROM t
+READ	SELECT pmod('1', cast(1 as double))                          FROM t
+READ	SELECT pmod('1', cast(1 as decimal(10, 0)))                  FROM t
+READ	SELECT pmod('1', '1')                                        FROM t
+READ	SELECT pmod('1', cast('1' as binary))                        FROM t
+READ	SELECT pmod('1', cast(1 as boolean))                         FROM t
+READ	SELECT pmod('1', cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT pmod('1', cast('2017-12-11 09:30:00' as date))        FROM t
+READ	SELECT cast(1 as tinyint)                         + '1' FROM t
+READ	SELECT cast(1 as smallint)                        + '1' FROM t
+READ	SELECT cast(1 as int)                             + '1' FROM t
+READ	SELECT cast(1 as bigint)                          + '1' FROM t
+READ	SELECT cast(1 as float)                           + '1' FROM t
+READ	SELECT cast(1 as double)                          + '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  + '1' FROM t
+READ	SELECT cast('1' as binary)                        + '1' FROM t
+READ	SELECT cast(1 as boolean)                         + '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) + '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        + '1' FROM t
+READ	SELECT cast(1 as tinyint)                         - '1' FROM t
+READ	SELECT cast(1 as smallint)                        - '1' FROM t
+READ	SELECT cast(1 as int)                             - '1' FROM t
+READ	SELECT cast(1 as bigint)                          - '1' FROM t
+READ	SELECT cast(1 as float)                           - '1' FROM t
+READ	SELECT cast(1 as double)                          - '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  - '1' FROM t
+READ	SELECT cast('1' as binary)                        - '1' FROM t
+READ	SELECT cast(1 as boolean)                         - '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) - '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        - '1' FROM t
+READ	SELECT cast(1 as tinyint)                         * '1' FROM t
+READ	SELECT cast(1 as smallint)                        * '1' FROM t
+READ	SELECT cast(1 as int)                             * '1' FROM t
+READ	SELECT cast(1 as bigint)                          * '1' FROM t
+READ	SELECT cast(1 as float)                           * '1' FROM t
+READ	SELECT cast(1 as double)                          * '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  * '1' FROM t
+READ	SELECT cast('1' as binary)                        * '1' FROM t
+READ	SELECT cast(1 as boolean)                         * '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) * '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        * '1' FROM t
+READ	SELECT cast(1 as tinyint)                         / '1' FROM t
+READ	SELECT cast(1 as smallint)                        / '1' FROM t
+READ	SELECT cast(1 as int)                             / '1' FROM t
+READ	SELECT cast(1 as bigint)                          / '1' FROM t
+READ	SELECT cast(1 as float)                           / '1' FROM t
+READ	SELECT cast(1 as double)                          / '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  / '1' FROM t
+READ	SELECT cast('1' as binary)                        / '1' FROM t
+READ	SELECT cast(1 as boolean)                         / '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) / '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        / '1' FROM t
+READ	SELECT cast(1 as tinyint)                         % '1' FROM t
+READ	SELECT cast(1 as smallint)                        % '1' FROM t
+READ	SELECT cast(1 as int)                             % '1' FROM t
+READ	SELECT cast(1 as bigint)                          % '1' FROM t
+READ	SELECT cast(1 as float)                           % '1' FROM t
+READ	SELECT cast(1 as double)                          % '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  % '1' FROM t
+READ	SELECT cast('1' as binary)                        % '1' FROM t
+READ	SELECT cast(1 as boolean)                         % '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) % '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        % '1' FROM t
+READ	SELECT pmod(cast(1 as tinyint), '1')                         FROM t
+READ	SELECT pmod(cast(1 as smallint), '1')                        FROM t
+READ	SELECT pmod(cast(1 as int), '1')                             FROM t
+READ	SELECT pmod(cast(1 as bigint), '1')                          FROM t
+READ	SELECT pmod(cast(1 as float), '1')                           FROM t
+READ	SELECT pmod(cast(1 as double), '1')                          FROM t
+READ	SELECT pmod(cast(1 as decimal(10, 0)), '1')                  FROM t
+READ	SELECT pmod(cast('1' as binary), '1')                        FROM t
+READ	SELECT pmod(cast(1 as boolean), '1')                         FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00.0' as timestamp), '1') FROM t
+READ	SELECT pmod(cast('2017-12-11 09:30:00' as date), '1')        FROM t
+READ	SELECT '1' = cast(1 as tinyint)                         FROM t
+READ	SELECT '1' = cast(1 as smallint)                        FROM t
+READ	SELECT '1' = cast(1 as int)                             FROM t
+READ	SELECT '1' = cast(1 as bigint)                          FROM t
+READ	SELECT '1' = cast(1 as float)                           FROM t
+READ	SELECT '1' = cast(1 as double)                          FROM t
+READ	SELECT '1' = cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' = '1'                                        FROM t
+READ	SELECT '1' = cast('1' as binary)                        FROM t
+READ	SELECT '1' = cast(1 as boolean)                         FROM t
+READ	SELECT '1' = cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' = cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT cast(1 as tinyint)                         = '1' FROM t
+READ	SELECT cast(1 as smallint)                        = '1' FROM t
+READ	SELECT cast(1 as int)                             = '1' FROM t
+READ	SELECT cast(1 as bigint)                          = '1' FROM t
+READ	SELECT cast(1 as float)                           = '1' FROM t
+READ	SELECT cast(1 as double)                          = '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  = '1' FROM t
+READ	SELECT cast('1' as binary)                        = '1' FROM t
+READ	SELECT cast(1 as boolean)                         = '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) = '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        = '1' FROM t
+READ	SELECT '1' <=> cast(1 as tinyint)                         FROM t
+READ	SELECT '1' <=> cast(1 as smallint)                        FROM t
+READ	SELECT '1' <=> cast(1 as int)                             FROM t
+READ	SELECT '1' <=> cast(1 as bigint)                          FROM t
+READ	SELECT '1' <=> cast(1 as float)                           FROM t
+READ	SELECT '1' <=> cast(1 as double)                          FROM t
+READ	SELECT '1' <=> cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' <=> '1'                                        FROM t
+READ	SELECT '1' <=> cast('1' as binary)                        FROM t
+READ	SELECT '1' <=> cast(1 as boolean)                         FROM t
+READ	SELECT '1' <=> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' <=> cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT cast(1 as tinyint)                         <=> '1' FROM t
+READ	SELECT cast(1 as smallint)                        <=> '1' FROM t
+READ	SELECT cast(1 as int)                             <=> '1' FROM t
+READ	SELECT cast(1 as bigint)                          <=> '1' FROM t
+READ	SELECT cast(1 as float)                           <=> '1' FROM t
+READ	SELECT cast(1 as double)                          <=> '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  <=> '1' FROM t
+READ	SELECT cast('1' as binary)                        <=> '1' FROM t
+READ	SELECT cast(1 as boolean)                         <=> '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <=> '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        <=> '1' FROM t
+READ	SELECT '1' < cast(1 as tinyint)                         FROM t
+READ	SELECT '1' < cast(1 as smallint)                        FROM t
+READ	SELECT '1' < cast(1 as int)                             FROM t
+READ	SELECT '1' < cast(1 as bigint)                          FROM t
+READ	SELECT '1' < cast(1 as float)                           FROM t
+READ	SELECT '1' < cast(1 as double)                          FROM t
+READ	SELECT '1' < cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' < '1'                                        FROM t
+READ	SELECT '1' < cast('1' as binary)                        FROM t
+READ	SELECT '1' < cast(1 as boolean)                         FROM t
+READ	SELECT '1' < cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' < cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT '1' <= cast(1 as tinyint)                         FROM t
+READ	SELECT '1' <= cast(1 as smallint)                        FROM t
+READ	SELECT '1' <= cast(1 as int)                             FROM t
+READ	SELECT '1' <= cast(1 as bigint)                          FROM t
+READ	SELECT '1' <= cast(1 as float)                           FROM t
+READ	SELECT '1' <= cast(1 as double)                          FROM t
+READ	SELECT '1' <= cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' <= '1'                                        FROM t
+READ	SELECT '1' <= cast('1' as binary)                        FROM t
+READ	SELECT '1' <= cast(1 as boolean)                         FROM t
+READ	SELECT '1' <= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' <= cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT '1' > cast(1 as tinyint)                         FROM t
+READ	SELECT '1' > cast(1 as smallint)                        FROM t
+READ	SELECT '1' > cast(1 as int)                             FROM t
+READ	SELECT '1' > cast(1 as bigint)                          FROM t
+READ	SELECT '1' > cast(1 as float)                           FROM t
+READ	SELECT '1' > cast(1 as double)                          FROM t
+READ	SELECT '1' > cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' > '1'                                        FROM t
+READ	SELECT '1' > cast('1' as binary)                        FROM t
+READ	SELECT '1' > cast(1 as boolean)                         FROM t
+READ	SELECT '1' > cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' > cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT '1' >= cast(1 as tinyint)                         FROM t
+READ	SELECT '1' >= cast(1 as smallint)                        FROM t
+READ	SELECT '1' >= cast(1 as int)                             FROM t
+READ	SELECT '1' >= cast(1 as bigint)                          FROM t
+READ	SELECT '1' >= cast(1 as float)                           FROM t
+READ	SELECT '1' >= cast(1 as double)                          FROM t
+READ	SELECT '1' >= cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' >= '1'                                        FROM t
+READ	SELECT '1' >= cast('1' as binary)                        FROM t
+READ	SELECT '1' >= cast(1 as boolean)                         FROM t
+READ	SELECT '1' >= cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' >= cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT '1' <> cast(1 as tinyint)                         FROM t
+READ	SELECT '1' <> cast(1 as smallint)                        FROM t
+READ	SELECT '1' <> cast(1 as int)                             FROM t
+READ	SELECT '1' <> cast(1 as bigint)                          FROM t
+READ	SELECT '1' <> cast(1 as float)                           FROM t
+READ	SELECT '1' <> cast(1 as double)                          FROM t
+READ	SELECT '1' <> cast(1 as decimal(10, 0))                  FROM t
+READ	SELECT '1' <> '1'                                        FROM t
+READ	SELECT '1' <> cast('1' as binary)                        FROM t
+READ	SELECT '1' <> cast(1 as boolean)                         FROM t
+READ	SELECT '1' <> cast('2017-12-11 09:30:00.0' as timestamp) FROM t
+READ	SELECT '1' <> cast('2017-12-11 09:30:00' as date)        FROM t
+READ	SELECT cast(1 as tinyint)                         < '1' FROM t
+READ	SELECT cast(1 as smallint)                        < '1' FROM t
+READ	SELECT cast(1 as int)                             < '1' FROM t
+READ	SELECT cast(1 as bigint)                          < '1' FROM t
+READ	SELECT cast(1 as float)                           < '1' FROM t
+READ	SELECT cast(1 as double)                          < '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  < '1' FROM t
+READ	SELECT '1'                                        < '1' FROM t
+READ	SELECT cast('1' as binary)                        < '1' FROM t
+READ	SELECT cast(1 as boolean)                         < '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) < '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        < '1' FROM t
+READ	SELECT cast(1 as tinyint)                         <= '1' FROM t
+READ	SELECT cast(1 as smallint)                        <= '1' FROM t
+READ	SELECT cast(1 as int)                             <= '1' FROM t
+READ	SELECT cast(1 as bigint)                          <= '1' FROM t
+READ	SELECT cast(1 as float)                           <= '1' FROM t
+READ	SELECT cast(1 as double)                          <= '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  <= '1' FROM t
+READ	SELECT '1'                                        <= '1' FROM t
+READ	SELECT cast('1' as binary)                        <= '1' FROM t
+READ	SELECT cast(1 as boolean)                         <= '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <= '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        <= '1' FROM t
+READ	SELECT cast(1 as tinyint)                         > '1' FROM t
+READ	SELECT cast(1 as smallint)                        > '1' FROM t
+READ	SELECT cast(1 as int)                             > '1' FROM t
+READ	SELECT cast(1 as bigint)                          > '1' FROM t
+READ	SELECT cast(1 as float)                           > '1' FROM t
+READ	SELECT cast(1 as double)                          > '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  > '1' FROM t
+READ	SELECT '1'                                        > '1' FROM t
+READ	SELECT cast('1' as binary)                        > '1' FROM t
+READ	SELECT cast(1 as boolean)                         > '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) > '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        > '1' FROM t
+READ	SELECT cast(1 as tinyint)                         >= '1' FROM t
+READ	SELECT cast(1 as smallint)                        >= '1' FROM t
+READ	SELECT cast(1 as int)                             >= '1' FROM t
+READ	SELECT cast(1 as bigint)                          >= '1' FROM t
+READ	SELECT cast(1 as float)                           >= '1' FROM t
+READ	SELECT cast(1 as double)                          >= '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  >= '1' FROM t
+READ	SELECT '1'                                        >= '1' FROM t
+READ	SELECT cast('1' as binary)                        >= '1' FROM t
+READ	SELECT cast(1 as boolean)                         >= '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) >= '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        >= '1' FROM t
+READ	SELECT cast(1 as tinyint)                         <> '1' FROM t
+READ	SELECT cast(1 as smallint)                        <> '1' FROM t
+READ	SELECT cast(1 as int)                             <> '1' FROM t
+READ	SELECT cast(1 as bigint)                          <> '1' FROM t
+READ	SELECT cast(1 as float)                           <> '1' FROM t
+READ	SELECT cast(1 as double)                          <> '1' FROM t
+READ	SELECT cast(1 as decimal(10, 0))                  <> '1' FROM t
+READ	SELECT '1'                                        <> '1' FROM t
+READ	SELECT cast('1' as binary)                        <> '1' FROM t
+READ	SELECT cast(1 as boolean)                         <> '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00.0' as timestamp) <> '1' FROM t
+READ	SELECT cast('2017-12-11 09:30:00' as date)        <> '1' FROM t
+READ	SELECT abs('1') FROM t
+READ	SELECT sum('1') FROM t
+READ	SELECT avg('1') FROM t
+READ	SELECT stddev_pop('1') FROM t
+READ	SELECT stddev_samp('1') FROM t
+READ	SELECT - '1' FROM t
+READ	SELECT + '1' FROM t
+READ	SELECT var_pop('1') FROM t
+READ	SELECT var_samp('1') FROM t
+READ	SELECT skewness('1') FROM t
+READ	SELECT kurtosis('1') FROM t

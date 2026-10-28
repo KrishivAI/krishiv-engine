@@ -263,7 +263,8 @@ pub fn run_spdx(root: &Path) -> Result<(), String> {
 }
 
 /// `xtask source-guard`: bans the parquet `object_store` adapters in `crates/`,
-/// confines `unsafe` in the kernel crates to `unsafe_*.rs` modules, and bans
+/// confines `unsafe` in the kernel crates to `unsafe_*.rs` modules, requires
+/// a `// cluster-scope:` reason on every `Admin` statement-class arm, and bans
 /// blocking calls in `crates/krishiv-exec/src` production code (P2-T061 yield
 /// discipline; the compile-time backstop is the workspace `clippy.toml`
 /// `disallowed-methods` list denied at that crate's root).
@@ -320,6 +321,11 @@ pub fn run_source_guard(root: &Path) -> Result<(), String> {
         for (line, marker) in lint::plan_handles_in(&rel, &text) {
             hits.push(format!(
                 "{rel}:{line}: `{marker}` in a physical-plan type: plans are data, live resources are resolved at instantiation (design P2-T171, I1)"
+            ));
+        }
+        for line in lint::unjustified_admin_arms(&text) {
+            hits.push(format!(
+                "{rel}:{line}: an `Admin` statement-class arm needs a `// cluster-scope: <reason>` comment (Admin is fail-closed, never a catch-all)"
             ));
         }
         if rel.starts_with("crates/krishiv-exec/src/") && !exec_test_only.contains(&rel) {

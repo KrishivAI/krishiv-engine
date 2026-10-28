@@ -1,0 +1,21 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT
+READ	SELECT
+READ	SELECT count(a, b), count(b, a), count(testData.*, testData.*) FROM testData
+READ	SELECT
+READ	SELECT count(DISTINCT 3,2)
+READ	SELECT count(DISTINCT 2), count(DISTINCT 2,3)
+READ	SELECT count(DISTINCT 2), count(DISTINCT 3,2)
+READ	SELECT count(DISTINCT a), count(DISTINCT 2,3) FROM testData
+READ	SELECT count(DISTINCT a), count(DISTINCT 3,2) FROM testData
+READ	SELECT count(DISTINCT a), count(DISTINCT 2), count(DISTINCT 2,3) FROM testData
+READ	SELECT count(DISTINCT a), count(DISTINCT 2), count(DISTINCT 3,2) FROM testData
+READ	SELECT count(distinct 0.8), percentile_approx(distinct a, 0.8) FROM testData
+SESSION	set spark.sql.legacy.allowParameterlessCount=true
+READ	SELECT count() FROM testData
+SESSION	set spark.sql.legacy.allowParameterlessCount=false
+READ	SELECT count() FROM testData
+SESSION	set spark.sql.legacy.allowStarWithSingleTableIdentifierInCount=true
+READ	SELECT count(testData.*) FROM testData
+SESSION	set spark.sql.legacy.allowStarWithSingleTableIdentifierInCount=false
+READ	SELECT count(testData.*) FROM testData

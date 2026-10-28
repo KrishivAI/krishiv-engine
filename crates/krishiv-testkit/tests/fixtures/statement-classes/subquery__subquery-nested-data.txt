@@ -1,0 +1,30 @@
+DDL	drop table if exists x
+DDL	drop table if exists y
+DDL	create table x(xm map<int, int>, x2 int) using parquet
+WRITE	insert into x values (map(1, 2), 3), (map(1, 4), 5), (map(2, 3), 4), (map(5, 6), 7)
+DDL	create table y(ym map<int, int>, y2 int) using parquet
+WRITE	insert into y values (map(1, 2), 10), (map(1, 3), 20), (map(2, 3), 20), (map(8, 3), 20)
+READ	select * from x where (select sum(y2) from y where xm[1] = ym[1]) > 2
+READ	select * from x where exists (select * from y where xm[1] = ym[1])
+READ	select * from x where exists (select * from y where xm[1] = ym[1] limit 1)
+READ	select * from x join lateral (select * from y where xm[1] = ym[1])
+READ	select * from x join lateral (select * from y where xm[1] = ym[1] union all select * from y where xm[1] = ym[1] + 1)
+READ	select * from x join lateral (select * from y where xm[1] = ym[1] limit 1)
+READ	select * from x join lateral (select count(*) from y where xm[1] = ym[1] group by y2)
+READ	select * from x where xm[1] in (select ym[1] from y)
+READ	select * from x where xm[1] in (select sum(ym[1]) from y group by y2)
+READ	select * from x where (select sum(y2) from y where xm[1] = ym[1] and xm[1] >= 1) > 2
+READ	select * from x where (select sum(y2) from y where xm[1] = ym[1] and xm[2] >= ym[2]) > 2
+READ	select * from x where (select sum(y2) from y where xm[1] = ym[1]) > 2 and (select count(y2) from y where xm[1] = ym[1]) 
+READ	select * from x join lateral (select xm[1] - ym[1] from y)
+READ	select * from x join lateral (select xm[1], xm[1] as s1, xm[1] - ym[1] as s2 from y)
+READ	select * from x join lateral (select xm[1], sum(ym[1]), xm[1] - sum(ym[1]) from y group by xm[1])
+READ	select * from x where (select sum(y2) from y where xm[x2] = ym[1]) > 2
+READ	select * from x where (select sum(y2) from y where xm[x2+1] = ym[1]) > 2
+READ	select * from x where (select sum(y2) from y where xm[x2+1] = ym[1] and xm[1+x2] = ym[2]) > 2
+READ	select * from x where (select sum(y2) from y where xm[y2] = ym[1]) > 2
+SESSION	set spark.sql.optimizer.pullOutNestedDataOuterRefExpressions.enabled = false
+READ	select * from x where (select sum(y2) from y where xm[1] = ym[1]) > 2
+SESSION	reset spark.sql.optimizer.rewriteNestedDataCorrelation.enabled
+DDL	drop table x
+DDL	drop table y

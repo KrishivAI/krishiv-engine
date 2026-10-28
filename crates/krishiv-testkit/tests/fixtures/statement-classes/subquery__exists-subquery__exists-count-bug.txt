@@ -1,0 +1,18 @@
+SESSION	create temporary view t1(c1, c2) as values (0, 1), (1, 2)
+SESSION	create temporary view t2(c1, c2) as values (0, 2), (0, 3)
+SESSION	create temporary view t3(c1, c2) as values (0, 3), (1, 4), (2, 5)
+READ	select * from t1 where exists (select count(*) from t2 where t2.c1 = t1.c1)
+READ	select * from t1 where not exists (select count(*) from t2 where t2.c1 = t1.c1)
+READ	select *, exists (select count(*) from t2 where t2.c1 = t1.c1) from t1
+READ	select *, not exists (select count(*) from t2 where t2.c1 = t1.c1) from t1
+READ	select * from t1 where
+READ	select * from t1 where
+READ	select * from t1 where exists (select count(*) from t2 where t1.c1 = 100)
+SESSION	set spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled = true
+READ	select * from t1 where exists (select count(*) from t2 where t2.c1 = t1.c1)
+READ	select * from t1 where not exists (select count(*) from t2 where t2.c1 = t1.c1)
+READ	select *, exists (select count(*) from t2 where t2.c1 = t1.c1) from t1
+READ	select *, not exists (select count(*) from t2 where t2.c1 = t1.c1) from t1
+READ	select * from t1 where
+READ	select * from t1 where exists (select count(*) from t2 where t1.c1 = 100)
+SESSION	set spark.sql.optimizer.decorrelateExistsSubqueryLegacyIncorrectCountHandling.enabled = false

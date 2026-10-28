@@ -1,0 +1,34 @@
+SESSION	set spark.sql.parser.quotedRegexColumnNames=false
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData2 AS SELECT * FROM VALUES
+READ	SELECT `(a)?+.+` FROM testData2 WHERE a = 1
+READ	SELECT t.`(a)?+.+` FROM testData2 t WHERE a = 1
+READ	SELECT `(a|b)` FROM testData2 WHERE a = 2
+READ	SELECT `(a|b)?+.+` FROM testData2 WHERE a = 2
+READ	SELECT SUM(`(a|b)?+.+`) FROM testData2
+READ	SELECT SUM(`(a)`) FROM testData2
+SESSION	set spark.sql.parser.quotedRegexColumnNames=true
+READ	SELECT `(a)?+.+` FROM testData2 WHERE a = 1
+READ	SELECT `(A)?+.+` FROM testData2 WHERE a = 1
+READ	SELECT t.`(a)?+.+` FROM testData2 t WHERE a = 1
+READ	SELECT t.`(A)?+.+` FROM testData2 t WHERE a = 1
+READ	SELECT `(a|B)` FROM testData2 WHERE a = 2
+READ	SELECT `(A|b)` FROM testData2 WHERE a = 2
+READ	SELECT `(a|B)?+.+` FROM testData2 WHERE a = 2
+READ	SELECT `(A|b)?+.+` FROM testData2 WHERE a = 2
+READ	SELECT `(e|f)` FROM testData2
+READ	SELECT t.`(e|f)` FROM testData2 t
+READ	SELECT p.`(KEY)?+.+`, b, testdata2.`(b)?+.+` FROM testData p join testData2 ON p.key = testData2.a WHERE key < 3
+READ	SELECT p.`(key)?+.+`, b, testdata2.`(b)?+.+` FROM testData p join testData2 ON p.key = testData2.a WHERE key < 3
+SESSION	set spark.sql.caseSensitive=true
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testdata3 AS SELECT * FROM VALUES
+READ	SELECT `(A)?+.+` FROM testdata3
+READ	SELECT `(a)?+.+` FROM testdata3
+READ	SELECT `(A)?+.+` FROM testdata3 WHERE a > 1
+READ	SELECT `(a)?+.+` FROM testdata3 where `a` > 1
+READ	SELECT SUM(`a`) FROM testdata3
+READ	SELECT SUM(`(a)`) FROM testdata3
+READ	SELECT SUM(`(a)?+.+`) FROM testdata3
+READ	SELECT SUM(a) FROM testdata3 GROUP BY `a`
+READ	SELECT SUM(a) FROM testdata3 GROUP BY `(a)`
+READ	SELECT SUM(a) FROM testdata3 GROUP BY `(a)?+.+`

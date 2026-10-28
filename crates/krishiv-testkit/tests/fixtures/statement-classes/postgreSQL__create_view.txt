@@ -1,0 +1,195 @@
+DDL	CREATE TABLE emp (
+DDL	CREATE VIEW toyemp AS
+SESSION	DROP VIEW toyemp
+DDL	DROP TABLE emp
+DDL	CREATE TABLE view_base_table (key int /* PRIMARY KEY */, data varchar(20)) USING PARQUET
+DDL	CREATE VIEW key_dependent_view AS
+PARSE_ERROR	CREATE VIEW key_dependent_view_no_cols AS
+DDL	CREATE TABLE viewtest_tbl (a int, b int) using parquet
+WRITE	INSERT INTO viewtest_tbl VALUES (5, 10), (10, 15), (15, 20), (20, 25)
+DDL	CREATE OR REPLACE VIEW viewtest AS
+DDL	CREATE OR REPLACE VIEW viewtest AS
+READ	SELECT * FROM viewtest
+DDL	CREATE OR REPLACE VIEW viewtest AS
+READ	SELECT * FROM viewtest
+DDL	CREATE OR REPLACE VIEW viewtest AS
+DDL	CREATE OR REPLACE VIEW viewtest AS
+DDL	CREATE OR REPLACE VIEW viewtest AS
+DDL	CREATE OR REPLACE VIEW viewtest AS
+SESSION	DROP VIEW viewtest
+DDL	DROP TABLE viewtest_tbl
+DDL	CREATE SCHEMA temp_view_test
+DDL	CREATE TABLE temp_view_test.base_table (a int, id int) using parquet
+DDL	CREATE TABLE temp_view_test.base_table2 (a int, id int) using parquet
+SESSION	USE temp_view_test
+SESSION	CREATE TEMPORARY VIEW temp_table AS SELECT * FROM VALUES
+DDL	CREATE VIEW v1 AS SELECT * FROM base_table
+READ	DESC TABLE EXTENDED v1
+DDL	CREATE VIEW v1_temp AS SELECT * FROM temp_table
+SESSION	CREATE TEMP VIEW v2_temp AS SELECT * FROM base_table
+READ	DESC TABLE EXTENDED v2_temp
+DDL	CREATE VIEW temp_view_test.v2 AS SELECT * FROM base_table
+READ	DESC TABLE EXTENDED temp_view_test.v2
+DDL	CREATE VIEW temp_view_test.v3_temp AS SELECT * FROM temp_table
+DDL	CREATE VIEW v3 AS
+READ	DESC TABLE EXTENDED v3
+DDL	CREATE VIEW v4_temp AS
+DDL	CREATE VIEW v5_temp AS
+DDL	CREATE VIEW v4 AS SELECT * FROM base_table WHERE id IN (SELECT id FROM base_table2)
+READ	DESC TABLE EXTENDED v4
+DDL	CREATE VIEW v5 AS SELECT t1.id, t2.a FROM base_table t1, (SELECT * FROM base_table2) t2
+READ	DESC TABLE EXTENDED v5
+DDL	CREATE VIEW v6 AS SELECT * FROM base_table WHERE EXISTS (SELECT 1 FROM base_table2)
+READ	DESC TABLE EXTENDED v6
+DDL	CREATE VIEW v7 AS SELECT * FROM base_table WHERE NOT EXISTS (SELECT 1 FROM base_table2)
+READ	DESC TABLE EXTENDED v7
+DDL	CREATE VIEW v8 AS SELECT * FROM base_table WHERE EXISTS (SELECT 1)
+READ	DESC TABLE EXTENDED v8
+DDL	CREATE VIEW v6_temp AS SELECT * FROM base_table WHERE id IN (SELECT id FROM temp_table)
+DDL	CREATE VIEW v7_temp AS SELECT t1.id, t2.a FROM base_table t1, (SELECT * FROM temp_table) t2
+DDL	CREATE VIEW v8_temp AS SELECT * FROM base_table WHERE EXISTS (SELECT 1 FROM temp_table)
+DDL	CREATE VIEW v9_temp AS SELECT * FROM base_table WHERE NOT EXISTS (SELECT 1 FROM temp_table)
+DDL	CREATE VIEW v10_temp AS SELECT * FROM v7_temp
+DDL	CREATE VIEW v11_temp AS SELECT t1.id, t2.a FROM base_table t1, v10_temp t2
+DDL	CREATE VIEW v12_temp AS SELECT true FROM v11_temp
+DDL	CREATE SCHEMA testviewschm2
+SESSION	USE testviewschm2
+DDL	CREATE TABLE t1 (num int, name string) using parquet
+DDL	CREATE TABLE t2 (num2 int, value string) using parquet
+SESSION	CREATE TEMP VIEW tt AS SELECT * FROM VALUES
+DDL	CREATE VIEW nontemp1 AS SELECT * FROM t1 CROSS JOIN t2
+READ	DESC TABLE EXTENDED nontemp1
+DDL	CREATE VIEW temporal1 AS SELECT * FROM t1 CROSS JOIN tt
+DDL	CREATE VIEW nontemp2 AS SELECT * FROM t1 INNER JOIN t2 ON t1.num = t2.num2
+READ	DESC TABLE EXTENDED nontemp2
+DDL	CREATE VIEW temporal2 AS SELECT * FROM t1 INNER JOIN tt ON t1.num = tt.num2
+DDL	CREATE VIEW nontemp3 AS SELECT * FROM t1 LEFT JOIN t2 ON t1.num = t2.num2
+READ	DESC TABLE EXTENDED nontemp3
+DDL	CREATE VIEW temporal3 AS SELECT * FROM t1 LEFT JOIN tt ON t1.num = tt.num2
+DDL	CREATE VIEW nontemp4 AS SELECT * FROM t1 LEFT JOIN t2 ON t1.num = t2.num2 AND t2.value = 'xxx'
+READ	DESC TABLE EXTENDED nontemp4
+DDL	CREATE VIEW temporal4 AS SELECT * FROM t1 LEFT JOIN tt ON t1.num = tt.num2 AND tt.value = 'xxx'
+DDL	CREATE VIEW temporal5 AS SELECT * FROM t1 WHERE num IN (SELECT num FROM t1 WHERE EXISTS (SELECT 1 FROM tt))
+DDL	CREATE TABLE tbl1 ( a int, b int) using parquet
+DDL	CREATE TABLE tbl2 (c int, d int) using parquet
+DDL	CREATE TABLE tbl3 (e int, f int) using parquet
+DDL	CREATE TABLE tbl4 (g int, h int) using parquet
+DDL	CREATE TABLE tmptbl (i int, j int) using parquet
+WRITE	INSERT INTO tmptbl VALUES (1, 1)
+DDL	CREATE   VIEW  pubview AS SELECT * FROM tbl1 WHERE tbl1.a
+READ	DESC TABLE EXTENDED pubview
+DDL	CREATE   VIEW  mytempview AS SELECT * FROM tbl1 WHERE tbl1.a
+READ	DESC TABLE EXTENDED mytempview
+DDL	CREATE VIEW tt1 AS
+READ	SELECT * FROM tt1
+READ	SELECT string(a) FROM tt1
+SESSION	DROP VIEW tt1
+DDL	CREATE TABLE tt1 (f1 int, f2 int, f3 string) using parquet
+DDL	CREATE TABLE tx1 (x1 int, x2 int, x3 string) using parquet
+DDL	CREATE TABLE temp_view_test.tt1 (y1 int, f2 int, f3 string) using parquet
+DDL	CREATE VIEW aliased_view_1 AS
+DDL	CREATE VIEW aliased_view_2 AS
+DDL	CREATE VIEW aliased_view_3 AS
+DDL	CREATE VIEW aliased_view_4 AS
+READ	DESC TABLE aliased_view_1
+READ	DESC TABLE aliased_view_2
+READ	DESC TABLE aliased_view_3
+READ	DESC TABLE aliased_view_4
+DDL	ALTER TABLE tx1 RENAME TO a1
+READ	DESC TABLE aliased_view_1
+READ	DESC TABLE aliased_view_2
+READ	DESC TABLE aliased_view_3
+READ	DESC TABLE aliased_view_4
+DDL	ALTER TABLE tt1 RENAME TO a2
+READ	DESC TABLE aliased_view_1
+READ	DESC TABLE aliased_view_2
+READ	DESC TABLE aliased_view_3
+READ	DESC TABLE aliased_view_4
+DDL	ALTER TABLE a1 RENAME TO tt1
+READ	DESC TABLE aliased_view_1
+READ	DESC TABLE aliased_view_2
+READ	DESC TABLE aliased_view_3
+READ	DESC TABLE aliased_view_4
+DDL	ALTER TABLE a2 RENAME TO tx1
+DDL	create view view_of_joins as
+DDL	create table tt2 (a int, b int, c int) using parquet
+DDL	create table tt3 (ax bigint, b short, c decimal) using parquet
+DDL	create table tt4 (ay int, b int, q int) using parquet
+DDL	create view v1 as select * from tt2 natural join tt3
+DDL	create view v1a as select * from (tt2 natural join tt3) j
+DDL	create view v2 as select * from tt2 join tt3 using (b,c) join tt4 using (b)
+DDL	create view v2a as select * from (tt2 join tt3 using (b,c) join tt4 using (b)) j
+DDL	create view v3 as select * from tt2 join tt3 using (b,c) full join tt4 using (b)
+READ	DESC TABLE v1
+READ	DESC TABLE v1a
+READ	DESC TABLE v2
+READ	DESC TABLE v2a
+READ	DESC TABLE v3
+DDL	alter table tt2 add column d int
+DDL	alter table tt2 add column e int
+READ	DESC TABLE v1
+READ	DESC TABLE v1a
+READ	DESC TABLE v2
+READ	DESC TABLE v2a
+READ	DESC TABLE v3
+DDL	drop table tt3
+DDL	create table tt3 (ax bigint, b short, d decimal) using parquet
+DDL	alter table tt3 add column c int
+DDL	alter table tt3 add column e int
+READ	DESC TABLE v1
+READ	DESC TABLE v1a
+READ	DESC TABLE v2
+READ	DESC TABLE v2a
+READ	DESC TABLE v3
+DDL	create table tt5 (a int, b int) using parquet
+DDL	create table tt6 (c int, d int) using parquet
+DDL	create view vv1 as select * from (tt5 cross join tt6) j(aa,bb,cc,dd)
+READ	DESC TABLE vv1
+DDL	alter table tt5 add column c int
+READ	DESC TABLE vv1
+DDL	alter table tt5 add column cc int
+READ	DESC TABLE vv1
+DDL	create table tt7 (x int, /* xx int, */ y int) using parquet
+DDL	create table tt8 (x int, z int) using parquet
+DDL	create view vv2 as
+READ	DESC TABLE vv2
+DDL	create view vv3 as
+READ	DESC TABLE vv3
+DDL	create view vv4 as
+READ	DESC TABLE vv4
+DDL	alter table tt7 add column zz int
+DDL	alter table tt7 add column z int
+DDL	alter table tt8 add column z2 int
+READ	DESC TABLE vv2
+READ	DESC TABLE vv3
+READ	DESC TABLE vv4
+DDL	create table tt7a (x date, /* xx int, */ y int) using parquet
+DDL	create table tt8a (x timestamp, z int) using parquet
+DDL	create view vv2a as
+READ	DESC TABLE vv4
+READ	DESC TABLE vv2a
+DDL	create table tt9 (x int, xx int, y int) using parquet
+DDL	create table tt10 (x int, z int) using parquet
+DDL	create view vv5 as select x,y,z from tt9 join tt10 using(x)
+READ	DESC TABLE vv5
+READ	DESC TABLE vv5
+DDL	create table tt11 (x int, y int) using parquet
+DDL	create table tt12 (x int, z int) using parquet
+DDL	create table tt13 (z int, q int) using parquet
+DDL	create view vv6 as select x,y,z,q from
+READ	DESC TABLE vv6
+DDL	alter table tt11 add column z int
+READ	DESC TABLE vv6
+DDL	CREATE TABLE int8_tbl (q1 int, q2 int) USING parquet
+DDL	create view tt18v as
+READ	DESC TABLE tt18v
+DDL	create view tt21v as
+READ	DESC TABLE tt21v
+DDL	create view tt22v as
+READ	DESC TABLE tt22v
+DDL	create view tt23v (col_a, col_b) as
+READ	DESC TABLE tt23v
+DDL	DROP SCHEMA temp_view_test CASCADE
+DDL	DROP SCHEMA testviewschm2 CASCADE
+SESSION	DROP VIEW temp_table
+SESSION	DROP VIEW tt

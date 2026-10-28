@@ -1,0 +1,139 @@
+READ	SELECT current_path()
+SESSION	SET PATH = spark_catalog.default, system.builtin
+READ	SELECT current_path()
+SESSION	SET PATH = Spark_Catalog.Default, System.Builtin
+READ	SELECT current_path()
+SESSION	SET PATH = spark_catalog.`sch.b`, system.builtin
+READ	SELECT current_path()
+SESSION	SET PATH = DEFAULT_PATH
+SESSION	SET PATH = DEFAULT_PATH
+READ	SELECT current_path()
+SESSION	SET PATH = SYSTEM_PATH
+READ	SELECT current_path()
+SESSION	USE spark_catalog.default
+SESSION	SET PATH = SYSTEM_PATH, CURRENT_SCHEMA
+READ	SELECT current_path()
+SESSION	SET PATH = DEFAULT_PATH
+SESSION	SET PATH = spark_catalog.default, system.builtin
+SESSION	SET PATH = PATH, system.session
+READ	SELECT current_path()
+SESSION	USE spark_catalog.default
+SESSION	SET PATH = current_schema, system.builtin
+READ	SELECT current_path()
+SESSION	SET PATH = current_database, system.builtin
+READ	SELECT current_path()
+SESSION	SET PATH = DEFAULT_PATH
+SESSION	SET PATH = spark_catalog.default, system.builtin
+READ	SELECT CURRENT_PATH = current_path() AS ansi_form_matches
+READ	SELECT current_path(1)
+SESSION	SET PATH = DEFAULT_PATH
+SESSION	SET PATH = spark_catalog.default, spark_catalog.default
+SESSION	SET PATH = spark_catalog.DEFAULT, spark_catalog.default
+SESSION	SET PATH = DEFAULT_PATH, system.builtin
+SESSION	SET PATH = SYSTEM_PATH, SYSTEM_PATH
+SESSION	SET PATH = current_database, current_schema
+SESSION	SET PATH = my_schema_no_catalog
+DDL	CREATE SCHEMA sql_path_routines
+PARSE_ERROR	CREATE FUNCTION sql_path_routines.pick() RETURNS INT RETURN 7
+SESSION	SET PATH = spark_catalog.sql_path_routines, spark_catalog.default, system.builtin
+READ	SELECT pick()
+SESSION	SET PATH = DEFAULT_PATH
+PARSE_ERROR	CREATE FUNCTION sql_path_routines.pick_tvf()
+SESSION	SET PATH = spark_catalog.sql_path_routines, spark_catalog.default, system.builtin
+READ	SELECT * FROM pick_tvf()
+SESSION	SET PATH = DEFAULT_PATH
+DDL	CREATE SCHEMA sql_path_routines_b
+PARSE_ERROR	CREATE FUNCTION sql_path_routines_b.pick() RETURNS INT RETURN 11
+SESSION	SET PATH = spark_catalog.sql_path_routines, spark_catalog.sql_path_routines_b, system.builtin
+READ	SELECT pick() AS from_first_schema
+SESSION	SET PATH = spark_catalog.sql_path_routines_b, spark_catalog.sql_path_routines, system.builtin
+READ	SELECT pick() AS from_first_schema
+SESSION	SET PATH = DEFAULT_PATH
+SESSION	SET PATH = spark_catalog.default, system.builtin
+READ	SELECT pick()
+SESSION	SET PATH = DEFAULT_PATH
+PARSE_ERROR	DROP FUNCTION sql_path_routines.pick
+PARSE_ERROR	DROP FUNCTION sql_path_routines.pick_tvf
+PARSE_ERROR	DROP FUNCTION sql_path_routines_b.pick
+DDL	DROP SCHEMA sql_path_routines
+DDL	DROP SCHEMA sql_path_routines_b
+DDL	CREATE SCHEMA sql_path_relations_a
+DDL	CREATE SCHEMA sql_path_relations_b
+DDL	CREATE TABLE sql_path_relations_a.tbl USING parquet AS SELECT 1 AS id
+DDL	CREATE TABLE sql_path_relations_b.tbl USING parquet AS SELECT 2 AS id
+SESSION	SET PATH = spark_catalog.sql_path_relations_a, spark_catalog.sql_path_relations_b, system.builtin
+READ	SELECT id FROM tbl AS from_first_schema
+SESSION	SET PATH = spark_catalog.sql_path_relations_b, spark_catalog.sql_path_relations_a, system.builtin
+READ	SELECT id FROM tbl AS from_first_schema
+SESSION	SET PATH = spark_catalog.default, system.builtin
+READ	SELECT id FROM tbl
+SESSION	SET PATH = DEFAULT_PATH
+DDL	DROP TABLE sql_path_relations_a.tbl
+DDL	DROP TABLE sql_path_relations_b.tbl
+DDL	DROP SCHEMA sql_path_relations_a
+DDL	DROP SCHEMA sql_path_relations_b
+DDL	CREATE SCHEMA sql_path_views_a
+DDL	CREATE SCHEMA sql_path_views_b
+DDL	CREATE TABLE sql_path_views_a.frozen_t USING parquet AS SELECT 1 AS id
+DDL	CREATE TABLE sql_path_views_b.frozen_t USING parquet AS SELECT 2 AS id
+SESSION	SET PATH = spark_catalog.sql_path_views_a, system.builtin
+DDL	CREATE VIEW default.v_path_frozen AS SELECT id FROM frozen_t
+SESSION	SET PATH = spark_catalog.sql_path_views_b, system.builtin
+READ	SELECT id FROM frozen_t AS bare_lookup_uses_live_path
+READ	SELECT id FROM default.v_path_frozen AS view_body_uses_frozen_path
+SESSION	USE spark_catalog.sql_path_views_a
+DDL	CREATE VIEW sql_path_views_a.v_ctx AS
+SESSION	USE spark_catalog.sql_path_views_b
+SESSION	SET PATH = DEFAULT_PATH
+READ	SELECT cs, cp FROM sql_path_views_a.v_ctx
+SESSION	USE spark_catalog.default
+SESSION	SET PATH = DEFAULT_PATH
+DDL	DROP VIEW default.v_path_frozen
+DDL	DROP VIEW sql_path_views_a.v_ctx
+DDL	DROP TABLE sql_path_views_a.frozen_t
+DDL	DROP TABLE sql_path_views_b.frozen_t
+DDL	DROP SCHEMA sql_path_views_a
+DDL	DROP SCHEMA sql_path_views_b
+DDL	CREATE SCHEMA sql_path_fn_a
+DDL	CREATE SCHEMA sql_path_fn_b
+DDL	CREATE TABLE sql_path_fn_a.frozen_t USING parquet AS SELECT 10 AS id
+DDL	CREATE TABLE sql_path_fn_b.frozen_t USING parquet AS SELECT 20 AS id
+SESSION	SET PATH = spark_catalog.sql_path_fn_a, system.builtin
+PARSE_ERROR	CREATE FUNCTION default.frozen_fn()
+SESSION	SET PATH = spark_catalog.sql_path_fn_b, system.builtin
+READ	SELECT MAX(id) FROM frozen_t AS bare_lookup_uses_live_path
+READ	SELECT default.frozen_fn() AS scalar_body_uses_frozen_path
+SESSION	SET PATH = spark_catalog.sql_path_fn_a, system.builtin
+PARSE_ERROR	CREATE FUNCTION default.frozen_tvf()
+SESSION	SET PATH = spark_catalog.sql_path_fn_b, system.builtin
+READ	SELECT * FROM default.frozen_tvf() AS table_body_uses_frozen_path
+SESSION	USE spark_catalog.sql_path_fn_a
+PARSE_ERROR	CREATE FUNCTION sql_path_fn_a.f_ctx()
+SESSION	USE spark_catalog.sql_path_fn_b
+SESSION	SET PATH = DEFAULT_PATH
+READ	SELECT sql_path_fn_a.f_ctx() AS invoker_context
+SESSION	USE spark_catalog.default
+SESSION	SET PATH = DEFAULT_PATH
+PARSE_ERROR	DROP FUNCTION default.frozen_fn
+PARSE_ERROR	DROP FUNCTION default.frozen_tvf
+PARSE_ERROR	DROP FUNCTION sql_path_fn_a.f_ctx
+DDL	DROP TABLE sql_path_fn_a.frozen_t
+DDL	DROP TABLE sql_path_fn_b.frozen_t
+DDL	DROP SCHEMA sql_path_fn_a
+DDL	DROP SCHEMA sql_path_fn_b
+SESSION	SET spark.sql.defaultPath = system.session, system.builtin
+SESSION	SET PATH = system.builtin, system.session
+READ	SELECT current_path() AS explicit_set_path_wins_over_conf
+SESSION	SET PATH = DEFAULT_PATH
+SESSION	RESET spark.sql.defaultPath
+SESSION	SET spark.sql.defaultPath = system.session, system.builtin, current_schema
+SESSION	USE spark_catalog.default
+SESSION	SET PATH = DEFAULT_PATH
+READ	SELECT current_path() AS default_path_expands_to_conf
+SESSION	RESET spark.sql.defaultPath
+SESSION	SET PATH = DEFAULT_PATH
+SESSION	SET spark.sql.defaultPath = this is not a path
+SESSION	SET spark.sql.defaultPath = PATH, system.builtin
+SESSION	SET spark.sql.path.enabled = false
+READ	SELECT current_path() IS NOT NULL AS has_path
+SESSION	SET PATH = spark_catalog.default

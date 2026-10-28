@@ -1,0 +1,18 @@
+SESSION	create temporary view data as select * from values
+READ	select g from data order by all
+READ	select * from data order by all
+READ	select * from data order by aLl
+READ	select * from data order by all asc
+READ	select * from data order by all desc
+READ	select * from data order by all nulls first
+READ	select * from data order by all nulls last
+READ	select * from data order by all asc nulls first
+READ	select * from data order by all desc nulls first
+READ	select * from data order by all asc nulls last
+READ	select * from data order by all desc nulls last
+READ	select * from data union all select * from data order by all
+READ	select * from data union select * from data order by all
+READ	select * from data order by all limit 2
+READ	select * from values("z", 1), ("y", 2), ("x", 3) AS T(col1, all) order by all
+READ	select name, dept, rank() over (partition by dept order by all) as rank
+READ	SELECT all, (SELECT col2 FROM VALUES (2, 2) ORDER BY ALL) FROM VALUES (1) AS t1 (all)

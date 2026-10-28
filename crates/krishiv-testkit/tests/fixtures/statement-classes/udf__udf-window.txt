@@ -1,0 +1,23 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT udf(val), cate, count(val) OVER(PARTITION BY cate ORDER BY udf(val) ROWS CURRENT ROW) FROM testData
+READ	SELECT udf(val), cate, sum(val) OVER(PARTITION BY cate ORDER BY udf(val)
+READ	SELECT val_long, udf(cate), sum(val_long) OVER(PARTITION BY cate ORDER BY udf(val_long)
+READ	SELECT udf(val), cate, count(val) OVER(PARTITION BY udf(cate) ORDER BY val RANGE 1 PRECEDING) FROM testData
+READ	SELECT val, udf(cate), sum(val) OVER(PARTITION BY udf(cate) ORDER BY val
+READ	SELECT val_long, udf(cate), sum(val_long) OVER(PARTITION BY udf(cate) ORDER BY val_long
+READ	SELECT val_double, udf(cate), sum(val_double) OVER(PARTITION BY udf(cate) ORDER BY val_double
+READ	SELECT val_date, udf(cate), max(val_date) OVER(PARTITION BY udf(cate) ORDER BY val_date
+READ	SELECT val_timestamp, udf(cate), avg(val_timestamp) OVER(PARTITION BY udf(cate) ORDER BY val_timestamp
+READ	SELECT val, udf(cate), sum(val) OVER(PARTITION BY cate ORDER BY val DESC
+READ	SELECT udf(val), cate, count(val) OVER(PARTITION BY udf(cate)
+READ	SELECT udf(val), cate, count(val) OVER(PARTITION BY udf(cate)
+READ	SELECT udf(val), cate, count(val) OVER(PARTITION BY udf(cate) ORDER BY udf(val), cate
+READ	SELECT udf(val), cate, count(val) OVER(PARTITION BY udf(cate) ORDER BY current_timestamp
+READ	SELECT udf(val), cate, count(val) OVER(PARTITION BY udf(cate) ORDER BY val
+PARSE_ERROR	SELECT udf(val), cate, count(val) OVER(PARTITION BY udf(cate) ORDER BY udf(val)
+READ	SELECT udf(val), cate,
+READ	SELECT udf(val), cate, avg(null) OVER(PARTITION BY cate ORDER BY val) FROM testData ORDER BY cate, val
+READ	SELECT udf(val), cate, row_number() OVER(PARTITION BY cate) FROM testData ORDER BY cate, udf(val)
+READ	SELECT udf(val), cate, sum(val) OVER(), avg(val) OVER() FROM testData ORDER BY cate, val
+READ	SELECT udf(val), cate,
+READ	SELECT udf(cate), sum(val) OVER (w)
