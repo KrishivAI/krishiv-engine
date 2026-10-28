@@ -37,6 +37,9 @@ REGISTRY_NAME = {
     "toDegrees": "degrees",
     "toRadians": "radians",
 }
+#: Optional parameters that are sent even when left out (as a NULL literal): `lag`/`lead`'s
+#: `default`, which the SQL parser fills with NULL, so the wrapper builds the SQL call.
+ALWAYS_SENT = {("lag", "default"), ("lead", "default")}
 #: Spark's `trim(chars, str)`: PySpark's `(col, trim)` is sent reversed.
 REVERSED = {"ltrim", "rtrim", "trim"}
 HAND_WRITTEN = set(F._HAND_WRITTEN)
@@ -155,12 +158,16 @@ def test_every_wrapper_builds_its_registry_call(name: str, recorded: None) -> No
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", FutureWarning)
         assert fn(*values)._c == ("call", REGISTRY_NAME.get(name, name), tuple(expected))
-        # Without the optional parameters: they are left out of the call, and a default that is not
+        # Without the optional parameters: they are left out of the call, except `lag`/`lead`'s
+        # `default`, which is sent as NULL (as the SQL parser fills it); a default that is not
         # None (`first`'s `ignorenulls`) is sent.
         required = [vs for (vs, _), p in zip(samples, params, strict=True) if p.default is p.empty]
         short = fn(*[v for vs in required for v in vs])._c
     sent_defaults = [p for p in params if p.default is not p.empty and p.default is not None]
-    assert len(short[2]) == sum(len(vs) for vs in required) + len(sent_defaults)
+    sent_nulls = [p for p in params if (name, p.name) in ALWAYS_SENT]
+    assert len(short[2]) == sum(len(vs) for vs in required) + len(sent_defaults) + len(sent_nulls)
+    if sent_nulls:
+        assert short[2][-len(sent_nulls) :] == tuple(("lit", None) for _ in sent_nulls)
 
 
 PYSPARK_CALLS = [
@@ -173,7 +180,7 @@ PYSPARK_CALLS = [
     (lambda: F.date_add("d", "n"), ("call", "date_add", (("col", "d"), ("col", "n")))),
     (lambda: F.first("a"), ("call", "first", (("col", "a"), ("lit", False)))),
     (lambda: F.first("a", True), ("call", "first", (("col", "a"), ("lit", True)))),
-    (lambda: F.lag("a"), ("call", "lag", (("col", "a"), ("lit", 1)))),
+    (lambda: F.lag("a"), ("call", "lag", (("col", "a"), ("lit", 1), ("lit", None)))),
     (lambda: F.lead("a", 2, 0), ("call", "lead", (("col", "a"), ("lit", 2), ("lit", 0)))),
     (lambda: F.nth_value("a", 2), ("call", "nth_value", (("col", "a"), ("lit", 2), ("lit", False)))),
     (lambda: F.first_value("a"), ("call", "first_value", (("col", "a"),))),

@@ -28,11 +28,11 @@ fn parses_optional_defaulted_and_variadic_parameters() {
             "flag: bool = False"
         ]
     );
-    assert_eq!(p[1].argument(), "*_opt(_lit, scale, \"scale\")");
-    assert_eq!(p[2].argument(), "_lit(flag, \"flag\")");
+    assert_eq!(p[1].argument(false), "*_opt(_lit, scale, \"scale\")");
+    assert_eq!(p[2].argument(false), "_lit(flag, \"flag\")");
     let v = parse_params("*cols: ColumnOrName").expect("parses");
     assert_eq!(v[0].declaration(), "*cols: ColumnOrName");
-    assert_eq!(v[0].argument(), "*_cols(cols)");
+    assert_eq!(v[0].argument(false), "*_cols(cols)");
     assert!(parse_params("").expect("parses").is_empty());
 }
 
@@ -129,6 +129,7 @@ fn a_registered_function_without_a_signature_is_an_error() {
 fn renders_optional_reversed_checked_and_deprecated_calls() {
     let g = generated_for(&[
         "ceil",
+        "lag",
         "trim",
         "greatest",
         "sha2",
@@ -158,6 +159,13 @@ fn renders_optional_reversed_checked_and_deprecated_calls() {
     ));
     assert!(py.contains("def bitwise_not(col: ColumnOrName) -> Column:"));
     assert!(py.contains("return _call(\"~\", _named(col, \"col\"))"));
+    // `lag` (and `lead`) send their default even when it is `None` (a SQL
+    // NULL), as the parser fills it: the wrapper builds the SQL call.
+    assert!(py.contains(
+        "def lag(col: ColumnOrName, offset: int = 1, default: Any | None = None) -> Column:\n    \
+         \"\"\"Calls the registry function ``lag``.\"\"\"\n    \
+         return _call(\"lag\", _named(col, \"col\"), _lit(offset, \"offset\"), _lit(default, \"default\"))"
+    ));
     assert!(py.contains("def shiftLeft("));
     assert!(py.contains("_deprecated(\"Deprecated in 3.2, use shiftleft instead.\")"));
 }

@@ -110,6 +110,8 @@ pub fn krishiv_session::Column::lt_eq(self, impl core::convert::Into<Self>) -> S
 pub fn krishiv_session::Column::not_eq(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::or(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::try_cast(self, krishiv_types::data_type::DataType) -> Self
+impl krishiv_session::Column
+pub fn krishiv_session::Column::over(self, krishiv_session::WindowSpec) -> Self
 impl core::clone::Clone for krishiv_session::Column
 pub fn krishiv_session::Column::clone(&self) -> krishiv_session::Column
 impl core::cmp::Eq for krishiv_session::Column
@@ -310,6 +312,23 @@ pub fn krishiv_session::SessionBuilder::principal(self, krishiv_plan::analyzer::
 pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
 impl core::fmt::Debug for krishiv_session::SessionBuilder
 pub fn krishiv_session::SessionBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::WindowSpec
+impl krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::new() -> Self
+pub fn krishiv_session::WindowSpec::order_by(self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::WindowSpec::partition_by(self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::WindowSpec::range_between(self, i64, i64) -> Self
+pub fn krishiv_session::WindowSpec::rows_between(self, i64, i64) -> Self
+impl core::clone::Clone for krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::clone(&self) -> krishiv_session::WindowSpec
+impl core::cmp::Eq for krishiv_session::WindowSpec
+impl core::cmp::PartialEq for krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::eq(&self, &krishiv_session::WindowSpec) -> bool
+impl core::default::Default for krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::default() -> Self
+impl core::fmt::Debug for krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::WindowSpec
 pub const krishiv_session::VERBOSE_FORMAT: &str
 pub const krishiv_session::VERBOSE_VERSION: u64
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>

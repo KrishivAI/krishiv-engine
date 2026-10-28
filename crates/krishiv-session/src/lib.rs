@@ -52,6 +52,7 @@ pub mod functions;
 mod profile;
 mod session;
 mod variables;
+mod window;
 
 pub use column::Column;
 pub use conf::RuntimeConf;
@@ -64,3 +65,4 @@ pub use explain_graph::{
 pub use krishiv_exec::profile::{QueryProfile, TextOptions};
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use session::{RecordBatchStream, Session, SessionBuilder};
+pub use window::WindowSpec;
