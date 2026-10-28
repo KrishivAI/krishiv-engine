@@ -32,6 +32,8 @@ mod logic;
 mod nested_cast;
 mod strings;
 
+pub(crate) use cast::canonical_carrier;
+
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -312,7 +314,7 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                 FunctionId::Builtin(b) => builtin(*b, f, args, input, e),
                 FunctionId::Registry { name, .. } => {
                     if name == "coalesce" {
-                        cond::coalesce(f, args)
+                        cond::coalesce(f, args, input.env)
                     } else if name == "nullif" || name == "nullifzero" {
                         cond::null_if(f, args, input)
                     } else if name == "nanvl" {
@@ -393,7 +395,7 @@ fn builtin(
         // `rlike(a, b)` is Spark's `RLike(a, b)`: the `regexp_like` kernel
         // over the same arguments, reporting Spark's `rlike` name.
         (Builtin::RLike, 2) => func::compile("rlike", f, args, input, e)?,
-        (Builtin::When, n) if n >= 2 => cond::when(args, out)?,
+        (Builtin::When, n) if n >= 2 => cond::when(args, out, env)?,
         (Builtin::Concat, _) => strings::concat(args, f.nullable)?,
         _ => {
             return Err(unsupported(&format!(

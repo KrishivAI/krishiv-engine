@@ -8,9 +8,10 @@ percentile and frequent-items aggregates), the test asserts the engine's own
 ``KRISHIV_UNSUPPORTED_FEATURE`` error instead of emulating the result: those assertions are the ones
 to turn into the documented outputs when the engine gains the feature.
 
-String columns are Arrow ``string_view`` columns (see :func:`arrow`): the engine cannot yet compare or
-coalesce a ``string`` column built from Python rows or a pyarrow ``string`` column with a string literal
-(``Utf8`` against ``Utf8View``), which the documented examples with string columns need.
+String columns built from Python rows or pyarrow ``string`` columns are Arrow
+``Utf8`` columns while string literals arrive as ``Utf8View``; the physical
+planner meets the two carriers in the canonical one, so comparisons and
+value-merging operators work across them.
 """
 
 from __future__ import annotations
@@ -172,17 +173,10 @@ def failing_examples(method: Any, spark: SparkSession) -> list[str]:
     return failed
 
 
-# Four documented examples compare or coalesce a string column made from Python rows with a string literal,
-# which the engine cannot do yet (see the module docstring): the example tests below run them on
-# ``string_view`` columns. These are the examples that fail when the docstrings run as written; the list is
-# empty once the engine can run them, and this test then fails until it is emptied.
-STRING_LITERAL_EXAMPLES = {
-    "fillna": [
-        "df.na.fill({'age': 50, 'name': 'unknown'}).show()",
-        "df.na.fill(value = 'Spark', subset = 'name').show()",
-    ],
-    "replace": ["df.na.replace('Alice', None).show()", "df.na.replace(['Alice', 'Bob'], ['A', 'B'], 'name').show()"],
-}
+# The documented examples compare or coalesce a string column made from
+# Python rows with a string literal; the engine runs them as written, so no
+# example fails.
+STRING_LITERAL_EXAMPLES: dict[str, list[str]] = {}
 
 
 @pytest.mark.parametrize("name", ["dropna", "fillna", "replace", "crosstab"])
