@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "url_decode#397346daef3a/ansi_on",
-      "reason": "SELECT url_decode(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "url_decode#397346daef3a/ansi_off",
-      "reason": "SELECT url_decode(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "url_decode#4f5db2bf56bc/ansi_on",
       "reason": "SELECT url_decode(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },

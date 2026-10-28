@@ -138,7 +138,10 @@
 //! picks (the range alone, a small or hashed exact set, or a Bloom sized
 //! exactly for the hashes collected), reserves it with the build and
 //! publishes it before indexing the table. A build that fails or is
-//! cancelled publishes `Disabled`, so no consumer waits for it.
+//! cancelled publishes `Disabled`, so no consumer waits for it. Filters
+//! are published as partials of the build's producer partition to a
+//! [`ValueService`] ([`HashJoin::with_filter_values`]), which hands the
+//! value to the scans' cells once every producer partition published.
 //!
 //! # Metrics (`EXPLAIN ANALYZE`, [`OperatorEntry::extra`](crate::OperatorEntry::extra))
 //! Build sink: `build_rows`, `spilled_partitions`, `spill_file_bytes`. Probe:
@@ -171,8 +174,10 @@ use crate::error::{Result, internal};
 use crate::metrics::Metric;
 use crate::operator::{Operator, Sink};
 use crate::operators::Predicate;
+use crate::physical::{ValueId, Version};
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::rows;
+use crate::values::{LocalValues, Partial, Producer, Value, ValueService};
 
 /// The join type. The probe (left) side is preserved by the left outer and
 /// anti joins; the build side is preserved by the right semi, right anti
@@ -409,6 +414,31 @@ pub(crate) struct Shared {
     spill: Option<SpillScope>,
     counters: Counters,
     runtime: Vec<JoinRuntimeFilter>,
+    /// Where the build publishes `runtime`, and as which producer.
+    publisher: Option<FilterPublisher>,
+}
+
+/// Where a build publishes its runtime filters.
+#[derive(Debug, Clone)]
+pub(crate) struct FilterPublisher {
+    pub(crate) values: Arc<dyn ValueService>,
+    pub(crate) producer: Producer,
+}
+
+impl FilterPublisher {
+    /// Publishes `snapshot` as this producer's partial of `id`. A filter
+    /// is optional: a partial the service rejects only costs the pruning.
+    pub(crate) fn publish(&self, id: krishiv_io::FilterId, snapshot: krishiv_io::FilterSnapshot) {
+        let published = self.values.publish(Partial {
+            value: ValueId::Filter(id),
+            version: Version::BATCH,
+            producer: self.producer,
+            payload: Value::Filter(snapshot),
+        });
+        if let Err(e) = published {
+            tracing::debug!(filter = %id, error = %e, "runtime filter partial not taken");
+        }
+    }
 }
 
 /// A runtime filter a hash join's build publishes (see the module docs).
@@ -591,6 +621,7 @@ impl Shared {
             spill,
             counters: Counters::default(),
             runtime: Vec::new(),
+            publisher: None,
         })
     }
 
@@ -729,15 +760,44 @@ impl HashJoin {
         Ok(Self(Arc::new(Shared::new(spec)?)))
     }
 
-    /// The same join publishing `filters` from its build (see the module
-    /// docs). Call before the join is shared.
+    /// The same join publishing `filters` from its build into their
+    /// cells, as the only producer (see the module docs). Call before the
+    /// join is shared.
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for a join whose build cannot filter its probe
     /// side (only inner and left semi joins drop unmatched probe rows), a
-    /// key out of range or a filter of another key type, or a join already
-    /// shared.
-    pub fn with_runtime_filters(mut self, filters: Vec<JoinRuntimeFilter>) -> Result<Self> {
+    /// key out of range or a filter of another key type, two filters of
+    /// one id, or a join already shared.
+    pub fn with_runtime_filters(self, filters: Vec<JoinRuntimeFilter>) -> Result<Self> {
+        let values = LocalValues::new();
+        for f in &filters {
+            values.adopt_filter(Arc::clone(&f.filter))?;
+        }
+        self.with_filter_values(filters, Arc::new(values), Producer::default())
+    }
+
+    /// The same join publishing `filters` from its build as `producer`'s
+    /// partials to `values`, which holds each filter's cell (see the
+    /// module docs). Call before the join is shared.
+    ///
+    /// # Errors
+    /// As [`Self::with_runtime_filters`]; also a filter whose cell is not
+    /// the one `values` holds.
+    pub fn with_filter_values(
+        mut self,
+        filters: Vec<JoinRuntimeFilter>,
+        values: Arc<dyn ValueService>,
+        producer: Producer,
+    ) -> Result<Self> {
+        for f in &filters {
+            if !Arc::ptr_eq(&values.filter(f.filter.id())?, &f.filter) {
+                return Err(internal(format!(
+                    "runtime filter {} is not the value service's",
+                    f.filter.id()
+                )));
+            }
+        }
         let shared = Arc::get_mut(&mut self.0)
             .ok_or_else(|| internal("runtime filters added to a shared join".to_owned()))?;
         if !filters.is_empty() && !matches!(shared.join_type, JoinType::Inner | JoinType::LeftSemi)
@@ -763,6 +823,7 @@ impl HashJoin {
             }
         }
         shared.runtime = filters;
+        shared.publisher = Some(FilterPublisher { values, producer });
         Ok(self)
     }
 

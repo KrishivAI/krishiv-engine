@@ -9,28 +9,12 @@
       "reason": "SELECT trunc('2019-08-04', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "trunc#3f6bf3a87eef/ansi_on",
-      "reason": "SELECT trunc(map('a', 1), 'week') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "trunc#3f6bf3a87eef/ansi_off",
-      "reason": "SELECT trunc(map('a', 1), 'week') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "trunc#a25de6ca5aa9/ansi_on",
       "reason": "SELECT trunc(INTERVAL '1-2' YEAR TO MONTH, 'week') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "trunc#a25de6ca5aa9/ansi_off",
       "reason": "SELECT trunc(INTERVAL '1-2' YEAR TO MONTH, 'week') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "trunc#d424704624cc/ansi_on",
-      "reason": "SELECT trunc('2019-08-04', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "trunc#d424704624cc/ansi_off",
-      "reason": "SELECT trunc('2019-08-04', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "trunc#daca01bba216/ansi_on",

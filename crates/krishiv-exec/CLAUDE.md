@@ -29,6 +29,10 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
 `probe.rs` probe operator + match cursor · `grace.rs` spill partitions, flush-phase grace join.
+`values/` (P2-T177) `ValueService` + `LocalValues`: runtime filters, subquery results and broadcast builds as
+versioned values (`ValueId`, `Version` are plan data), published as one partial per producer partition and visible
+once every producer partition published (count 1 unless the task says otherwise; a retried partition's partial is
+ignored); `WorkerContext` holds the service, a fresh `LocalValues` per instantiation by default.
 Runtime filters (P2-T163): `operators/runtime_filter.rs` the per-scan `RuntimeFilters` list and the row stage
 (adaptive switch-off); `planner/runtime_filter.rs` legal targets (sites) and the cost model.
 `window/` (P2-T055) the `Window` operator over input sorted by partition then order keys (the planner puts a

@@ -20,6 +20,7 @@ mod csv;
 mod defs;
 mod hashing;
 mod hof;
+mod map;
 mod math;
 mod misc;
 mod number;
