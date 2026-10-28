@@ -16,8 +16,10 @@ disallowed-methods = [
     { path = "prost::Message::merge_length_delimited", reason = "unbounded recursion: decode through krishiv_connect::wire" },
     { path = "prost_types::Any::to_msg", reason = "unbounded recursion: decode through krishiv_connect::wire" },
     # Yield discipline (P2-T061): compute workers must never block. These
-    # paths are denied in `krishiv-exec` only (its crate root denies the
-    # lint); other crates do not deny it, so they are unaffected.
+    # paths are denied at the crate root of `krishiv-exec` (and, for the
+    # prost entries above, of `krishiv-connect`, whose bounded `wire`
+    # decoder is the only allowed decoder of untrusted bytes); other crates
+    # do not deny it, so they are unaffected.
     # `krishiv-io` reads through the async `IoScheduler` on the I/O runtime
     # instead; work over ~1 ms that cannot yield goes through
     # `TaskContext::run_blocking` on the bounded blocking pool. `xtask

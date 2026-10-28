@@ -511,11 +511,23 @@ pub fn is_exec_test_file(rel_path: &str) -> bool {
         || p.contains("/tests/")
 }
 
+/// Whether a `#[cfg(...)]` attribute line gates on `test`: the negated
+/// `not(test)` form does not count (code compiled only outside tests is
+/// production code, so the blocking-call ban still applies to it).
+fn mentions_test_cfg(attr: &str) -> bool {
+    if !attr.contains("cfg(") || !attr.contains("test") {
+        return false;
+    }
+    let compact: String = attr.chars().filter(|c| !c.is_whitespace()).collect();
+    !compact.contains("not(test")
+}
+
 /// Files under `crates/krishiv-exec/src` that are only compiled for tests:
 /// `files` is every `(path, text)` pair of that directory. A `mod name;`
-/// declaration whose contiguous `#[cfg]` block mentions `test` but no
-/// `feature` resolves to a test-only file (`pages`/`table` in `rows` are
-/// also compiled with a feature, so they stay production).
+/// declaration whose contiguous `#[cfg]` block gates on `test` (but not
+/// the negated `not(test)` form) with no `feature` resolves to a test-only
+/// file (`pages`/`table` in `rows` are also compiled with a feature, so
+/// they stay production).
 #[must_use]
 pub fn exec_test_only_files(files: &[(&str, &str)]) -> Vec<String> {
     let mut out = Vec::new();
@@ -534,7 +546,7 @@ pub fn exec_test_only_files(files: &[(&str, &str)]) -> Vec<String> {
                 let mut mentions_feature = false;
                 while j < lines.len() && lines[j].trim_start().starts_with("#[") {
                     let a = lines[j].trim_start();
-                    mentions_test = mentions_test || (a.contains("cfg(") && a.contains("test"));
+                    mentions_test = mentions_test || mentions_test_cfg(a);
                     mentions_feature = mentions_feature || a.contains("feature");
                     j += 1;
                 }
@@ -764,7 +776,8 @@ fn fn_or_mod_item(t: &str) -> (bool, bool) {
 /// Blocking-call markers in the production code of `text` as `(line,
 /// marker)`: `[]` for files outside `crates/krishiv-exec/src` or for
 /// test-only files. Skips comments, string literals, test-gated items
-/// (`#[cfg(test...)]`, `#[test]`, `#[tokio::test...]`) and items the crate's
+/// (`#[cfg(test...)]` but not `#[cfg(not(test))]`, `#[test]`,
+/// `#[tokio::test...]`) and items the crate's
 /// deliberate `#[expect(clippy::disallowed_methods, ...)]` covers (that
 /// attribute, or one of the two lines above the hit, names it).
 #[must_use]
@@ -810,7 +823,7 @@ pub fn exec_blocking_calls_in(rel_path: &str, text: &str) -> Vec<(usize, &'stati
             // Blank lines and comments (masked out) never end an
             // attribute run.
         } else if t.starts_with("#[") || attr_depth != 0 {
-            if t.contains("cfg(") && t.contains("test") {
+            if mentions_test_cfg(t) {
                 pending_test = true;
             }
             if t.contains("disallowed_methods") {
@@ -897,6 +910,17 @@ mod exec_discipline_tests {
     fn ignores_stacked_cfg_test_attributes() {
         let text = "#[cfg(test)]\n#[cfg(not(loom))]\nmod proof_tests {\n    let t = std::fs::read_to_string(p);\n}\n";
         assert!(exec_blocking_calls_in(PATH, text).is_empty());
+    }
+
+    #[test]
+    fn flags_blocking_calls_under_not_test() {
+        // `not(test)` compiles only outside tests: production code, so the
+        // ban applies.
+        let text = "#[cfg(not(test))]\nfn f() {\n    std::thread::sleep(d);\n}\n";
+        assert_eq!(
+            exec_blocking_calls_in(PATH, text),
+            [(3, "std::thread::sleep")]
+        );
     }
 
     #[test]
@@ -1001,5 +1025,22 @@ mod exec_discipline_tests {
             exec_test_only_files(&files),
             ["crates/krishiv-exec/src/aggregate/accumulator/differential.rs".to_owned()]
         );
+    }
+
+    #[test]
+    fn not_test_modules_stay_production() {
+        // `not(test)` compiles only outside tests: the file stays
+        // production, so the blocking-call ban still covers it.
+        let files = [
+            (
+                "crates/krishiv-exec/src/driver.rs",
+                "#[cfg(not(test))]\nmod shim;\n",
+            ),
+            (
+                "crates/krishiv-exec/src/shim.rs",
+                "fn f() { rt.block_on(g()); }\n",
+            ),
+        ];
+        assert!(exec_test_only_files(&files).is_empty());
     }
 }

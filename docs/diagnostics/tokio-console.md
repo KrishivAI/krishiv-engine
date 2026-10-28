@@ -48,11 +48,11 @@ never yields shows one long poll where the rest show short ones. Warnings
 The `tokio-console-test` feature (implies `tokio-console`) adds
 `testing::BusyLoop`, a pass-through operator that busy-loops 50 ms per
 batch without yielding. It exists so the console has something to show;
-it is test-only and never in default builds:
+it is compiled only with `tokio-console-test`, never in default builds:
 
 ```sh
 export CARGO_TARGET_DIR="$PWD/target/console" RUSTFLAGS="--cfg tokio_unstable"
-cargo nextest run -p krishiv-exec --features tokio-console-test busy_loop
+cargo nextest run -p krishiv-exec --features tokio-console-test a_busy_loop_counts_a_stall
 ```
 
 The `a_busy_loop_counts_a_stall` test runs one batch through it and

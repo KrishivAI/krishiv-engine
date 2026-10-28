@@ -6,34 +6,21 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use krishiv_mcp::KrishivMcpServer;
+use krishiv_mcp::{HANDSHAKE_VERSION, PINNED_PROTOCOL_VERSION};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
-/// Set in the spawned child so it serves stdio instead of running tests.
-const HELPER_ENV: &str = "KRISHIV_MCP_STDIO_HELPER";
+/// The shim binary serving stdio for these tests (its stdout carries only
+/// the JSON-RPC stream, so every non-empty line must parse as JSON).
+const SHIM_EXE: &str = env!("CARGO_BIN_EXE_mcp_stdio");
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-#[tokio::test]
-async fn stdio_helper() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::var(HELPER_ENV).as_deref() != Ok("1") {
-        return Ok(());
-    }
-    KrishivMcpServer.serve_stdio().await?.waiting().await?;
-    Ok(())
-}
-
 fn spawn_helper() -> Result<Child, Box<dyn std::error::Error>> {
-    let exe = std::env::current_exe()?;
-    let child = Command::new(exe)
-        .arg("--exact")
-        .arg("stdio_helper")
-        .arg("--nocapture")
-        .env(HELPER_ENV, "1")
+    let child = Command::new(SHIM_EXE)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::inherit())
         .kill_on_drop(true)
         .spawn()?;
     Ok(child)
@@ -55,10 +42,10 @@ async fn read_message<R>(reader: &mut BufReader<R>) -> Result<Value, Box<dyn std
 where
     R: tokio::io::AsyncRead + Unpin,
 {
-    // The child is the test binary itself, so libtest's own preamble
-    // ("running 1 test") shares stdout with the JSON-RPC stream; only
-    // lines that parse as JSON can be protocol messages.
-    let message = loop {
+    // The child is a dedicated shim binary, so stdout carries only the
+    // JSON-RPC stream: a non-JSON line is server pollution (a banner or
+    // log line) that breaks MCP stdio clients, and fails the test.
+    loop {
         let mut line = String::new();
         let read: usize = tokio::time::timeout(READ_TIMEOUT, reader.read_line(&mut line)).await??;
         if read == 0 {
@@ -67,11 +54,15 @@ where
         if line.trim().is_empty() {
             continue;
         }
-        if let Ok(value) = serde_json::from_str::<Value>(line.trim()) {
-            break value;
+        match serde_json::from_str::<Value>(line.trim()) {
+            Ok(value) => return Ok(value),
+            Err(e) => {
+                return Err(
+                    format!("server wrote a non-JSON line to stdout: {line:?} ({e})").into(),
+                );
+            }
         }
-    };
-    Ok(message)
+    }
 }
 
 async fn read_result<R>(
@@ -120,11 +111,11 @@ async fn stdio_round_trip_on_the_handshake_revision() -> Result<(), Box<dyn std:
     let mut writer = child.stdin.take().expect("helper stdin");
     let mut reader = BufReader::new(child.stdout.take().expect("helper stdout"));
 
-    send_json(&mut writer, &initialize("2025-11-25")).await?;
+    send_json(&mut writer, &initialize(HANDSHAKE_VERSION.as_str())).await?;
     let initialized = read_result(&mut reader, 1).await?;
     assert_eq!(
         initialized.pointer("/result/protocolVersion"),
-        Some(&json!("2025-11-25")),
+        Some(&json!(HANDSHAKE_VERSION.as_str())),
         "handshake revision must be echoed"
     );
     assert_eq!(
@@ -184,12 +175,12 @@ async fn stdio_round_trip_on_the_handshake_revision() -> Result<(), Box<dyn std:
         .and_then(Value::as_str)
         .unwrap_or_default();
     assert!(
-        text.contains("2026-07-28"),
+        text.contains(PINNED_PROTOCOL_VERSION.as_str()),
         "tool output must name the pin, got: {text}"
     );
     assert_eq!(
         called.pointer("/result/structuredContent/protocolVersion"),
-        Some(&json!("2026-07-28"))
+        Some(&json!(PINNED_PROTOCOL_VERSION.as_str()))
     );
 
     drop(writer);
@@ -209,7 +200,7 @@ async fn stdio_downgrades_an_older_client() -> Result<(), Box<dyn std::error::Er
     let initialized = read_result(&mut reader, 1).await?;
     assert_eq!(
         initialized.pointer("/result/protocolVersion"),
-        Some(&json!("2025-11-25")),
+        Some(&json!(HANDSHAKE_VERSION.as_str())),
         "older client must be moved to the handshake revision"
     );
 
@@ -236,12 +227,13 @@ async fn stdio_downgrades_an_older_client() -> Result<(), Box<dyn std::error::Er
 
 /// Offline conformance note: the official MCP inspector CLI is not
 /// vendored and needs network (`npx -y @modelcontextprotocol/inspector`),
-/// so it cannot run in CI. To run it manually against this server, build a
-/// stdio shim binary that calls `KrishivMcpServer::serve_stdio`, then point
-/// the inspector at it and walk `initialize` → `tools/list` →
-/// `tools/call server_status`, checking the pin (`2026-07-28`) in the
-/// tool output. Set `MCP_INSPECTOR_CMD` to have this test execute that
-/// command instead of just printing these instructions.
+/// so it cannot run in CI. To run it manually against this server, point
+/// the inspector at the `mcp_stdio` shim binary (`cargo run -p krishiv-mcp
+/// --bin mcp_stdio`) and walk `initialize` → `tools/list` →
+/// `tools/call server_status`, checking the pin
+/// (`PINNED_PROTOCOL_VERSION`) in the tool output. Set `MCP_INSPECTOR_CMD`
+/// to have this test execute that command instead of just printing these
+/// instructions.
 #[test]
 #[ignore = "needs the external inspector CLI plus network; see doc comment"]
 fn inspector_conformance() {

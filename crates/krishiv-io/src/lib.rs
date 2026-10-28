@@ -26,6 +26,9 @@
 //! connector SDK (P2-T117 decision 11).
 
 #![forbid(unsafe_code)]
+// The `#[coverage(off)]` workaround in `io/fault.rs` needs the nightly
+// attribute, enabled only for instrumented builds.
+#![cfg_attr(coverage, feature(coverage_attribute))]
 
 mod commit;
 pub mod csv;

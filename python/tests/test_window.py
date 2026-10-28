@@ -246,9 +246,16 @@ def test_out_of_threshold_bounds_are_unbounded(docs: DataFrame) -> None:
 def test_builders_replace_and_return_new_specs(docs: DataFrame) -> None:
     base = Window.partitionBy("category")
     ordered = base.orderBy("id")
-    # `base` is unchanged: it still has no ordering, so a ranking fails over it.
-    with pytest.raises(errors.PySparkException):
+    # `base` is unchanged: it still has no ordering, so a ranking fails over it
+    # (Spark 4.2 raises `WINDOW_FUNCTION_FRAME_NOT_ORDERED` here; see the
+    # `row_number() OVER(PARTITION BY cate)` case in the window.sql golden).
+    with pytest.raises(errors.AnalysisException) as excinfo:
         docs.withColumn("v", F.row_number().over(base)).collect()
+    assert excinfo.value.getCondition() == "WINDOW_FUNCTION_FRAME_NOT_ORDERED"
+    assert excinfo.value.getMessageParameters() == {
+        "wf_name": "row_number",
+        "wf_expr": "row_number()",
+    }
     assert vals(docs.withColumn("v", F.row_number().over(ordered)), "category", "id") == [1, 2, 3, 1, 2, 3]
     # A repeated call replaces: partitioning by `id` sums each id, not each category.
     repart = Window.partitionBy("category").partitionBy("id")
@@ -300,13 +307,30 @@ def test_frame_bounds_require_ints() -> None:
     with pytest.raises(errors.PySparkTypeError) as excinfo:
         Window.rowsBetween("1", 1)  # ty: ignore[invalid-argument-type]
     assert excinfo.value.getCondition() == "NOT_EXPECTED_TYPE"
-    with pytest.raises(errors.PySparkTypeError):
+    assert excinfo.value.getMessageParameters() == {
+        "arg_name": "start",
+        "expected_type": "int",
+        "arg_type": "str",
+    }
+    with pytest.raises(errors.PySparkTypeError) as excinfo:
         Window.orderBy().rangeBetween(0, 1.5)  # ty: ignore[invalid-argument-type]
+    assert excinfo.value.getCondition() == "NOT_EXPECTED_TYPE"
+    assert excinfo.value.getMessageParameters() == {
+        "arg_name": "end",
+        "expected_type": "int",
+        "arg_type": "float",
+    }
 
 
 def test_partition_by_rejects_other_types() -> None:
-    with pytest.raises(errors.PySparkTypeError):
+    with pytest.raises(errors.PySparkTypeError) as excinfo:
         Window.partitionBy(1)  # ty: ignore[invalid-argument-type]
+    assert excinfo.value.getCondition() == "NOT_EXPECTED_TYPE"
+    assert excinfo.value.getMessageParameters() == {
+        "arg_name": "cols",
+        "expected_type": "Column, str or list of Column or str",
+        "arg_type": "int",
+    }
 
 
 def test_signatures_match_pyspark() -> None:

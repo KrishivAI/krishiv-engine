@@ -27,6 +27,8 @@ use crate::executor::{Executor, TaskHandle, WorkloadClass};
 
 #[cfg(all(feature = "tokio-console", tokio_unstable))]
 use crate::error::internal;
+#[cfg(feature = "tokio-console")]
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// The console subscriber's event-buffer capacity: fixed, not the crate
 /// default (`console_subscriber` buffers 102400 events by default).
@@ -80,7 +82,10 @@ pub fn spawn_named(
 /// Starts the tokio-console subscriber if the `tokio-console` feature is on
 /// and `KRISHIV_TOKIO_CONSOLE=1`, once per process; a no-op otherwise. The
 /// retention is 60 seconds and the event buffer is
-/// [`EVENT_BUFFER_CAPACITY`], not the crate defaults. The CLI and the
+/// [`EVENT_BUFFER_CAPACITY`], not the crate defaults. The subscriber is
+/// installed with `try_init`: when the host already owns the global
+/// tracing subscriber (an embedder's logger), diagnostics stay off instead
+/// of panicking, and host logging is left alone. The CLI and the
 /// session builder call this at startup, so embedders only set the variable.
 pub fn maybe_init_tokio_console() {
     #[cfg(feature = "tokio-console")]
@@ -90,10 +95,13 @@ pub fn maybe_init_tokio_console() {
             return;
         }
         INIT.call_once(|| {
-            console_subscriber::ConsoleLayer::builder()
+            let layer = console_subscriber::ConsoleLayer::builder()
                 .retention(std::time::Duration::from_secs(60))
                 .event_buffer_capacity(EVENT_BUFFER_CAPACITY)
-                .init();
+                .spawn();
+            // A set global subscriber (or a racing init) is not an error:
+            // the console just stays off.
+            let _ = tracing_subscriber::registry().with(layer).try_init();
         });
     }
 }

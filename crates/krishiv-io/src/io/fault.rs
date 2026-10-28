@@ -167,6 +167,13 @@ fn is_tail(range: Option<&GetRange>, size: u64) -> bool {
 
 #[async_trait]
 impl ObjectStore for FaultStore {
+    // `#[coverage(off)]`: these two methods' async-trait shims carry branch
+    // counters without regions on nightly, which segfaults `llvm-cov export
+    // --format=lcov` for every crate linking this file (see
+    // `cargo xtask coverage`). The attribute is on only for instrumented
+    // builds (`cfg(coverage)`); the bodies stay fully tested by the
+    // scheduler conformance suite, only the coverage mapping is skipped.
+    #[cfg_attr(coverage, coverage(off))]
     async fn put_opts(
         &self,
         location: &Path,
@@ -200,6 +207,7 @@ impl ObjectStore for FaultStore {
         }))
     }
 
+    #[cfg_attr(coverage, coverage(off))]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> StoreResult<GetResult> {
         self.check_scheduled(options.extensions.get::<ScheduledRequest>().is_some());
         let latency = {
