@@ -1,0 +1,1 @@
+READ	SELECT xpath_string('abc', date_format('X', 'unknown'))

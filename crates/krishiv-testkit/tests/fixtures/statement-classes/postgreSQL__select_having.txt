@@ -1,0 +1,22 @@
+DDL	CREATE TABLE test_having (a int, b int, c string, d string) USING parquet
+WRITE	INSERT INTO test_having VALUES (0, 1, 'XXXX', 'A')
+WRITE	INSERT INTO test_having VALUES (1, 2, 'AAAA', 'b')
+WRITE	INSERT INTO test_having VALUES (2, 2, 'AAAA', 'c')
+WRITE	INSERT INTO test_having VALUES (3, 3, 'BBBB', 'D')
+WRITE	INSERT INTO test_having VALUES (4, 3, 'BBBB', 'e')
+WRITE	INSERT INTO test_having VALUES (5, 3, 'bbbb', 'F')
+WRITE	INSERT INTO test_having VALUES (6, 4, 'cccc', 'g')
+WRITE	INSERT INTO test_having VALUES (7, 4, 'cccc', 'h')
+WRITE	INSERT INTO test_having VALUES (8, 4, 'CCCC', 'I')
+WRITE	INSERT INTO test_having VALUES (9, 4, 'CCCC', 'j')
+READ	SELECT b, c FROM test_having
+READ	SELECT b, c FROM test_having
+READ	SELECT c, max(a) FROM test_having
+READ	SELECT min(a), max(a) FROM test_having HAVING min(a) = max(a)
+READ	SELECT min(a), max(a) FROM test_having HAVING min(a) < max(a)
+READ	SELECT a FROM test_having HAVING min(a) < max(a)
+READ	SELECT 1 AS one FROM test_having HAVING a > 1
+READ	SELECT 1 AS one FROM test_having HAVING 1 > 2
+READ	SELECT 1 AS one FROM test_having HAVING 1 < 2
+READ	SELECT 1 AS one FROM test_having WHERE 1/a = 1 HAVING 1 < 2
+DDL	DROP TABLE test_having

@@ -1,0 +1,32 @@
+SESSION	CREATE TEMPORARY VIEW t AS SELECT 'aa' as a
+READ	select cast(a as byte) from t
+READ	select cast(a as short) from t
+READ	select cast(a as int) from t
+READ	select cast(a as long) from t
+READ	select cast(a as float) from t
+READ	select cast(a as double) from t
+READ	select cast(a as decimal) from t
+READ	select cast(a as boolean) from t
+READ	select cast(a as timestamp) from t
+READ	select cast(a as date) from t
+READ	select cast(a as binary) from t
+READ	select cast(a as array<string>) from t
+READ	select cast(a as struct<s:string>) from t
+READ	select cast(a as map<string, string>) from t
+READ	select to_timestamp(a) from t
+READ	select to_timestamp('2018-01-01', a) from t
+READ	select to_unix_timestamp(a) from t
+READ	select to_unix_timestamp('2018-01-01', a) from t
+READ	select unix_timestamp(a) from t
+READ	select unix_timestamp('2018-01-01', a) from t
+READ	select from_unixtime(a) from t
+READ	select from_unixtime('2018-01-01', a) from t
+READ	select next_day(a, 'MO') from t
+READ	select next_day('2018-01-01', a) from t
+READ	select trunc(a, 'MM') from t
+READ	select trunc('2018-01-01', a) from t
+READ	select unhex('-123')
+READ	select sha2(a, a) from t
+READ	select get_json_object(a, a) from t
+READ	select json_tuple(a, a) from t
+READ	select from_json(a, 'a INT') from t

@@ -1,0 +1,151 @@
+DDL	create table t1(s string, utf8_binary string collate utf8_binary, utf8_lcase string collate utf8_lcase) using parquet
+WRITE	insert into t1 values ('Spark', 'Spark', 'SQL')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaAAaA')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaaAaA')
+WRITE	insert into t1 values ('aaAaAAaA', 'aaAaAAaA', 'aaAaaAaAaaAaaAaAaaAaaAaA')
+WRITE	insert into t1 values ('bbAbaAbA', 'bbAbAAbA', 'a')
+WRITE	insert into t1 values ('İo', 'İo', 'İo')
+WRITE	insert into t1 values ('İo', 'İo', 'İo ')
+WRITE	insert into t1 values ('İo', 'İo ', 'İo')
+WRITE	insert into t1 values ('İo', 'İo', 'i̇o')
+WRITE	insert into t1 values ('efd2', 'efd2', 'efd2')
+WRITE	insert into t1 values ('Hello, world! Nice day.', 'Hello, world! Nice day.', 'Hello, world! Nice day.')
+WRITE	insert into t1 values ('Something else. Nothing here.', 'Something else. Nothing here.', 'Something else. Nothing here.'
+WRITE	insert into t1 values ('kitten', 'kitten', 'sitTing')
+WRITE	insert into t1 values ('abc', 'abc', 'abc')
+WRITE	insert into t1 values ('abcdcba', 'abcdcba', 'aBcDCbA')
+DDL	create table t2(ascii long) using parquet
+WRITE	insert into t2 values (97)
+WRITE	insert into t2 values (66)
+DDL	create table t3(format string collate utf8_binary, utf8_binary string collate utf8_binary, utf8_lcase string collate utf
+WRITE	insert into t3 values ('%s%s', 'abCdE', 'abCdE')
+READ	select concat_ws(' ', utf8_lcase, utf8_lcase) from t1
+READ	select concat_ws(' ', utf8_binary, utf8_lcase) from t1
+READ	select concat_ws(' ' collate utf8_binary, utf8_binary, 'SQL' collate utf8_lcase) from t1
+READ	select concat_ws(' ' collate utf8_lcase, utf8_binary, 'SQL' collate utf8_lcase) from t1
+READ	select concat_ws(',', utf8_lcase, 'word'), concat_ws(',', utf8_binary, 'word') from t1
+READ	select concat_ws(',', utf8_lcase, 'word' collate utf8_binary), concat_ws(',', utf8_binary, 'word' collate utf8_lcase) fr
+READ	select split_part(utf8_binary, utf8_lcase, 3) from t1
+READ	select split_part(s, utf8_binary, 1) from t1
+READ	select split_part(utf8_binary collate utf8_binary, s collate utf8_lcase, 1) from t1
+READ	select split_part(utf8_binary, utf8_lcase collate utf8_binary, 2) from t1
+READ	select split_part(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase, 2) from t1
+READ	select split_part(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai, 2) from t1
+READ	select split_part(utf8_binary, 'a', 3), split_part(utf8_lcase, 'a', 3) from t1
+READ	select split_part(utf8_binary, 'a' collate utf8_lcase, 3), split_part(utf8_lcase, 'a' collate utf8_binary, 3) from t1
+READ	select split_part(utf8_binary, 'a ' collate utf8_lcase_rtrim, 3), split_part(utf8_lcase, 'a' collate utf8_binary, 3) fro
+READ	select contains(utf8_binary, utf8_lcase) from t1
+READ	select contains(s, utf8_binary) from t1
+READ	select contains(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select contains(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select contains(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select contains(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai) from t1
+READ	select contains(utf8_binary, 'a'), contains(utf8_lcase, 'a') from t1
+READ	select contains(utf8_binary, 'AaAA' collate utf8_lcase), contains(utf8_lcase, 'AAa' collate utf8_binary) from t1
+READ	select contains(utf8_binary, 'AaAA ' collate utf8_lcase_rtrim), contains(utf8_lcase, 'AAa ' collate utf8_binary_rtrim) f
+READ	select substring_index(utf8_binary, utf8_lcase, 2) from t1
+READ	select substring_index(s, utf8_binary,1) from t1
+READ	select substring_index(utf8_binary collate utf8_binary, s collate utf8_lcase, 3) from t1
+READ	select substring_index(utf8_binary, utf8_lcase collate utf8_binary, 2) from t1
+READ	select substring_index(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase, 2) from t1
+READ	select substring_index(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai, 2) from t1
+READ	select substring_index(utf8_binary, 'a', 2), substring_index(utf8_lcase, 'a', 2) from t1
+READ	select substring_index(utf8_binary, 'AaAA' collate utf8_lcase, 2), substring_index(utf8_lcase, 'AAa' collate utf8_binary
+READ	select substring_index(utf8_binary, 'AaAA ' collate utf8_lcase_rtrim, 2), substring_index(utf8_lcase, 'AAa' collate utf8
+READ	select instr(utf8_binary, utf8_lcase) from t1
+READ	select instr(s, utf8_binary) from t1
+READ	select instr(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select instr(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select instr(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select instr(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai) from t1
+READ	select instr(utf8_binary, 'a'), instr(utf8_lcase, 'a') from t1
+READ	select instr(utf8_binary, 'AaAA' collate utf8_lcase), instr(utf8_lcase, 'AAa' collate utf8_binary) from t1
+READ	select find_in_set(utf8_binary, utf8_lcase) from t1
+READ	select find_in_set(s, utf8_binary) from t1
+READ	select find_in_set(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select find_in_set(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select find_in_set(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select find_in_set(utf8_binary, 'aaAaaAaA,i̇o'), find_in_set(utf8_lcase, 'aaAaaAaA,i̇o') from t1
+READ	select find_in_set(utf8_binary, 'aaAaaAaA,i̇o' collate utf8_lcase), find_in_set(utf8_lcase, 'aaAaaAaA,i̇o' collate utf8_
+READ	select find_in_set(utf8_binary, 'aaAaaAaA,i̇o ' collate utf8_lcase_rtrim), find_in_set(utf8_lcase, 'aaAaaAaA,i̇o' collat
+READ	select startswith(utf8_binary, utf8_lcase) from t1
+READ	select startswith(s, utf8_binary) from t1
+READ	select startswith(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select startswith(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select startswith(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select startswith(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai) from t1
+READ	select startswith(utf8_binary, 'aaAaaAaA'), startswith(utf8_lcase, 'aaAaaAaA') from t1
+READ	select startswith(utf8_binary, 'aaAaaAaA' collate utf8_lcase), startswith(utf8_lcase, 'aaAaaAaA' collate utf8_binary) fr
+READ	select startswith(utf8_binary, 'aaAaaAaA ' collate utf8_lcase_rtrim), startswith(utf8_lcase, 'aaAaaAaA' collate utf8_bin
+READ	select translate(utf8_lcase, utf8_lcase, '12345') from t1
+READ	select translate(utf8_binary, utf8_lcase, '12345') from t1
+READ	select translate(utf8_binary, 'aBc' collate utf8_lcase, '12345' collate utf8_binary) from t1
+READ	select translate(utf8_binary, 'SQL' collate utf8_lcase, '12345' collate utf8_lcase) from t1
+READ	select translate(utf8_binary, 'SQL' collate unicode_ai, '12345' collate unicode_ai) from t1
+READ	select translate(utf8_lcase, 'aaAaaAaA', '12345'), translate(utf8_binary, 'aaAaaAaA', '12345') from t1
+READ	select translate(utf8_lcase, 'aBc' collate utf8_binary, '12345'), translate(utf8_binary, 'aBc' collate utf8_lcase, '1234
+READ	select translate(utf8_lcase, 'aBc ' collate utf8_binary_rtrim, '12345'), translate(utf8_binary, 'aBc' collate utf8_lcase
+READ	select replace(utf8_binary, utf8_lcase, 'abc') from t1
+READ	select replace(s, utf8_binary, 'abc') from t1
+READ	select replace(utf8_binary collate utf8_binary, s collate utf8_lcase, 'abc') from t1
+READ	select replace(utf8_binary, utf8_lcase collate utf8_binary, 'abc') from t1
+READ	select replace(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase, 'abc') from t1
+READ	select replace(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai, 'abc') from t1
+READ	select replace(utf8_binary, 'aaAaaAaA', 'abc'), replace(utf8_lcase, 'aaAaaAaA', 'abc') from t1
+READ	select replace(utf8_binary, 'aaAaaAaA' collate utf8_lcase, 'abc'), replace(utf8_lcase, 'aaAaaAaA' collate utf8_binary, '
+READ	select replace(utf8_binary, 'aaAaaAaA ' collate utf8_lcase_rtrim, 'abc'), replace(utf8_lcase, 'aaAaaAaA' collate utf8_bi
+READ	select endswith(utf8_binary, utf8_lcase) from t1
+READ	select endswith(s, utf8_binary) from t1
+READ	select endswith(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select endswith(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select endswith(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase) from t1
+READ	select endswith(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai) from t1
+READ	select endswith(utf8_binary, 'aaAaaAaA'), endswith(utf8_lcase, 'aaAaaAaA') from t1
+READ	select endswith(utf8_binary, 'aaAaaAaA' collate utf8_lcase), endswith(utf8_lcase, 'aaAaaAaA' collate utf8_binary) from t
+READ	select endswith(utf8_binary, 'aaAaaAaA ' collate utf8_lcase_rtrim), endswith(utf8_lcase, 'aaAaaAaA' collate utf8_binary)
+READ	select repeat(utf8_binary, 3), repeat(utf8_lcase, 2) from t1
+READ	select repeat(utf8_binary collate utf8_lcase, 3), repeat(utf8_lcase collate utf8_binary, 2) from t1
+READ	select chr(ascii) from t2
+READ	select sentences(utf8_binary), sentences(utf8_lcase) from t1
+READ	select sentences(utf8_binary collate utf8_lcase), sentences(utf8_lcase collate utf8_binary) from t1
+READ	select upper(utf8_binary), upper(utf8_lcase) from t1
+READ	select upper(utf8_binary collate utf8_lcase), upper(utf8_lcase collate utf8_binary) from t1
+READ	select lower(utf8_binary), lower(utf8_lcase) from t1
+READ	select lower(utf8_binary collate utf8_lcase), lower(utf8_lcase collate utf8_binary) from t1
+READ	select initcap(utf8_binary), initcap(utf8_lcase) from t1
+READ	select initcap(utf8_binary collate utf8_lcase), initcap(utf8_lcase collate utf8_binary) from t1
+READ	select overlay(utf8_binary, utf8_lcase, 2) from t1
+READ	select overlay(s, utf8_binary,1) from t1
+READ	select overlay(utf8_binary collate utf8_binary, s collate utf8_lcase, 3) from t1
+READ	select overlay(utf8_binary, utf8_lcase collate utf8_binary, 2) from t1
+READ	select overlay(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase, 2) from t1
+READ	select overlay(utf8_binary, 'a', 2), overlay(utf8_lcase, 'a', 2) from t1
+READ	select overlay(utf8_binary, 'AaAA' collate utf8_lcase, 2), overlay(utf8_lcase, 'AAa' collate utf8_binary, 2) from t1
+READ	select format_string(format, utf8_binary, utf8_lcase) from t3
+READ	select format_string(format collate utf8_lcase, utf8_lcase, utf8_binary collate utf8_lcase, 3), format_string(format, ut
+READ	select format_string(format, utf8_binary, utf8_lcase) from t3
+READ	select length(utf8_binary), length(utf8_lcase) from t1
+READ	select length(utf8_binary collate utf8_lcase), length(utf8_lcase collate utf8_binary) from t1
+READ	select bit_length(utf8_binary), bit_length(utf8_lcase) from t1
+READ	select bit_length(utf8_binary collate utf8_lcase), bit_length(utf8_lcase collate utf8_binary) from t1
+READ	select octet_length(utf8_binary), octet_length(utf8_lcase) from t1
+READ	select octet_length(utf8_binary collate utf8_lcase), octet_length(utf8_lcase collate utf8_binary) from t1
+READ	select octet_length(utf8_binary collate utf8_lcase_rtrim), octet_length(utf8_lcase collate utf8_binary_rtrim) from t1
+READ	select substr(utf8_binary, 2, 2), substr(utf8_lcase, 2, 2) from t1
+READ	select substr(utf8_binary collate utf8_lcase, 2, 2), substr(utf8_lcase collate utf8_binary, 2, 2) from t1
+READ	select right(utf8_binary, 2), right(utf8_lcase, 2) from t1
+READ	select right(utf8_binary collate utf8_lcase, 2), right(utf8_lcase collate utf8_binary, 2) from t1
+READ	select left(utf8_binary, '2' collate utf8_lcase), left(utf8_lcase, 2) from t1
+READ	select left(utf8_binary collate utf8_lcase, 2), left(utf8_lcase collate utf8_binary, 2) from t1
+READ	select locate(utf8_binary, utf8_lcase) from t1
+READ	select locate(s, utf8_binary) from t1
+READ	select locate(utf8_binary collate utf8_binary, s collate utf8_lcase) from t1
+READ	select locate(utf8_binary, utf8_lcase collate utf8_binary) from t1
+READ	select locate(utf8_binary collate utf8_lcase, utf8_lcase collate utf8_lcase, 3) from t1
+READ	select locate(utf8_binary collate unicode_ai, utf8_lcase collate unicode_ai, 3) from t1
+READ	select locate(utf8_binary, 'a'), locate(utf8_lcase, 'a') from t1
+READ	select locate(utf8_binary, 'AaAA' collate utf8_lcase, 4), locate(utf8_lcase, 'AAa' collate utf8_binary, 4) from t1
+READ	select locate(utf8_binary, 'AaAA ' collate utf8_binary_rtrim, 4), locate(utf8_lcase, 'AAa ' collate utf8_binary, 4) from
+DDL	drop table t1
+DDL	drop table t2
+DDL	drop table t3

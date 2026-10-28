@@ -78,6 +78,10 @@ message ExprEnv {
   // `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates
   // give NaN instead of NULL where Spark divides by zero.
   bool legacy_statistical_aggregate = 5;
+  // The session's map-key dedup policy: a worker without the feature keeps
+  // the first value on duplicate map keys.
+  // feature: map_key_dedup_policy
+  optional bool map_key_dedup_last_win = 6;
 }
 
 message ExplainNode {

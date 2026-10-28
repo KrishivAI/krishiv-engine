@@ -1,0 +1,58 @@
+DDL	CREATE DATABASE IF NOT EXISTS testdb
+SESSION	USE testdb
+DDL	CREATE TABLE t1(id INT, name STRING, value DOUBLE) USING PARQUET
+DDL	CREATE TABLE t2(id INT, category STRING, amount BIGINT) USING CSV
+DDL	CREATE TABLE t3(a INT, b STRING, c DOUBLE) USING ORC
+READ	SELECT _metadata.file_name FROM t1
+READ	SELECT _metadata.file_path FROM t1
+READ	SELECT _metadata.file_size FROM t1
+READ	SELECT _metadata.file_modification_time FROM t1
+READ	SELECT _metadata.row_index FROM t1
+READ	SELECT _metadata.file_block_start FROM t1
+READ	SELECT _metadata.file_block_length FROM t1
+READ	SELECT t1._metadata.file_name FROM t1
+READ	SELECT testdb.t1._metadata.file_name FROM testdb.t1
+READ	SELECT _metadata.file_name, t1._metadata.file_path FROM t1
+READ	SELECT t1._metadata.file_name, testdb.t1._metadata.file_path FROM testdb.t1
+READ	SELECT * FROM t1 WHERE _metadata.file_size > 1000
+READ	SELECT id, name FROM t1 WHERE _metadata.row_index < 100
+READ	SELECT * FROM t1 WHERE _metadata.file_name = 'data.parquet'
+READ	SELECT * FROM t1 WHERE _metadata.file_modification_time > timestamp'2024-01-01 00:00:00'
+READ	SELECT * FROM t1 WHERE t1._metadata.file_size > 1000
+READ	SELECT * FROM testdb.t1 WHERE testdb.t1._metadata.row_index < 100
+READ	SELECT id, name, _metadata.file_name FROM t1 ORDER BY _metadata.file_size
+READ	SELECT * FROM t1 ORDER BY _metadata.row_index DESC
+READ	SELECT id, _metadata.file_name FROM t1 ORDER BY _metadata.file_modification_time, _metadata.row_index
+READ	SELECT t1._metadata.file_name, COUNT(*) FROM t1 GROUP BY t1._metadata.file_name
+READ	SELECT testdb.t1._metadata.file_path, SUM(value) FROM testdb.t1 GROUP BY testdb.t1._metadata.file_path
+READ	SELECT _metadata.file_name, MIN(_metadata.row_index), MAX(_metadata.row_index) FROM t1
+READ	SELECT _metadata.file_path, COUNT(DISTINCT _metadata.file_name) FROM t1
+READ	SELECT t1.id, t2.category, t1._metadata.file_name
+READ	SELECT t1.id, t1._metadata.file_name, t2._metadata.file_name
+READ	SELECT t1.id, t1._metadata.row_index, t2._metadata.row_index
+READ	SELECT t1.name, t1._metadata.file_name, t2._metadata.file_name
+READ	SELECT t1._metadata.file_path, t2._metadata.file_path, t1.id
+READ	SELECT t1._metadata.file_name, t2._metadata.file_name, t1.id, t2.id
+READ	SELECT a.id, a._metadata.file_name, b._metadata.file_name
+READ	SELECT t._metadata.file_name, t.id FROM t1 t
+READ	SELECT x._metadata.file_name, x._metadata.row_index FROM t1 x
+READ	SELECT * FROM (SELECT id, _metadata.file_name FROM t1) sub
+READ	SELECT id FROM t1 WHERE _metadata.file_name IN
+READ	SELECT _metadata.file_name, id FROM t1
+READ	SELECT _metadata.* FROM t1
+READ	SELECT _metadata.* FROM t2
+READ	SELECT _metadata.* FROM t3
+READ	SELECT t1._metadata.* FROM t1
+READ	SELECT t2._metadata.* FROM t2
+READ	SELECT t3._metadata.* FROM t3
+READ	SELECT id, name, _metadata.* FROM t1 ORDER BY id
+READ	SELECT id, category, _metadata.* FROM t2 ORDER BY id
+READ	SELECT sub.file_name, sub.file_size FROM (SELECT _metadata.* FROM t1) sub ORDER BY sub.file_name
+READ	SELECT id, _metadata.* FROM t1 WHERE _metadata.file_size >= 0 ORDER BY id
+READ	SELECT _metadata.*, COUNT(*) AS cnt FROM t1 GROUP BY ALL ORDER BY _metadata.file_name
+READ	SELECT _metadata.*, COUNT(*) AS cnt FROM t2 GROUP BY ALL ORDER BY _metadata.file_name
+READ	SELECT _metadata.*, COUNT(*) AS cnt FROM t3 GROUP BY ALL ORDER BY _metadata.file_name
+DDL	DROP TABLE t1
+DDL	DROP TABLE t2
+DDL	DROP TABLE t3
+DDL	DROP DATABASE testdb

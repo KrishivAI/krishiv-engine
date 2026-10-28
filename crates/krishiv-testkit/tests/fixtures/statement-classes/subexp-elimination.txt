@@ -1,0 +1,10 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT from_json(a, 'struct<a:int,b:string>').a, from_json(a, 'struct<a:int,b:string>').b, from_json(b, 'array<struct<a:
+READ	SELECT if(from_json(a, 'struct<a:int,b:string>').a > 1, from_json(b, 'array<struct<a:int,b:int>>')[0].a, from_json(b, 'a
+READ	SELECT if(isnull(from_json(a, 'struct<a:int,b:string>').a), from_json(b, 'array<struct<a:int,b:int>>')[0].b + 1, from_js
+READ	SELECT case when from_json(a, 'struct<a:int,b:string>').a > 5 then from_json(a, 'struct<a:int,b:string>').b when from_js
+READ	SELECT case when from_json(a, 'struct<a:int,b:string>').a > 5 then from_json(b, 'array<struct<a:int,b:int>>')[0].b when 
+READ	SELECT from_json(a, 'struct<a:int,b:string>').a + random() > 2, from_json(a, 'struct<a:int,b:string>').b, from_json(b, '
+READ	SELECT if(from_json(a, 'struct<a:int,b:string>').a + random() > 5, from_json(b, 'array<struct<a:int,b:int>>')[0].a, from
+READ	SELECT case when from_json(a, 'struct<a:int,b:string>').a > 5 then from_json(a, 'struct<a:int,b:string>').b + random() >
+SESSION	DROP VIEW IF EXISTS testData

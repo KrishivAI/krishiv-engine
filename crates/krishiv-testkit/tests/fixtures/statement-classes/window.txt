@@ -1,0 +1,71 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+SESSION	CREATE OR REPLACE TEMPORARY VIEW basic_pays AS SELECT * FROM VALUES
+SESSION	CREATE OR REPLACE TEMPORARY VIEW test_ignore_null AS SELECT * FROM VALUES
+READ	SELECT val, cate, count(val) OVER(PARTITION BY cate ORDER BY val ROWS CURRENT ROW) FROM testData
+READ	SELECT val, cate, sum(val) OVER(PARTITION BY cate ORDER BY val
+READ	SELECT val_long, cate, sum(val_long) OVER(PARTITION BY cate ORDER BY val_long
+READ	SELECT val, cate, count(val) OVER(PARTITION BY cate ORDER BY val RANGE 1 PRECEDING) FROM testData
+READ	SELECT val, cate, sum(val) OVER(PARTITION BY cate ORDER BY val
+READ	SELECT val_long, cate, sum(val_long) OVER(PARTITION BY cate ORDER BY val_long
+READ	SELECT val_double, cate, sum(val_double) OVER(PARTITION BY cate ORDER BY val_double
+READ	SELECT val_date, cate, max(val_date) OVER(PARTITION BY cate ORDER BY val_date
+READ	SELECT val_timestamp, cate, avg(val_timestamp) OVER(PARTITION BY cate ORDER BY val_timestamp
+READ	SELECT val_timestamp, cate, avg(val_timestamp) OVER(PARTITION BY cate ORDER BY to_timestamp_ntz(val_timestamp)
+READ	SELECT val_timestamp, cate, avg(val_timestamp) OVER(PARTITION BY cate ORDER BY val_timestamp
+READ	SELECT val_timestamp, cate, avg(val_timestamp) OVER(PARTITION BY cate ORDER BY to_timestamp_ntz(val_timestamp)
+READ	SELECT val_timestamp, cate, avg(val_timestamp) OVER(PARTITION BY cate ORDER BY val_timestamp
+READ	SELECT val_timestamp, cate, avg(val_timestamp) OVER(PARTITION BY cate ORDER BY to_timestamp_ntz(val_timestamp)
+READ	SELECT val_date, cate, avg(val_timestamp) OVER(PARTITION BY cate ORDER BY val_date
+READ	SELECT val_date, cate, avg(val_timestamp) OVER(PARTITION BY cate ORDER BY val_date
+READ	SELECT val, cate, sum(val) OVER(PARTITION BY cate ORDER BY val DESC
+READ	SELECT val, cate, count(val) OVER(PARTITION BY cate
+READ	SELECT val, cate, count(val) OVER(PARTITION BY cate
+READ	SELECT val, cate, count(val) OVER(PARTITION BY cate ORDER BY val, cate
+READ	SELECT val, cate, count(val) OVER(PARTITION BY cate ORDER BY current_timestamp
+READ	SELECT val, cate, count(val) OVER(PARTITION BY cate ORDER BY val
+PARSE_ERROR	SELECT val, cate, count(val) OVER(PARTITION BY cate ORDER BY val
+READ	SELECT val, cate,
+READ	SELECT val, cate, avg(null) OVER(PARTITION BY cate ORDER BY val) FROM testData ORDER BY cate, val
+READ	SELECT val, cate, row_number() OVER(PARTITION BY cate) FROM testData ORDER BY cate, val
+READ	SELECT lead(t) OVER ()
+READ	SELECT val, cate, sum(val) OVER(), avg(val) OVER() FROM testData ORDER BY cate, val
+READ	SELECT val, cate,
+READ	SELECT cate, sum(val) OVER (w)
+READ	SELECT val, cate,
+READ	SELECT val, cate,
+READ	SELECT val, cate,
+READ	SELECT val, cate,
+READ	SELECT val, cate,
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+PARSE_ERROR	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+SESSION	create or replace temp view t1 (p, o) as values (1, 1), (1, 1), (1, 2), (2, 1), (2, 1), (2, 2)
+READ	select * from (select *, dense_rank() over (partition by p order by o) as rnk from t1) where rnk = 1
+READ	SELECT * FROM (SELECT cate, val, rank() OVER(PARTITION BY cate ORDER BY val) as r FROM testData) where r = 1
+READ	SELECT * FROM (SELECT cate, val, rank() OVER(PARTITION BY cate ORDER BY val) as r FROM testData) where r <= 2
+READ	SELECT * FROM (SELECT cate, val, dense_rank() OVER(PARTITION BY cate ORDER BY val) as r FROM testData) where r = 1
+READ	SELECT * FROM (SELECT cate, val, dense_rank() OVER(PARTITION BY cate ORDER BY val) as r FROM testData) where r <= 2
+READ	SELECT * FROM (SELECT cate, val, row_number() OVER(PARTITION BY cate ORDER BY val) as r FROM testData) where r = 1
+READ	SELECT * FROM (SELECT cate, val, row_number() OVER(PARTITION BY cate ORDER BY val) as r FROM testData) where r <= 2
+READ	SELECT *, mean(val_double) over (partition BY val ORDER BY val_date RANGE INTERVAL '5' DAY PRECEDING) AS mean FROM testD
+READ	SELECT *, mean(val_double) over (partition BY val ORDER BY val_date RANGE INTERVAL '1 2:3:4.001' DAY TO SECOND PRECEDING
+READ	SELECT *, mean(val_double) over (partition BY val ORDER BY val_date RANGE DATE '2024-01-01' FOLLOWING) AS mean FROM test

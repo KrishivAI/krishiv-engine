@@ -131,6 +131,7 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         query_start_micros: env.query_start_micros,
         user: env.user.to_string(),
         legacy_statistical_aggregate: env.legacy_statistical_aggregate,
+        map_key_dedup_last_win: env.map_key_dedup_last_win.then_some(true),
     }
 }
 

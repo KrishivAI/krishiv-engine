@@ -31,6 +31,7 @@ mod chars;
 mod codec;
 mod datetime;
 mod hash;
+mod map;
 mod math;
 mod misc;
 mod number;
@@ -54,6 +55,7 @@ use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::KernelCtx;
 use krishiv_kernels::cast::{FixedOffset, TimeZoneRules};
+use krishiv_kernels::map::DedupPolicy;
 
 pub use args::Arg;
 use args::{Inputs, broadcast, internal, unsupported};
@@ -125,6 +127,9 @@ pub struct BindOptions {
     /// `spark.sql.decimalOperations.allowPrecisionLoss`: the result types of
     /// decimal arithmetic (`pmod`, `try_add`, ...).
     pub decimal_precision_loss: bool,
+    /// `spark.sql.mapKeyDedupPolicy`: how the map functions resolve
+    /// duplicate keys.
+    pub map_key_dedup_policy: DedupPolicy,
     /// The session's user (`current_user()`).
     pub user: Arc<str>,
     /// Counts the unseeded random binds of one plan instantiation, in
@@ -145,6 +150,7 @@ impl BindOptions {
             time_zone: Arc::new(FixedOffset(0)),
             query_start_micros: 0,
             decimal_precision_loss: true,
+            map_key_dedup_policy: DedupPolicy::Exception,
             user: Arc::from("unknown"),
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
@@ -175,6 +181,13 @@ impl BindOptions {
     #[must_use]
     pub fn with_decimal_precision_loss(mut self, loss: bool) -> Self {
         self.decimal_precision_loss = loss;
+        self
+    }
+
+    /// With `spark.sql.mapKeyDedupPolicy = policy`.
+    #[must_use]
+    pub const fn with_map_key_dedup_policy(mut self, policy: DedupPolicy) -> Self {
+        self.map_key_dedup_policy = policy;
         self
     }
 
@@ -392,7 +405,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 17] = [
+const FAMILIES: [(&[&str], Binder); 18] = [
     (array::NAMES, array::bind),
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
@@ -400,6 +413,7 @@ const FAMILIES: [(&[&str], Binder); 17] = [
     (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
+    (map::NAMES, map::bind),
     (session::NAMES, session::bind),
     (bitwise::NAMES, bitwise::bind),
     (predicate::NAMES, predicate::bind),
@@ -426,7 +440,8 @@ pub fn scalar_names() -> Vec<&'static str> {
 
 /// Whether the result of the scalar function `name` depends only on its
 /// arguments and `spark.sql.ansi.enabled`: the string (with its character and
-/// encoding families), math, arithmetic and struct families. The datetime, session and
+/// encoding families), math, arithmetic, struct and map families (the map family also reads
+/// `spark.sql.mapKeyDedupPolicy`). The datetime, session and
 /// hash families read the session time zone, the user or the query start, so a
 /// caller that evaluates a call before execution (constant folding) must not
 /// evaluate those.
@@ -439,6 +454,7 @@ pub fn is_argument_pure(name: &str) -> bool {
         codec::NAMES,
         math::NAMES,
         arith::NAMES,
+        map::NAMES,
         r#struct::NAMES,
     ]
     .iter()

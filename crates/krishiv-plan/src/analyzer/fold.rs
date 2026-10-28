@@ -64,6 +64,8 @@ pub(super) struct Conf {
     /// The session time zone as a fixed offset in seconds, when it is one.
     /// UDFs folding over literals see it in their [`InvokeContext`](krishiv_udf_sdk::InvokeContext).
     pub zone: Option<i32>,
+    /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`.
+    pub map_key_dedup_last_win: bool,
     /// The kernels' context: the session's Spark line, whose error classes
     /// and messages the kernels raise.
     pub kernel: KernelCtx,
@@ -74,6 +76,7 @@ impl Conf {
     pub(super) fn new(
         ansi: bool,
         decimal_loss: bool,
+        map_key_dedup_last_win: bool,
         profile: SparkProfile,
         zone: Option<i32>,
     ) -> Self {
@@ -87,6 +90,7 @@ impl Conf {
             ansi,
             decimal_loss,
             zone,
+            map_key_dedup_last_win,
             kernel: KernelCtx::new().with_spark_version(version),
         }
     }
@@ -98,7 +102,7 @@ type Folded = Option<Result<ArrayRef, KrishivError>>;
 
 /// What a folded node's value depends on besides the node: its address
 /// and the settings it was folded under.
-type Key = (usize, bool, bool, SparkVersion, Option<i32>);
+type Key = (usize, bool, bool, bool, SparkVersion, Option<i32>);
 
 /// The values of the expressions folded so far in one resolver pass, by
 /// node address. Folding a call folds its arguments, and `Resolver::expr`
@@ -247,6 +251,7 @@ fn fold_on_stack(
         Arc::as_ptr(e) as usize,
         conf.ansi,
         conf.decimal_loss,
+        conf.map_key_dedup_last_win,
         conf.kernel.spark_version(),
         conf.zone,
     );
@@ -568,10 +573,17 @@ fn registry(
     {
         return None;
     }
+    use krishiv_kernels::map::DedupPolicy;
+    let policy = if conf.map_key_dedup_last_win {
+        DedupPolicy::LastWin
+    } else {
+        DedupPolicy::Exception
+    };
     let opts = BindOptions::new()
         .with_kernel(conf.kernel)
         .with_ansi(conf.ansi)
-        .with_decimal_precision_loss(conf.decimal_loss);
+        .with_decimal_precision_loss(conf.decimal_loss)
+        .with_map_key_dedup_policy(policy);
     let bind: Vec<BindArg> = args.iter().cloned().map(BindArg::Literal).collect();
     let run = bind_scalar(name, &bind, &opts).and_then(|func| {
         let call: Vec<Arg> = args.into_iter().map(Arg::Scalar).collect();
@@ -640,7 +652,7 @@ mod tests {
     fn constant(e: &Expr, ansi: bool) -> Option<Constant> {
         super::constant(
             &Arc::new(e.clone()),
-            Conf::new(ansi, true, SparkProfile::V4_2, None),
+            Conf::new(ansi, true, false, SparkProfile::V4_2, None),
             &mut Memo::default(),
             &BuiltinFunctions::new(),
         )
@@ -1036,7 +1048,7 @@ mod tests {
     fn fold_udf(name: &str, version: u32, deterministic: bool) -> Option<Constant> {
         super::constant(
             &Arc::new(udf(name, version, vec![int(41)], deterministic)),
-            Conf::new(true, true, SparkProfile::V4_2, None),
+            Conf::new(true, true, false, SparkProfile::V4_2, None),
             &mut Memo::default(),
             &TestUdfs::new(),
         )
@@ -1066,7 +1078,7 @@ mod tests {
         assert_eq!(
             super::constant(
                 &Arc::new(udf("test_udf", 2, vec![col], true)),
-                Conf::new(true, true, SparkProfile::V4_2, None),
+                Conf::new(true, true, false, SparkProfile::V4_2, None),
                 &mut Memo::default(),
                 &TestUdfs::new(),
             ),
@@ -1082,7 +1094,7 @@ mod tests {
                     vec![cast_of(lit(Literal::Short(41)), DataType::Integer)],
                     true
                 )),
-                Conf::new(true, true, SparkProfile::V4_2, None),
+                Conf::new(true, true, false, SparkProfile::V4_2, None),
                 &mut Memo::default(),
                 &TestUdfs::new(),
             ),
@@ -1097,7 +1109,7 @@ mod tests {
                     vec![udf("test_udf", 2, vec![int(41)], true)],
                     true
                 )),
-                Conf::new(true, true, SparkProfile::V4_2, None),
+                Conf::new(true, true, false, SparkProfile::V4_2, None),
                 &mut Memo::default(),
                 &TestUdfs::new(),
             ),
@@ -1112,7 +1124,7 @@ mod tests {
                     vec![udf("test_udf_failing", 9, vec![int(41)], true)],
                     true
                 )),
-                Conf::new(true, true, SparkProfile::V4_2, None),
+                Conf::new(true, true, false, SparkProfile::V4_2, None),
                 &mut Memo::default(),
                 &TestUdfs::new(),
             )),
@@ -1200,7 +1212,7 @@ mod tests {
                 },
             ))));
         }
-        let conf = Conf::new(false, true, SparkProfile::V4_2, None);
+        let conf = Conf::new(false, true, false, SparkProfile::V4_2, None);
         let mut memo = Memo::default();
         // 2 * 2^200 wraps to 0 in legacy mode: the value is the kernels'.
         let first = super::constant(&e, conf, &mut memo, &BuiltinFunctions::new());
@@ -1212,7 +1224,7 @@ mod tests {
         );
         assert_eq!(memo.map.len(), depth + 1);
         // Another setting folds under its own entries.
-        let ansi = Conf::new(true, true, SparkProfile::V4_2, None);
+        let ansi = Conf::new(true, true, false, SparkProfile::V4_2, None);
         let _ = super::constant(&e, ansi, &mut memo, &BuiltinFunctions::new());
         assert_eq!(memo.map.len(), 2 * (depth + 1));
     }
@@ -1228,7 +1240,7 @@ mod tests {
         ));
         let class = |profile| match super::constant(
             &rem,
-            Conf::new(true, true, profile, None),
+            Conf::new(true, true, false, profile, None),
             &mut Memo::default(),
             &BuiltinFunctions::new(),
         ) {
@@ -1597,7 +1609,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(2 << 20)
             .spawn(move || {
-                let conf = Conf::new(false, true, SparkProfile::V4_2, None);
+                let conf = Conf::new(false, true, false, SparkProfile::V4_2, None);
                 let mut memo = Memo::default();
                 assert_eq!(
                     super::constant(&e, conf, &mut memo, &BuiltinFunctions::new()),

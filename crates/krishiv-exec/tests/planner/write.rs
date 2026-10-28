@@ -127,6 +127,7 @@ fn query_results_are_written_committed_and_read_back() {
             zone: None,
             query_start_micros: 0,
             user: Arc::from("u"),
+            map_key_dedup_last_win: false,
         },
     );
     let worker = WorkerContext::new(Arc::new(MemoryTables::new())).with_write_sink(other);

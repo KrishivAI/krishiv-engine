@@ -8,6 +8,7 @@ use arrow_array::RecordBatch;
 use arrow_schema::DataType as ArrowType;
 use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar};
 use krishiv_kernels::cast::FixedOffset;
+use krishiv_kernels::map::DedupPolicy;
 use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
 use krishiv_udf_sdk::ScalarUdf;
 
@@ -106,6 +107,11 @@ pub(super) fn compile(
         .with_kernel(input.env.kernels)
         .with_time_zone(Arc::new(zone))
         .with_query_start(input.env.query_start_micros)
+        .with_map_key_dedup_policy(if input.env.map_key_dedup_last_win {
+            DedupPolicy::LastWin
+        } else {
+            DedupPolicy::Exception
+        })
         .with_user(Arc::clone(&input.env.user))
         .with_seed_salt(Arc::clone(&input.env.seed_salt));
     let function = bind_scalar(name, &bind_args, &opts).map_err(|err| {

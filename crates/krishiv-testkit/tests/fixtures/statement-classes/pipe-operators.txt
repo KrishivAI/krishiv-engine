@@ -1,0 +1,317 @@
+DDL	drop table if exists t
+DDL	create table t(x int, y string) using csv
+WRITE	insert into t values (0, 'abc'), (1, 'def')
+DDL	drop table if exists other
+DDL	create table other(a int, b int) using json
+WRITE	insert into other values (1, 1), (1, 2), (2, 4)
+DDL	drop table if exists st
+DDL	create table st(x int, col struct<i1:int, i2:int>) using parquet
+WRITE	insert into st values (1, (2, 3))
+SESSION	create temporary view courseSales as select * from values
+SESSION	create temporary view courseEarnings as select * from values
+SESSION	create temporary view courseEarningsAndSales as select * from values
+SESSION	create temporary view yearsWithComplexTypes as select * from values
+SESSION	create temporary view join_test_t1 as select * from values (1) as grouping(a)
+SESSION	create temporary view join_test_t2 as select * from values (1) as grouping(a)
+SESSION	create temporary view join_test_t3 as select * from values (1) as grouping(a)
+SESSION	create temporary view join_test_empty_table as select a from join_test_t2 where false
+SESSION	create temporary view lateral_test_t1(c1, c2)
+SESSION	create temporary view lateral_test_t2(c1, c2)
+SESSION	create temporary view lateral_test_t3(c1, c2)
+SESSION	create temporary view lateral_test_t4(c1, c2)
+SESSION	create temporary view natural_join_test_t1 as select * from values
+SESSION	create temporary view natural_join_test_t2 as select * from values
+SESSION	create temporary view natural_join_test_t3 as select * from values
+SESSION	create temporary view windowTestData as select * from values
+READ	from t
+READ	table t
+READ	from t
+READ	from t as t_alias
+READ	from t as t_alias
+READ	from t, other
+READ	from t join other on (t.x = other.a)
+READ	from t lateral view explode(array(100, 101)) as ly
+READ	from st
+READ	from st as st_alias
+READ	from values (0), (1) tab(col)
+PARSE_ERROR	from t
+READ	table t
+READ	table t
+READ	table t
+READ	values (0), (1) tab(col)
+READ	(select * from t union all select * from t)
+READ	(table t
+READ	(select col from st)
+READ	table st
+READ	table t
+READ	select (values (0) tab(col) |> select col) as result
+READ	table t
+READ	table t
+READ	table t
+READ	select 1 x, 2 y, 3 z
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	select col from st
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+PARSE_ERROR	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table other
+READ	table t
+READ	table t
+READ	table t
+READ	select col from st
+READ	table t
+READ	table t
+READ	table t
+READ	values (0), (1) lhs(a)
+READ	table t
+PARSE_ERROR	table t
+PARSE_ERROR	select col from st
+READ	table t
+READ	select 1 as x, 2 as y, 3 as z
+READ	select 1 as x, 2 as y, 3 as z
+READ	select x from t
+READ	table t
+READ	table st
+READ	table st
+READ	table t
+READ	select 1 as x, named_struct('x', 2, 'y', 3) as col
+READ	select 1 as x, named_struct('middle', named_struct('inner', 2)) as outer
+READ	table t
+READ	table st
+READ	table st
+READ	select 1 as x, 2 as y, 3 as z
+READ	table t
+READ	select 1 as x, 2 as y
+READ	table t
+READ	table t
+READ	table t
+PARSE_ERROR	table t
+PARSE_ERROR	table t
+PARSE_ERROR	table t
+PARSE_ERROR	table t
+PARSE_ERROR	table t
+READ	table t
+READ	table t
+READ	table t
+READ	(select x, sum(length(y)) as sum_len from t group by x)
+READ	table t
+READ	table t
+READ	(select col from st)
+READ	table st
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+PARSE_ERROR	table t
+READ	select * from t where sum(x) over (partition by y) = 1
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	(select x, sum(length(y)) as sum_len from t group by x)
+READ	table courseSales
+READ	table courseSales
+READ	select course, `year`, y, a
+READ	select earnings, `year`, s
+READ	table courseEarnings
+READ	table courseEarnings
+READ	table courseEarningsAndSales
+READ	table courseSales
+READ	table courseSales
+PARSE_ERROR	table courseSales
+PARSE_ERROR	table courseSales
+PARSE_ERROR	table courseSales
+PARSE_ERROR	table courseSales
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+PARSE_ERROR	table t
+PARSE_ERROR	table t
+READ	table t
+READ	table t
+PARSE_ERROR	table t
+PARSE_ERROR	table t
+PARSE_ERROR	table t
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table join_test_t1
+READ	select * from join_test_t1 where true
+READ	select 1 as x, 2 as y
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table join_test_t1
+READ	table lateral_test_t1
+READ	table lateral_test_t1
+READ	table lateral_test_t1
+READ	table lateral_test_t1
+READ	table lateral_test_t1
+READ	table lateral_test_t1
+READ	table lateral_test_t1
+READ	table lateral_test_t1
+READ	table lateral_test_t1
+READ	table natural_join_test_t1
+READ	table natural_join_test_t1
+READ	table natural_join_test_t1
+PARSE_ERROR	table join_test_t1
+READ	table join_test_t1
+PARSE_ERROR	table join_test_t1 jt
+READ	table t
+READ	table t
+READ	(select * from t)
+READ	(select * from t)
+READ	values (0, 'abc') tab(x, y)
+READ	values (2, 'xyz') tab(x, y)
+READ	values (2, 'xyz') tab(x, y)
+READ	(select * from t)
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	(select * from t)
+READ	values (0, 'abc') tab(x, y)
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+READ	table t
+PARSE_ERROR	table t
+READ	table t
+READ	table t
+PARSE_ERROR	table t
+PARSE_ERROR	table t
+READ	table other
+READ	table other
+READ	table other
+READ	select 1 as x, 2 as y
+READ	select 3 as x, 4 as y
+READ	values (3, 4) as tab(x, y)
+READ	values (3, 4), (5, 4) as tab(x, y)
+READ	select 3 as x, 4 as y
+READ	select 1 as `1`, 2 as `2`
+READ	select 3 as x, 4 as y
+READ	select 3 as x, 4 as y, 5 as z
+READ	select 3 as x, 4 as y, 5 as z
+READ	select 3 as x, 4 as y, 5 as z
+READ	select 3 as x, 4 as y, 5 as z
+READ	select 3 as x, 4 as y, 5 as z
+READ	table t
+READ	table t
+READ	table other
+READ	select 1 as x, 2 as y, 3 as z
+READ	select 1 as x, 2 as y, 3 as z
+READ	select 1 as x, 2 as y, named_struct('z', 3) as st
+READ	select 1 x, 2 y, 3 z
+READ	select 1 x, 3 z
+READ	table other
+READ	table other
+PARSE_ERROR	select 3 as x, 4 as y
+PARSE_ERROR	table courseSales
+PARSE_ERROR	table courseSales
+PARSE_ERROR	table courseSales
+PARSE_ERROR	table courseSales
+PARSE_ERROR	table courseSales
+PARSE_ERROR	select 1 as x, 2 as y
+READ	table other
+PARSE_ERROR	table other
+READ	table other
+PARSE_ERROR	table other
+PARSE_ERROR	table other
+READ	select 1 x, 2 y, 3 z
+READ	table windowTestData
+READ	table windowTestData
+READ	table windowTestData
+READ	table windowTestData
+READ	table windowTestData
+READ	table windowTestData
+READ	(select col from st)
+READ	table st
+READ	table st
+READ	table windowTestData
+READ	table windowTestData
+READ	table windowTestData
+READ	table windowTestData
+READ	table windowTestData
+READ	with customer_total_return as
+READ	with customer_total_return as
+READ	with wscs as
+READ	with wscs as
+READ	select
+READ	table date_dim
+READ	select
+READ	table web_sales
+READ	select
+READ	from store_sales ss1
+READ	with web_v1 as (
+READ	with web_v1 as (
+READ	table t
+READ	table t
+READ	table t
+READ	table windowTestData
+READ	from store_sales ss1
+READ	table t
+READ	from t
+SESSION	declare or replace extend int = 5
+READ	select 1 | extend y
+SESSION	set spark.sql.parser.singleCharacterPipeOperator.enabled=false
+READ	select 1 | extend y
+SESSION	set spark.sql.parser.singleCharacterPipeOperator.enabled=true
+SESSION	drop temporary variable extend
+SESSION	set spark.sql.parser.singleCharacterPipeOperator.enabled=false
+READ	table t
+PARSE_ERROR	table t
+READ	select 1 | 2 as result
+SESSION	set spark.sql.parser.singleCharacterPipeOperator.enabled=true
+READ	table t
+READ	table other
+READ	table other
+READ	table other
+READ	table other
+READ	table other
+READ	select 1 as x, 2 as y, 3 as z
+READ	table other
+READ	table other
+READ	select 1 as x, 2 as y
+READ	table other
+READ	table other
+READ	table other
+READ	table other
+DDL	drop table t
+DDL	drop table other
+DDL	drop table st

@@ -1,0 +1,13 @@
+READ	SELECT '' AS two, unique1, unique2, stringu1
+READ	SELECT '' AS five, unique1, unique2, stringu1
+READ	SELECT '' AS two, unique1, unique2, stringu1
+READ	SELECT '' AS three, unique1, unique2, stringu1
+READ	SELECT '' AS zero, unique1, unique2, stringu1
+READ	SELECT '' AS eleven, unique1, unique2, stringu1
+READ	SELECT '' AS ten, unique1, unique2, stringu1
+READ	SELECT '' AS five, unique1, unique2, stringu1
+SESSION	CREATE OR REPLACE TEMPORARY VIEW INT8_TBL AS SELECT * FROM
+READ	select * from int8_tbl limit (case when random() < 0.5 then bigint(null) end)
+READ	select * from int8_tbl offset (case when random() < 0.5 then bigint(null) end)
+SESSION	DROP VIEW INT8_TBL
+READ	select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2

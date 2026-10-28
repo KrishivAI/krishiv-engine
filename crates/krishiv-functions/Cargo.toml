@@ -36,3 +36,6 @@ ignored = ["regex-automata", "regex-syntax"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+arrow-buffer.workspace = true

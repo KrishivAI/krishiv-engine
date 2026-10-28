@@ -1,0 +1,197 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW INT2_TBL(f1) AS VALUES
+SESSION	CREATE OR REPLACE TEMPORARY VIEW INT4_TBL AS SELECT * FROM
+SESSION	CREATE OR REPLACE TEMPORARY VIEW INT8_TBL AS SELECT * FROM
+SESSION	CREATE OR REPLACE TEMPORARY VIEW FLOAT8_TBL AS SELECT * FROM
+SESSION	CREATE OR REPLACE TEMPORARY VIEW TEXT_TBL AS SELECT * FROM
+SESSION	CREATE OR REPLACE TEMPORARY VIEW tenk2 AS SELECT * FROM tenk1
+DDL	CREATE TABLE J1_TBL (
+DDL	CREATE TABLE J2_TBL (
+WRITE	INSERT INTO J1_TBL VALUES (1, 4, 'one')
+WRITE	INSERT INTO J1_TBL VALUES (2, 3, 'two')
+WRITE	INSERT INTO J1_TBL VALUES (3, 2, 'three')
+WRITE	INSERT INTO J1_TBL VALUES (4, 1, 'four')
+WRITE	INSERT INTO J1_TBL VALUES (5, 0, 'five')
+WRITE	INSERT INTO J1_TBL VALUES (6, 6, 'six')
+WRITE	INSERT INTO J1_TBL VALUES (7, 7, 'seven')
+WRITE	INSERT INTO J1_TBL VALUES (8, 8, 'eight')
+WRITE	INSERT INTO J1_TBL VALUES (0, NULL, 'zero')
+WRITE	INSERT INTO J1_TBL VALUES (NULL, NULL, 'null')
+WRITE	INSERT INTO J1_TBL VALUES (NULL, 0, 'zero')
+WRITE	INSERT INTO J2_TBL VALUES (1, -1)
+WRITE	INSERT INTO J2_TBL VALUES (2, 2)
+WRITE	INSERT INTO J2_TBL VALUES (3, -3)
+WRITE	INSERT INTO J2_TBL VALUES (2, 4)
+WRITE	INSERT INTO J2_TBL VALUES (5, -5)
+WRITE	INSERT INTO J2_TBL VALUES (5, -5)
+WRITE	INSERT INTO J2_TBL VALUES (0, NULL)
+WRITE	INSERT INTO J2_TBL VALUES (NULL, NULL)
+WRITE	INSERT INTO J2_TBL VALUES (NULL, 0)
+READ	SELECT udf('') AS `xxx`, udf(i), udf(j), udf(t)
+READ	SELECT udf(udf('')) AS `xxx`, udf(udf(i)), udf(j), udf(t)
+READ	SELECT udf('') AS `xxx`, a, udf(udf(b)), c
+READ	SELECT udf('') AS `xxx`, udf(a), udf(b), udf(udf(c))
+READ	SELECT udf('') AS `xxx`, udf(a), b, udf(c), udf(d), e
+READ	SELECT udf('') AS `xxx`, *
+READ	SELECT udf('') AS `xxx`, udf(i) AS i, udf(k), udf(t) AS t
+READ	SELECT udf('') AS `xxx`, udf(t1.i) AS i, udf(k), udf(t)
+READ	SELECT udf(udf('')) AS `xxx`, udf(udf(ii)) AS ii, udf(udf(tt)) AS tt, udf(udf(kk))
+READ	SELECT udf('') AS `xxx`, udf(udf(j1_tbl.i)), udf(j), udf(t), udf(a.i), udf(a.k), udf(b.i),  udf(b.k)
+READ	SELECT udf('') AS `xxx`, udf(i) AS i, udf(j), udf(t) AS t, udf(k)
+READ	SELECT udf(udf('')) AS `xxx`, udf(i), udf(j) AS j, udf(t), udf(k) AS k
+READ	SELECT udf('') AS `xxx`, *
+READ	SELECT udf(udf('')) AS `xxx`, udf(i), udf(j), udf(t), udf(k)
+READ	SELECT udf('') AS `xxx`, udf(udf(udf(a))) AS a, udf(b), udf(c), udf(d)
+READ	SELECT udf('') AS `xxx`, udf(udf(a)), udf(udf(b)), udf(udf(c)) AS c, udf(udf(udf(d))) AS d
+READ	SELECT udf('') AS `xxx`, udf(J1_TBL.i), udf(udf(J1_TBL.j)), udf(J1_TBL.t), udf(J2_TBL.i), udf(J2_TBL.k)
+READ	SELECT udf('') AS `xxx`, udf(udf(J1_TBL.i)), udf(udf(J1_TBL.j)), udf(udf(J1_TBL.t)), J2_TBL.i, J2_TBL.k
+READ	SELECT udf('') AS `xxx`, udf(J1_TBL.i), udf(J1_TBL.j), udf(J1_TBL.t), udf(J2_TBL.i), udf(J2_TBL.k)
+READ	SELECT udf(udf('')) AS `xxx`, udf(i), udf(j), udf(t), udf(k)
+READ	SELECT udf('') AS `xxx`, udf(i), udf(j), udf(t), udf(k)
+READ	SELECT udf('') AS `xxx`, udf(udf(i)), udf(j), udf(t), udf(k)
+READ	SELECT udf('') AS `xxx`, udf(i), udf(udf(j)), udf(t), udf(k)
+READ	SELECT udf('') AS `xxx`, udf(i), udf(j), udf(udf(t)), udf(k)
+READ	SELECT udf('') AS `xxx`, udf(i), udf(j), t, udf(udf(k))
+READ	SELECT udf('') AS `xxx`, udf(i), udf(j), udf(t), udf(udf(k))
+READ	SELECT udf('') AS `xxx`, udf(i), udf(j), udf(t), udf(k)
+DDL	CREATE TABLE t1 (name STRING, n INTEGER) USING parquet
+DDL	CREATE TABLE t2 (name STRING, n INTEGER) USING parquet
+DDL	CREATE TABLE t3 (name STRING, n INTEGER) USING parquet
+WRITE	INSERT INTO t1 VALUES ( 'bb', 11 )
+WRITE	INSERT INTO t2 VALUES ( 'bb', 12 )
+WRITE	INSERT INTO t2 VALUES ( 'cc', 22 )
+WRITE	INSERT INTO t2 VALUES ( 'ee', 42 )
+WRITE	INSERT INTO t3 VALUES ( 'bb', 13 )
+WRITE	INSERT INTO t3 VALUES ( 'cc', 23 )
+WRITE	INSERT INTO t3 VALUES ( 'dd', 33 )
+READ	SELECT * FROM t1 FULL JOIN t2 USING (name) FULL JOIN t3 USING (name)
+READ	SELECT * FROM
+READ	SELECT * FROM
+READ	SELECT udf(name), udf(udf(s2.n)), udf(s3.n) FROM
+READ	SELECT * FROM
+READ	SELECT * FROM
+READ	SELECT * FROM
+READ	SELECT * FROM
+READ	SELECT * FROM
+READ	SELECT name, udf(udf(s1_n)), udf(s2_n), udf(s3_n) FROM
+READ	SELECT * FROM
+READ	SELECT s1.name, udf(s1_n), s2.name, udf(udf(s2_n)) FROM
+SESSION	create or replace temporary view x as select * from
+SESSION	create or replace temporary view y as select * from
+READ	select udf(udf(x1)), udf(x2) from x
+READ	select udf(y1), udf(udf(y2)) from y
+READ	select * from x left join y on (udf(x1) = udf(udf(y1)) and udf(x2) is not null)
+READ	select * from x left join y on (udf(udf(x1)) = udf(y1) and udf(y2) is not null)
+READ	select * from (x left join y on (udf(x1) = udf(udf(y1)))) left join x xx(xx1,xx2)
+READ	select * from (x left join y on (udf(x1) = udf(y1))) left join x xx(xx1,xx2)
+READ	select * from (x left join y on (x1 = udf(y1))) left join x xx(xx1,xx2)
+READ	select * from (x left join y on (udf(x1) = y1)) left join x xx(xx1,xx2)
+READ	select * from (x left join y on (udf(udf(x1)) = udf(udf(y1)))) left join x xx(xx1,xx2)
+READ	select * from (x left join y on (udf(x1) = udf(y1))) left join x xx(xx1,xx2)
+READ	select * from (x left join y on (udf(x1) = udf(y1))) left join x xx(xx1,xx2)
+READ	select udf(udf(count(*))) from tenk1 a where udf(udf(unique1)) in
+READ	select udf(count(*)) from tenk1 x where
+READ	select udf(udf(count(*))) from tenk1 x where
+READ	select * from int8_tbl i1 left join (int8_tbl i2 join
+READ	select udf(count(*))
+READ	select udf(a.f1), udf(b.f1), udf(t.thousand), udf(t.tenthous) from
+READ	select * from
+READ	select udf(count(*)) from
+DDL	DROP TABLE t1
+DDL	DROP TABLE t2
+DDL	DROP TABLE t3
+DDL	DROP TABLE J1_TBL
+DDL	DROP TABLE J2_TBL
+SESSION	create or replace temporary view tt1 as select * from
+SESSION	create or replace temporary view tt2 as select * from
+READ	select tt1.*, tt2.* from tt1 left join tt2 on udf(udf(tt1.joincol)) = udf(tt2.joincol)
+READ	select tt1.*, tt2.* from tt2 right join tt1 on udf(udf(tt1.joincol)) = udf(udf(tt2.joincol))
+READ	select udf(count(*)) from tenk1 a, tenk1 b
+DDL	DROP TABLE IF EXISTS tt3
+DDL	CREATE TABLE tt3(f1 int, f2 string) USING parquet
+WRITE	INSERT INTO tt3 SELECT x.id, repeat('xyzzy', 100) FROM range(1,10001) x
+DDL	DROP TABLE IF EXISTS tt4
+DDL	CREATE TABLE tt4(f1 int) USING parquet
+WRITE	INSERT INTO tt4 VALUES (0),(1),(9999)
+READ	SELECT udf(udf(a.f1)) as f1
+SESSION	create or replace temporary view tt5 as select * from
+SESSION	create or replace temporary view tt6 as select * from
+READ	select * from tt5,tt6 where udf(tt5.f1) = udf(tt6.f1) and udf(tt5.f1) = udf(udf(tt5.f2) - udf(tt6.f2))
+SESSION	create or replace temporary view xx as select * from
+SESSION	create or replace temporary view yy as select * from
+READ	select udf(udf(yy.pkyy)) as yy_pkyy, udf(yy.pkxx) as yy_pkxx, udf(yya.pkyy) as yya_pkyy,
+SESSION	create or replace temporary view zt1 as select * from
+SESSION	create or replace temporary view zt2 as select * from
+SESSION	create or replace temporary view zt3(f3 int) using parquet
+READ	select * from
+SESSION	create temp view zv1 as select *,'dummy' AS junk from zt1
+READ	select * from
+READ	select udf(a.unique2), udf(a.ten), udf(b.tenthous), udf(b.unique2), udf(b.hundred)
+SESSION	create or replace temporary view a (i integer) using parquet
+SESSION	create or replace temporary view b (x integer, y integer) using parquet
+READ	select * from a left join b on udf(i) = x and i = udf(y) and udf(x) = udf(i)
+READ	select udf(t1.q2), udf(count(t2.q1, t2.q2))
+READ	select udf(udf(t1.q2)), udf(count(t2.q1, t2.q2))
+READ	select udf(t1.q2) as q2, udf(udf(count(t2.q1, t2.q2)))
+SESSION	create or replace temporary view a as select * from
+SESSION	create or replace temporary view b as select * from
+SESSION	create or replace temporary view c as select * from
+READ	select udf(c.name), udf(ss.code), udf(ss.b_cnt), udf(ss.const)
+READ	SELECT * FROM
+READ	SELECT * FROM
+READ	SELECT udf(qq), udf(udf(unique1))
+SESSION	create or replace temporary view nt1 as select * from
+SESSION	create or replace temporary view nt2 as select * from
+SESSION	create or replace temporary view nt3 as select * from
+READ	select udf(nt3.id)
+READ	select * from int4_tbl a full join int4_tbl b on true
+READ	select * from int4_tbl a full join int4_tbl b on false
+READ	select udf(count(*)) from
+READ	select udf(b.unique1) from
+READ	select * from
+READ	select udf(q1), udf(unique2), udf(thousand), udf(hundred)
+READ	select udf(f1), udf(unique2), case when udf(udf(unique2)) is null then udf(f1) else 0 end
+READ	select udf(a.unique1), udf(b.unique1), udf(c.unique1), udf(coalesce(b.twothousand, a.twothousand))
+READ	select * from
+READ	select * from
+READ	select udf(a.q2), udf(b.q1)
+SESSION	create or replace temporary view parent as select * from
+SESSION	create or replace temporary view child as select * from
+READ	select p.* from parent p left join child c on (udf(p.k) = udf(c.k))
+READ	select p.*, linked from parent p
+READ	select p.* from
+READ	select p.* from
+SESSION	create or replace temporary view a as select * from
+SESSION	create or replace temporary view b as select * from
+READ	SELECT * FROM b LEFT JOIN a ON (udf(b.a_id) = udf(a.id)) WHERE (udf(udf(a.id)) IS NULL OR udf(a.id) > 0)
+READ	SELECT b.* FROM b LEFT JOIN a ON (udf(b.a_id) = udf(a.id)) WHERE (udf(a.id) IS NULL OR udf(udf(a.id)) > 0)
+SESSION	create or replace temporary view innertab as select * from
+READ	SELECT * FROM
+READ	select * from
+READ	select * from
+READ	select * from
+READ	select udf(t1.uunique1) from
+READ	select udf(udf(t2.uunique1)) from
+READ	select udf(uunique1) from
+READ	select unique2, x.*
+READ	select unique2, x.*
+READ	select unique2, x.*
+READ	select * from (select f1/2 as x from int4_tbl) ss1 join int4_tbl i4 on x = f1,
+READ	select * from ((select f1/2 as x from int4_tbl) ss1 join int4_tbl i4 on x = f1) j,
+READ	select * from
+READ	select x.* from
+READ	select * from
+READ	select * from
+READ	select * from int4_tbl i left join
+READ	select * from
+READ	select udf(udf(f1,g)) from int4_tbl a, (select udf(udf(f1)) as g) ss
+READ	select udf(f1,g) from int4_tbl a, (select a.f1 as g) ss
+READ	select udf(udf(f1,g)) from int4_tbl a cross join (select udf(f1) as g) ss
+READ	select udf(f1,g) from int4_tbl a cross join (select udf(udf(a.f1)) as g) ss
+DDL	CREATE TABLE j1 (id1 int, id2 int) USING parquet
+DDL	CREATE TABLE j2 (id1 int, id2 int) USING parquet
+WRITE	INSERT INTO j1 values(1,1),(1,2)
+WRITE	INSERT INTO j2 values(1,1)
+WRITE	INSERT INTO j2 values(1,2)
+READ	select * from j1
+DDL	drop table j1
+DDL	drop table j2

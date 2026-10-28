@@ -307,9 +307,18 @@ pub enum Securable {
     View(TableIdent),
     /// A catalog function.
     Function(Vec<String>),
-    /// Files read by path (`volume`/path grant); a URL's credentials stay
+    /// Files read or written by path (`volume`/path grant), in the
+    /// qualified form the read or write uses; a URL's credentials stay
     /// typed.
     Path(OptionValue),
+    /// A namespace (database or schema): the catalog name, then the
+    /// namespace parts. Just the catalog name stands for the catalog
+    /// itself (where namespaces are created).
+    Namespace(Vec<String>),
+    /// A system object: `system.*` tables (`Monitor` reads other
+    /// principals' rows), or `cluster` for the cluster-scope statements
+    /// of the `ADMIN` class.
+    System(String),
 }
 
 impl fmt::Display for Securable {
@@ -319,6 +328,8 @@ impl fmt::Display for Securable {
             Self::View(t) => write!(f, "view {t}"),
             Self::Function(n) => write!(f, "function {}", quoted(n)),
             Self::Path(p) => write!(f, "path '{p}'"),
+            Self::Namespace(n) => write!(f, "namespace {}", quoted(n)),
+            Self::System(n) => write!(f, "system {}", quoted(std::slice::from_ref(n))),
         }
     }
 }
@@ -329,12 +340,35 @@ impl fmt::Display for Securable {
 pub enum Privilege {
     /// Read rows.
     Select,
+    /// Insert, overwrite, update or delete rows; write files under a path.
+    Modify,
+    /// Create an object in a namespace or catalog, or files at a new path.
+    Create,
+    /// Drop (or replace) the object.
+    Drop,
+    /// Read other principals' rows in `system.*` tables, and run the
+    /// cluster-scope statements of the `ADMIN` class.
+    Monitor,
+}
+
+impl Privilege {
+    /// Whether the privilege changes data or objects (`Modify`, `Create`,
+    /// `Drop`): a principal whose reads of the securable are filtered is
+    /// never granted one (see [`super::authorize`]).
+    #[must_use]
+    pub const fn changes(self) -> bool {
+        matches!(self, Self::Modify | Self::Create | Self::Drop)
+    }
 }
 
 impl fmt::Display for Privilege {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Select => "SELECT",
+            Self::Modify => "MODIFY",
+            Self::Create => "CREATE",
+            Self::Drop => "DROP",
+            Self::Monitor => "MONITOR",
         })
     }
 }
@@ -369,9 +403,10 @@ pub enum AccessDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PolicyVersion(pub u64);
 
-/// The access-policy hook (ADR 0036 R2): called once per securable a query
-/// reads, with the query's principal, before the resolver sees any of its
-/// metadata. Every error and every denial fails the query.
+/// The access-policy hook (ADR 0036 R2): called once per securable and
+/// privilege a statement uses, with the session's principal, before the
+/// resolver sees any of its metadata and before any side effect. Every
+/// error and every denial fails the statement (see [`super::authorize`]).
 pub trait AccessPolicy: Send + Sync {
     /// The policy version.
     fn version(&self) -> PolicyVersion;
@@ -400,6 +435,28 @@ impl AccessPolicy for AllowAll {
         _: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
         Box::pin(std::future::ready(Ok(AccessDecision::Allow)))
+    }
+}
+
+/// A policy that denies everything (tests, and a closed default to build
+/// grants on).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DenyAll;
+
+impl AccessPolicy for DenyAll {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(0)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        _: &'a Securable,
+        _: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        Box::pin(std::future::ready(Ok(AccessDecision::Deny {
+            reason: "deny-all policy".to_owned(),
+        })))
     }
 }
 
