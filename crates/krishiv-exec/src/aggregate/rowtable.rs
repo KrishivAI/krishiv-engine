@@ -70,19 +70,18 @@
 //! aggregate never pays the per-partition fold. When it widens is a cost
 //! choice between that fold (a gather of the argument columns per touched
 //! partition, every batch) and the copy (every row of the table, once):
-//! - while the input is folded, when after [`ADAPT_ROWS`] input rows at
-//!   least half of them have distinct keys: the table grows with its
-//!   input, so a late copy would cost about a fold of every row anyway,
-//!   and more memory at once;
+//! - while the input is folded, when its input keeps making new rows
+//!   (nearly all rows so far, or a quarter of the rows since a settled
+//!   fixed index last adapted): the table grows with its input, and a
+//!   late copy costs several times the fold per row it copies;
 //! - otherwise when its input ends (`combine`, on each driver in
 //!   parallel): most rows find their group, so the fold would be paid on
 //!   every row for a copy of few groups.
 //!
-//! Profiled on TPC-DS SF10 at eight threads: q22 (a `ROLLUP` folding 132.6M
-//! expanded rows into 204K groups, few rows new) ran in 13.7 s widening at
-//! 32K groups and 11.1 s widening at the end (the columnar path: 9.6 s);
-//! q39 (6.1M groups from 26.5M rows, most rows new) ran in 7.6 s widening
-//! early and 9-11 s widening at the end, a copy of every row.
+//! Measured on TPC-DS SF10 at eight threads: q22 (a `ROLLUP` of 132.6M
+//! expanded rows into 204K groups; a driver's table ends at 1.8M rows from
+//! 66M input rows) is faster widening at the end; q39, q65, q67 and q75
+//! (a quarter to all input rows new) are faster widening early.
 //! A table that cannot reserve the copy stays narrow (the final phase asks
 //! again). One thread never widens (nothing merges in parallel).
 //!
@@ -255,7 +254,24 @@ struct Adapt {
     /// Rows pushed (groups created) so far.
     pushed: usize,
     next: usize,
+    /// `rows` and `pushed` when the current interval started.
+    window: (usize, usize),
+    /// At the last adaptation the index was settled (it did not grow) and
+    /// at least [`EARLY_RATE`] of the interval's rows were pushed: see
+    /// [`RowTable::wants_widen_early`].
+    early: bool,
 }
+
+/// Share of input rows that must make new rows, once a fixed index has
+/// settled, for a table to widen while its input is still folded. The
+/// late copy costs about 7x the early per-row fold per row it copies
+/// (TPC-DS SF10 profiles: a widen copies about 5M rows a second per
+/// driver; the per-partition fold adds about 30 ns per input row), so
+/// early wins above about 1/7 of rows new; a quarter leaves a margin.
+const EARLY_RATE: f64 = 0.25;
+/// Share of input rows that made new rows from which a table widens as
+/// soon as it is due: nearly every row is new (no adaptation needed).
+const ALL_NEW: f64 = 0.9;
 
 /// A batch prepared for [`RowTable::apply`].
 pub(crate) struct RowPrepared {
@@ -395,6 +411,8 @@ impl RowTable {
                 rows: 0,
                 pushed: 0,
                 next: ADAPT_ROWS,
+                window: (0, 0),
+                early: false,
             }),
             groups: 0,
             rows_in: 0,
@@ -432,21 +450,17 @@ impl RowTable {
     }
 
     /// Whether the table is due to widen while its input is still being
-    /// folded ([`wants_widen`](Self::wants_widen), and after
-    /// [`ADAPT_ROWS`] input rows at least half of them have distinct keys):
-    /// see the module's width docs. Fewer rows say little (the first pass
-    /// over a key column is all new keys), and a fixed index counts its
-    /// keys with the input sample's sketch, not its rows: a full index that
-    /// is cleared makes rows of keys it has seen.
+    /// folded ([`wants_widen`](Self::wants_widen), and its input keeps
+    /// making new rows): nearly every input row so far made a new row
+    /// ([`ALL_NEW`]), or, at the last adaptation of a settled fixed index,
+    /// at least [`EARLY_RATE`] of the interval's rows did. While a fixed
+    /// index still grows, its rows overstate the keys (a cleared index
+    /// makes new rows of keys it has seen), so it does not decide then.
+    /// See the module's width docs.
     pub(crate) fn wants_widen_early(&self) -> bool {
         #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
-        let (groups, rows) = (self.groups as f64, self.rows_in as f64);
-        // The sample is 1/8 of the hashes.
-        let distinct = self
-            .adapt
-            .as_ref()
-            .map_or(groups, |a| a.sketch.estimate() * 8.0);
-        self.wants_widen() && self.rows_in >= ADAPT_ROWS && 2.0 * distinct >= rows
+        let all_new = self.groups as f64 >= ALL_NEW * self.rows_in as f64;
+        self.wants_widen() && (all_new || self.adapt.as_ref().is_some_and(|a| a.early))
     }
 
     /// Spreads the rows (with their long key bytes) and states over
@@ -855,10 +869,15 @@ impl RowTable {
             self.unique &= self.groups == 0;
             self.index = HashTable::new();
         }
+        let grew = mode != self.mode && mode != Mode::Append;
         self.mode = mode;
         if let Some(a) = self.adapt.as_mut()
             && a.rows >= a.next
         {
+            #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
+            let rate = (a.pushed - a.window.1) as f64 / (a.rows - a.window.0).max(1) as f64;
+            a.early = !grew && rate >= EARLY_RATE;
+            a.window = (a.rows, a.pushed);
             a.next = a.rows + ADAPT_ROWS;
         }
     }
