@@ -398,9 +398,7 @@ fn builtin(
             let hi = args.pop().ok_or_else(arity)?;
             let lo = args.pop().ok_or_else(arity)?;
             let v = args.pop().ok_or_else(arity)?;
-            let ge = logic::compare(Builtin::GtEq, Arc::clone(&v), lo, env)?;
-            let le = logic::compare(Builtin::LtEq, v, hi, env)?;
-            logic::and_or(true, ge, le)
+            cond::between(v, lo, hi, env)?
         }
         (Builtin::Like, 2 | 3) => strings::like(args)?,
         // `rlike(a, b)` is Spark's `RLike(a, b)`: the `regexp_like` kernel

@@ -264,6 +264,11 @@ fn run_budgets_precheck(root: &Path, base: &str) -> Result<(), String> {
 /// each main commit is measured once.
 fn run_budgets_cache_main(root: &Path) -> Result<(), String> {
     let sha = budgets::head_sha(root)?;
+    if !budgets::working_tree_clean(root)? {
+        return Err(format!(
+            "cannot cache the main measurement of {sha}: the working tree has uncommitted changes; commit or stash them before `--cache-main`"
+        ));
+    }
     let path = budgets::main_baseline_path(&cargo_target_dir(root)?, &sha)
         .ok_or_else(|| format!("unsafe commit id {sha:?}"))?;
     let (now, _) = measure_budgets(root, false)?;

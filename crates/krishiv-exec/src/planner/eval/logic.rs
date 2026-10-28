@@ -629,19 +629,20 @@ mod tests {
             index: 1,
             data_type: ArrowType::Utf8View,
         });
-        for (op, want) in [
-            (Builtin::Eq, true),
-            (Builtin::EqNullSafe, true),
-            (Builtin::Lt, false),
-            (Builtin::LtEq, true),
-            (Builtin::Gt, false),
-            (Builtin::GtEq, true),
+        for (op, want, row1) in [
+            (Builtin::Eq, true, None),
+            (Builtin::EqNullSafe, true, Some(false)),
+            (Builtin::Lt, false, None),
+            (Builtin::LtEq, true, None),
+            (Builtin::Gt, false, None),
+            (Builtin::GtEq, true, None),
         ] {
             let e = compare(op, Arc::clone(&utf8), Arc::clone(&view), &env).unwrap();
             let got = e.eval(&batch, 0).unwrap().into_array(2).unwrap();
             let got = got.as_boolean();
             assert_eq!(got.len(), 2, "{op:?}");
             assert_eq!(got.value(0), want, "{op:?}");
+            assert_eq!(got.is_valid(1).then(|| got.value(1)), row1, "{op:?}");
         }
         // `NULL = 'c'` is NULL, `NULL <=> 'c'` is false.
         let e = compare(Builtin::Eq, Arc::clone(&utf8), Arc::clone(&view), &env).unwrap();

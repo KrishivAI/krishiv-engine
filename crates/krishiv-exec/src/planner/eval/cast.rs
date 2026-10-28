@@ -240,7 +240,7 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::{
-        Array, ArrayRef, BinaryArray, Int32Array, LargeStringArray, RecordBatch, StringArray,
+        ArrayRef, BinaryArray, Int32Array, LargeStringArray, RecordBatch, StringArray,
         StringViewArray,
     };
     use arrow_schema::{DataType as ArrowType, Field, Schema};
@@ -363,9 +363,9 @@ mod tests {
         let (l, r) = unify(col(0, ArrowType::Utf8), col(2, ArrowType::Utf8View), &env).unwrap();
         assert_eq!(l.data_type(), &ArrowType::Utf8View);
         assert_eq!(r.data_type(), &ArrowType::Utf8View);
-        for e in [&l, &r] {
+        for (e, want) in [(&l, [Some("a"), None]), (&r, [Some("c"), None])] {
             let got = e.eval(&batch, 0).unwrap().into_array(2).unwrap();
-            assert_eq!(got.len(), 2);
+            assert_eq!(got.as_string_view().iter().collect::<Vec<_>>(), want);
         }
         // Equal types pass through untouched.
         let (l, r) = unify(col(0, ArrowType::Utf8), col(0, ArrowType::Utf8), &env).unwrap();

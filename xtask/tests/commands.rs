@@ -1054,3 +1054,21 @@ esac
             .success()
     );
 }
+
+/// `budgets --cache-main` refuses a dirty tree: the cache is keyed by
+/// `HEAD`, so measuring with uncommitted changes would file a measurement
+/// that does not match the commit. Untracked `target/` output never counts.
+#[test]
+fn budgets_cache_main_rejects_a_dirty_working_tree() {
+    let dir = init_repo("budgets-dirty");
+    let repo = dir.to_str().unwrap();
+    // Tracked modification without a commit: the gate fails before measuring.
+    write(&dir, "README.md", "dirty\n");
+    let out = xtask(&["budgets", "--cache-main", "--repo", repo]);
+    assert!(!out.status.success(), "{out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(
+        stderr.contains("uncommitted changes") && stderr.contains("commit or stash"),
+        "{out:?}"
+    );
+}

@@ -163,6 +163,15 @@ pub fn head_sha(root: &Path) -> Result<String, String> {
     }
 }
 
+/// Whether the working tree has no tracked modifications: `git status`
+/// without untracked files, so build outputs under `target/` never count.
+///
+/// # Errors
+/// Returns the git failure.
+pub fn working_tree_clean(root: &Path) -> Result<bool, String> {
+    Ok(git_output(root, &["status", "--porcelain", "--untracked-files=no"])?.is_empty())
+}
+
 /// Parses the `budgets` flags; `None` on an unknown flag or a conflicting
 /// combination (`--compare` measures nothing, so it takes no other flag
 /// besides `--baseline`, which only `--compare` accepts; `--precheck` takes

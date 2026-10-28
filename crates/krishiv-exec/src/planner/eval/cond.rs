@@ -21,28 +21,272 @@ use krishiv_kernels::compare::CompareKind;
 use krishiv_plan::{Builtin, CastMode, ResolvedFunction};
 
 use super::cast::{CastParts, apply, canonical_carrier, parts};
-use super::logic::{and_or, cmp, compare, is_null};
+use super::logic::{cmp, compare, is_null};
 use super::{EvalEnv, Input, PhysExpr, Value};
 use crate::error::Result;
 use crate::planner::build::internal;
 
-/// `v IN (a, b, ...)` as `v = a OR v = b OR ...`: true on a match, NULL when
-/// `v` is NULL or nothing matched and an element is NULL, else false.
+/// `v IN (a, b, ...)` with `v` evaluated once: true on a match, NULL
+/// when `v` is NULL or nothing matched and an element is NULL, else
+/// false. Operands of one Spark `STRING`/`BINARY` in different Arrow
+/// encodings meet in the canonical carrier (each side cast once at plan
+/// time); every other mismatch fails here exactly as `=` does, through
+/// [`compare`](super::logic::compare) validation.
 pub(super) fn in_list(
     mut args: Vec<Arc<dyn PhysExpr>>,
     env: &EvalEnv,
 ) -> Result<Arc<dyn PhysExpr>> {
     let list = args.split_off(1);
-    let v = args.pop().ok_or_else(|| internal("IN arity"))?;
-    let mut out: Option<Arc<dyn PhysExpr>> = None;
-    for item in list {
-        let eq = compare(Builtin::Eq, Arc::clone(&v), item, env)?;
-        out = Some(match out {
-            None => eq,
-            Some(prev) => and_or(false, prev, eq),
-        });
+    let mut v = args.pop().ok_or_else(|| internal("IN arity"))?;
+    if list.is_empty() {
+        return Err(internal("IN without a list"));
     }
-    out.ok_or_else(|| internal("IN without a list"))
+    let mut items = list;
+    if let Some(target) =
+        string_target(std::iter::once(v.data_type()).chain(items.iter().map(|e| e.data_type())))
+    {
+        if v.data_type() != &target && *v.data_type() != ArrowType::Null {
+            v = super::cast::coerce_to(v, &target, env)?;
+        }
+        for item in &mut items {
+            if item.data_type() != &target && *item.data_type() != ArrowType::Null {
+                *item = super::cast::coerce_to(Arc::clone(item), &target, env)?;
+            }
+        }
+    }
+    // The same gate `=` applies, for the same error on other mismatches.
+    for item in &items {
+        compare(Builtin::Eq, Arc::clone(&v), Arc::clone(item), env)?;
+    }
+    Ok(Arc::new(InList {
+        v,
+        items,
+        kernels: env.kernels,
+    }))
+}
+
+/// The canonical carrier when every non-`NULL` type is one Spark
+/// `STRING`/`BINARY` in some Arrow encoding: `None` otherwise (including
+/// all-`NULL`, for which no cast is needed).
+fn string_target<'a>(types: impl IntoIterator<Item = &'a ArrowType>) -> Option<ArrowType> {
+    let mut out: Option<ArrowType> = None;
+    for t in types {
+        if *t == ArrowType::Null {
+            continue;
+        }
+        let c = canonical_carrier(t)?;
+        match &out {
+            None => out = Some(c),
+            Some(a) if *a == c => {}
+            _ => return None,
+        }
+    }
+    out
+}
+
+/// `IN (list)` over one evaluation of `v`: each list element is evaluated
+/// at most once, and only until every row has matched (further elements
+/// cannot change a `true`). This reuses the evaluated canonical `Value`
+/// of `v` across the elements instead of converting it once per element.
+#[derive(Debug)]
+struct InList {
+    v: Arc<dyn PhysExpr>,
+    items: Vec<Arc<dyn PhysExpr>>,
+    kernels: KernelCtx,
+}
+
+impl PhysExpr for InList {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Boolean
+    }
+
+    fn nullable(&self) -> bool {
+        self.v.nullable() || self.items.iter().any(|e| e.nullable())
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.v.eval(batch, partition)?;
+        let rows = batch.num_rows();
+        if rows == 0 {
+            return Ok(Value::Array(Arc::new(BooleanArray::new(
+                BooleanBuffer::new_unset(0),
+                None,
+            ))));
+        }
+        let mut matched = vec![false; rows];
+        let mut saw_null = vec![false; rows];
+        let mut saw_array = !v.is_scalar();
+        for item in &self.items {
+            if matched.iter().all(|m| *m) {
+                break;
+            }
+            let other = item.eval(batch, partition)?;
+            saw_array = saw_array || !other.is_scalar();
+            let eq = cmp(CompareKind::Equal, &v, &other, &self.kernels)?;
+            // `eq` is one row for scalar-vs-scalar, else `rows`.
+            let scalar_eq = eq.len() == 1 && rows != 1;
+            for i in 0..rows {
+                if matched[i] {
+                    continue;
+                }
+                let at = if scalar_eq { 0 } else { i };
+                if !eq.is_valid(at) {
+                    saw_null[i] = true;
+                } else if eq.value(at) {
+                    matched[i] = true;
+                }
+            }
+        }
+        if !saw_array {
+            let m = matched.first().copied().unwrap_or(false);
+            let s = saw_null.first().copied().unwrap_or(false);
+            let out: ArrayRef = Arc::new(BooleanArray::new(
+                BooleanBuffer::from(vec![m]),
+                (!m && s).then(|| arrow_buffer::NullBuffer::new(BooleanBuffer::from(vec![false]))),
+            ));
+            return Ok(Value::Scalar(out));
+        }
+        let mut values = vec![false; rows];
+        let mut valid = vec![true; rows];
+        for i in 0..rows {
+            if matched[i] {
+                values[i] = true;
+            } else if saw_null[i] {
+                valid[i] = false;
+            }
+        }
+        Ok(Value::Array(Arc::new(BooleanArray::new(
+            BooleanBuffer::from(values),
+            Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valid))),
+        ))))
+    }
+}
+
+/// `v BETWEEN lo AND hi` with `v` evaluated once: `v >= lo AND v <= hi`
+/// under Kleene logic. Operands of one Spark `STRING`/`BINARY` in
+/// different encodings meet in the canonical carrier; every other
+/// mismatch fails here exactly as the two comparisons do.
+pub(super) fn between(
+    v: Arc<dyn PhysExpr>,
+    lo: Arc<dyn PhysExpr>,
+    hi: Arc<dyn PhysExpr>,
+    env: &EvalEnv,
+) -> Result<Arc<dyn PhysExpr>> {
+    let (mut v, mut lo, mut hi) = (v, lo, hi);
+    if let Some(target) = string_target([v.data_type(), lo.data_type(), hi.data_type()]) {
+        for e in [&mut v, &mut lo, &mut hi] {
+            if e.data_type() != &target && *e.data_type() != ArrowType::Null {
+                *e = super::cast::coerce_to(Arc::clone(e), &target, env)?;
+            }
+        }
+    }
+    compare(Builtin::GtEq, Arc::clone(&v), Arc::clone(&lo), env)?;
+    compare(Builtin::LtEq, Arc::clone(&v), Arc::clone(&hi), env)?;
+    Ok(Arc::new(Between {
+        v,
+        lo,
+        hi,
+        kernels: env.kernels,
+    }))
+}
+
+/// `BETWEEN` over one evaluation of `v`: both bounds reuse the evaluated
+/// canonical `Value` instead of converting it once per bound. `hi` is
+/// evaluated only where `v >= lo` did not already decide `false`, as the
+/// `AND` it lowers to would.
+#[derive(Debug)]
+struct Between {
+    v: Arc<dyn PhysExpr>,
+    lo: Arc<dyn PhysExpr>,
+    hi: Arc<dyn PhysExpr>,
+    kernels: KernelCtx,
+}
+
+impl PhysExpr for Between {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Boolean
+    }
+
+    fn nullable(&self) -> bool {
+        self.v.nullable() || self.lo.nullable() || self.hi.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.v.eval(batch, partition)?;
+        let lo = self.lo.eval(batch, partition)?;
+        let rows = batch.num_rows();
+        if rows == 0 {
+            return Ok(Value::Array(Arc::new(BooleanArray::new(
+                BooleanBuffer::new_unset(0),
+                None,
+            ))));
+        }
+        let ge = cmp(CompareKind::GreaterEq, &v, &lo, &self.kernels)?;
+        let scalar_ge = ge.len() == 1 && rows != 1;
+        // `false AND _` is `false`: skip `hi` where every row decided.
+        let all_false = (0..ge.len()).all(|i| ge.is_valid(i) && !ge.value(i));
+        if all_false {
+            if ge.len() == 1 && v.is_scalar() && lo.is_scalar() {
+                let out: ArrayRef =
+                    Arc::new(BooleanArray::new(BooleanBuffer::from(vec![false]), None));
+                return Ok(Value::Scalar(out));
+            }
+            let out: ArrayRef = if scalar_ge {
+                Arc::new(BooleanArray::new(
+                    BooleanBuffer::from(vec![false; rows]),
+                    None,
+                ))
+            } else {
+                Arc::new(BooleanArray::new(
+                    BooleanBuffer::from(vec![false; ge.len()]),
+                    None,
+                ))
+            };
+            return Ok(Value::Array(out));
+        }
+        let hi = self.hi.eval(batch, partition)?;
+        let all_scalar = v.is_scalar() && lo.is_scalar() && hi.is_scalar();
+        let le = cmp(CompareKind::LessEq, &v, &hi, &self.kernels)?;
+        let n = if all_scalar { 1 } else { rows };
+        let mut values = Vec::with_capacity(n);
+        let mut valids = Vec::with_capacity(n);
+        for i in 0..n {
+            let gi = if ge.len() == 1 { 0 } else { i };
+            let li = if le.len() == 1 { 0 } else { i };
+            let (g_valid, l_valid) = (ge.is_valid(gi), le.is_valid(li));
+            let (g, l) = (g_valid && ge.value(gi), l_valid && le.value(li));
+            if (g_valid && !g) || (l_valid && !l) {
+                values.push(false);
+                valids.push(true);
+            } else if g_valid && l_valid {
+                values.push(true);
+                valids.push(true);
+            } else {
+                values.push(false);
+                valids.push(false);
+            }
+        }
+        let out: ArrayRef = Arc::new(BooleanArray::new(
+            BooleanBuffer::from(values),
+            Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valids))),
+        ));
+        if all_scalar {
+            return Ok(Value::Scalar(out));
+        }
+        if out.len() == 1 && rows != 1 {
+            let mut values = Vec::with_capacity(rows);
+            let mut valids = Vec::with_capacity(rows);
+            for _ in 0..rows {
+                values.push(out.as_boolean().value(0));
+                valids.push(out.is_valid(0));
+            }
+            return Ok(Value::Array(Arc::new(BooleanArray::new(
+                BooleanBuffer::from(values),
+                Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valids))),
+            ))));
+        }
+        Ok(Value::Array(out))
+    }
 }
 
 /// `CASE WHEN c1 THEN v1 ... [ELSE e] END`, lazily: each condition sees only
