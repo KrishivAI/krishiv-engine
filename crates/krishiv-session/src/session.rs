@@ -1448,6 +1448,19 @@ mod tests {
             .collect()
     }
 
+    /// The access policy is asked about the qualified path: a cloud URL
+    /// keeps its canonical form (no store is built), a local path gets the
+    /// `file:` form.
+    #[test]
+    fn qualify_path_keeps_cloud_urls_and_qualifies_local_paths() {
+        let session = super::Session::new().unwrap();
+        assert_eq!(
+            session.qualify_path("s3a://bucket/k").unwrap(),
+            "s3a://bucket/k"
+        );
+        assert_eq!(session.qualify_path("/a/b").unwrap(), "file:/a/b");
+    }
+
     #[test]
     fn max_records_per_file_reads_the_write_option() {
         assert_eq!(

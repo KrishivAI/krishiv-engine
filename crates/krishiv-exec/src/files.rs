@@ -574,6 +574,66 @@ mod tests {
         assert_eq!(locate("1a:b").unwrap().display, "file:/work/dir/1a:b");
     }
 
+    fn object_paths() -> ObjectPaths {
+        use krishiv_common::config::Config;
+        use krishiv_io::{IoConfig, IoScheduler, StoreRegistry};
+
+        let config = Config::new();
+        ObjectPaths::new(
+            StoreId::new("file"),
+            "/work/dir",
+            IoScheduler::new(IoConfig::from_config(&config)),
+            Arc::new(StoreRegistry::new(Arc::new(config))),
+        )
+    }
+
+    /// Qualifying never builds a store: cloud paths print their canonical
+    /// form whatever the build, local paths print as `LocalPaths` does, and
+    /// local locating is the same through the options form.
+    #[test]
+    fn object_paths_qualify_without_building_stores() {
+        let paths = object_paths();
+        for (input, display) in [
+            ("s3a://bucket/k", "s3a://bucket/k"),
+            ("gs://bucket/k", "gs://bucket/k"),
+            ("/a/b.parquet", "file:/a/b.parquet"),
+            ("rel", "file:/work/dir/rel"),
+            ("file:/a/b", "file:/a/b"),
+        ] {
+            assert_eq!(paths.qualified_display(input).unwrap(), display, "{input}");
+        }
+        assert_eq!(
+            paths
+                .qualified_display("ftp://x/y")
+                .unwrap_err()
+                .error_class()
+                .name(),
+            "KRISHIV_UNSUPPORTED_FEATURE"
+        );
+        let options = BTreeMap::new();
+        assert_eq!(
+            paths.locate_with_options("/a/b", &options).unwrap(),
+            paths.locate("/a/b").unwrap()
+        );
+    }
+
+    /// Without the `cloud` feature a cloud path locates to the unsupported
+    /// error rather than a store, with or without per-read options.
+    #[cfg(not(feature = "cloud"))]
+    #[test]
+    fn cloud_paths_need_the_cloud_feature_to_locate() {
+        let paths = object_paths();
+        let options = BTreeMap::new();
+        for e in [
+            paths.locate("s3://bucket/k").unwrap_err(),
+            paths
+                .locate_with_options("s3://bucket/k", &options)
+                .unwrap_err(),
+        ] {
+            assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
+        }
+    }
+
     #[cfg(feature = "cloud")]
     #[test]
     fn cloud_urls_locate_in_their_bucket_stores() {

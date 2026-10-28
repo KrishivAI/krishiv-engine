@@ -1535,6 +1535,70 @@ mod tests {
         assert_eq!(policy_for(ObjectScheme::Azure), StorePolicy::AZURE);
     }
 
+    /// Per-read `fs.*` options isolate the store id by a hash of their
+    /// values: the same options always give the same id, any change gives
+    /// another, keys match case-insensitively, other options are ignored,
+    /// and no value (plain, inline secret, reference or credentialed URL)
+    /// reaches the id's text.
+    #[test]
+    fn per_read_options_isolate_store_ids_without_leaking_values() {
+        let base = StoreId::new("s3://bucket");
+        assert_eq!(effective_store_id(&base, &BTreeMap::new()), base);
+        assert_eq!(
+            effective_store_id(&base, &read_options(&[("header", "true")])),
+            base
+        );
+        let id = |pairs: &[(&str, &str)]| effective_store_id(&base, &read_options(pairs));
+        let plain = id(&[(S3_ENDPOINT, "http://a:9000")]);
+        assert!(plain.to_string().starts_with("s3://bucket#"));
+        assert_eq!(plain, id(&[(S3_ENDPOINT, "http://a:9000")]));
+        assert_ne!(plain, id(&[(S3_ENDPOINT, "http://b:9000")]));
+        assert_eq!(
+            plain,
+            id(&[("FS.S3A.ENDPOINT", "http://a:9000"), ("header", "true")])
+        );
+        let secret = id(&[(S3_SECRET_KEY, "Canary-1")]);
+        assert_ne!(secret, id(&[(S3_SECRET_KEY, "Canary-2")]));
+        assert_ne!(secret, plain);
+        let mut by_reference = read_options(&[]);
+        by_reference.insert(
+            S3_SECRET_KEY.to_owned(),
+            OptionValue::reference("scope", "k"),
+        );
+        let referenced = effective_store_id(&base, &by_reference);
+        assert_ne!(referenced, secret);
+        let mut other = read_options(&[]);
+        other.insert(
+            S3_SECRET_KEY.to_owned(),
+            OptionValue::reference("scope", "k2"),
+        );
+        assert_ne!(effective_store_id(&base, &other), referenced);
+        let url = id(&[(S3_ENDPOINT, "https://user:Canary-3@host:9000/x")]);
+        assert_ne!(url, plain);
+        for shown in [&secret, &referenced, &url] {
+            assert!(!shown.to_string().contains("Canary"), "{shown}");
+        }
+    }
+
+    /// Per-read options reach the same configuration gate as session
+    /// config: without the `cloud` feature nothing builds, and a failed
+    /// build registers nothing.
+    #[cfg(not(feature = "cloud"))]
+    #[test]
+    fn per_read_options_without_the_cloud_feature_fail_to_build() {
+        let registry = StoreRegistry::new(config(&[]));
+        let url = parse_object_url("s3://bucket/k").unwrap();
+        let options = read_options(&[(S3_ENDPOINT, "http://127.0.0.1:9000")]);
+        let error = registry.store_with_options(&url, &options).unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        let sched = crate::IoScheduler::new(crate::IoConfig::from_config(&Config::new()));
+        let error = registry
+            .ensure_with_options(&sched, "s3://bucket/k", &options)
+            .unwrap_err();
+        assert_eq!(error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        assert!(format!("{registry:?}").contains("cached: 0"));
+    }
+
     #[cfg(not(feature = "cloud"))]
     #[test]
     fn cloud_stores_need_the_cloud_feature() {
