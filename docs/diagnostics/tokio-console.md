@@ -84,7 +84,7 @@ between chunks.
 - Enabled, attached, idle query: added overhead per query to be recorded.
 - Enabled, attached, running query: resident memory of the subscriber to be recorded.
 - Disabled (any default or `dist` build): zero overhead and zero console
-  symbols, checked by `cargo xtask tokio-console-check` (wired into
-  `cargo xtask precheck`). The subscriber accounts none of its memory to
+  symbols in the `krishiv` and `krishiv-cli` default feature trees, checked by
+  `cargo xtask tokio-console-check` (wired into `cargo xtask precheck`). The subscriber accounts none of its memory to
   the query `MemoryPool`: it runs on its own runtime in a background
   thread, outside every query's pool.
