@@ -378,6 +378,36 @@ fn budgets_run_for_manifest_changes_or_full_and_never_with_fast() {
 }
 
 #[test]
+fn budgets_step_compares_against_the_cached_main_baseline() {
+    let manifest = detect(&["crates/exec/Cargo.toml"]);
+    let steps = make_plan(&manifest, &opts(&[]), true);
+    let Action::Run(cmds) = &step(&steps, "budgets").action else {
+        panic!()
+    };
+    assert_eq!(cmds.len(), 1);
+    assert_eq!(cmds[0].program, "/x/xtask");
+    assert_eq!(
+        cmds[0].args,
+        ["budgets", "--precheck", "--base", "origin/main"]
+    );
+    assert!(cmds[0].heavy);
+    // A custom base is threaded through; budgets.json is never an argument.
+    let dev = make_plan(&manifest, &opts(&["--base", "origin/dev"]), true);
+    let Action::Run(cmds) = &step(&dev, "budgets").action else {
+        panic!()
+    };
+    assert_eq!(
+        cmds[0].args,
+        ["budgets", "--precheck", "--base", "origin/dev"]
+    );
+    assert!(
+        !cmds[0].args.iter().any(|a| a.contains("budgets.json")),
+        "{:?}",
+        cmds[0].args
+    );
+}
+
+#[test]
 fn fast_skips_both_coverage_gates() {
     let ch = detect(&["crates/exec/src/lib.rs", "bench/src/krishiv_bench/a.py"]);
     let steps = make_plan(&ch, &opts(&["--fast"]), true);
