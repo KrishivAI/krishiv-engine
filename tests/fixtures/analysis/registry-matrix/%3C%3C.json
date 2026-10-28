@@ -31,22 +31,6 @@
     {
       "id": "<<#7e74e30d017a/ansi_off",
       "reason": "SELECT 2 << (INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "<<#b68d0e5fe063/ansi_on",
-      "reason": "SELECT 2 << (map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "<<#b68d0e5fe063/ansi_off",
-      "reason": "SELECT 2 << (map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "<<#e95105f352b6/ansi_on",
-      "reason": "SELECT (map('a', 1)) << 1 | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "<<#e95105f352b6/ansi_off",
-      "reason": "SELECT (map('a', 1)) << 1 | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

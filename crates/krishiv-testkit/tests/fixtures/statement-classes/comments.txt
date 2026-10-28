@@ -1,0 +1,12 @@
+READ	/* This is the first example of bracketed comment.
+READ	/* This is the second example of bracketed comment.
+READ	/* This is the third example of bracketed comment.
+READ	/**/
+READ	/* This is the first example of nested bracketed comment.
+READ	/* This is the second example of nested bracketed comment.
+READ	/*
+READ	/*
+READ	SELECT /*
+READ	/*/**/*/
+PARSE_ERROR	/*abc*/
+PARSE_ERROR	/*abc*/

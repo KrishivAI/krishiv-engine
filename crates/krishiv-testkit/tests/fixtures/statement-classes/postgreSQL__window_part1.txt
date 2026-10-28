@@ -1,0 +1,43 @@
+SESSION	CREATE TEMPORARY VIEW tenk2 AS SELECT * FROM tenk1
+READ	SELECT four, ten, SUM(SUM(four)) OVER (PARTITION BY four), AVG(ten) FROM tenk1
+READ	SELECT COUNT(*) OVER () FROM tenk1 WHERE unique2 < 10
+READ	SELECT COUNT(*) OVER w FROM tenk1 WHERE unique2 < 10 WINDOW w AS ()
+READ	SELECT four FROM tenk1 WHERE FALSE WINDOW w AS (PARTITION BY ten)
+READ	SELECT sum(four) OVER (PARTITION BY ten ORDER BY unique2) AS sum_1, ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT row_number() OVER (ORDER BY unique2) FROM tenk1 WHERE unique2 < 10
+READ	SELECT rank() OVER (PARTITION BY four ORDER BY ten) AS rank_1, ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT dense_rank() OVER (PARTITION BY four ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT percent_rank() OVER (PARTITION BY four ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT cume_dist() OVER (PARTITION BY four ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT ntile(3) OVER (ORDER BY ten, four), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT lag(ten) OVER (PARTITION BY four ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT lead(ten) OVER (PARTITION BY four ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT lead(ten * 2, 1) OVER (PARTITION BY four ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT lead(ten * 2, 1, -1) OVER (PARTITION BY four ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT first(ten) OVER (PARTITION BY four ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT last(four) OVER (ORDER BY ten), ten, four FROM tenk1 WHERE unique2 < 10
+READ	SELECT last(ten) OVER (PARTITION BY four), ten, four FROM
+READ	SELECT ten, two, sum(hundred) AS gsum, sum(sum(hundred)) OVER (PARTITION BY two ORDER BY ten) AS wsum
+READ	SELECT count(*) OVER (PARTITION BY four), four FROM (SELECT * FROM tenk1 WHERE two = 1)s WHERE unique2 < 10
+READ	SELECT (count(*) OVER (PARTITION BY four ORDER BY ten) +
+READ	SELECT * FROM(
+READ	SELECT avg(four) OVER (PARTITION BY four ORDER BY thousand / 100) FROM tenk1 WHERE unique2 < 10
+READ	SELECT ten, two, sum(hundred) AS gsum, sum(sum(hundred)) OVER win AS wsum
+READ	SELECT count(*) OVER (PARTITION BY four) FROM (SELECT * FROM tenk1 WHERE FALSE)s
+SESSION	create temporary view int4_tbl as select * from values
+READ	SELECT SUM(COUNT(f1)) OVER () FROM int4_tbl WHERE f1=42
+READ	select ten,
+READ	SELECT four, ten,
+READ	SELECT four, ten,
+READ	SELECT four, ten,
+READ	SELECT sum(unique1) over (order by four range between current row and unbounded following),
+READ	SELECT sum(unique1) over (rows between current row and unbounded following),
+READ	SELECT sum(unique1) over (rows between 2 preceding and 2 following),
+READ	SELECT sum(unique1) over (rows between 2 preceding and 1 preceding),
+READ	SELECT sum(unique1) over (rows between 1 following and 3 following),
+READ	SELECT sum(unique1) over (rows between unbounded preceding and 1 following),
+SESSION	CREATE TEMP VIEW v_window AS
+READ	SELECT * FROM v_window
+SESSION	DROP VIEW v_window
+SESSION	DROP VIEW tenk2
+SESSION	DROP VIEW int4_tbl

@@ -15,14 +15,6 @@
     {
       "id": "soundex#ccd858418689/ansi_off",
       "reason": "SELECT soundex(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "soundex#d5ca2c3e019c/ansi_on",
-      "reason": "SELECT soundex(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "soundex#d5ca2c3e019c/ansi_off",
-      "reason": "SELECT soundex(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     }
   ],
   "format_version": 1,

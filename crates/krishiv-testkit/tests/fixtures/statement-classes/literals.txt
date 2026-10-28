@@ -1,0 +1,62 @@
+READ	select null, Null, nUll
+READ	select true, tRue, false, fALse
+READ	select 1Y
+READ	select 127Y, -128Y
+PARSE_ERROR	select 128Y
+READ	select 1S
+READ	select 32767S, -32768S
+PARSE_ERROR	select 32768S
+READ	select 1L, 2147483648L
+READ	select 9223372036854775807L, -9223372036854775808L
+PARSE_ERROR	select 9223372036854775808L
+READ	select 1, -1
+READ	select 2147483647, -2147483648
+READ	select 9223372036854775807, -9223372036854775808
+READ	select 9223372036854775808, -9223372036854775809
+READ	select 1234567890123456789012345678901234567890
+READ	select 1234567890123456789012345678901234567890.0
+READ	select 1F, 1.2F, .10f, 0.10f
+READ	select -1F, -1.2F, -.10F, -0.10F
+PARSE_ERROR	select -3.4028235E39f
+READ	select 1D, 1.2D, 1e10, 1.5e5, .10D, 0.10D, .1e5, .9e+2, 0.9e+2, 900e-1, 9.e+1
+READ	select -1D, -1.2D, -1e10, -1.5e5, -.10D, -0.10D, -.1e5
+PARSE_ERROR	select .e3
+PARSE_ERROR	select 1E309, -1E309
+READ	select 0.3, -0.8, .5, -.18, 0.1111, .1111
+READ	select 0.3 F, 0.4 D, 0.5 BD
+READ	select 123456789012345678901234567890123456789e10d, 123456789012345678901234567890123456789.1e10d
+READ	select "Hello Peter!", 'hello lee!'
+READ	select 'hello' 'world', 'hello' " " 'lee'
+READ	select "hello 'peter'"
+READ	select 'pattern%', 'no-pattern\%', 'pattern\\%', 'pattern\\\%'
+READ	select '\'', '"', '\n', '\r', '\t', 'Z'
+READ	select '\110\145\154\154\157\041'
+READ	select '\u0057\u006F\u0072\u006C\u0064\u0020\u003A\u0029'
+READ	select dAte '2016-03-12'
+PARSE_ERROR	select date 'mar 11 2016'
+READ	select tImEstAmp '2016-03-11 20:54:00.000'
+PARSE_ERROR	select timestamp '2016-33-11 20:54:00.000'
+PARSE_ERROR	select GEO '(10,-6)'
+READ	select 90912830918230182310293801923652346786BD, 123.0E-28BD, 123.08BD
+PARSE_ERROR	select 1.20E-38BD
+READ	select x'2379ACFe'
+PARSE_ERROR	select X'XuZ'
+READ	SELECT 3.14, -3.14, 3.14e8, 3.14e-8, -3.14e8, -3.14e-8, 3.14e+8, 3.14E8, 3.14E-8
+READ	select +date '1999-01-01'
+READ	select +timestamp '1999-01-01'
+READ	select +interval '1 day'
+READ	select +map(1, 2)
+READ	select +array(1,2)
+READ	select +named_struct('a', 1, 'b', 'spark')
+READ	select +X'1'
+READ	select -date '1999-01-01'
+READ	select -timestamp '1999-01-01'
+READ	select -x'2379ACFe'
+READ	select -0, -0.0
+READ	SELECT "S""par""k" AS c1, "S\"par\"k" AS c2, 'S""par""k' AS c3
+READ	SELECT 'S''par''k' AS c1, 'S\'par\'k' AS c2, "S''par''k" AS c3
+READ	SELECT "S" "par" "k" AS c1, 'S' 'par' 'k' AS c2, "S" 'par' "k" AS c3, 'S' "par" 'k' AS c4, "S"'par'"k" AS c5, 'S'"par"'k
+SESSION	SET spark.sql.legacy.consecutiveStringLiterals.enabled=true
+READ	SELECT "S""par""k" AS c1, "S\"par\"k" AS c2, 'S""par""k' AS c3
+READ	SELECT 'S''par''k' AS c1, 'S\'par\'k' AS c2, "S''par''k" AS c3
+READ	SELECT "S" "par" "k" AS c1, 'S' 'par' 'k' AS c2, "S" 'par' "k" AS c3, 'S' "par" 'k' AS c4, "S"'par'"k" AS c5, 'S'"par"'k

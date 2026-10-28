@@ -17,14 +17,6 @@
       "reason": "SELECT filter(INTERVAL '1-2' YEAR TO MONTH, x -> x % 2 == 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "filter#b772a52335ae/ansi_on",
-      "reason": "SELECT filter(map('a', 1), x -> x % 2 == 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "filter#b772a52335ae/ansi_off",
-      "reason": "SELECT filter(map('a', 1), x -> x % 2 == 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "filter#cc869a817020/ansi_on",
       "reason": "SELECT filter(array(0, 2, 3), (x, i) -> x > i) | INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH"
     },

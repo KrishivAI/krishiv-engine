@@ -1,28 +1,12 @@
 {
   "entries": [
     {
-      "id": "log#2849851ffff9/ansi_on",
-      "reason": "SELECT log(10, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "log#2849851ffff9/ansi_off",
-      "reason": "SELECT log(10, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "log#6e4cd2e20dbf/ansi_on",
       "reason": "SELECT log(10, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "log#6e4cd2e20dbf/ansi_off",
       "reason": "SELECT log(10, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "log#94eb25460542/ansi_on",
-      "reason": "SELECT log(map('a', 1), 100) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "log#94eb25460542/ansi_off",
-      "reason": "SELECT log(map('a', 1), 100) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "log#b29ab2f7e498/ansi_on",

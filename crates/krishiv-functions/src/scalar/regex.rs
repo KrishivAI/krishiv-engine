@@ -527,6 +527,30 @@ fn split_pieces(
     split_pattern(compiled, s, limit)
 }
 
+/// A Java regex delimiter split for `str_to_map`: the pattern compiles
+/// once, then splits every row's text with Spark's limit semantics (as
+/// [`split_pieces`]). An invalid pattern is
+/// `INVALID_PARAMETER_VALUE.PATTERN`, as for `split`.
+pub(super) struct Splitter {
+    pattern: String,
+    compiled: Compiled,
+}
+
+impl Splitter {
+    /// Compiles the Java regex `pattern` for [`Self::split`].
+    pub(super) fn new(pattern: &str) -> Result<Self, KrishivError> {
+        Ok(Self {
+            pattern: pattern.to_owned(),
+            compiled: Compiled::new(pattern, "`str_to_map`")?,
+        })
+    }
+
+    /// Splits `s` with Spark's limit semantics.
+    pub(super) fn split(&self, s: &str, limit: i32) -> Result<Vec<String>, KrishivError> {
+        split_pieces(s, &self.pattern, &self.compiled, limit)
+    }
+}
+
 /// Spark `split(str, pattern[, limit])` over a column: one row per input,
 /// NULL in for NULL out. `limit` holds one entry per row (`None` is NULL).
 /// The pattern compiles once per call.

@@ -9,22 +9,6 @@
       "reason": "SELECT nanvl(cast('NaN' as double), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "nanvl#224c752cdc8a/ansi_on",
-      "reason": "SELECT nanvl(map('a', 1), 123) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "nanvl#224c752cdc8a/ansi_off",
-      "reason": "SELECT nanvl(map('a', 1), 123) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "nanvl#8c6ee640d734/ansi_on",
-      "reason": "SELECT nanvl(cast('NaN' as double), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "nanvl#8c6ee640d734/ansi_off",
-      "reason": "SELECT nanvl(cast('NaN' as double), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "nanvl#a22c4b677583/ansi_on",
       "reason": "SELECT nanvl(INTERVAL '1-2' YEAR TO MONTH, 123) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

@@ -1,0 +1,145 @@
+SESSION	CREATE TEMPORARY VIEW t AS SELECT 1
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as tinyint), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as smallint), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as int), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as bigint), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as float), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as double), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as decimal(10, 0)), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as string), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast('1' as binary), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast(1 as boolean), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00.0' as timestamp), cast('2017-12-11 09:30:00' as date)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as tinyint)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as smallint)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as int)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as bigint)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as float)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as double)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as decimal(10, 0))) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as string)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast('2' as binary)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast(2 as boolean)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast('2017-12-11 09:30:00.0' as timestamp)) FROM t
+READ	SELECT IF(true, cast('2017-12-12 09:30:00' as date), cast('2017-12-11 09:30:00' as date)) FROM t

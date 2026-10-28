@@ -15,6 +15,7 @@ Paths are relative to this crate.
 - `src/conf.rs` configuration snapshot taken per query
 - `src/catalog.rs` session catalog (temporary tables and views)
 - `src/dataframe.rs` DataFrame transformations (IR only) and async actions; `src/column.rs` and `src/functions.rs` user API
+- `src/access.rs` `StatementInfo` / `Session::statement_info` (class + read securables with columns), write/DDL checks (`authorize_statement`), the `krishiv::audit` denial record, `PathPrefixPolicy`
 - `src/explain.rs` EXPLAIN; `src/profile.rs` profile for EXPLAIN ANALYZE
 - `tests/session.rs`, `tests/explain_analyze.rs`, `tests/spill.rs`, `tests/tpch_q1.rs` and `tests/window_goldens.rs` (window functions against Spark goldens) end-to-end tests
 
@@ -28,6 +29,7 @@ Paths are relative to this crate.
 - Transformations only build IR; actions are `async` and run on the session's executor, so they work from
   any runtime. Dropping an action's future or result stream cancels its query.
 - The IR is reachable only behind the `unstable-ir` feature (not covered by semver).
+- Access control: one principal and one `AccessPolicy` per session, for life. Reads are checked in analysis; what a statement writes, creates or drops (`krishiv_sql::statement_targets`) is checked in `sql` before it is dispatched, and `df.write` paths before `DirectoryWrite::begin`, all through `krishiv_plan::analyzer::authorize` (fail closed, 42501, no reason, no existence oracle). Every denial logs one `krishiv::audit` record. Deny-all and inverse matrices: `tests/access_policy.rs` (merge-blocking).
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class
   and SQLSTATE.
 

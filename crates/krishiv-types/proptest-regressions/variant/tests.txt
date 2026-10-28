@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc cf7ccd33de5c8791c7c8fe9d175724c8a9858f27bccf3f1a6046145e44eba3b0 # shrinks to doc = Arr([Arr([])])
+cc 76ac303dfce7c9f3ff4229add45481d8f31a10a405f03a8eb8fc7f8cfb56ede0 # shrinks to doc = Arr([Obj([("c", Null), ("a", Int("-39147199124537"))])])
+cc 02d408ae6699f395b3ba0c39ec8e046a886391366350a061bcf61284a7c1d72f # shrinks to doc = Arr([Arr([Float("--0.10002509e0")])])
+cc 43cd1371068db42ac28867b516a7588ae6b76b85c7957242f57a1c6619bcc0df # shrinks to doc = Obj([("a", Arr([Str("\u{b}")]))])
