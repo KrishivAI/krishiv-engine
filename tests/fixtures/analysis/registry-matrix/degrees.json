@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "degrees#9a381aac8d04/ansi_on",
-      "reason": "SELECT degrees(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "degrees#9a381aac8d04/ansi_off",
-      "reason": "SELECT degrees(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "degrees#baea01745120/ansi_on",
       "reason": "SELECT degrees(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

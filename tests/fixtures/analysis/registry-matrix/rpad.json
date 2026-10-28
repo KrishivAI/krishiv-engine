@@ -9,14 +9,6 @@
       "reason": "SELECT rpad('hi', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
-      "id": "rpad#0bf1aa70ff76/ansi_on",
-      "reason": "SELECT rpad('hi', 5, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#0bf1aa70ff76/ansi_off",
-      "reason": "SELECT rpad('hi', 5, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "rpad#0dde82949852/ansi_on",
       "reason": "SELECT rpad('hi', INTERVAL '1 02:03:04' DAY TO SECOND, '??') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
@@ -39,22 +31,6 @@
     {
       "id": "rpad#2df795636485/ansi_off",
       "reason": "SELECT rpad('hi', 5, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "rpad#7acc254d2875/ansi_on",
-      "reason": "SELECT rpad(map('a', 1), 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#7acc254d2875/ansi_off",
-      "reason": "SELECT rpad(map('a', 1), 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#7e928e3e1889/ansi_on",
-      "reason": "SELECT rpad('hi', map('a', 1), '??') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#7e928e3e1889/ansi_off",
-      "reason": "SELECT rpad('hi', map('a', 1), '??') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "rpad#888e9eeec49f/ansi_on",
@@ -95,22 +71,6 @@
     {
       "id": "rpad#c2dc63c23dd1/ansi_off",
       "reason": "SELECT rpad('hi', 5, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "rpad#d8ee019cf6cd/ansi_on",
-      "reason": "SELECT rpad('hi', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#d8ee019cf6cd/ansi_off",
-      "reason": "SELECT rpad('hi', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#f3cf473e2510/ansi_on",
-      "reason": "SELECT rpad(map('a', 1), 5, '??') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "rpad#f3cf473e2510/ansi_off",
-      "reason": "SELECT rpad(map('a', 1), 5, '??') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "rpad#f654cde77e9c/ansi_on",

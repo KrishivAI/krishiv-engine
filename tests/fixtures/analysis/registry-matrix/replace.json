@@ -9,28 +9,12 @@
       "reason": "SELECT replace('ABCabc', 'abc', INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "replace#773d4608b460/ansi_on",
-      "reason": "SELECT replace('ABCabc', 'abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#773d4608b460/ansi_off",
-      "reason": "SELECT replace('ABCabc', 'abc', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "replace#8abe9653048f/ansi_on",
       "reason": "SELECT replace('ABCabc', INTERVAL '1 02:03:04' DAY TO SECOND, 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "replace#8abe9653048f/ansi_off",
       "reason": "SELECT replace('ABCabc', INTERVAL '1 02:03:04' DAY TO SECOND, 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "replace#8f3797458fc0/ansi_on",
-      "reason": "SELECT replace(map('a', 1), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#8f3797458fc0/ansi_off",
-      "reason": "SELECT replace(map('a', 1), 'abc', 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "replace#b4f9fb44df97/ansi_on",
@@ -47,14 +31,6 @@
     {
       "id": "replace#bc3da4b48ee0/ansi_off",
       "reason": "SELECT replace(INTERVAL '1 02:03:04' DAY TO SECOND, 'abc', 'DEF') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "replace#d9f91490acc7/ansi_on",
-      "reason": "SELECT replace('ABCabc', map('a', 1), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "replace#d9f91490acc7/ansi_off",
-      "reason": "SELECT replace('ABCabc', map('a', 1), 'DEF') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "replace#e9035df3e654/ansi_on",

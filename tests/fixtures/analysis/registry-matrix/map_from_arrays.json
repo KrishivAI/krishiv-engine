@@ -1,0 +1,38 @@
+{
+  "entries": [
+    {
+      "id": "map_from_arrays#08636ccc6b7a/ansi_on",
+      "reason": "SELECT map_from_arrays(array(1.0, 3.0), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "map_from_arrays#08636ccc6b7a/ansi_off",
+      "reason": "SELECT map_from_arrays(array(1.0, 3.0), INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "map_from_arrays#1cfeee22237b/ansi_on",
+      "reason": "SELECT map_from_arrays(array(1.0, 3.0), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "map_from_arrays#1cfeee22237b/ansi_off",
+      "reason": "SELECT map_from_arrays(array(1.0, 3.0), INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "map_from_arrays#bed2f6e41870/ansi_on",
+      "reason": "SELECT map_from_arrays(INTERVAL '1-2' YEAR TO MONTH, array('2', '4')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "map_from_arrays#bed2f6e41870/ansi_off",
+      "reason": "SELECT map_from_arrays(INTERVAL '1-2' YEAR TO MONTH, array('2', '4')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "map_from_arrays#cb38b6ff0949/ansi_on",
+      "reason": "SELECT map_from_arrays(INTERVAL '1 02:03:04' DAY TO SECOND, array('2', '4')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    },
+    {
+      "id": "map_from_arrays#cb38b6ff0949/ansi_off",
+      "reason": "SELECT map_from_arrays(INTERVAL '1 02:03:04' DAY TO SECOND, array('2', '4')) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    }
+  ],
+  "format_version": 1,
+  "function": "map_from_arrays"
+}

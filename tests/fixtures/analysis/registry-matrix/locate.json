@@ -65,52 +65,12 @@
       "reason": "SELECT locate('bar', INTERVAL '1 02:03:04' DAY TO SECOND, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "locate#a7767364d0b8/ansi_on",
-      "reason": "SELECT locate(map('a', 1), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#a7767364d0b8/ansi_off",
-      "reason": "SELECT locate(map('a', 1), 'foobarbar') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#b74e2d74ab2f/ansi_on",
-      "reason": "SELECT locate('bar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#b74e2d74ab2f/ansi_off",
-      "reason": "SELECT locate('bar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#c3f4168b42eb/ansi_on",
-      "reason": "SELECT locate(map('a', 1), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#c3f4168b42eb/ansi_off",
-      "reason": "SELECT locate(map('a', 1), 'foobarbar', 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#c7fe7c11d1a0/ansi_on",
-      "reason": "SELECT locate('bar', 'foobarbar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#c7fe7c11d1a0/ansi_off",
-      "reason": "SELECT locate('bar', 'foobarbar', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "locate#d7063806fdbe/ansi_on",
       "reason": "SELECT locate('bar', INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
       "id": "locate#d7063806fdbe/ansi_off",
       "reason": "SELECT locate('bar', INTERVAL '1-2' YEAR TO MONTH, 5) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "locate#f4332c0ebfcb/ansi_on",
-      "reason": "SELECT locate('bar', map('a', 1), 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "locate#f4332c0ebfcb/ansi_off",
-      "reason": "SELECT locate('bar', map('a', 1), 5) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },
     {
       "id": "locate#ffc3f838bcdf/ansi_on",
