@@ -37,7 +37,7 @@ layer has one), and the fixtures `cast-timestamp-differential`, `dst-transitions
 (type, nullability or analysis error class vs Spark, both ANSI modes); failures are listed with reasons in
 `tests/fixtures/analysis/registry-matrix/`, one file per function name (`KRISHIV_UPDATE_MANIFEST=1` rewrites
 only the changed files).
-The generic `FileFormat` conformance suite (`file_format`, P2-T117: 12 checks over a `FormatFixture`,
+The generic `FileFormat` conformance suite (`file_format`, P2-T117: 13 checks over a `FormatFixture`,
 `file_format_conformance!(name, fixture)`) and its `MockFormat`; every format crate instantiates it, directly and
 through the executor (`file_format::drive::ThroughExecutor`, P2-T117b). `file_format::parquet::ParquetFixture`
 (P2-T080a) reads through the real Parquet reader and writes through a test-only `ArrowWriter` encoder.

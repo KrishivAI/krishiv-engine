@@ -21,6 +21,7 @@ mod physical;
 mod runtime_filters;
 mod scan_row_drop;
 mod semantics;
+mod splits;
 mod sum_rewrite;
 mod tpch;
 mod union;
@@ -50,8 +51,8 @@ use krishiv_exec::planner::{
     PlanningContext, ProviderStatistics, TableProvider, TableProviderResolver,
 };
 use krishiv_exec::{
-    ExecConfig, ExecutorConfig, FileWriteSink, QueryContext, QueryId, QueryRunner, Scheduler as _,
-    TokioExecutor, WorkloadClass,
+    ExecConfig, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler as _, TokioExecutor,
+    WorkloadClass,
 };
 
 /// A plan and the worker context it runs with.
@@ -82,12 +83,30 @@ impl Runnable {
         self
     }
 
-    /// The plan writing its rows through `sink`.
-    pub(crate) fn into_write(self, sink: Arc<FileWriteSink>) -> Result<Self, KrishivError> {
-        Ok(Self {
-            plan: self.plan.into_write(&sink)?,
-            worker: self.worker.with_write_sink(sink),
-        })
+    /// The plan writing its rows as `write` describes.
+    pub(crate) fn into_write(self, write: krishiv_exec::physical::WritePlan) -> Self {
+        Self {
+            plan: self.plan.into_write(write),
+            worker: self.worker,
+        }
+    }
+
+    /// The same plan instantiated with `io`.
+    pub(crate) fn with_io(mut self, io: krishiv_io::IoContext) -> Self {
+        self.worker = self.worker.with_io(io);
+        self
+    }
+
+    /// The same plan resolving a write's format against `formats`.
+    pub(crate) fn with_formats(mut self, formats: Arc<krishiv_io::FormatRegistry>) -> Self {
+        self.worker = self.worker.with_formats(formats);
+        self
+    }
+
+    /// The same plan parsing a write's options against `config`.
+    pub(crate) fn with_config(mut self, config: Arc<krishiv_common::config::Config>) -> Self {
+        self.worker = self.worker.with_config(config);
+        self
     }
 }
 

@@ -209,6 +209,75 @@ fn modes_on_a_directory() {
 }
 
 #[test]
+fn a_job_id_that_is_a_suffix_of_another_write_keeps_its_files() {
+    // Two appends into one directory with job ids `"1"` and `"job-1"`:
+    // the file `part-00000-job-1-c000...` contains `"-1-c"`, which a bare
+    // `contains` match would attribute to job `"1"`. The orphan sweep of
+    // `"1"` must keep it.
+    let env = Env::memory();
+    let first = env.write("t", SaveMode::ErrorIfExists, "1", 2).unwrap();
+    assert_eq!(first.len(), 1);
+    let second = env.write("t", SaveMode::Append, "job-1", 3).unwrap();
+    assert_eq!(second.len(), 1);
+    assert_eq!(
+        second[0].path.to_string(),
+        "t/part-00000-job-1-c000.snappy.parquet"
+    );
+    // A retried attempt of `"1"` runs the sweep: only unlisted files of
+    // job `"1"` go.
+    let w = env.begin("t", SaveMode::Append, "1").unwrap().unwrap();
+    w.note_attempt(1);
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let kept = env
+        .rt
+        .block_on(w.commit(&env.io, format.as_ref(), schema(), &o, first.clone()))
+        .unwrap();
+    assert_eq!(kept, first);
+    assert!(
+        env.names("t").contains(&second[0].path.to_string()),
+        "the other write's file survived: {:?}",
+        env.names("t")
+    );
+}
+
+#[test]
+fn a_commit_without_a_retry_skips_the_orphan_listing() {
+    // An append whose tasks all ran their first attempt lists nothing on
+    // the commit: the write succeeds while listings fail. With a retried
+    // attempt recorded, the sweep does list, and its failure surfaces.
+    let inner = Arc::new(InMemory::new());
+    let fault = crate::io::FaultStore::new(Arc::clone(&inner) as Arc<dyn ObjectStore>);
+    let env = Env::new(Arc::clone(&fault) as Arc<dyn ObjectStore>, STORE);
+    fault.fail_next_lists(1000);
+    let files = env.write("t", SaveMode::Append, "u", 4).unwrap();
+    assert_eq!(files.len(), 1);
+    fault.fail_next_lists(0);
+    assert_eq!(
+        env.names("t"),
+        vec![
+            "t/_SUCCESS".to_owned(),
+            "t/part-00000-u-c000.snappy.parquet".to_owned()
+        ]
+    );
+    let w = env.begin("t", SaveMode::Append, "u2").unwrap().unwrap();
+    w.note_attempt(2);
+    fault.fail_next_lists(1000);
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let e = env
+        .rt
+        .block_on(w.commit(&env.io, format.as_ref(), schema(), &o, files))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivObjectStoreRequestFailed,
+        "{e}"
+    );
+    fault.fail_next_lists(0);
+}
+
+#[test]
 fn a_failed_overwrite_keeps_the_old_data() {
     let env = Env::memory();
     env.write("t", SaveMode::ErrorIfExists, "old", 4).unwrap();

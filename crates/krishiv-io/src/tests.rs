@@ -291,16 +291,14 @@ fn inner2() -> Fields {
 // ---- statistics ------------------------------------------------------------
 
 fn stats(rows: u64, nulls: u64, min: ScalarValue, max: ScalarValue) -> FileStatistics {
+    let mut column = ColumnStatistics::new(col("c"));
+    column.null_count = Precision::Exact(nulls);
+    column.min = Precision::Exact(min);
+    column.max = Precision::Exact(max);
     FileStatistics {
         rows: Precision::Exact(rows),
         bytes: Precision::Absent,
-        columns: vec![ColumnStatistics {
-            path: col("c"),
-            null_count: Precision::Exact(nulls),
-            min: Precision::Exact(min),
-            max: Precision::Exact(max),
-            nan_count: Precision::Absent,
-        }],
+        columns: vec![column],
     }
 }
 
@@ -607,6 +605,18 @@ fn pruning_answers_all_none_or_unknown() {
         ScalarValue::Float32(f32::NAN),
         ScalarValue::Float32(f32::NAN)
     );
+}
+
+#[test]
+fn statistics_slots_default_to_absent_and_do_not_prune() {
+    let mut s = stats(10, 0, ScalarValue::Int32(5), ScalarValue::Int32(9));
+    assert_eq!(s.columns[0].distinct, Precision::Absent);
+    assert!(s.columns[0].sketch.is_none());
+    let before = prune(&cmp(CmpOp::Eq, 4), &s);
+    s.columns[0].distinct = Precision::Exact(3);
+    s.columns[0].sketch = Some(krishiv_common::SketchRef::new(1, vec![1, 2, 3]));
+    assert_eq!(prune(&cmp(CmpOp::Eq, 4), &s), before);
+    assert_eq!(ColumnStatistics::new(col("c")).distinct, Precision::Absent);
 }
 
 // ---- options ---------------------------------------------------------------

@@ -70,6 +70,7 @@
 //! impl krishiv_exec::physical::PlanData for Handle {}
 //! ```
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 mod sealed {
@@ -123,6 +124,13 @@ value_types!(
     krishiv_io::ColumnPath,
     krishiv_io::FilterId,
     krishiv_io::KeyFilterOptions,
+    // Write-plan option values (references only on the wire; inline
+    // secrets are refused at encode time).
+    krishiv_common::secret::OptionValue,
+    krishiv_common::secret::SecretValue,
+    krishiv_common::secret::SecretString,
+    krishiv_common::secret::SecretUrl,
+    krishiv_common::secret::UrlPart,
     // Operator options that are plain values.
     crate::operators::SortKey,
     crate::operators::RowStageSettings,
@@ -136,6 +144,8 @@ impl<T: PlanData> sealed::Sealed for Vec<T> {}
 impl<T: PlanData> PlanData for Vec<T> {}
 impl<T: PlanData> sealed::Sealed for Option<T> {}
 impl<T: PlanData> PlanData for Option<T> {}
+impl<K: PlanData + Ord, V: PlanData> sealed::Sealed for BTreeMap<K, V> {}
+impl<K: PlanData + Ord, V: PlanData> PlanData for BTreeMap<K, V> {}
 impl<T: PlanData> sealed::Sealed for Box<T> {}
 impl<T: PlanData> PlanData for Box<T> {}
 // Shared ownership of an immutable value (`Arc<Expr>`, `SchemaRef`) is

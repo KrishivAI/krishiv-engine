@@ -44,8 +44,8 @@ use crate::sync::{Mutex, lock};
 pub trait Scheduler: Send + Sync {
     /// Starts `plan` and returns its result stream. Dropping the stream
     /// cancels the query. The plan is data; `worker` holds what this
-    /// process resolves its references with (tables, spill scope, write
-    /// sink) for the parts of the plan that run here.
+    /// process resolves its references with (tables, spill scope, I/O
+    /// context, formats and configuration) for the parts of the plan that run here.
     ///
     /// # Errors
     /// Instantiation errors; execution errors arrive on the stream.

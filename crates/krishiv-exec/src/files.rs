@@ -19,11 +19,12 @@
 //! `mergeSchema`): Parquet reads the first file's footer, CSV samples
 //! all of them. Local paths and cloud URLs (`s3://`, `s3a://`, `gs://`,
 //! `abfs://`, `abfss://`, `az://`, resolved by [`ObjectPaths`] through the
-//! [`StoreRegistry`]) are supported. Not yet
-//! supported, failing with `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns,
-//! subdirectories (Spark's partition discovery), paths with any other
-//! scheme, and file sources without a [`FileFormat`] here, and merging the
-//! files' schemas (`mergeSchema`).
+//! [`StoreRegistry`]) are supported. Not yet supported, failing with
+//! `KRISHIV_UNSUPPORTED_FEATURE`: glob patterns, subdirectories (Spark's
+//! partition discovery), paths with any other scheme, file sources Spark
+//! knows but the engine has no [`FileFormat`] for, and merging the files'
+//! schemas (`mergeSchema`). A name Spark does not know at all fails with
+//! Spark's `DATA_SOURCE_NOT_FOUND`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -37,27 +38,14 @@ use krishiv_common::error::{
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{
-    FileFormat, FileRef, FormatOptions, IoContext, IoScheduler, StoreId, StoreRegistry,
-    parse_object_url,
+    FileFormat, FileRef, FormatOptions, FormatRegistry, IoContext, IoScheduler, StoreId,
+    StoreRegistry, is_spark_file_source, parse_object_url,
 };
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
 use krishiv_types::DataType;
 use object_store::path::Path;
 
 use crate::error::Result;
-
-/// Spark 4.2's built-in data sources that read files (`` name.`path` ``
-/// reads them), as a Spark run classifies them.
-const SPARK_FILE_SOURCES: &[&str] = &[
-    "parquet",
-    "orc",
-    "json",
-    "csv",
-    "text",
-    "binaryfile",
-    "xml",
-    "libsvm",
-];
 
 /// Spark 4.2's built-in data sources that read no files:
 /// `UNSUPPORTED_DATASOURCE_FOR_DIRECT_QUERY`.
@@ -183,6 +171,8 @@ impl PathLocator for LocalPaths {
 /// registry reports them as unsupported. Locating is synchronous and performs
 /// no I/O: store construction only reads configuration and the environment.
 /// A located cloud path re-parses to itself through its [`LocatedPath::display`].
+/// Cloud URLs need the `cloud` feature: without it the
+/// registry reports them as unsupported.
 #[derive(Debug, Clone)]
 pub struct ObjectPaths {
     local: LocalPaths,
@@ -297,7 +287,7 @@ type ReadKey = (String, Vec<OptionValue>, BTreeMap<String, OptionValue>);
 /// Make one per query; the next query lists the files again.
 pub struct FileReads {
     io: IoContext,
-    formats: Vec<Arc<dyn FileFormat>>,
+    formats: Arc<FormatRegistry>,
     paths: Arc<dyn PathLocator>,
     session: Arc<Config>,
     listed: Mutex<Vec<(ReadKey, Arc<FileListing>)>>,
@@ -306,10 +296,7 @@ pub struct FileReads {
 impl fmt::Debug for FileReads {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FileReads")
-            .field(
-                "formats",
-                &self.formats.iter().map(|x| x.name()).collect::<Vec<_>>(),
-            )
+            .field("formats", &self.formats.names())
             .field("paths", &self.paths)
             .finish_non_exhaustive()
     }
@@ -321,7 +308,7 @@ impl FileReads {
     #[must_use]
     pub fn new(
         io: IoContext,
-        formats: Vec<Arc<dyn FileFormat>>,
+        formats: Arc<FormatRegistry>,
         paths: Arc<dyn PathLocator>,
         session: Arc<Config>,
     ) -> Self {
@@ -338,9 +325,10 @@ impl FileReads {
     /// on the first call, the same listing after.
     ///
     /// # Errors
-    /// `PATH_NOT_FOUND`, `UNABLE_TO_INFER_SCHEMA`, option errors,
-    /// `KRISHIV_UNSUPPORTED_FEATURE` (see the module docs) and storage
-    /// failures.
+    /// `PATH_NOT_FOUND`, `UNABLE_TO_INFER_SCHEMA`, Spark's
+    /// `DATA_SOURCE_NOT_FOUND` for a name Spark does not know, option
+    /// errors, `KRISHIV_UNSUPPORTED_FEATURE` (see the module docs) and
+    /// storage failures.
     pub async fn listing(
         &self,
         format: &str,
@@ -384,21 +372,22 @@ impl FileReads {
             if text.contains(['*', '?', '[', '{']) {
                 return Err(unsupported("glob patterns in paths".to_owned()));
             }
-            // The store is instantiated on the worker from the plan's
-            // option values (plans stay pure data): the read's `fs.*`
-            // options override the session configuration.
+            // The store is instantiated from the plan's option values
+            // (plans stay pure data): the read's `fs.*` options override
+            // the session configuration.
             let at = self.paths.locate_with_options(text, options)?;
             self.list_path(&at, &mut files).await?;
         }
         files.sort_by(|a, b| a.path.as_ref().cmp(b.path.as_ref()));
-        let Some(f) = self
-            .formats
-            .iter()
-            .find(|f| f.name().eq_ignore_ascii_case(format))
-        else {
-            return Err(unsupported(format!("the {format} file format")));
+        let format = match self.formats.get(format) {
+            Ok(format) => format,
+            Err(e) => {
+                if is_spark_file_source(format) {
+                    return Err(unsupported(format!("the {format} file format")));
+                }
+                return Err(e);
+            }
         };
-        let format = Arc::clone(f);
         if self.merges_schemas(format.name(), options) {
             return Err(unsupported(
                 "merging the schemas of files (mergeSchema)".to_owned(),
@@ -473,10 +462,11 @@ impl FileReads {
 
 impl FileSchemaResolver for FileReads {
     /// The located path's qualified form (`file:/abs/path`); a path with
-    /// credentials stays as written (its read is refused). Qualifying never
-    /// builds a store, so it needs no options and never fails on store
-    /// configuration: the store is instantiated at listing from the read's
-    /// options.
+    /// credentials stays as written (its read is refused).
+    /// The located path's qualified form; a path with credentials stays as
+    /// written (its read is refused). Qualifying never builds a store, so it
+    /// needs no options and never fails on store configuration: the store is
+    /// instantiated at listing from the read's options.
     fn qualify(&self, path: &OptionValue) -> std::result::Result<OptionValue, KrishivError> {
         match path.as_plain() {
             Some(text) => Ok(OptionValue::from_user(
@@ -489,9 +479,7 @@ impl FileSchemaResolver for FileReads {
 
     fn source_kind(&self, name: &str) -> SourceKind {
         let name = name.to_ascii_lowercase();
-        if SPARK_FILE_SOURCES.contains(&name.as_str())
-            || self.formats.iter().any(|f| f.name() == name)
-        {
+        if is_spark_file_source(&name) || self.formats.contains(&name) {
             SourceKind::File
         } else if SPARK_OTHER_SOURCES.contains(&name.as_str()) {
             SourceKind::Other

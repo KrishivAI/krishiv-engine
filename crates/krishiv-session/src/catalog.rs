@@ -26,8 +26,13 @@ use krishiv_common::error::{
     RecursiveView, TableOrViewNotFound,
 };
 use krishiv_exec::files::FileReads;
+use krishiv_exec::physical::{
+    PhysNode, PhysicalPlan, ScanId, SplitFileRef, TaskSpec, assign_batch_splits,
+    assign_file_splits, plan_file_partitions,
+};
 use krishiv_exec::planner::{FileTable, MemoryTable, TableProvider, TableProviderResolver};
 use krishiv_io::IoContext;
+use krishiv_io::split::SplitConfig;
 use krishiv_plan::analyzer::{
     BoxFuture, Catalog, CatalogResolver, NameForm, TableColumn, TableIdent, TableKind, TableMeta,
 };
@@ -395,6 +400,195 @@ impl QueryCatalog {
             .into()),
         }
     }
+
+    /// The scan splits of one stage over `plan`: one [`TaskSpec`] per task
+    /// of `tasks`, dealing the streaming pipeline's scans (or relation
+    /// batches) in contiguous index ranges, deterministically.
+    ///
+    /// Only the scans of the probe or streaming pipeline are split: the
+    /// build side of any join and the plans of scalar and `EXISTS`
+    /// subqueries read whole (no entry), so a task joins its probe share
+    /// against the full build and evaluates subqueries over full inputs.
+    /// Splitting those would join `t_i` against only its build share or
+    /// evaluate `(SELECT max(x) FROM u)` over part of `u`.
+    ///
+    /// The files are the opened listing (listed once, before planning);
+    /// their partitions are planned here with `total_slots` worker slots,
+    /// so the same listing and config give every task the same splits, and
+    /// a retried task reads the same ones. A split carries a byte range,
+    /// never row-group indices: the coordinator reads no footers. A scan
+    /// the stage reads whole (a table without a relation lease) gets no
+    /// entry.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for no tasks, a task count past `u32`, or a scan
+    /// whose files were not opened before planning.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the distributed scheduler is the caller; unit tests cover it until then"
+        )
+    )]
+    pub(crate) fn task_specs(
+        &self,
+        plan: &PhysicalPlan,
+        tasks: usize,
+        total_slots: u64,
+    ) -> Result<Vec<TaskSpec>, KrishivError> {
+        if tasks == 0 {
+            return Err(InternalError {
+                message: "a stage without tasks".to_owned(),
+            }
+            .into());
+        }
+        let partitions = u32::try_from(tasks).map_err(|_| InternalError {
+            message: format!("a stage of {tasks} tasks"),
+        })?;
+        // The streaming pipeline's scans, in id order: the assignment is
+        // deterministic. Builds and subquery plans read whole.
+        let mut scans = streaming_scans(plan.root());
+        scans.sort_by_key(|s| s.id);
+        let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
+        for scan in scans {
+            match &scan.scan.source {
+                ReadSource::Table { name, .. } => {
+                    let last = name.last().map_or("", String::as_str);
+                    let Some(table) = self.loaded(last) else {
+                        return Err(InternalError {
+                            message: format!("the scanned table {last} was not loaded"),
+                        }
+                        .into());
+                    };
+                    match &*table {
+                        TempTable::Memory { table, .. } => {
+                            if let Some(lease) = table.relation_lease() {
+                                assigned.push((
+                                    scan.id,
+                                    ScanSplitsKind::Batches {
+                                        relation: lease.reference(),
+                                        batches: lease.batches(),
+                                    },
+                                ));
+                            }
+                        }
+                        TempTable::Files { .. } => {
+                            let key = FilesKey::View(last.to_lowercase());
+                            let table = self.opened(&key).ok_or_else(|| InternalError {
+                                message: "a scan of files that was not opened before planning"
+                                    .to_owned(),
+                            })?;
+                            assigned.push((scan.id, self.file_splits(&table, total_slots)?));
+                        }
+                        TempTable::View { .. } => {
+                            return Err(InternalError {
+                                message: "a scan of a temporary view that was not inlined"
+                                    .to_owned(),
+                            }
+                            .into());
+                        }
+                    }
+                }
+                source @ ReadSource::Files { .. } => {
+                    let key = FilesKey::Read(source.clone());
+                    let table = self.opened(&key).ok_or_else(|| InternalError {
+                        message: "a scan of files that was not opened before planning".to_owned(),
+                    })?;
+                    assigned.push((scan.id, self.file_splits(&table, total_slots)?));
+                }
+                _ => {
+                    return Err(unsupported("this scan"));
+                }
+            }
+        }
+        // `partitions` already holds `tasks` as a `u32`: iterating it
+        // cannot fail the conversion the `tasks` range would repeat.
+        let mut specs: Vec<TaskSpec> = (0..partitions)
+            .map(|partition| TaskSpec {
+                stage: 0,
+                stage_attempt: 0,
+                partition,
+                partitions,
+                attempt: 0,
+                scans: BTreeMap::new(),
+            })
+            .collect();
+        for (id, kind) in assigned {
+            match kind {
+                ScanSplitsKind::Files { files, partitions } => {
+                    for (splits, spec) in assign_file_splits(&files, &partitions, tasks)
+                        .into_iter()
+                        .zip(specs.iter_mut())
+                    {
+                        spec.scans.insert(id, splits);
+                    }
+                }
+                ScanSplitsKind::Batches { relation, batches } => {
+                    for (splits, spec) in assign_batch_splits(relation, batches, tasks)
+                        .into_iter()
+                        .zip(specs.iter_mut())
+                    {
+                        spec.scans.insert(id, splits);
+                    }
+                }
+            }
+        }
+        Ok(specs)
+    }
+
+    /// The file splits of an opened file table: the listed files with
+    /// their versions, planned with `total_slots` worker slots.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the distributed scheduler is the caller; unit tests cover it until then"
+        )
+    )]
+    fn file_splits(
+        &self,
+        table: &FileTable,
+        total_slots: u64,
+    ) -> Result<ScanSplitsKind, KrishivError> {
+        let config = SplitConfig::from_config(&self.scans.config, total_slots);
+        let format = table.format();
+        let options = table.options();
+        let files: Vec<SplitFileRef> = table
+            .files()
+            .iter()
+            .map(SplitFileRef::from_file_ref)
+            .collect();
+        let partitions = plan_file_partitions(&config, &files, |f| {
+            format.capabilities(&options).is_splittable(f.path.as_ref())
+        });
+        Ok(ScanSplitsKind::Files { files, partitions })
+    }
+}
+
+/// What [`QueryCatalog::task_specs`] deals to a stage's tasks: a file
+/// scan's planned partitions, or a memory scan's batch count.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the distributed scheduler is the caller; unit tests cover it until then"
+    )
+)]
+enum ScanSplitsKind {
+    /// The listed files with their versions, and their planned partitions.
+    Files {
+        /// The scan's files, in listing order.
+        files: Vec<SplitFileRef>,
+        /// Their partitions.
+        partitions: Vec<krishiv_io::split::FilePartition>,
+    },
+    /// A relation's content hash and batch count.
+    Batches {
+        /// The relation, by content hash.
+        relation: krishiv_memory::RelationRef,
+        /// The number of stored batches.
+        batches: usize,
+    },
 }
 
 /// [`FileTable::open`] on the executor's I/O runtime: footer reads are
@@ -460,6 +654,42 @@ fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
     }
     plan.for_each_expr(&mut |e| in_expr(e, out));
     plan.for_each_child(&mut |c| collect_scans(c, out));
+}
+
+/// The scans of the streaming pipeline of `root`: those a task splits.
+/// Joins contribute only their probe side and nodes only their streaming
+/// input; subquery plans and join builds read whole (no entry), so tasks
+/// join probe shares against full builds and evaluate subqueries over full
+/// inputs.
+fn streaming_scans(root: &PhysNode) -> Vec<&krishiv_exec::physical::ScanNode> {
+    fn go<'a>(node: &'a PhysNode, out: &mut Vec<&'a krishiv_exec::physical::ScanNode>) {
+        match node {
+            PhysNode::Scan(scan) => out.push(scan),
+            PhysNode::OneRow => {}
+            PhysNode::Filter { input, .. }
+            | PhysNode::Project { input, .. }
+            | PhysNode::ReplicateRows { input, .. }
+            | PhysNode::Expand { input, .. }
+            | PhysNode::Limit { input, .. }
+            | PhysNode::Sort { input, .. }
+            | PhysNode::TopN { input, .. }
+            | PhysNode::Window { input, .. }
+            | PhysNode::WindowGroupLimit { input, .. }
+            | PhysNode::Aggregate { input, .. }
+            | PhysNode::WriteFiles { input, .. } => go(input, out),
+            PhysNode::Exchange(e) => go(&e.input, out),
+            PhysNode::HashJoin(join) => go(&join.probe, out),
+            PhysNode::NestedLoopJoin(join) => go(&join.probe, out),
+            PhysNode::Union { inputs } => {
+                for input in inputs {
+                    go(input, out);
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    go(root, &mut out);
+    out
 }
 
 /// The table `name`: the one this query already loaded, so every spelling
@@ -1308,5 +1538,563 @@ mod tests {
             .register_batches("__KRISHIV_SNAPSHOT_7", schema, vec![batch])
             .unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::KrishivReservedTempViewName);
+    }
+
+    /// Writes `rows` `id` values to `path` as Parquet with row groups of at
+    /// most `row_group` rows.
+    fn write_parquet(path: &std::path::Path, rows: i32, row_group: usize) {
+        use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(row_group))
+            .build();
+        let file = std::fs::File::create(path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), Some(props)).unwrap();
+        let mut at = 0;
+        while at < rows {
+            let take = (rows - at).min(50);
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(Int32Array::from(
+                    (at..at + take).collect::<Vec<_>>(),
+                ))],
+            )
+            .unwrap();
+            writer.write(&batch).unwrap();
+            at += take;
+        }
+        writer.close().unwrap();
+    }
+
+    /// The `id` column of `batches`, sorted.
+    fn ids_of(batches: &[RecordBatch]) -> Vec<i32> {
+        let mut out = Vec::new();
+        for batch in batches {
+            let ids = batch
+                .column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap();
+            out.extend((0..batch.num_rows()).map(|i| ids.value(i)));
+        }
+        out.sort_unstable();
+        out
+    }
+
+    #[test]
+    fn task_specs_deal_file_scans_deterministically_and_cover_everything() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_parquet(&dir.path().join("a.parquet"), 500, 100);
+        write_parquet(&dir.path().join("b.parquet"), 300, 100);
+        let session = Session::builder()
+            // Small splits: every file is cut into several byte ranges.
+            .config("spark.sql.files.maxPartitionBytes", "1024")
+            .build()
+            .unwrap();
+        let df = session.read().parquet([dir.path().to_str().unwrap()]);
+        let analysis = rt.block_on(df.analysis()).unwrap();
+        let (_, physical) = rt
+            .block_on(session.physical(&analysis.analyzed, &analysis.env))
+            .unwrap();
+        let catalog = &analysis.env.catalog;
+        // The same listing and config give the same assignment, so a
+        // retried task reads the same splits.
+        let first = catalog.task_specs(&physical, 3, 3).unwrap();
+        let second = catalog.task_specs(&physical, 3, 3).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 3);
+        // Every task's partitions are contiguous, and together the tasks
+        // cover every planned partition exactly once.
+        let mut indexes = Vec::new();
+        for task in &first {
+            assert_eq!(task.scans.len(), 1, "one scan: {task:?}");
+            let splits = task.scans.values().next().unwrap();
+            let krishiv_exec::physical::ScanSplits::Files { files, partitions } = splits else {
+                panic!("file splits: {splits:?}");
+            };
+            assert!(!files.is_empty());
+            let mut last: Option<usize> = None;
+            for part in partitions {
+                if let Some(previous) = last {
+                    assert_eq!(part.index, previous + 1, "contiguous: {partitions:?}");
+                }
+                last = Some(part.index);
+                indexes.push(part.index);
+            }
+        }
+        indexes.sort_unstable();
+        assert!(!indexes.is_empty(), "several splits");
+        assert_eq!(
+            indexes,
+            (0..indexes.len()).collect::<Vec<_>>(),
+            "every partition exactly once"
+        );
+        // The union of 1..=4 tasks is the single run, with no duplicates.
+        let whole = ids_of(&rt.block_on(df.collect()).unwrap());
+        assert_eq!(whole.len(), 800);
+        for tasks in 1..=4_usize {
+            let specs = catalog
+                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
+                .unwrap();
+            assert_eq!(specs.len(), tasks);
+            let mut union = Vec::new();
+            for task in &specs {
+                union.extend(ids_of(
+                    &rt.block_on(session.run_task(&physical, &analysis.env, task))
+                        .unwrap(),
+                ));
+            }
+            union.sort_unstable();
+            assert_eq!(union, whole, "{tasks} tasks");
+        }
+    }
+
+    #[test]
+    fn task_specs_deal_a_view_over_files() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_parquet(&dir.path().join("a.parquet"), 500, 100);
+        write_parquet(&dir.path().join("b.parquet"), 300, 100);
+        let session = Session::builder()
+            // Small splits: every file is cut into several byte ranges.
+            .config("spark.sql.files.maxPartitionBytes", "1024")
+            .build()
+            .unwrap();
+        // A view over a files read keeps listing them: the scan names the
+        // view, and its splits come from the opened listing.
+        let files = session.read().parquet([dir.path().to_str().unwrap()]);
+        rt.block_on(files.create_or_replace_temp_view("pv"))
+            .unwrap();
+        let df = block_on(session.sql("SELECT id FROM pv")).unwrap();
+        let analysis = rt.block_on(df.analysis()).unwrap();
+        assert!(analysis.env.catalog.loaded_file_views());
+        let (_, physical) = rt
+            .block_on(session.physical(&analysis.analyzed, &analysis.env))
+            .unwrap();
+        let catalog = &analysis.env.catalog;
+        // The same listing and config give the same assignment, so a
+        // retried task reads the same splits.
+        let first = catalog.task_specs(&physical, 3, 3).unwrap();
+        let second = catalog.task_specs(&physical, 3, 3).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 3);
+        // The union of 1..=3 tasks is the single run, with no duplicates:
+        // every task reads exactly its splits, never the whole view.
+        let whole = ids_of(&rt.block_on(df.collect()).unwrap());
+        assert_eq!(whole.len(), 800);
+        for tasks in 1..=3_usize {
+            let specs = catalog
+                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
+                .unwrap();
+            assert_eq!(specs.len(), tasks);
+            let mut union = Vec::new();
+            for task in &specs {
+                assert_eq!(task.scans.len(), 1, "one scan: {task:?}");
+                union.extend(ids_of(
+                    &rt.block_on(session.run_task(&physical, &analysis.env, task))
+                        .unwrap(),
+                ));
+            }
+            union.sort_unstable();
+            assert_eq!(union, whole, "{tasks} tasks");
+        }
+    }
+
+    #[test]
+    fn a_file_changed_between_listing_and_reading_fails() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        write_parquet(&dir.path().join("a.parquet"), 200, 100);
+        let session = Session::builder()
+            .config("spark.sql.files.maxPartitionBytes", "4096")
+            .build()
+            .unwrap();
+        let df = session.read().parquet([dir.path().to_str().unwrap()]);
+        let analysis = rt.block_on(df.analysis()).unwrap();
+        let (_, physical) = rt
+            .block_on(session.physical(&analysis.analyzed, &analysis.env))
+            .unwrap();
+        let specs = analysis.env.catalog.task_specs(&physical, 1, 1).unwrap();
+        assert_eq!(specs.len(), 1);
+        // New bytes under an old name: the listed version is stale (the
+        // size differs too, so the failure does not depend on timestamp
+        // granularity).
+        write_parquet(&dir.path().join("a.parquet"), 10, 100);
+        let e = rt
+            .block_on(session.run_task(&physical, &analysis.env, &specs[0]))
+            .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivFileChangedDuringRead,
+            "{e}"
+        );
+    }
+
+    /// The `id` values of `sql` over `session`, sorted.
+    fn table_ids(session: &Session, sql: &str) -> Vec<i32> {
+        let df = block_on(session.sql(sql)).unwrap();
+        ids_of(&block_on(df.collect()).unwrap())
+    }
+
+    #[test]
+    fn task_specs_deal_memory_tables_and_release_them() {
+        use krishiv_exec::physical::TaskSpec;
+        let session = Session::new().unwrap();
+        let base = session.memory_reserved();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batches_of = |values: Vec<i32>| {
+            values
+                .chunks(3)
+                .map(|chunk| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from(chunk.to_vec()))],
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        let values: Vec<i32> = (0..14).collect();
+        session
+            .register_batches("t", Arc::clone(&schema), batches_of(values.clone()))
+            .unwrap();
+        // The same data under another name shares its content hash.
+        session
+            .register_batches("u", Arc::clone(&schema), batches_of(values))
+            .unwrap();
+        session
+            .register_batches("v", Arc::clone(&schema), batches_of(vec![99]))
+            .unwrap();
+        let hash_of = |name: &str| {
+            let entry = session.state.catalog.get(name, false).unwrap();
+            let TempTable::Memory { table, .. } = &*entry else {
+                panic!("a memory table: {name}");
+            };
+            table.relation_lease().unwrap().hash()
+        };
+        assert_eq!(hash_of("t"), hash_of("u"), "same data, same hash");
+        assert_ne!(hash_of("t"), hash_of("v"), "different data, different hash");
+        assert_eq!(session.relations().len(), 2, "t and u share one entry");
+        assert!(
+            session.relations().reserved() > 0,
+            "the entries hold store bytes while leased"
+        );
+        // Holding tables never consumes the query pool's budget (tight
+        // spill tests register large tables): the store has its own pool.
+        assert_eq!(
+            session.memory_reserved(),
+            base,
+            "registration leaves the session pool alone"
+        );
+        // The union of 1..=4 tasks is the table, with no duplicates; the
+        // same listing gives the same assignment.
+        let df = session.table("t");
+        let analysis = block_on(df.analysis()).unwrap();
+        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
+        let whole = table_ids(&session, "SELECT id FROM t");
+        assert_eq!(whole, (0..14).collect::<Vec<_>>());
+        for tasks in 1..=4_usize {
+            let catalog = &analysis.env.catalog;
+            let specs = catalog
+                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
+                .unwrap();
+            assert_eq!(
+                specs,
+                catalog
+                    .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
+                    .unwrap(),
+                "deterministic"
+            );
+            assert_eq!(specs.len(), tasks);
+            let mut union = Vec::new();
+            for task in &specs {
+                assert_eq!(task.scans.len(), 1, "one scan: {task:?}");
+                union.extend(ids_of(
+                    &block_on(session.run_task(&physical, &analysis.env, task)).unwrap(),
+                ));
+            }
+            union.sort_unstable();
+            assert_eq!(union, whole, "{tasks} tasks");
+        }
+        // A scan without an entry reads the whole table, exactly as before.
+        let single = ids_of(
+            &block_on(session.run_task(&physical, &analysis.env, &TaskSpec::whole())).unwrap(),
+        );
+        assert_eq!(single, whole);
+        // The test's analysis holds a table lease through its loaded
+        // tables: release it before the tables are dropped.
+        drop(analysis);
+        drop(df);
+        // Dropping the tables releases their entries and their bytes.
+        assert!(session.drop_temp_view("t"));
+        assert_eq!(session.relations().len(), 2, "u still holds the entry");
+        assert!(session.drop_temp_view("u"));
+        assert_eq!(session.relations().len(), 1);
+        assert!(session.drop_temp_view("v"));
+        assert!(session.relations().is_empty());
+        assert_eq!(
+            session.relations().reserved(),
+            0,
+            "the last lease returns the bytes"
+        );
+        assert_eq!(
+            session.memory_reserved(),
+            base,
+            "queries and drops leave the session pool as it was"
+        );
+    }
+
+    #[test]
+    fn task_specs_splits_only_the_streaming_pipeline() {
+        // Broadcast builds and scalar subqueries read whole: tasks join
+        // probe shares against the full build and evaluate the subquery
+        // over its full input, so their union is the single run.
+        let session = Session::new().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batches_of = |values: Vec<i32>| {
+            values
+                .chunks(3)
+                .map(|chunk| {
+                    RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from(chunk.to_vec()))],
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        session
+            .register_batches("t", Arc::clone(&schema), batches_of((0..14).collect()))
+            .unwrap();
+        session
+            .register_batches("u", Arc::clone(&schema), batches_of((0..14).collect()))
+            .unwrap();
+        session
+            .register_batches("v", Arc::clone(&schema), batches_of(vec![5]))
+            .unwrap();
+        let sql = "SELECT t.id FROM t JOIN u ON t.id = u.id WHERE t.id > (SELECT max(id) FROM v)";
+        let whole = table_ids(&session, sql);
+        assert_eq!(whole, (6..14).collect::<Vec<_>>());
+        let df = block_on(session.sql(sql)).unwrap();
+        let analysis = block_on(df.analysis()).unwrap();
+        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
+        for tasks in [2_usize, 3_usize] {
+            let specs = analysis
+                .env
+                .catalog
+                .task_specs(&physical, tasks, u64::try_from(tasks).unwrap())
+                .unwrap();
+            assert_eq!(specs.len(), tasks);
+            // Only the streaming scan is dealt ranges; builds and the
+            // subquery's scan read whole (no entry).
+            let streaming = streaming_scans(physical.root());
+            assert_eq!(streaming.len(), 1, "one streaming scan");
+            for task in &specs {
+                assert_eq!(task.scans.len(), 1, "probe only: {task:?}");
+                assert!(
+                    task.scans.contains_key(&streaming[0].id),
+                    "the streaming scan: {task:?}"
+                );
+            }
+            let mut union = Vec::new();
+            for task in &specs {
+                union.extend(ids_of(
+                    &block_on(session.run_task(&physical, &analysis.env, task)).unwrap(),
+                ));
+            }
+            union.sort_unstable();
+            assert_eq!(union, whole, "{tasks} tasks");
+        }
+        drop(analysis);
+        drop(df);
+    }
+
+    #[test]
+    fn task_specs_rejects_no_tasks() {
+        let session = Session::new().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        session.register_batches("t", schema, vec![batch]).unwrap();
+        let df = session.table("t");
+        let analysis = block_on(df.analysis()).unwrap();
+        let (_, physical) = block_on(session.physical(&analysis.analyzed, &analysis.env)).unwrap();
+        let e = analysis
+            .env
+            .catalog
+            .task_specs(&physical, 0, 0)
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+        // The analysis holds the old table through its loaded tables.
+        drop(analysis);
+        drop(df);
+        // Replacing the table releases the old entry: one entry either way.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![2]))],
+        )
+        .unwrap();
+        session.register_batches("t", schema, vec![batch]).unwrap();
+        assert_eq!(session.relations().len(), 1);
+        assert_eq!(table_ids(&session, "SELECT id FROM t"), [2]);
+    }
+
+    /// A scan plan over `source`: what `task_specs` deals splits for.
+    fn split_scan_plan(source: ReadSource) -> PhysicalPlan {
+        use krishiv_exec::RowStageSettings;
+        use krishiv_exec::physical::{ExprEnv, ScanNode};
+        use krishiv_exec::planner::ExplainNode;
+        use krishiv_io::ColumnPath;
+        use krishiv_plan::{AttrId, BoundColumn};
+
+        let scan = Scan {
+            source,
+            output: vec![BoundColumn {
+                id: AttrId(1),
+                name: "id".to_owned(),
+                data_type: DataType::Integer,
+                nullable: true,
+            }],
+            version: None,
+        };
+        PhysicalPlan::new(
+            PhysNode::Scan(ScanNode {
+                id: ScanId(1),
+                scan,
+                projection: vec![ColumnPath::new("id")],
+                filter: None,
+                runtime_filters: Vec::new(),
+                row_stage: RowStageSettings::default(),
+            }),
+            Arc::new(Schema::new(vec![Field::new(
+                "id",
+                arrow_schema::DataType::Int32,
+                true,
+            )])),
+            ExplainNode::leaf("Scan", ""),
+            ExprEnv {
+                ansi: true,
+                legacy_statistical_aggregate: false,
+                zone: None,
+                query_start_micros: 0,
+                user: Arc::from("u"),
+                map_key_dedup_last_win: false,
+            },
+        )
+    }
+
+    /// A table scan source over `name`.
+    fn table_source(name: &str) -> ReadSource {
+        ReadSource::Table {
+            name: vec![
+                "spark_catalog".to_owned(),
+                "default".to_owned(),
+                name.to_owned(),
+            ],
+            options: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn task_specs_rejects_what_it_cannot_split() {
+        let session = Session::new().unwrap();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int32,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        session.register_batches("t", schema, vec![batch]).unwrap();
+        block_on(session.sql("CREATE TEMPORARY VIEW w AS SELECT 1 AS id")).unwrap();
+        // The analysis references the view (inlined afterwards), so the
+        // catalog holds its entry while no scan names it.
+        let df = block_on(session.sql("SELECT id FROM w")).unwrap();
+        let analysis = block_on(df.analysis()).unwrap();
+        let catalog = &analysis.env.catalog;
+        // The view's own entry, as an analysis that kept it would hold
+        // it: a view reaching split planning was not inlined.
+        let view = session.state.catalog.get("w", false).unwrap();
+        catalog.loaded.lock().unwrap().insert("w".to_owned(), view);
+
+        // A scan of a table the analysis never loaded.
+        let e = catalog
+            .task_specs(&split_scan_plan(table_source("nope")), 2, 2)
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+        assert!(e.to_string().contains("was not loaded"), "{e}");
+
+        // A scan of a temporary view: views inline during analysis, so a
+        // view reaching split planning is a coordinator bug.
+        let e = catalog
+            .task_specs(&split_scan_plan(table_source("w")), 2, 2)
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+        assert!(e.to_string().contains("was not inlined"), "{e}");
+
+        // A scan of files that were never opened.
+        let e = catalog
+            .task_specs(
+                &split_scan_plan(ReadSource::Files {
+                    format: "parquet".to_owned(),
+                    paths: Vec::new(),
+                    options: BTreeMap::new(),
+                }),
+                2,
+                2,
+            )
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+        assert!(e.to_string().contains("not opened"), "{e}");
+
+        // More tasks than a `u32` holds: rejected before anything is dealt.
+        let e = catalog
+            .task_specs(
+                &split_scan_plan(table_source("t")),
+                usize::try_from(u32::MAX).unwrap() + 1,
+                1,
+            )
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InternalError, "{e}");
+        drop(analysis);
+        drop(df);
     }
 }
