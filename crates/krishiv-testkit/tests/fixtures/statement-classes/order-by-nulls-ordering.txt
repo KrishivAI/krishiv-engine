@@ -1,0 +1,17 @@
+DDL	create table spark_10747(col1 int, col2 int, col3 int) using parquet
+WRITE	INSERT INTO spark_10747 VALUES (6, 12, 10), (6, 11, 4), (6, 9, 10), (6, 15, 8),
+READ	select col1, col2, col3, sum(col2)
+READ	select col1, col2, col3, sum(col2)
+READ	select col1, col2, col3, sum(col2)
+READ	select col1, col2, col3, sum(col2)
+READ	SELECT COL1, COL2, COL3 FROM spark_10747 ORDER BY COL3 ASC NULLS FIRST, COL2
+READ	SELECT COL1, COL2, COL3 FROM spark_10747 ORDER BY COL3 NULLS LAST, COL2
+READ	SELECT COL1, COL2, COL3 FROM spark_10747 ORDER BY COL3 DESC NULLS FIRST, COL2
+READ	SELECT COL1, COL2, COL3 FROM spark_10747 ORDER BY COL3 DESC NULLS LAST, COL2
+DDL	drop table spark_10747
+DDL	create table spark_10747_mix(
+WRITE	INSERT INTO spark_10747_mix VALUES
+READ	select * from spark_10747_mix order by col1 nulls last, col5 nulls last
+READ	select * from spark_10747_mix order by col1 desc nulls first, col5 desc nulls first
+READ	select * from spark_10747_mix order by col5 desc nulls first, col3 desc nulls last
+DDL	drop table spark_10747_mix

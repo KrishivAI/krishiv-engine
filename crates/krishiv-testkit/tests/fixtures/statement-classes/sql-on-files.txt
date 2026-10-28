@@ -1,0 +1,23 @@
+DDL	CREATE DATABASE IF NOT EXISTS sql_on_files
+DDL	CREATE TABLE sql_on_files.test_parquet USING PARQUET AS SELECT 1
+READ	SELECT * FROM parquet.``
+READ	SELECT * FROM parquet.`/file/not/found`
+READ	SELECT * FROM parquet.`${spark.sql.warehouse.dir}/sql_on_files.db/test_parquet`
+DDL	DROP TABLE sql_on_files.test_parquet
+DDL	CREATE TABLE sql_on_files.test_orc USING ORC AS SELECT 1
+READ	SELECT * FROM orc.``
+READ	SELECT * FROM orc.`/file/not/found`
+READ	SELECT * FROM orc.`${spark.sql.warehouse.dir}/sql_on_files.db/test_orc`
+DDL	DROP TABLE sql_on_files.test_orc
+DDL	CREATE TABLE sql_on_files.test_csv USING CSV AS SELECT 1
+READ	SELECT * FROM csv.``
+READ	SELECT * FROM csv.`/file/not/found`
+READ	SELECT * FROM csv.`${spark.sql.warehouse.dir}/sql_on_files.db/test_csv`
+DDL	DROP TABLE sql_on_files.test_csv
+DDL	CREATE TABLE sql_on_files.test_json USING JSON AS SELECT 1
+READ	SELECT * FROM json.``
+READ	SELECT * FROM json.`/file/not/found`
+READ	SELECT * FROM json.`${spark.sql.warehouse.dir}/sql_on_files.db/test_json`
+DDL	DROP TABLE sql_on_files.test_json
+DDL	DROP DATABASE sql_on_files
+READ	SELECT * FROM json.`https://raw.githubusercontent.com/apache/spark/refs/heads/master/examples/src/main/resources/employe

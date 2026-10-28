@@ -1,0 +1,29 @@
+DDL	CREATE VIEW users(user_id, score) AS VALUES (1, 10.0), (2, 20.0), (3, 30.0)
+DDL	CREATE VIEW products(product, pscore) AS VALUES ('A', 11.0), ('B', 22.0), ('C', 5.0)
+READ	SELECT u.user_id, p.product
+READ	SELECT *
+READ	SELECT *
+READ	SELECT u.user_id, p.product, p.pscore
+READ	SELECT u.user_id, p.product
+READ	SELECT u.user_id, p.product
+READ	SELECT u.user_id, p.product
+READ	SELECT u.user_id, p.product
+READ	SELECT a.user_id AS a_id, b.user_id AS b_id
+PARSE_ERROR	SELECT u.user_id, p.product
+PARSE_ERROR	SELECT u.user_id, p.product
+PARSE_ERROR	SELECT u.user_id, p.product
+READ	SELECT u.user_id, p.product
+READ	SELECT COUNT(*) AS num_rows
+READ	SELECT COUNT(*) AS num_rows
+READ	SELECT COUNT(*) AS num_rows
+READ	EXPLAIN
+READ	EXPLAIN
+READ	EXPLAIN
+SESSION	SET spark.sql.crossJoin.enabled = false
+READ	SELECT u.user_id, p.product
+SESSION	SET spark.sql.crossJoin.enabled = true
+SESSION	CREATE OR REPLACE TEMP VIEW tied_products(product, pscore)
+READ	SELECT u.user_id, COUNT(*) AS num_matches
+SESSION	DROP VIEW tied_products
+SESSION	DROP VIEW users
+SESSION	DROP VIEW products

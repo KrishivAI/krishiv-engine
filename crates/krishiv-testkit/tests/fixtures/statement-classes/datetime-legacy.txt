@@ -1,0 +1,243 @@
+SESSION	create temporary view date_view as select '2011-11-11' date_str, '1' int_str
+READ	select date '2019-01-01\t'
+PARSE_ERROR	select date '2020-01-01中文'
+READ	select make_date(2019, 1, 1), make_date(12, 12, 12)
+READ	select make_date(2000, 13, 1)
+READ	select make_date(2000, 1, 33)
+PARSE_ERROR	select date'015'
+PARSE_ERROR	select date'2021-4294967297-11'
+READ	select current_date = current_date
+READ	select current_date() = current_date()
+READ	select curdate(1)
+READ	select DATE_FROM_UNIX_DATE(0), DATE_FROM_UNIX_DATE(1000), DATE_FROM_UNIX_DATE(null)
+READ	select UNIX_DATE(DATE('1970-01-01')), UNIX_DATE(DATE('2020-12-04')), UNIX_DATE(null)
+READ	select to_date(null), to_date('2016-12-31'), to_date('2016-12-31', 'yyyy-MM-dd')
+READ	select to_date("16", "dd")
+READ	select to_date("02-29", "MM-dd")
+READ	select dayofweek('2007-02-03'), dayofweek('2009-07-30'), dayofweek('2017-05-27'), dayofweek(null),
+READ	select weekday('2007-02-03'), weekday('2009-07-30'), weekday('2017-05-27'), weekday(null),
+READ	select year('1500-01-01'), year('1582-10-15 13:10:15'), year(timestamp_ltz'1582-10-15 13:10:15'), year(timestamp_ntz'158
+READ	select month('1500-01-01'), month('1582-10-15 13:10:15'), month(timestamp_ltz'1582-10-15 13:10:15'), month(timestamp_ntz
+READ	select dayOfYear('1500-01-01'), dayOfYear('1582-10-15 13:10:15'), dayOfYear(timestamp_ltz'1582-10-15 13:10:15'), dayOfYe
+READ	select next_day("2015-07-23", "Mon")
+READ	select next_day("2015-07-23", "xx")
+READ	select next_day("2015-07-23 12:12:12", "Mon")
+READ	select next_day(timestamp_ltz"2015-07-23 12:12:12", "Mon")
+READ	select next_day(timestamp_ntz"2015-07-23 12:12:12", "Mon")
+READ	select next_day("xx", "Mon")
+READ	select next_day(null, "Mon")
+READ	select next_day(null, "xx")
+READ	select date_add(date'2011-11-11', 1)
+READ	select date_add('2011-11-11', 1)
+READ	select date_add('2011-11-11', 1Y)
+READ	select date_add('2011-11-11', 1S)
+READ	select date_add('2011-11-11', 1L)
+READ	select date_add('2011-11-11', 1.0)
+READ	select date_add('2011-11-11', 1E1)
+READ	select date_add('2011-11-11', '1')
+READ	select date_add('2011-11-11', '1.2')
+READ	select date_add(null, 1)
+READ	select date_add(date'2011-11-11', null)
+READ	select date_add(timestamp_ltz'2011-11-11 12:12:12', 1)
+READ	select date_add(timestamp_ntz'2011-11-11 12:12:12', 1)
+READ	select date_sub(date'2011-11-11', 1)
+READ	select date_sub('2011-11-11', 1)
+READ	select date_sub('2011-11-11', 1Y)
+READ	select date_sub('2011-11-11', 1S)
+READ	select date_sub('2011-11-11', 1L)
+READ	select date_sub('2011-11-11', 1.0)
+READ	select date_sub('2011-11-11', 1E1)
+READ	select date_sub(date'2011-11-11', '1')
+READ	select date_sub(date'2011-11-11', '1.2')
+READ	select date_sub(null, 1)
+READ	select date_sub(date'2011-11-11', null)
+READ	select date_sub(timestamp_ltz'2011-11-11 12:12:12', 1)
+READ	select date_sub(timestamp_ntz'2011-11-11 12:12:12', 1)
+READ	select date_add('2011-11-11', int_str) from date_view
+READ	select date_sub('2011-11-11', int_str) from date_view
+READ	select date_add(date_str, 1) from date_view
+READ	select date_sub(date_str, 1) from date_view
+READ	select date '2011-11-11' + 1E1
+READ	select date '2001-09-28' + 7Y
+READ	select 7S + date '2001-09-28'
+READ	select date '2001-10-01' - 7
+READ	select date '2001-10-01' - date '2001-09-28'
+READ	select date '2001-10-01' - '2001-09-28'
+READ	select '2001-10-01' - date '2001-09-28'
+READ	select date '2001-09-28' - null
+READ	select null - date '2019-10-06'
+READ	select date_str - date '2001-09-28' from date_view
+READ	select date '2001-09-28' - date_str from date_view
+READ	select date'2011-11-11' + '1'
+READ	select '1' + date'2011-11-11'
+READ	select date'2011-11-11' + null
+READ	select null + date'2011-11-11'
+READ	select date '2012-01-01' - interval '2-2' year to month,
+READ	select to_date('26/October/2015', 'dd/MMMMM/yyyy')
+READ	select from_json('{"d":"26/October/2015"}', 'd Date', map('dateFormat', 'dd/MMMMM/yyyy'))
+READ	select from_csv('26/October/2015', 'd Date', map('dateFormat', 'dd/MMMMM/yyyy'))
+READ	select dateadd(MICROSECOND, 1001, timestamp'2022-02-25 01:02:03.123')
+READ	select date_add(MILLISECOND, -1, timestamp'2022-02-25 01:02:03.456')
+READ	select dateadd(SECOND, 58, timestamp'2022-02-25 01:02:03')
+READ	select date_add(MINUTE, -100, date'2022-02-25')
+READ	select dateadd(HOUR, -1, timestamp'2022-02-25 01:02:03')
+READ	select date_add(DAY, 367, date'2022-02-25')
+READ	select dateadd(WEEK, -4, timestamp'2022-02-25 01:02:03')
+READ	select date_add(MONTH, -1, timestamp'2022-02-25 01:02:03')
+READ	select dateadd(QUARTER, 5, date'2022-02-25')
+READ	select date_add(YEAR, 1, date'2022-02-25')
+PARSE_ERROR	select dateadd('MICROSECOND', 1001, timestamp'2022-02-25 01:02:03.123')
+PARSE_ERROR	select date_add('QUARTER', 5, date'2022-02-25')
+READ	select datediff(MICROSECOND, timestamp'2022-02-25 01:02:03.123', timestamp'2022-02-25 01:02:03.124001')
+READ	select date_diff(MILLISECOND, timestamp'2022-02-25 01:02:03.456', timestamp'2022-02-25 01:02:03.455')
+READ	select datediff(SECOND, timestamp'2022-02-25 01:02:03', timestamp'2022-02-25 01:03:01')
+READ	select date_diff(MINUTE, date'2022-02-25', timestamp'2022-02-24 22:20:00')
+READ	select datediff(HOUR, timestamp'2022-02-25 01:02:03', timestamp'2022-02-25 00:02:03')
+READ	select date_diff(DAY, date'2022-02-25', timestamp'2023-02-27 00:00:00')
+READ	select datediff(WEEK, timestamp'2022-02-25 01:02:03', timestamp'2022-01-28 01:02:03')
+READ	select date_diff(MONTH, timestamp'2022-02-25 01:02:03', timestamp'2022-01-25 01:02:03')
+READ	select datediff(QUARTER, date'2022-02-25', date'2023-05-25')
+READ	select date_diff(YEAR, date'2022-02-25', date'2023-02-25')
+PARSE_ERROR	select date_diff('MILLISECOND', timestamp'2022-02-25 01:02:03.456', timestamp'2022-02-25 01:02:03.455')
+PARSE_ERROR	select datediff('YEAR', date'2022-02-25', date'2023-02-25')
+READ	select timestamp '2019-01-01\t'
+PARSE_ERROR	select timestamp '2019-01-01中文'
+PARSE_ERROR	select timestamp'4294967297'
+PARSE_ERROR	select timestamp'2021-01-01T12:30:4294967297.123456'
+READ	select current_timestamp = current_timestamp
+READ	select current_timestamp() = current_timestamp()
+READ	select localtimestamp() = localtimestamp()
+READ	SELECT make_timestamp(2021, 07, 11, 6, 30, 45.678)
+READ	SELECT make_timestamp(2021, 07, 11, 6, 30, 45.678, 'CET')
+READ	SELECT make_timestamp(2021, 07, 11, 6, 30, 60.007)
+READ	SELECT make_timestamp(1, 1, 1, 1, 1, 1)
+READ	SELECT make_timestamp(1, 1, 1, 1, 1, 60)
+READ	SELECT make_timestamp(1, 1, 1, 1, 1, 61)
+READ	SELECT make_timestamp(1, 1, 1, 1, 1, null)
+READ	SELECT make_timestamp(1, 1, 1, 1, 1, 59.999999)
+READ	SELECT make_timestamp(1, 1, 1, 1, 1, 99.999999)
+READ	SELECT make_timestamp(1, 1, 1, 1, 1, 999.999999)
+READ	SELECT make_timestamp(make_date(2021, 07, 11))
+READ	SELECT make_timestamp(DATE'1970-01-01')
+READ	SELECT make_timestamp(NULL)
+READ	SELECT make_timestamp(make_date(2021, 07, 11), make_time(6, 30, 45.678))
+READ	SELECT make_timestamp(DATE'1970-01-01', TIME'00:00:00')
+READ	SELECT make_timestamp(NULL, TIME'00:00:00')
+READ	SELECT make_timestamp(DATE'1970-01-01', NULL)
+READ	SELECT make_timestamp(NULL, NULL)
+READ	SELECT make_timestamp(make_date(2021, 07, 11), make_time(6, 30, 45.678), 'MIT')
+READ	SELECT make_timestamp(make_date(2021, 07, 11), make_time(6, 30, 45.678), 'PST')
+READ	SELECT make_timestamp(make_date(2021, 07, 11), make_time(6, 30, 45.678), 'UTC')
+READ	SELECT make_timestamp(make_date(2021, 07, 11), make_time(6, 30, 45.678), 'CET')
+READ	SELECT make_timestamp(make_date(2021, 07, 11), make_time(6, 30, 45.678), 'JST')
+READ	SELECT make_timestamp(DATE'1970-01-01', TIME'00:00:00', 'UTC')
+READ	SELECT make_timestamp(NULL, TIME'00:00:00', 'UTC')
+READ	SELECT make_timestamp(DATE'1970-01-01', NULL, 'UTC')
+READ	SELECT make_timestamp(DATE'1970-01-01', TIME'00:00:00', NULL)
+READ	SELECT make_timestamp(NULL, NULL, 'UTC')
+READ	SELECT make_timestamp(NULL, TIME'00:00:00', NULL)
+READ	SELECT make_timestamp(DATE'1970-01-01', NULL, NULL)
+READ	SELECT make_timestamp(NULL, NULL, NULL)
+READ	SELECT make_timestamp(timestamp '2018-11-17 13:33:33', TIME'0:0:0', 'CET')
+READ	SELECT make_timestamp(timestamp_ntz '2018-11-17 13:33:33', TIME'0:0:0', 'CET')
+READ	SELECT make_timestamp(DATE'1970-01-01', timestamp '2018-11-17 13:33:33', 'CET')
+READ	SELECT make_timestamp(DATE'1970-01-01', timestamp_ntz '2018-11-17 13:33:33', 'CET')
+READ	SELECT try_make_timestamp(make_date(2021, 07, 11))
+READ	SELECT try_make_timestamp(make_date(2021, 07, 11), make_time(6, 30, 45.678))
+READ	SELECT try_make_timestamp(make_date(2021, 07, 11), make_time(6, 30, 45.678), 'CET')
+READ	SELECT try_make_timestamp(NULL)
+READ	SELECT try_make_timestamp(NULL, NULL)
+READ	SELECT try_make_timestamp(NULL, NULL, NULL)
+READ	SELECT try_make_timestamp(timestamp '2018-11-17 13:33:33', TIME'0:0:0', 'CET')
+READ	SELECT try_make_timestamp(DATE'1970-01-01', timestamp_ntz '2018-11-17 13:33:33', 'CET')
+READ	select TIMESTAMP_SECONDS(1230219000),TIMESTAMP_SECONDS(-1230219000),TIMESTAMP_SECONDS(null)
+READ	select TIMESTAMP_SECONDS(1.23), TIMESTAMP_SECONDS(1.23d), TIMESTAMP_SECONDS(FLOAT(1.23))
+READ	select TIMESTAMP_MILLIS(1230219000123),TIMESTAMP_MILLIS(-1230219000123),TIMESTAMP_MILLIS(null)
+READ	select TIMESTAMP_MICROS(1230219000123123),TIMESTAMP_MICROS(-1230219000123123),TIMESTAMP_MICROS(null)
+READ	select TIMESTAMP_SECONDS(1230219000123123)
+READ	select TIMESTAMP_SECONDS(-1230219000123123)
+READ	select TIMESTAMP_MILLIS(92233720368547758)
+READ	select TIMESTAMP_MILLIS(-92233720368547758)
+READ	select TIMESTAMP_SECONDS(0.1234567)
+READ	select TIMESTAMP_SECONDS(0.1234567d), TIMESTAMP_SECONDS(FLOAT(0.1234567))
+SESSION	create temporary view ttf1 as select * from values
+READ	select typeof(current_date), typeof(current_timestamp) from ttf1
+SESSION	create temporary view ttf2 as select * from values
+READ	select current_date = current_date(), current_timestamp = current_timestamp(), a, b from ttf2
+READ	select a, b from ttf2 order by a, current_date
+READ	select UNIX_SECONDS(timestamp'2020-12-01 14:30:08Z'), UNIX_SECONDS(timestamp'2020-12-01 14:30:08.999999Z'), UNIX_SECONDS
+READ	select UNIX_MILLIS(timestamp'2020-12-01 14:30:08Z'), UNIX_MILLIS(timestamp'2020-12-01 14:30:08.999999Z'), UNIX_MILLIS(nu
+READ	select UNIX_MICROS(timestamp'2020-12-01 14:30:08Z'), UNIX_MICROS(timestamp'2020-12-01 14:30:08.999999Z'), UNIX_MICROS(nu
+READ	select to_timestamp(null), to_timestamp('2016-12-31 00:12:00'), to_timestamp('2016-12-31', 'yyyy-MM-dd')
+READ	select to_timestamp(1)
+READ	select to_timestamp('2019-10-06 10:11:12.', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.0', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.1', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.12', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.123UTC', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.1234', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.12345CST', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.123456PST', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.1234567PST', 'yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('123456 2019-10-06 10:11:12.123456PST', 'SSSSSS yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('223456 2019-10-06 10:11:12.123456PST', 'SSSSSS yyyy-MM-dd HH:mm:ss.SSSSSS[zzz]')
+READ	select to_timestamp('2019-10-06 10:11:12.1234', 'yyyy-MM-dd HH:mm:ss.[SSSSSS]')
+READ	select to_timestamp('2019-10-06 10:11:12.123', 'yyyy-MM-dd HH:mm:ss[.SSSSSS]')
+READ	select to_timestamp('2019-10-06 10:11:12', 'yyyy-MM-dd HH:mm:ss[.SSSSSS]')
+READ	select to_timestamp('2019-10-06 10:11:12.12', 'yyyy-MM-dd HH:mm[:ss.SSSSSS]')
+READ	select to_timestamp('2019-10-06 10:11', 'yyyy-MM-dd HH:mm[:ss.SSSSSS]')
+READ	select to_timestamp("2019-10-06S10:11:12.12345", "yyyy-MM-dd'S'HH:mm:ss.SSSSSS")
+READ	select to_timestamp("12.12342019-10-06S10:11", "ss.SSSSyyyy-MM-dd'S'HH:mm")
+READ	select to_timestamp("12.1232019-10-06S10:11", "ss.SSSSyyyy-MM-dd'S'HH:mm")
+READ	select to_timestamp("12.1232019-10-06S10:11", "ss.SSSSyy-MM-dd'S'HH:mm")
+READ	select to_timestamp("12.1234019-10-06S10:11", "ss.SSSSy-MM-dd'S'HH:mm")
+READ	select to_timestamp("2019-10-06S", "yyyy-MM-dd'S'")
+READ	select to_timestamp("S2019-10-06", "'S'yyyy-MM-dd")
+READ	select to_timestamp("2019-10-06T10:11:12'12", "yyyy-MM-dd'T'HH:mm:ss''SSSS")
+READ	select to_timestamp("2019-10-06T10:11:12'", "yyyy-MM-dd'T'HH:mm:ss''")
+READ	select to_timestamp("'2019-10-06T10:11:12", "''yyyy-MM-dd'T'HH:mm:ss")
+READ	select to_timestamp("P2019-10-06T10:11:12", "'P'yyyy-MM-dd'T'HH:mm:ss")
+READ	select to_timestamp("16", "dd")
+READ	select to_timestamp("02-29", "MM-dd")
+READ	select to_timestamp("2019 40", "yyyy mm")
+READ	select to_timestamp("2019 10:10:10", "yyyy hh:mm:ss")
+READ	select timestamp'2011-11-11 11:11:11' - timestamp'2011-11-11 11:11:10'
+READ	select date'2020-01-01' - timestamp'2019-10-06 10:11:12.345678'
+READ	select timestamp'2019-10-06 10:11:12.345678' - date'2020-01-01'
+READ	select timestamp'2011-11-11 11:11:11' - '2011-11-11 11:11:10'
+READ	select '2011-11-11 11:11:11' - timestamp'2011-11-11 11:11:10'
+READ	select timestamp'2011-11-11 11:11:11' - null
+READ	select null - timestamp'2011-11-11 11:11:11'
+SESSION	create temporary view ts_view as select '2011-11-11 11:11:11' str
+READ	select str - timestamp'2011-11-11 11:11:11' from ts_view
+READ	select timestamp'2011-11-11 11:11:11' - str from ts_view
+READ	select timestamp'2011-11-11 11:11:11' + '1'
+READ	select '1' + timestamp'2011-11-11 11:11:11'
+READ	select timestamp'2011-11-11 11:11:11' + null
+READ	select null + timestamp'2011-11-11 11:11:11'
+READ	select timestamp'2011-11-11 11:11:11' + interval '2' day,
+READ	select date '2012-01-01' - interval 3 hours,
+READ	select to_timestamp('2019-10-06 A', 'yyyy-MM-dd GGGGG')
+READ	select to_timestamp('22 05 2020 Friday', 'dd MM yyyy EEEEEE')
+READ	select to_timestamp('22 05 2020 Friday', 'dd MM yyyy EEEEE')
+READ	select unix_timestamp('22 05 2020 Friday', 'dd MM yyyy EEEEE')
+READ	select from_json('{"t":"26/October/2015"}', 't Timestamp', map('timestampFormat', 'dd/MMMMM/yyyy'))
+READ	select from_csv('26/October/2015', 't Timestamp', map('timestampFormat', 'dd/MMMMM/yyyy'))
+READ	select timestampadd(MONTH, -1, timestamp'2022-02-14 01:02:03')
+READ	select timestampadd(MINUTE, 58, timestamp'2022-02-14 01:02:03')
+READ	select timestampadd(YEAR, 1, date'2022-02-15')
+READ	select timestampadd(SECOND, -1, date'2022-02-15')
+PARSE_ERROR	select timestampadd('MONTH', -1, timestamp'2022-02-14 01:02:03')
+PARSE_ERROR	select timestampadd('SECOND', -1, date'2022-02-15')
+READ	select timestampdiff(MONTH, timestamp'2022-02-14 01:02:03', timestamp'2022-01-14 01:02:03')
+READ	select timestampdiff(MINUTE, timestamp'2022-02-14 01:02:03', timestamp'2022-02-14 02:00:03')
+READ	select timestampdiff(YEAR, date'2022-02-15', date'2023-02-15')
+READ	select timestampdiff(SECOND, date'2022-02-15', timestamp'2022-02-14 23:59:59')
+PARSE_ERROR	select timestampdiff('MINUTE', timestamp'2022-02-14 01:02:03', timestamp'2022-02-14 02:00:03')
+PARSE_ERROR	select timestampdiff('YEAR', date'2022-02-15', date'2023-02-15')
+READ	select timediff(QUARTER, timestamp'2023-08-10 01:02:03', timestamp'2022-01-14 01:02:03')
+READ	select timediff(HOUR, timestamp'2022-02-14 01:02:03', timestamp'2022-02-14 12:00:03')
+READ	select timediff(DAY, date'2022-02-15', date'2023-02-15')
+READ	select timediff(SECOND, date'2022-02-15', timestamp'2022-02-14 23:59:59')
+PARSE_ERROR	select timediff('MINUTE', timestamp'2023-02-14 01:02:03', timestamp'2023-02-14 02:00:03')
+PARSE_ERROR	select timediff('YEAR', date'2020-02-15', date'2023-02-15')

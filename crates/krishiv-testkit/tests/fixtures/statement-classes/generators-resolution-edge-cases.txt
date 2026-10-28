@@ -1,0 +1,54 @@
+READ	SELECT explode(explode(array(array(1, 2, 3))))
+READ	SELECT 1 + explode(array(1, 2, 3))
+READ	SELECT explode(array(0, 1, 2)), explode(array(10, 20))
+READ	SELECT explode(array(sin(0), 1, 2)), explode(array(10, 20))
+READ	SELECT explode(array(1, 2)), explode(array(3, 4)), count(*)
+READ	SELECT explode(array(1, 2)) AS a, posexplode(array('x', 'y', 'z')) AS (pos, b)
+READ	SELECT explode(collect_list(id)) AS val FROM range(5)
+READ	SELECT explode(collect_list(id)) AS val, count(*) AS cnt FROM range(3)
+READ	SELECT id, explode(array(1, 2, 3)) AS array_element
+READ	SELECT id, posexplode_outer(CASE WHEN id = 1 THEN array('a', 'b') ELSE null END) AS (pos, val)
+READ	WITH cte AS (SELECT explode(array(1, 2, 3)) AS col)
+READ	WITH cte AS (SELECT explode(array(1, 2)) AS col)
+READ	SELECT * FROM (SELECT explode(array(1, 2, 3)) AS val) t WHERE val > 1
+READ	SELECT *
+READ	SELECT explode(arr) AS package
+READ	SELECT explode(collect_list(a)) AS val
+READ	SELECT stack(2, id + 10L, count(val))
+READ	SELECT id, explode(arr)
+READ	SELECT stack(2, 'first', count(*), arr,
+READ	SELECT stack(2, 'first', count(*), arr,
+READ	SELECT stack(2, 'first', count(*), arr,
+READ	SELECT explode(array(t1.c1, t2.c1)) AS x1
+READ	SELECT explode(array(t1.c1, t2.c1)) AS x1, explode(array(t1.c1)) AS x2
+READ	SELECT id, posexplode(arr) AS (index, value), index, value
+READ	SELECT array(1, 2, 3) as arr, explode(arr) as col
+READ	SELECT array(1, 2, 3) as arr, explode(arr) as col, count(*)
+READ	SELECT array(1, 2, 3) as arr, explode(arr) as col, count(*), col + 1 as col2
+READ	SELECT explode(array(1, 2, 3)) as col, col + 1 as col2, count(*)
+READ	SELECT array(1, 2, 3) as arr, explode(arr) as col, col + 1 as col2
+READ	SELECT explode(array(1, 2, 3)) as col, col + 1 as col2
+READ	SELECT explode(array(1, 2, 3)) as col, count(*) OVER ()
+READ	SELECT explode(array(1, 2, 3)), count(*) OVER (), count(*)
+READ	SELECT explode(array(array(0), array(1), array(2))) as arr, explode(arr) as col
+READ	SELECT explode(arr) as col, explode(array(array(0), array(1), array(2))) as arr
+READ	SELECT col + 1 as col2, explode(array(1, 2, 3)) as col
+READ	SELECT 1 AS (pos, val)
+READ	SELECT * FROM VALUES (1) ORDER BY explode(array(1, 2, 3))
+READ	SELECT * FROM VALUES (array(1, 2, 3)) t(arr) WHERE explode(arr) == 2
+READ	SELECT explode(packages) AS package
+READ	SELECT explode(collect_list(a)) AS package
+READ	SELECT stack(2, id * 10L, count(val))
+READ	SELECT
+READ	SELECT
+READ	SELECT explode(array(t1.c1, t2.c1)) AS x1, explode(array(x1, t1.c1)) AS x2
+READ	SELECT 1 as a, explode(array(1, 2, 3)) as a, a * 10
+READ	SELECT 1 as a, explode(array(1, 2, 3)) as a, a * 10, count(*)
+READ	SELECT explode(array(1, 2, 3)) as a, 1 as a, a * 10
+READ	SELECT explode(array(1, 2, 3)) as a, 1 as a, a * 10, count(*)
+READ	SELECT 1 as pos, posexplode(array('x', 'y')) as (pos, val), pos * 10
+READ	SELECT 1 as pos, posexplode(array('x', 'y')) as (pos, val), pos * 10, count(*)
+READ	SELECT explode(array(10, 20)) as col, col FROM (VALUES (42)) AS t(col)
+READ	SELECT explode(array(10, 20)) as col, col, count(*) FROM (VALUES (42)) AS t(col) GROUP BY col
+READ	SELECT posexplode(array('x', 'y')) as (pos, val), pos, val FROM (VALUES (42)) AS t(pos)
+READ	SELECT posexplode(array('x', 'y')) as (pos, val), pos, val, count(*) FROM (VALUES (42)) AS t(pos) GROUP BY pos

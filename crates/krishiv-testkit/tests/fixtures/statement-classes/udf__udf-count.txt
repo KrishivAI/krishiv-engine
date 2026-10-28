@@ -1,0 +1,5 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT
+READ	SELECT
+READ	SELECT udf(count(a, b)), udf(count(b, a)), udf(count(testData.*, testData.*)) FROM testData
+READ	SELECT
