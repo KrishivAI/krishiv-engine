@@ -47,6 +47,7 @@ fn new_root(limit: usize) -> Arc<TreePool> {
             spill_wait_timeout: TIMEOUT,
             abort_release_timeout: RELEASE,
             spill_scratch_reserve: 0,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     )
@@ -759,6 +760,7 @@ fn timeout_scenario(
             spill_wait_timeout: Duration::from_millis(50),
             abort_release_timeout: Duration::from_millis(100),
             spill_scratch_reserve: 0,
+            resident_guard: true,
         },
         Arc::new(SystemClock::new()),
     );

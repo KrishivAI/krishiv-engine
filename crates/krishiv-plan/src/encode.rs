@@ -537,6 +537,18 @@ impl<'k, 'a> Encoder<'k, 'a> {
         self.bytes(s.as_bytes());
     }
 
+    /// A function's identity in a key: its canonical name, never a registry
+    /// id (see `FunctionId`), and for a UDF its version, so a re-registered
+    /// UDF never shares a key with the version it replaced. Kept out of line
+    /// so the recursive expression encoder's frame stays small.
+    #[inline(never)]
+    fn function_id(&mut self, id: &crate::FunctionId) {
+        self.str(id.name());
+        if let crate::FunctionId::Udf { version, .. } = id {
+            self.u32(*version);
+        }
+    }
+
     fn bytes(&mut self, b: &[u8]) {
         self.len(b.len());
         self.put(b);
@@ -1054,9 +1066,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 deterministic: _,
             })) => {
                 self.u8(10);
-                // The canonical name only: a registry id is never part of
-                // a key (see `FunctionId`).
-                self.str(id.name());
+                self.function_id(id);
                 self.u8(kind.code());
                 self.data_type(data_type);
                 self.bool(*nullable);

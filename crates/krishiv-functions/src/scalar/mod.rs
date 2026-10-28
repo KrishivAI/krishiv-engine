@@ -42,6 +42,7 @@ mod regex;
 mod session;
 mod string;
 mod r#struct;
+mod udf;
 mod url;
 
 pub use regex::{extract_all_pieces, split_regex};
@@ -59,6 +60,7 @@ use krishiv_kernels::map::DedupPolicy;
 
 pub use args::Arg;
 use args::{Inputs, broadcast, internal, unsupported};
+pub use udf::{bind_udf, failed_execute};
 
 /// An argument as the planner knows it when binding.
 #[derive(Debug, Clone)]

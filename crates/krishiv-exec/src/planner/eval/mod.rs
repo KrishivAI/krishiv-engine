@@ -42,11 +42,13 @@ use arrow_schema::{DataType as ArrowType, SchemaRef};
 use krishiv_common::config::{
     ANSI_ENABLED, Config, LEGACY_STATISTICAL_AGGREGATE, MAP_KEY_DEDUP_POLICY, SESSION_TIME_ZONE,
 };
+use krishiv_common::error::{KrishivError, KrishivUdfNotAvailable};
 use krishiv_kernels::KernelCtx;
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Literal, ResolvedExpr,
     ResolvedFunction,
 };
+use krishiv_udf_sdk::UdfLibrary;
 
 use super::build::{internal, unsupported};
 use crate::error::Result;
@@ -178,6 +180,10 @@ pub(crate) struct EvalEnv {
     pub(crate) query_start_micros: i64,
     /// The session user (`current_user()`).
     pub(crate) user: Arc<str>,
+    /// The session's UDFs, resolved by (name, version) at instantiation.
+    /// Never plan data: the planner sets it from its context, and
+    /// instantiation overwrites it from the worker.
+    pub(crate) udfs: Option<Arc<UdfLibrary>>,
     /// `spark.sql.mapKeyDedupPolicy = LAST_WIN`: duplicate map keys keep
     /// the value inserted last. It travels in the plan (`ExprEnv`), so a
     /// worker instantiating a plan without the feature refuses it.
@@ -217,14 +223,16 @@ impl EvalEnv {
             kernels: KernelCtx::new(),
             query_start_micros,
             user,
+            udfs: None,
             map_key_dedup_last_win,
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    /// The environment a plan fixed, with this worker's kernels. Lambda
+    /// The environment a plan fixed, with this worker's kernels. UDFs are
+    /// not plan data: instantiation sets them from the worker. Lambda
     /// variables match by stable identity, so no name-resolution flag is
-    /// plan data.
+    /// plan data. The map-key dedup policy is plan data.
     pub(crate) fn from_plan(env: &ExprEnv) -> Self {
         Self {
             ansi: env.ansi,
@@ -233,6 +241,7 @@ impl EvalEnv {
             kernels: KernelCtx::new(),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
+            udfs: None,
             map_key_dedup_last_win: env.map_key_dedup_last_win,
             seed_salt: Arc::new(AtomicU64::new(0)),
         }
@@ -331,6 +340,20 @@ pub(crate) fn compile(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
                     } else {
                         func::compile(name, f, args, input, e)
                     }
+                }
+                FunctionId::Udf { name, version } => {
+                    let udf = input
+                        .env
+                        .udfs
+                        .as_ref()
+                        .and_then(|lib| lib.get_versioned(name, *version))
+                        .ok_or_else(|| {
+                            KrishivError::from(KrishivUdfNotAvailable {
+                                name: name.clone(),
+                                version: version.to_string(),
+                            })
+                        })?;
+                    func::compile_udf(&udf, f, args, input, e)
                 }
                 _ => Err(unsupported_expr(e)),
             }
@@ -628,10 +651,18 @@ impl ScalarExpr for Compiled {
 
 #[cfg(test)]
 mod tests {
-    use krishiv_plan::Literal;
-    use krishiv_types::DataType;
+    use std::sync::Arc;
 
-    use super::{Lit, PhysExpr as _};
+    use arrow_schema::Schema;
+    use krishiv_common::error::ErrorClass;
+    use krishiv_plan::{FunctionId, FunctionKind, Literal};
+    use krishiv_types::DataType;
+    use krishiv_udf_sdk::{
+        ArgField, InvokeContext, ReturnField, ScalarUdf, Signature, UdfArg, UdfError, UdfInputType,
+        UdfLibrary,
+    };
+
+    use super::{EvalEnv, Input, Lit, PhysExpr as _, compile};
 
     #[test]
     fn a_null_literal_is_nullable_typed_or_not() {
@@ -686,5 +717,155 @@ mod tests {
         let none = BooleanBuffer::new_unset(4);
         let out = super::scatter(&BooleanArray::from(Vec::<bool>::new()), &none).unwrap();
         assert_eq!((out.len(), out.null_count()), (4, 4));
+    }
+
+    /// The identity over `INT`, for the UDF compilation tests.
+    #[derive(Debug)]
+    struct Identity(u32);
+
+    impl ScalarUdf for Identity {
+        fn name(&self) -> &str {
+            "my_udf"
+        }
+
+        fn version(&self) -> u32 {
+            self.0
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+
+        fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+            Ok(ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            args: &[UdfArg<'_>],
+            _: usize,
+            _: &InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, UdfError> {
+            Ok(args[0].array())
+        }
+    }
+
+    fn udf_call() -> krishiv_plan::Expr {
+        use krishiv_plan::{Expr, ExprNode, ResolvedExpr, ResolvedFunction};
+        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Udf {
+                    name: "my_udf".to_owned(),
+                    version: 2,
+                },
+                kind: FunctionKind::Scalar,
+                args: vec![Arc::new(Expr::literal(Literal::Integer(1)))],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Integer,
+                nullable: true,
+                deterministic: true,
+            },
+        )))
+    }
+
+    fn env_with(udfs: Option<Arc<UdfLibrary>>) -> EvalEnv {
+        EvalEnv {
+            ansi: true,
+            legacy_statistical_aggregate: false,
+            zone: None,
+            kernels: krishiv_kernels::KernelCtx::new(),
+            query_start_micros: 0,
+            user: Arc::from("test"),
+            udfs,
+            map_key_dedup_last_win: false,
+            seed_salt: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
+
+    /// Compiling a UDF call without the UDF on the executing side fails
+    /// with `KRISHIV_UDF_NOT_AVAILABLE`, naming `name@version`.
+    #[test]
+    fn a_missing_udf_fails_compilation_naming_name_and_version() {
+        let schema = Arc::new(Schema::empty());
+        let e = udf_call();
+        for udfs in [None, Some(Arc::new(UdfLibrary::new()))] {
+            let env = env_with(udfs);
+            let input = Input {
+                layout: &[],
+                schema: &schema,
+                env: &env,
+                subqueries: &[],
+            };
+            let err = compile(&e, input).unwrap_err();
+            assert_eq!(err.error_class(), ErrorClass::KrishivUdfNotAvailable);
+            assert!(err.to_string().contains("my_udf@2"), "{err}");
+        }
+        // A library holding another version is the same failure: the
+        // plan names `my_udf@2`.
+        let other = Arc::new(UdfLibrary::new());
+        other.register(Arc::new(Identity(9))).unwrap();
+        let env = env_with(Some(other));
+        let input = Input {
+            layout: &[],
+            schema: &schema,
+            env: &env,
+            subqueries: &[],
+        };
+        let err = compile(&e, input).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::KrishivUdfNotAvailable);
+        assert!(err.to_string().contains("my_udf@2"), "{err}");
+    }
+
+    /// Compiling a UDF call with its version present binds it.
+    #[test]
+    fn a_registered_udf_binds_where_the_analyzer_typed_it() {
+        let lib = Arc::new(UdfLibrary::new());
+        lib.register(Arc::new(Identity(2))).unwrap();
+        let env = env_with(Some(lib));
+        let schema = Arc::new(Schema::empty());
+        let e = udf_call();
+        let input = Input {
+            layout: &[],
+            schema: &schema,
+            env: &env,
+            subqueries: &[],
+        };
+        let compiled = compile(&e, input).unwrap();
+        assert_eq!(compiled.data_type(), &arrow_schema::DataType::Int32);
+    }
+
+    /// The fixture exposes its declared contract directly.
+    #[test]
+    fn udf_fixture_exposes_its_contract() {
+        let udf = Identity(2);
+        assert_eq!(udf.name(), "my_udf");
+        assert_eq!(udf.version(), 2);
+        assert_eq!(
+            udf.signature(),
+            &Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)])
+        );
+        let field = udf.return_field(&[]).unwrap();
+        assert_eq!(field.data_type, DataType::Integer);
+        assert!(field.nullable);
+        let array: arrow_array::ArrayRef =
+            std::sync::Arc::new(arrow_array::Int32Array::from(vec![1]));
+        let out = udf
+            .invoke(
+                &[UdfArg::Column(&array)],
+                1,
+                &InvokeContext {
+                    partition: 0,
+                    ansi: true,
+                    time_zone: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(out.len(), 1);
     }
 }

@@ -286,8 +286,9 @@ impl DirectoryWrite {
         let name = spark_file_name(0, &self.job_uuid, 0, &format.file_suffix(o));
         let path = self.dir.clone().join(name);
         let display = format!("{}/{path}", self.store);
+        let seed = format!("{}/0/0", self.job_uuid);
         let mut encoder = format
-            .writer(io, Arc::clone(&schema), o)
+            .writer(io, Arc::clone(&schema), &o.clone().with_write_seed(seed))
             .await
             .map_err(|e| e.into_error(&display))?;
         let mut bytes = BytesMut::new();

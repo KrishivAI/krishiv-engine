@@ -15,12 +15,14 @@ arrow-schema.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-exec = { path = "../krishiv-exec" }
+krishiv-functions = { path = "../krishiv-functions" }
 krishiv-io = { path = "../krishiv-io" }
 krishiv-memory = { path = "../krishiv-memory" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-sql = { path = "../krishiv-sql" }
 krishiv-types = { path = "../krishiv-types" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 # The `EXPLAIN VERBOSE` JSON document.
 serde_json = { workspace = true, features = ["std"] }
 # Warnings from analysis and planning are logged, as Spark logs them.

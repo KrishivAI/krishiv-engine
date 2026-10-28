@@ -119,6 +119,12 @@
     ],
     "sqlState" : "42K0I"
   },
+  "KRISHIV_UDF_NOT_AVAILABLE" : {
+    "message" : [
+      "The user-defined function <name>@<version> is not available on this worker: register it on the executing session before running the plan."
+    ],
+    "sqlState" : "39000"
+  },
   "KRISHIV_UNKNOWN_FORMAT_OPTION" : {
     "message" : [
       "The option <option> is not an option of the <format> data source.<suggestion> Remove it, or set \"krishiv.io.strictOptions\" to \"false\" to ignore unknown options with a warning."

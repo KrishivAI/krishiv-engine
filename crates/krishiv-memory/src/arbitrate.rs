@@ -42,7 +42,7 @@ use crate::pool::{Class, Consumer, Denied, Group, GroupKind, Node};
 use crate::spill::SpillTicket;
 use std::time::Instant;
 
-use crate::sync::Ordering;
+use crate::sync::{AtomicBool, Ordering};
 use crate::{ConsumerId, MemoryError};
 
 /// Spill requests a round sends while each pass frees memory, before it
@@ -70,6 +70,7 @@ pub(crate) async fn reserve(
         consumer,
         bytes,
         escalation,
+        unguarded: AtomicBool::new(false),
     };
     let Some((mut binding, need)) = round.attempt()? else {
         return Ok(());
@@ -157,6 +158,9 @@ struct Round {
     consumer: Arc<Consumer>,
     bytes: usize,
     escalation: Escalation,
+    /// Set once spilling is exhausted: the round then asks without the
+    /// resident-set guard's cut, so the cut never fails or aborts an arbitrated request.
+    unguarded: AtomicBool,
 }
 
 fn aborted(n: &Node) -> bool {
@@ -172,11 +176,20 @@ impl Round {
     fn attempt(&self) -> Result<Option<(Arc<Node>, usize)>, MemoryError> {
         match self
             .node
-            .try_reserve_for(&self.consumer, self.bytes, Class::Ordinary)
+            .try_reserve_for(&self.consumer, self.bytes, self.class())
         {
             Ok(()) => Ok(None),
             Err(Denied::Error(e)) => Err(e),
             Err(Denied::Limit { binding, need }) => Ok(Some((binding, need))),
+        }
+    }
+
+    /// The ceiling the round's requests are checked against.
+    fn class(&self) -> Class {
+        if self.unguarded.load(Ordering::Acquire) {
+            Class::Unguarded
+        } else {
+            Class::Ordinary
         }
     }
 
@@ -258,8 +271,8 @@ impl Round {
             };
             let consumers = self.consumers_within(&binding);
             let plan = self.plan(&binding, &consumers);
-            let shortfall = need
-                .saturating_sub(binding.available())
+            let shortfall = binding
+                .shortfall(need, self.class())
                 .saturating_sub(plan.pending);
             let tickets = self.request_spills(&consumers, &plan, shortfall, false);
             if tickets.is_empty() {
@@ -284,8 +297,8 @@ impl Round {
         };
         let consumers = self.consumers_within(&binding);
         let plan = self.plan(&binding, &consumers);
-        let shortfall = need
-            .saturating_sub(binding.available())
+        let shortfall = binding
+            .shortfall(need, self.class())
             .saturating_sub(plan.pending);
         let tickets = self.request_spills(&consumers, &plan, shortfall, true);
         if !tickets.is_empty() {
@@ -294,6 +307,10 @@ impl Round {
                 return Ok(s);
             }
         }
+
+        // Spilling is exhausted. The resident-set guard's cut only makes
+        // queries spill: from here on, ask without it.
+        self.unguarded.store(true, Ordering::Release);
 
         if self.escalation == Escalation::SpillOnly {
             return match self.step(slot)? {
@@ -311,7 +328,7 @@ impl Round {
             };
             let consumers = self.consumers_within(&binding);
             let plan = self.plan(&binding, &consumers);
-            let shortfall = need.saturating_sub(binding.available());
+            let shortfall = binding.shortfall(need, self.class());
             if plan.pending > 0 && plan.pending >= shortfall {
                 match self.wait(slot, deadline, Vec::new(), false).await? {
                     Waited::Step(s) => return Ok(s),

@@ -523,6 +523,7 @@ fn hidden(name: &str) -> bool {
 fn display_name(format: &str) -> String {
     match format {
         "parquet" => "Parquet".to_owned(),
+        "avro" => "Avro".to_owned(),
         "orc" => "ORC".to_owned(),
         "json" => "JSON".to_owned(),
         "csv" => "CSV".to_owned(),
@@ -633,6 +634,7 @@ mod tests {
             assert!(!hidden(name), "{name}");
         }
         assert_eq!(display_name("parquet"), "Parquet");
+        assert_eq!(display_name("avro"), "Avro");
         assert_eq!(display_name("json"), "JSON");
         assert_eq!(display_name("mock"), "mock");
     }

@@ -27,6 +27,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod avro;
 mod commit;
 pub mod csv;
 mod error;
@@ -47,6 +48,7 @@ pub mod text;
 pub mod text_format;
 mod write;
 
+pub use avro::AvroFormat;
 pub use commit::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
 pub use csv::CsvFormat;
 pub use error::{FormatError, FormatResult, Result};

@@ -28,6 +28,11 @@ fn main() -> ExitCode {
     // before `main`, see `krishiv_alloc`), and under memory pressure threads
     // return freed memory.
     krishiv_memory::set_release_hook(krishiv_alloc::install());
+    // Under that bounded policy the resident set follows the pools, and the
+    // pools keep it within their reservations plus an allowance.
+    if krishiv_alloc::bounded() {
+        krishiv_memory::set_resident_probe(krishiv_memory::process_resident_bytes);
+    }
     run()
 }
 

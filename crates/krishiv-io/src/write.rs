@@ -153,17 +153,23 @@ impl FileWriter {
     }
 
     async fn open_file(&mut self) -> Result<()> {
+        let file = self.next_file.fetch_add(1, Ordering::Relaxed);
         let name = spark_file_name(
             self.options.task,
             &self.options.job_uuid,
-            self.next_file.fetch_add(1, Ordering::Relaxed),
+            file,
             &self.suffix,
         );
         let path = self.options.dir.clone().join(name);
         let display = format!("{}/{}", self.options.store, path);
+        let seed = format!("{}/{}/{file}", self.options.job_uuid, self.options.task);
         let encoder = self
             .format
-            .writer(&self.io, Arc::clone(&self.schema), &self.format_options)
+            .writer(
+                &self.io,
+                Arc::clone(&self.schema),
+                &self.format_options.clone().with_write_seed(seed),
+            )
             .await
             .map_err(|e| e.into_error(&display))?;
         let upload = self.io.upload(&self.options.store, path.clone())?;

@@ -181,9 +181,13 @@ pub(crate) struct Planner<'a> {
 impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &LogicalPlan) -> Self {
         let next_id = max_id(root).saturating_add(1).max(1 << 62);
+        let mut env = EvalEnv::new(&cx.config, Arc::clone(&cx.user));
+        // Planning validates UDF calls against the session's library; the
+        // implementation a plan runs comes from its worker.
+        env.udfs = cx.udfs.clone();
         Self {
             cx,
-            env: EvalEnv::new(&cx.config, Arc::clone(&cx.user)),
+            env,
             warnings: Vec::new(),
             ctes: HashMap::new(),
             consumed_hints: HashSet::new(),
