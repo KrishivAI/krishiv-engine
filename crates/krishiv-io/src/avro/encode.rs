@@ -440,7 +440,7 @@ impl AvroEncoder {
     /// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for a bad `avroSchema`;
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a schema with no Avro type.
     pub(crate) fn new(schema: &SchemaRef, o: &FormatOptions) -> FormatResult<Self> {
-        let opts = AvroOptions::new(o, true)?;
+        let opts = AvroOptions::new(o)?;
         let codec = block_codec(opts.codec)?;
         let json = match &opts.avro_schema {
             Some(s) => s.clone(),

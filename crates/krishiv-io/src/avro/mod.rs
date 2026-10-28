@@ -1,24 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Spark's Avro format: [`AvroFormat`], a container-file reader and writer
-//! with Spark's options (see `options`) and Spark's type mapping (see
-//! `schema`).
+//! Spark's Avro format: container-file reader/writer with Spark's options
+//! (`options`) and type mapping (`schema`). Files are self-describing and
+//! splittable at block boundaries (the metadata pass finds blocks from
+//! headers and sync markers; splits own blocks by midpoint; the decoder
+//! reads one owned block at a time). No column stats, page pruning or late
+//! materialisation; row indexes and selections are honoured from the index.
 //!
-//! Files are self-describing (the header carries the writer schema) and
-//! splittable at block (sync marker) boundaries: the metadata pass finds
-//! every block's bytes, first row and record count from the block headers
-//! and sync markers alone (it never reads a block's records), and a split
-//! owns the blocks whose midpoint it holds. The decoder reads one owned
-//! block at a time (see `decode`); the writer frames compressed blocks (see
-//! `encode`). Whole-file row and byte counts are reported, but there are no
-//! column statistics, page pruning or late materialisation;
-//! `_metadata.row_index` and file-relative row selections are honoured from
-//! the block index.
-//!
-//! Typed refusals: the `zstandard` block codec (reads and writes) is
-//! `CODEC_NOT_AVAILABLE.WITH_AVAILABLE_CODECS_SUGGESTION` (the `apache-avro`
-//! codec needs zstd 0.13, which carries RUSTSEC-2026-0391, so it is not
-//! built); the `bzip2` and `xz` block codecs and `LEGACY` rebase of dates
-//! and timestamps before 1582-10-15 are `KRISHIV_UNSUPPORTED_FEATURE`.
+//! Typed refusals: `zstandard` is `CODEC_NOT_AVAILABLE` (needs zstd 0.13
+//! with RUSTSEC-2026-0391); `bzip2`/`xz` and `LEGACY` rebase are
+//! `KRISHIV_UNSUPPORTED_FEATURE`.
 
 mod decode;
 mod encode;
@@ -396,7 +386,7 @@ impl FileFormat for AvroFormat {
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<SchemaRef>> {
         Box::pin(async move {
-            let opts = AvroOptions::new(o, false)?;
+            let opts = AvroOptions::new(o)?;
             if let Some(json) = &opts.avro_schema {
                 return Ok(reader_of(json)?.1);
             }
@@ -420,7 +410,7 @@ impl FileFormat for AvroFormat {
         o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Arc<dyn FileMetadata>>> {
         Box::pin(async move {
-            let opts = AvroOptions::new(o, false)?;
+            let opts = AvroOptions::new(o)?;
             let m = read_meta(io, file, &opts).await?;
             Ok(Arc::new(m) as Arc<dyn FileMetadata>)
         })
@@ -465,7 +455,7 @@ impl FileFormat for AvroFormat {
             let meta = any
                 .downcast::<AvroMetadata>()
                 .map_err(|_| FormatError::Corrupt("not Avro metadata".to_owned()))?;
-            let opts = AvroOptions::new(o, false)?;
+            let opts = AvroOptions::new(o)?;
             let d = AvroDecoder::new(&meta, &units, req, &opts)?;
             Ok(Box::new(d) as Box<dyn Decoder>)
         })

@@ -2,15 +2,10 @@
 //! The options of the Avro format (Spark's names and defaults) and the
 //! parsed [`AvroOptions`] the reader and writer use.
 //!
-//! The names, defaults and value spellings follow the Spark 4.2 Avro data
-//! source documentation: `avroSchema`, `compression`, `recordName`,
-//! `recordNamespace`, `ignoreExtension`, `positionalFieldMatching`, `mode`
-//! and `datetimeRebaseMode`. `compression` falls back to
-//! `spark.sql.avro.compression.codec` and `datetimeRebaseMode` to
-//! `spark.sql.avro.datetimeRebaseModeInRead`, the session confs Spark
-//! documents for them; every other option is read as given, else its
-//! default. `krishiv.avro.blockRows` is an internal writer option (it caps
-//! the rows of a block so tests can write several small blocks).
+//! Names, defaults and spellings follow Spark 4.2's Avro docs.
+//! `compression` falls back to `spark.sql.avro.compression.codec` and
+//! `datetimeRebaseMode` to `spark.sql.avro.datetimeRebaseModeInRead`;
+//! `krishiv.avro.blockRows` caps a written block's rows for tests.
 
 use std::sync::LazyLock;
 
@@ -59,24 +54,18 @@ fn spec(name: &'static str, value: &'static str, doc: &'static str) -> OptionSpe
     }
 }
 
-/// An option as one list (a brace-delimited macro: `rustfmt` leaves the
-/// table one option per line).
-macro_rules! options {
-    ($($spec:expr;)*) => { vec![$($spec),*] };
-}
-
 static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
-    options! {
-        OptionSpec { name: "avroSchema", kind: OptionKind::String, default: OptionDefault::None, conf_fallback: None, metadata_key: true, doc: "The Avro schema (JSON) to read or write with: the reader schema for a read, the output schema for a write. When unset, a read uses each file's own schema and a write builds one from the data." };
-        OptionSpec { name: "compression", kind: OptionKind::Enum(COMPRESSIONS), default: OptionDefault::Str("snappy"), conf_fallback: Some("spark.sql.avro.compression.codec"), metadata_key: false, doc: "The block codec: uncompressed (null), snappy (default), deflate, bzip2, xz, zstandard.", };
-        spec("recordName", "topLevelRecord", "The record name of a written schema built from the data (without `avroSchema`).");
-        spec("recordNamespace", "", "The record namespace of a written schema built from the data (without `avroSchema`).");
-        flag("ignoreExtension", true, "Must be true (the default): the framework lists files without filtering by extension, so extensions are always ignored; false is refused.");
-        flag("positionalFieldMatching", false, "Match a file's fields to the read schema by position instead of by name.");
-        OptionSpec { name: "mode", kind: OptionKind::Enum(MODES), default: OptionDefault::Str("FAILFAST"), conf_fallback: None, metadata_key: false, doc: "How corrupt records are handled: FAILFAST (the default, as Spark's) fails the read; PERMISSIVE and DROPMALFORMED drop the rest of the block (PERMISSIVE keeps one null row).", };
-        OptionSpec { name: "datetimeRebaseMode", kind: OptionKind::Enum(REBASE_MODES), default: OptionDefault::Str("EXCEPTION"), conf_fallback: Some("spark.sql.avro.datetimeRebaseModeInRead"), metadata_key: false, doc: "How dates and timestamps before 1582-10-15 are handled in files whose writer is unknown (Spark's Avro default is EXCEPTION); files written by Spark 3.0 or later say how they were written.", };
-        OptionSpec { name: "krishiv.avro.blockRows", kind: OptionKind::Int { min: 1, max: i64::MAX }, default: OptionDefault::None, conf_fallback: None, metadata_key: false, doc: "Internal: the most rows a written block holds (the default and the ceiling are 4096).", };
-    }
+    vec![
+        OptionSpec { name: "avroSchema", kind: OptionKind::String, default: OptionDefault::None, conf_fallback: None, metadata_key: true, doc: "The Avro schema (JSON) to read or write with: the reader schema for a read, the output schema for a write. When unset, a read uses each file's own schema and a write builds one from the data." },
+        OptionSpec { name: "compression", kind: OptionKind::Enum(COMPRESSIONS), default: OptionDefault::Str("snappy"), conf_fallback: Some("spark.sql.avro.compression.codec"), metadata_key: false, doc: "The block codec: uncompressed (null), snappy (default), deflate, bzip2, xz, zstandard.", },
+        spec("recordName", "topLevelRecord", "The record name of a written schema built from the data (without `avroSchema`)."),
+        spec("recordNamespace", "", "The record namespace of a written schema built from the data (without `avroSchema`)."),
+        flag("ignoreExtension", true, "Must be true (the default): the framework lists files without filtering by extension, so extensions are always ignored; false is refused."),
+        flag("positionalFieldMatching", false, "Match a file's fields to the read schema by position instead of by name."),
+        OptionSpec { name: "mode", kind: OptionKind::Enum(MODES), default: OptionDefault::Str("FAILFAST"), conf_fallback: None, metadata_key: false, doc: "How corrupt records are handled: FAILFAST (the default, as Spark's) fails the read; PERMISSIVE and DROPMALFORMED drop the rest of the block (PERMISSIVE keeps one null row).", },
+        OptionSpec { name: "datetimeRebaseMode", kind: OptionKind::Enum(REBASE_MODES), default: OptionDefault::Str("EXCEPTION"), conf_fallback: Some("spark.sql.avro.datetimeRebaseModeInRead"), metadata_key: false, doc: "How dates and timestamps before 1582-10-15 are handled in files whose writer is unknown (Spark's Avro default is EXCEPTION); files written by Spark 3.0 or later say how they were written.", },
+        OptionSpec { name: "krishiv.avro.blockRows", kind: OptionKind::Int { min: 1, max: i64::MAX }, default: OptionDefault::None, conf_fallback: None, metadata_key: false, doc: "Internal: the most rows a written block holds (the default and the ceiling are 4096).", },
+    ]
 });
 
 pub(super) static OPTIONS: LazyLock<OptionSchema> = LazyLock::new(|| OptionSchema {
@@ -155,13 +144,12 @@ pub(crate) struct AvroOptions {
 }
 
 impl AvroOptions {
-    /// The options of a read (`writing` false) or a write.
+    /// The options of a read or a write.
     ///
     /// # Errors
     /// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` for a value that cannot be
     /// honoured; `KRISHIV_UNSUPPORTED_FEATURE` for `ignoreExtension=false`.
-    pub(crate) fn new(o: &FormatOptions, writing: bool) -> Result<Self> {
-        let _ = writing;
+    pub(crate) fn new(o: &FormatOptions) -> Result<Self> {
         if matches!(o.bool("ignoreExtension"), Some(false)) {
             return Err(unsupported(
                 "ignoreExtension=false (Avro files are always listed without filtering by extension)".to_owned(),
@@ -196,7 +184,4 @@ impl AvroOptions {
             block_rows: o
                 .int("krishiv.avro.blockRows")
                 .and_then(|v| usize::try_from(v).ok()),
-            sync_seed: o.write_seed().map(str::to_owned),
-        })
-    }
-}
+            sync_seed: o.write_seed().map(s

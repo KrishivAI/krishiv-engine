@@ -171,20 +171,14 @@ fn arrow_of(schema: &AvroSchema) -> FormatResult<DataType> {
         AvroSchema::TimestampMillis | AvroSchema::TimestampMicros => {
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
         }
-        AvroSchema::TimestampNanos => {
+        AvroSchema::TimestampNanos | AvroSchema::LocalTimestampNanos => {
             return Err(unsupported(
-                "the Avro timestamp-nanos logical type (only millis and micros are supported)"
+                "the Avro (local-)timestamp-nanos logical type (only millis and micros are supported)"
                     .to_owned(),
             ));
         }
         AvroSchema::LocalTimestampMillis | AvroSchema::LocalTimestampMicros => {
             DataType::Timestamp(TimeUnit::Microsecond, None)
-        }
-        AvroSchema::LocalTimestampNanos => {
-            return Err(unsupported(
-                "the Avro local-timestamp-nanos logical type (only millis and micros are supported)"
-                    .to_owned(),
-            ));
         }
         AvroSchema::Duration(_) => {
             return Err(unsupported(

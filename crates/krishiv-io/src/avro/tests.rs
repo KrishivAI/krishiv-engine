@@ -1016,7 +1016,7 @@ fn round_trip_all_types() {
                 None,
             )),
             Arc::new(list_array(&[])),
-            Arc::new(empty_map_array(&schema.field(13).data_type().clone())),
+            Arc::new(map_array(&[])),
         ],
     )
     .unwrap();
@@ -1105,31 +1105,6 @@ fn map_array(rows: &[MapRow]) -> arrow_array::MapArray {
         OffsetBuffer::new(offsets.into()),
         entries,
         Some(validity.into()),
-        false,
-    )
-}
-
-/// An empty map array of `dt`.
-fn empty_map_array(dt: &DataType) -> arrow_array::MapArray {
-    let DataType::Map(entries, _) = dt else {
-        panic!("not a map type");
-    };
-    let DataType::Struct(fields) = entries.data_type() else {
-        panic!("not a struct");
-    };
-    let entries_array = StructArray::new(
-        fields.clone(),
-        vec![
-            Arc::new(StringViewArray::from(Vec::<Option<&str>>::new())) as ArrayRef,
-            Arc::new(Int32Array::from(Vec::<Option<i32>>::new())) as ArrayRef,
-        ],
-        None,
-    );
-    arrow_array::MapArray::new(
-        Arc::clone(entries),
-        OffsetBuffer::new(vec![0_i32].into()),
-        entries_array,
-        None,
         false,
     )
 }
@@ -1845,14 +1820,14 @@ fn session_confs_back_the_options() {
 fn mode_defaults_to_failfast() {
     use super::options::{AvroOptions, Mode};
     let env = Env::new();
-    let default = AvroOptions::new(&env.options(&[]), false).unwrap();
+    let default = AvroOptions::new(&env.options(&[])).unwrap();
     assert_eq!(default.mode, Mode::FailFast);
     for (mode, want) in [
         ("PERMISSIVE", Mode::Permissive),
         ("DROPMALFORMED", Mode::DropMalformed),
         ("FAILFAST", Mode::FailFast),
     ] {
-        let o = AvroOptions::new(&env.options(&[("mode", mode)]), false).unwrap();
+        let o = AvroOptions::new(&env.options(&[("mode", mode)])).unwrap();
         assert_eq!(o.mode, want, "{mode}");
     }
 }

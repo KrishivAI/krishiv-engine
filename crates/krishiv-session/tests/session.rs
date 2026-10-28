@@ -1077,11 +1077,11 @@ fn avro_writes_read_back() {
         block_on(s.read().format("avro").load([out.as_str()]).count()).unwrap(),
         3
     );
-    // The `avro` convenience methods agree.
+    // `format("avro")` agrees through a second path.
     let out2 = dir.path().join("out2");
     let out2 = out2.to_str().unwrap().to_owned();
-    block_on(people.write().avro(&out2)).unwrap();
-    assert_eq!(block_on(s.read().avro([out2.as_str()]).count()).unwrap(), 3);
+    block_on(people.write().format("avro").save(&out2)).unwrap();
+    assert_eq!(block_on(s.read().format("avro").load([out2.as_str()]).count()).unwrap(), 3);
     // Options flow through: an unknown codec fails before any task runs.
     assert_eq!(
         class(block_on(
