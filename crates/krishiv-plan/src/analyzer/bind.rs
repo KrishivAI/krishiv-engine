@@ -6,17 +6,17 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    KrishivCatalogFailure, KrishivInsufficientPermissions, KrishivUnsupportedFeature,
-    NamedParametersNotSupported, RequiresSinglePartNamespace, TableOrViewNotFound,
-    UnresolvedRoutine, UnsupportedDatasourceForDirectQuery,
+    KrishivCatalogFailure, KrishivUnsupportedFeature, NamedParametersNotSupported,
+    RequiresSinglePartNamespace, TableOrViewNotFound, UnresolvedRoutine,
+    UnsupportedDatasourceForDirectQuery,
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
 
 use super::catalog::quoted;
 use super::{
-    AccessDecision, AnalysisContext, AnalysisError, Catalog, FunctionLookup, NameForm, Privilege,
-    Securable, SourceKind, TableColumn, TableIdent, TableKind, TableMeta,
+    AnalysisContext, AnalysisError, Catalog, FunctionLookup, NameForm, Privilege, Securable,
+    SourceKind, TableColumn, TableIdent, TableKind, TableMeta,
 };
 use crate::walk::{self, Node};
 use crate::{
@@ -410,29 +410,9 @@ async fn authorize(
         return Ok(*i);
     }
     let privilege = Privilege::Select;
-    let decision = ctx
-        .policy
-        .check(&ctx.principal, &securable, privilege)
-        .await;
-    match decision {
-        Ok(AccessDecision::Allow) => {}
-        Ok(AccessDecision::AllowWith(_)) => {
-            return Err(unsupported(
-                format!("row filters and column masks (on {securable})"),
-                origin,
-            ));
-        }
-        Ok(AccessDecision::Deny { .. }) | Err(_) => {
-            return Err(AnalysisError::new(
-                KrishivInsufficientPermissions {
-                    principal: quoted(std::slice::from_ref(&ctx.principal.name)),
-                    privilege: privilege.to_string(),
-                    securable: securable.to_string(),
-                },
-                origin,
-            ));
-        }
-    }
+    super::access::authorize(&*ctx.policy, &ctx.principal, &securable, privilege)
+        .await
+        .map_err(|e| AnalysisError::new(e, origin))?;
     b.securables.push((securable.clone(), privilege));
     checked.push((securable, b.securables.len() - 1));
     Ok(b.securables.len() - 1)

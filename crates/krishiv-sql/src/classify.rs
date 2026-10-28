@@ -16,9 +16,11 @@
 
 use std::fmt;
 
+use krishiv_plan::analyzer::Privilege;
+
 use crate::ast::{
-    AlterViewAction, CacheKind, DescribeKind, ExplainMode, MergeSource, Query, SetVariableKind,
-    Statement,
+    AlterNamespaceAction, AlterTableAction, AlterViewAction, CacheKind, DdlName, DescribeKind,
+    ExplainMode, MergeSource, Query, SetVariableKind, ShowKind, Statement,
 };
 
 /// What kind of effect a statement has.
@@ -253,4 +255,251 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::AddResource(_)
         | Statement::ListResource(_) => Vec::new(),
     })
+}
+
+/// An object a statement changes, or reads without a query, before it is
+/// located: the session resolves names against its current catalog and
+/// namespace and paths to their qualified form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TargetObject<'a> {
+    /// The table the name names.
+    Table(&'a DdlName),
+    /// The table the name names inside the namespace `in` (`SHOW COLUMNS
+    /// IN t IN db`).
+    TableIn {
+        /// The table name.
+        table: &'a DdlName,
+        /// The namespace.
+        namespace: &'a DdlName,
+    },
+    /// The persistent view the name names.
+    View(&'a DdlName),
+    /// The global temporary view the name names (in `global_temp`).
+    GlobalTempView(&'a DdlName),
+    /// The namespace holding the table or view the name names.
+    ParentOf(&'a DdlName),
+    /// The namespace global temporary views live in.
+    GlobalTempNamespace,
+    /// The namespace the name names.
+    Namespace(&'a DdlName),
+    /// The catalog (or parent namespace) holding the namespace the name
+    /// names.
+    ParentOfNamespace(&'a DdlName),
+    /// The current namespace.
+    CurrentNamespace,
+    /// The current catalog.
+    CurrentCatalog,
+    /// A path, as written.
+    Path(&'a str),
+    /// The cluster: what the `ADMIN` class acts on.
+    Cluster,
+}
+
+/// One privilege a statement needs on one object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target<'a> {
+    /// The object.
+    pub object: TargetObject<'a>,
+    /// The privilege.
+    pub privilege: Privilege,
+}
+
+/// What `statement` needs beyond the reads of its queries (which analysis
+/// checks): `Modify` on what it writes, `Create` on the namespace a new
+/// object goes in, `Drop` on what it drops or replaces (an `ALTER` replaces
+/// the object's definition: `Drop` on it and `Create` in its namespace),
+/// `Select` on what it reads without a query (metadata commands, `LIKE`
+/// sources, `MERGE` from a table), and `Monitor` on the cluster for the
+/// `ADMIN` class. Session-class statements need nothing.
+#[must_use]
+#[deny(clippy::wildcard_enum_match_arm)]
+#[expect(clippy::too_many_lines, reason = "one arm per statement kind")]
+pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
+    use Privilege::{Create, Drop, Modify, Monitor, Select};
+    use TargetObject as O;
+    const fn t(object: TargetObject<'_>, privilege: Privilege) -> Target<'_> {
+        Target { object, privilege }
+    }
+    fn location(l: &Option<String>) -> Vec<Target<'_>> {
+        l.iter()
+            .map(|p| t(TargetObject::Path(p), Privilege::Modify))
+            .collect()
+    }
+    // An ALTER replaces the definition of `object` in `parent`.
+    fn alter<'a>(object: TargetObject<'a>, parent: TargetObject<'a>) -> Vec<Target<'a>> {
+        vec![t(object, Privilege::Drop), t(parent, Privilege::Create)]
+    }
+    fn listing(namespace: &Option<DdlName>) -> Vec<Target<'_>> {
+        let object = namespace
+            .as_ref()
+            .map_or(TargetObject::CurrentNamespace, TargetObject::Namespace);
+        vec![t(object, Privilege::Select)]
+    }
+    match statement {
+        Statement::Query(_)
+        | Statement::Set(_)
+        | Statement::Reset(_)
+        | Statement::Use(_)
+        | Statement::DeclareVariable(_)
+        | Statement::SetVariable(_)
+        | Statement::DropVariable(_)
+        | Statement::CreateView(_)
+        | Statement::DropView(_)
+        | Statement::ListResource(_) => Vec::new(),
+        Statement::Explain(e) => match e.mode {
+            ExplainMode::Analyze => statement_targets(&e.statement),
+            ExplainMode::Simple
+            | ExplainMode::Extended
+            | ExplainMode::Formatted
+            | ExplainMode::Codegen
+            | ExplainMode::Cost
+            | ExplainMode::Verbose => Vec::new(),
+        },
+        Statement::CreateTable(c) => {
+            if c.temporary {
+                return Vec::new();
+            }
+            let mut out = vec![t(O::ParentOf(&c.name), Create)];
+            if c.or_replace {
+                out.push(t(O::Table(&c.name), Drop));
+            }
+            if c.as_query.is_some() {
+                out.push(t(O::Table(&c.name), Modify));
+            }
+            out.extend(location(&c.location));
+            out
+        }
+        Statement::CreateTableLike(c) => {
+            let mut out = vec![
+                t(O::ParentOf(&c.name), Create),
+                t(O::Table(&c.source), Select),
+            ];
+            out.extend(location(&c.location));
+            out
+        }
+        Statement::DropTable(d) => vec![t(O::Table(&d.name), Drop)],
+        Statement::CreateNamespace(c) => {
+            let mut out = vec![t(O::ParentOfNamespace(&c.name), Create)];
+            out.extend(location(&c.location));
+            out
+        }
+        Statement::DropNamespace(d) => vec![t(O::Namespace(&d.name), Drop)],
+        Statement::CreatePermanentView(v) => {
+            let (object, parent) = match (v.temporary, v.global) {
+                (true, false) => return Vec::new(),
+                (_, true) => (O::GlobalTempView(&v.name), O::GlobalTempNamespace),
+                (false, false) => (O::View(&v.name), O::ParentOf(&v.name)),
+            };
+            let mut out = vec![t(parent, Create)];
+            if v.or_replace {
+                out.push(t(object, Drop));
+            }
+            out
+        }
+        Statement::DropPermanentView(d) => vec![t(O::View(&d.name), Drop)],
+        Statement::AlterTable(a) => {
+            let mut out = alter(O::Table(&a.table), O::ParentOf(&a.table));
+            match &a.action {
+                AlterTableAction::RenameTo { name, .. } => out.push(t(O::ParentOf(name), Create)),
+                AlterTableAction::SetLocation(l) => out.push(t(O::Path(l), Modify)),
+                AlterTableAction::SetPartitionLocation { location, .. } => {
+                    out.push(t(O::Path(location), Modify));
+                }
+                AlterTableAction::AddPartition { parts, .. } => {
+                    out.extend(parts.iter().flat_map(|p| location(&p.location)));
+                }
+                AlterTableAction::AddColumns(_)
+                | AlterTableAction::DropColumns(_)
+                | AlterTableAction::RenameColumn { .. }
+                | AlterTableAction::ChangeColumn { .. }
+                | AlterTableAction::AlterColumn { .. }
+                | AlterTableAction::SetTblProperties(_)
+                | AlterTableAction::UnsetTblProperties { .. }
+                | AlterTableAction::SetSerdeProperties(_)
+                | AlterTableAction::SetPartitionSerdeProperties { .. }
+                | AlterTableAction::DropPartition { .. }
+                | AlterTableAction::RenamePartition { .. }
+                | AlterTableAction::RecoverPartitions => {}
+            }
+            out
+        }
+        Statement::AlterView(a) => {
+            let mut out = alter(O::View(&a.name), O::ParentOf(&a.name));
+            match &a.action {
+                AlterViewAction::RenameTo { name, .. } => out.push(t(O::ParentOf(name), Create)),
+                AlterViewAction::SetQuery { .. }
+                | AlterViewAction::SetSchemaBinding(_)
+                | AlterViewAction::SetTblProperties(_)
+                | AlterViewAction::UnsetTblProperties { .. } => {}
+            }
+            out
+        }
+        Statement::AlterNamespace(a) => {
+            let mut out = alter(O::Namespace(&a.name), O::ParentOfNamespace(&a.name));
+            match &a.action {
+                AlterNamespaceAction::SetLocation(l) => out.push(t(O::Path(l), Modify)),
+                AlterNamespaceAction::SetProperties(_)
+                | AlterNamespaceAction::DefaultCollation(_) => {}
+            }
+            out
+        }
+        Statement::Repair(r) => alter(O::Table(&r.table), O::ParentOf(&r.table)),
+        Statement::Insert(i) => i
+            .clauses
+            .iter()
+            .map(|c| t(O::Table(&c.name), Modify))
+            .collect(),
+        Statement::Delete(d) => vec![t(O::Table(&d.table), Modify)],
+        Statement::Update(u) => vec![t(O::Table(&u.table), Modify)],
+        Statement::Truncate(u) => vec![t(O::Table(&u.table), Modify)],
+        Statement::Merge(m) => {
+            let mut out = vec![t(O::Table(&m.target), Modify)];
+            match &m.source {
+                MergeSource::Table { name, .. } => out.push(t(O::Table(name), Select)),
+                MergeSource::Query { .. } => {}
+            }
+            out
+        }
+        // Statistics are written from the rows read.
+        Statement::Analyze(a) => vec![t(O::Table(&a.table), Select), t(O::Table(&a.table), Modify)],
+        Statement::Show(s) => match &s.kind {
+            ShowKind::Tables { namespace, .. }
+            | ShowKind::TableExtended { namespace, .. }
+            | ShowKind::Views { namespace, .. }
+            | ShowKind::Functions { namespace, .. } => listing(namespace),
+            ShowKind::Columns {
+                table, namespace, ..
+            } => vec![t(
+                namespace
+                    .as_ref()
+                    .map_or(O::Table(table), |namespace| O::TableIn { table, namespace }),
+                Select,
+            )],
+            ShowKind::Namespaces { .. } => vec![t(O::CurrentCatalog, Select)],
+            ShowKind::CreateTable { name, .. }
+            | ShowKind::TblProperties { name, .. }
+            | ShowKind::Partitions { name, .. } => vec![t(O::Table(name), Select)],
+            ShowKind::CurrentNamespace { .. } => Vec::new(),
+        },
+        Statement::Describe(d) => match &d.kind {
+            DescribeKind::Table { table, .. } => vec![t(O::Table(table), Select)],
+            DescribeKind::Namespace { name, .. } => vec![t(O::Namespace(name), Select)],
+            // Built-in functions are public; a query's reads are analyzed.
+            DescribeKind::Function { .. } | DescribeKind::Query { .. } => Vec::new(),
+        },
+        Statement::Cache(c) => match &c.kind {
+            // Caching a table reads it whole; a cached query is analyzed.
+            CacheKind::Cache { name, query, .. } => {
+                if query.is_some() {
+                    Vec::new()
+                } else {
+                    vec![t(O::Table(name), Select)]
+                }
+            }
+            CacheKind::Uncache { .. } => Vec::new(),
+            CacheKind::Clear => vec![t(O::Cluster, Monitor)],
+        },
+        Statement::Refresh(_) | Statement::AddResource(_) => vec![t(O::Cluster, Monitor)],
+    }
 }

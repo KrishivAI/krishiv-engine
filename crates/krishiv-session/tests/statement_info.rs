@@ -10,7 +10,7 @@ mod common;
 use std::fmt::Write as _;
 
 use futures::executor::block_on;
-use krishiv_session::{ExplainKind, Securable, Session, StatementClass};
+use krishiv_session::{ExplainKind, Privilege, Securable, Session, StatementClass};
 
 fn session() -> Session {
     let s = Session::new().unwrap();
@@ -67,8 +67,22 @@ fn classes_explain_kinds_and_reads_of_statements() {
     // A write's reads are the reads of its query.
     let i = info("INSERT INTO region SELECT * FROM nation");
     assert_eq!(i.class, StatementClass::Write);
+    let uses: Vec<String> = i
+        .securables
+        .iter()
+        .map(|u| format!("{} {}", u.privilege, u.securable))
+        .collect();
+    assert_eq!(
+        uses,
+        [
+            "SELECT table `spark_catalog`.`default`.`nation`",
+            "MODIFY table `spark_catalog`.`default`.`region`",
+        ]
+    );
+    let i = info("DROP TABLE nation");
     assert!(
-        matches!(&i.securables[..], [u] if matches!(&u.securable, Securable::Table(t) if t.name == "nation"))
+        matches!(&i.securables[..], [u] if u.privilege == Privilege::Drop
+        && matches!(&u.securable, Securable::Table(t) if t.name == "nation"))
     );
     assert_eq!(info("DROP TABLE nation").class, StatementClass::Ddl);
     assert_eq!(info("SET a = b").class, StatementClass::Session);

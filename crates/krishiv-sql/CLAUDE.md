@@ -24,7 +24,7 @@ Paths are relative to this crate.
 - `src/ast.rs` spanned AST; `src/error.rs` parser errors with Spark classes
 - `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`; `pipe.rs`, `sample.rs`, `relation.rs`, `transform.rs` for the query-syntax tail)
 - `src/lower.rs` AST to unresolved `krishiv_plan::Plan`; `src/redact.rs` `redact_sql` to `RedactedSql`
-- `src/classify.rs` statement classifier (`classify` → `StatementClass`, `explain_kind`, `statement_queries`); goldens `tests/fixtures/statement-classes.tsv` (`tests/classify.rs`), corpus goldens in `krishiv-testkit` `tests/statement_classes.rs`
+- `src/classify.rs` statement classifier (`classify` → `StatementClass`, `explain_kind`, `statement_queries`, `statement_targets`: the privileges a statement needs on what it writes, creates or drops); goldens `tests/fixtures/statement-classes.tsv` (`tests/classify.rs`), corpus goldens in `krishiv-testkit` `tests/statement_classes.rs`
 
 ## Extension points
 - New construct: token in `keywords.rs` or `lexer.rs`, grammar in `parser.rs` or `parser/expr.rs`, checks in `validate/`, lowering in `lower.rs`.
