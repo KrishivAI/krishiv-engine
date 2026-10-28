@@ -132,7 +132,7 @@ proptest! {
         };
         let data = tables(seed, rows, i64::try_from(keys).unwrap());
         let unlimited = session("1g", &data);
-        let tight = session("8m", &data);
+        let tight = session("4m", &data);
         let mut spilled_any = 0;
         for sql in QUERIES {
             let (expected, none) = run(&unlimited, sql);
@@ -141,6 +141,6 @@ proptest! {
             spilled_any += spilled;
             prop_assert_eq!(got, expected, "{}", sql);
         }
-        prop_assert!(spilled_any > 0, "8 MiB must make something spill");
+        prop_assert!(spilled_any > 0, "4 MiB must make something spill");
     }
 }

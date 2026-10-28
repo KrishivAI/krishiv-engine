@@ -10,11 +10,63 @@ use krishiv_functions::scalar::{Arg, BindArg, BindOptions, ScalarFunction, bind_
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::map::DedupPolicy;
 use krishiv_plan::{Expr, ExprNode, ResolvedFunction};
+use krishiv_udf_sdk::ScalarUdf;
 
 use super::strings::to_view;
 use super::{Input, PhysExpr, Value, literal_array, unsupported_expr};
 use crate::error::Result;
 use crate::planner::build::{internal, unsupported};
+
+/// Binds a session UDF call: wraps the implementation (resolved from the
+/// worker by the caller) like a built-in binding, over the arguments the
+/// analyzer cast.
+pub(super) fn compile_udf(
+    udf: &Arc<dyn ScalarUdf>,
+    f: &ResolvedFunction,
+    args: Vec<Arc<dyn PhysExpr>>,
+    input: Input<'_>,
+    _e: &Expr,
+) -> Result<Arc<dyn PhysExpr>> {
+    let bind_args = f
+        .args
+        .iter()
+        .zip(&args)
+        .map(|(ir, compiled)| match &ir.node {
+            ExprNode::Literal(l) => literal_array(l).map(BindArg::Literal),
+            _ => Ok(BindArg::Column {
+                ty: compiled.data_type().clone(),
+                nullable: compiled.nullable(),
+            }),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let arg_types: Vec<ArrowType> = bind_args.iter().map(BindArg::data_type).collect();
+    // `bind_udf` reports user faults as `FAILED_EXECUTE_UDF` and engine
+    // faults as `INTERNAL_ERROR` (never `KRISHIV_UNSUPPORTED_FEATURE`,
+    // which has no planning fallback), so there is nothing to map here.
+    let function = krishiv_functions::scalar::bind_udf(
+        udf,
+        &arg_types,
+        &f.data_type,
+        f.nullable,
+        input.env.ansi,
+        input.env.zone,
+    )?;
+    let out = f.data_type.to_arrow();
+    // The binding returns plain carriers; Spark's `STRING` and `BINARY`
+    // are views here. Both derive from the analyzer's type, so they only
+    // ever match or convert to a view (by construction, no mismatch).
+    let view = matches!(
+        (function.return_type(), &out),
+        (ArrowType::Utf8, ArrowType::Utf8View) | (ArrowType::Binary, ArrowType::BinaryView)
+    );
+    Ok(Arc::new(Call {
+        function,
+        args,
+        out,
+        view,
+        nullable: f.nullable,
+    }))
+}
 
 pub(super) fn compile(
     name: &str,

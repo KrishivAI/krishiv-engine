@@ -18,9 +18,8 @@ use krishiv_common::error::{
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
-use krishiv_exec::FileWriteSink;
 use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
-use krishiv_exec::physical::{SpillScopes, WorkerContext};
+use krishiv_exec::physical::{SpillScopes, WorkerContext, WritePlan};
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
 };
@@ -28,21 +27,24 @@ use krishiv_exec::{
     ExecConfig, Executor, ExecutorConfig, QueryContext, QueryId, QueryRunner, Scheduler,
     TokioExecutor, WorkloadClass,
 };
-use krishiv_io::csv::CsvFormat;
-use krishiv_io::parquet::ParquetFormat;
-use krishiv_io::{DirectoryWrite, FileFormat, IoConfig, IoScheduler, SaveMode, StoreId};
-use krishiv_memory::{MemoryConfig, MemoryPool, SpillConfig, SpillManager, SpillScope, TreePool};
+use krishiv_io::{
+    DirectoryWrite, FormatRegistry, IoConfig, IoScheduler, SaveMode, StoreId, is_spark_file_source,
+};
+use krishiv_memory::{
+    MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager, SpillScope, TreePool,
+};
 use krishiv_plan::analyzer::QueryContext as PlanQueryContext;
 use krishiv_plan::analyzer::{
     AccessPolicy, AllowAll, AnalysisContext, AnalysisError, AnalyzedPlan, Analyzer as _,
-    BuiltinFunctions, DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf,
-    Securable, SparkProfile, TableColumn, authorize,
+    DefaultAnalyzer, FunctionRegistry, Principal, Privilege, ResolutionConf, Securable,
+    SparkProfile, TableColumn, authorize,
 };
 use krishiv_plan::{LogicalPlan, Plan, PlanId, PlanNode, ReadSource, SourceId};
 use krishiv_sql::ast::Statement;
 use krishiv_sql::{Frontend, ParserOptions, StatementClass};
 use krishiv_types::DataType;
 use krishiv_types::batch::{Batch, Weights};
+use krishiv_udf_sdk::{UdfLibrary, guard_call};
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
@@ -51,6 +53,7 @@ use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
 use crate::conf::{self, ConfStore, RuntimeConf};
 use crate::dataframe::{DataFrame, DataFrameReader};
+use crate::udfs::SessionFunctions;
 use crate::variables::SessionVariables;
 
 /// The store id of the local file system.
@@ -104,6 +107,9 @@ pub(crate) struct SessionState {
     pub(crate) principal: Arc<Principal>,
     pub(crate) policy: Arc<dyn AccessPolicy>,
     functions: Arc<dyn FunctionRegistry>,
+    /// The session's registered UDFs, shared with the registry above and
+    /// the workers running its plans.
+    udfs: Arc<UdfLibrary>,
     executor: Arc<dyn Executor>,
     runner: QueryRunner,
     memory: Arc<dyn MemoryPool>,
@@ -111,7 +117,11 @@ pub(crate) struct SessionState {
     /// execution (`krishiv.spill.*` are build-time keys).
     spill: Mutex<Option<SpillManager>>,
     io: Arc<IoScheduler>,
-    formats: Vec<Arc<dyn FileFormat>>,
+    formats: Arc<FormatRegistry>,
+    /// The session's content-addressed relations: every memory table's
+    /// batches as Arrow IPC, so workers resolve a batch range through it
+    /// instead of reading rows from the plan.
+    relations: Arc<RelationStore>,
     cwd: String,
     planner: Arc<dyn PhysicalPlanner>,
     plan_ids: AtomicI64,
@@ -266,6 +276,12 @@ impl SessionBuilder {
             .ok()
             .and_then(|d| d.to_str().map(str::to_owned))
             .unwrap_or_else(|| "/".to_owned());
+        let udfs = Arc::new(UdfLibrary::new());
+        let functions = match self.functions {
+            Some(f) => Arc::new(SessionFunctions::with_registry(f, Arc::clone(&udfs)))
+                as Arc<dyn FunctionRegistry>,
+            None => Arc::new(SessionFunctions::new(Arc::clone(&udfs))) as Arc<dyn FunctionRegistry>,
+        };
         Ok(Session {
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
@@ -274,15 +290,15 @@ impl SessionBuilder {
                 profile: self.profile,
                 principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
                 policy: self.policy.unwrap_or_else(|| Arc::new(AllowAll)),
-                functions: self
-                    .functions
-                    .unwrap_or_else(|| Arc::new(BuiltinFunctions::new())),
+                functions,
+                udfs,
                 runner: QueryRunner::new(Arc::clone(&executor)),
                 executor,
                 memory,
+                relations: RelationStore::new(),
                 spill: Mutex::new(None),
                 io,
-                formats: vec![Arc::new(ParquetFormat), Arc::new(CsvFormat)],
+                formats: Arc::new(FormatRegistry::with_defaults()),
                 cwd,
                 planner: Arc::new(DefaultPlanner),
                 plan_ids: AtomicI64::new(0),
@@ -497,9 +513,11 @@ impl Session {
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a column type Spark has no
     /// equivalent of; `INTERNAL_ERROR` when a batch does not have `schema`;
-    /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with the
-    /// reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any letter
-    /// case), which queries cannot spell either.
+    /// `UNABLE_TO_ACQUIRE_MEMORY` when the relation store cannot hold the
+    /// batches' bytes (its pool is unbounded, so only a shut-down pool
+    /// refuses); `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with
+    /// with the reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any
+    /// letter case), which queries cannot spell either.
     pub fn register_batches(
         &self,
         name: &str,
@@ -526,8 +544,15 @@ impl Session {
                 b.schema()
             )));
         }
-        let batches = batches.into_iter().map(Batch::new).collect();
-        let table = krishiv_exec::planner::MemoryTable::new(schema, batches);
+        let batches: Vec<Batch> = batches.into_iter().map(Batch::new).collect();
+        // The batches as content-addressed IPC in the session's store: the
+        // table's scans split into batch ranges that workers resolve
+        // through it. The table holds the lease but not the batches, so
+        // they live once, memory-accounted; the lease releases the entry
+        // when the table is dropped or replaced.
+        let rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
+        let lease = self.state.relations.insert(&schema, &batches)?;
+        let table = krishiv_exec::planner::MemoryTable::from_lease(schema, rows, lease);
         self.state.catalog.put(
             name,
             TempTable::Memory {
@@ -535,6 +560,70 @@ impl Session {
                 table: Arc::new(table),
             },
         );
+        Ok(())
+    }
+
+    /// Registers a native Rust scalar UDF under its name
+    /// (case-insensitive), replacing any UDF of that name. Built-ins keep precedence on the
+    /// bare search path; qualify with `system.session` (or `session`) to
+    /// reach the UDF when a built-in shares its name. Every registration
+    /// changes the analysis fingerprint, so plans analyzed before it are
+    /// never reused after it.
+    ///
+    /// ```
+    /// # use krishiv_session::{ScalarUdf, Session};
+    /// # use krishiv_session::{ArgField, InvokeContext, ReturnField, Signature, UdfArg, UdfError, UdfInputType};
+    /// # use krishiv_types::DataType;
+    /// # use std::sync::Arc;
+    /// # use arrow_array::ArrayRef;
+    /// # #[derive(Debug)] struct One;
+    /// # impl ScalarUdf for One {
+    /// #     fn name(&self) -> &str { "one" }
+    /// #     fn version(&self) -> u32 { 1 }
+    /// #     fn signature(&self) -> &Signature {
+    /// #         use std::sync::OnceLock; static SIG: OnceLock<Signature> = OnceLock::new();
+    /// #         SIG.get_or_init(|| Signature::Exact(Vec::new()))
+    /// #     }
+    /// #     fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+    /// #         Ok(ReturnField { data_type: DataType::Integer, nullable: false })
+    /// #     }
+    /// #     fn invoke(&self, _: &[UdfArg<'_>], _: usize, _: &InvokeContext) -> Result<ArrayRef, UdfError> {
+    /// #         Ok(Arc::new(arrow_array::Int32Array::from(vec![1])) as ArrayRef)
+    /// #     }
+    /// # }
+    /// let session = Session::new()?;
+    /// session.register_udf(One)?;
+    /// let df = futures::executor::block_on(session.sql("SELECT one()"))?;
+    /// let rows = futures::executor::block_on(df.collect())?;
+    /// assert_eq!(rows.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// `FAILED_EXECUTE_UDF` when the UDF's `name` panics, is empty, or
+    /// contains a `.` or a backtick, since such a UDF can never be called
+    /// by name (the function name is `unknown` when there is none).
+    pub fn register_udf(
+        &self,
+        udf: impl krishiv_udf_sdk::ScalarUdf,
+    ) -> Result<(), krishiv_common::error::KrishivError> {
+        let udf: Arc<dyn krishiv_udf_sdk::ScalarUdf> = Arc::new(udf);
+        if let Err(e) = self.state.udfs.register(Arc::clone(&udf)) {
+            let name = guard_call("unknown", "name", || udf.name().to_owned())
+                .map(|name| name.to_lowercase())
+                .unwrap_or_else(|_| "unknown".to_owned());
+            let name = if name.is_empty() {
+                "unknown".to_owned()
+            } else {
+                name
+            };
+            return Err(krishiv_functions::scalar::failed_execute(
+                &name,
+                "unknown",
+                "unknown",
+                e.message(),
+            ));
+        }
         Ok(())
     }
 
@@ -615,7 +704,7 @@ impl Session {
         let (config, conf_version) = self.state.conf.versioned_snapshot();
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
-            self.state.formats.clone(),
+            Arc::clone(&self.state.formats),
             Arc::new(LocalPaths::new(
                 StoreId::new(LOCAL_STORE),
                 self.state.cwd.clone(),
@@ -718,15 +807,26 @@ impl Session {
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>;
         let stats = ProviderStatistics(Arc::clone(&tables));
         let (optimized, steps) = if trace {
-            krishiv_optimizer::optimize_traced(&analyzed.plan, &stats)?
+            krishiv_optimizer::optimize_traced_with_udfs(
+                &analyzed.plan,
+                &stats,
+                &self.state.udfs,
+                &env.config,
+            )?
         } else {
             (
-                krishiv_optimizer::optimize_with(&analyzed.plan, &stats)?,
+                krishiv_optimizer::optimize_with_udfs(
+                    &analyzed.plan,
+                    &stats,
+                    &self.state.udfs,
+                    &env.config,
+                )?,
                 Vec::new(),
             )
         };
         let cx = PlanningContext::new(tables, Arc::clone(&env.config))
-            .with_user(self.state.principal.name.as_str());
+            .with_user(self.state.principal.name.as_str())
+            .with_udfs(Arc::clone(&self.state.udfs));
         let physical = self.state.planner.plan(&optimized, &cx)?;
         // Spark logs what analysis and planning ignore (hints) as
         // warnings; `DataFrame::warnings` returns them too.
@@ -765,6 +865,48 @@ impl Session {
     ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
         self.run_on_query(physical, self.worker(env), env, true)
             .await
+    }
+
+    /// Runs `physical` as `task` in this process (tests): the worker of
+    /// [`Self::worker`] instantiating with the task's scan splits, executed
+    /// on the session's executor (I/O needs its runtime).
+    #[cfg(test)]
+    pub(crate) async fn run_task(
+        &self,
+        physical: &PhysicalPlan,
+        env: &QueryEnv,
+        task: &krishiv_exec::physical::TaskSpec,
+    ) -> Result<Vec<RecordBatch>, KrishivError> {
+        use krishiv_exec::physical::instantiate_task;
+        let worker = self.worker(env);
+        let node = instantiate_task(physical, &worker, task)?;
+        let state = Arc::clone(&self.state);
+        let config = Arc::clone(&env.config);
+        self.on_executor(async move {
+            let id = QueryId(state.query_ids.fetch_add(1, Ordering::Relaxed));
+            let pool = state.memory.child(&format!("query-task-{}", id.0), None);
+            let query = QueryContext::new(
+                id,
+                WorkloadClass::Interactive,
+                ExecConfig::from_config(&config),
+                pool,
+            );
+            let mut stream = state.runner.execute(node, Arc::clone(&query)).await?;
+            let mut out = Vec::new();
+            while let Some(batch) = stream.next().await {
+                out.push(batch?.into_parts().0);
+            }
+            query.finished().await;
+            Ok(out)
+        })
+        .await
+    }
+
+    /// The session's relation store (tests): every registered memory
+    /// table's batches as content-addressed IPC.
+    #[cfg(test)]
+    pub(crate) fn relations(&self) -> &Arc<RelationStore> {
+        &self.state.relations
     }
 
     /// Runs `physical` instantiated with `worker`.
@@ -810,9 +952,12 @@ impl Session {
 impl Session {
     /// Writes the result of `physical` to the directory `path` in
     /// `format` with `mode` (`df.write`): the files under their final
-    /// names, then the directory's commit (`_SUCCESS`, and the removal of
-    /// what an overwrite replaces). A failed or cancelled write deletes its
-    /// files and leaves the directory as it was.
+    /// names, then the directory's commit (`_SUCCESS`, the removal of
+    /// orphaned attempt files, and the removal of what an overwrite
+    /// replaces). A failed or cancelled write deletes its files and leaves
+    /// the directory as it was. The plan carries the write as data; the
+    /// commit runs from the plan's result rows (one per file: `path`,
+    /// `size`, `rows`).
     pub(crate) async fn write_files(
         &self,
         physical: PhysicalPlan,
@@ -834,19 +979,19 @@ impl Session {
             .into());
         }
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
-        let Some(format) = self
-            .state
-            .formats
-            .iter()
-            .find(|f| f.name().eq_ignore_ascii_case(&format))
-            .cloned()
-        else {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!("writing the {format} format"),
+        let format = match self.state.formats.get(&format) {
+            Ok(format) => format,
+            Err(e) => {
+                if is_spark_file_source(&format) {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!("writing the {format} format"),
+                    }
+                    .into());
+                }
+                return Err(e);
             }
-            .into());
         };
-        let (options, _) = format.options().parse(&options, &env.config)?;
+        let (parsed, _) = format.options().parse(&options, &env.config)?;
         let Some(text) = path.as_plain() else {
             return Err(KrishivUnsupportedFeature {
                 feature: "write paths with credentials".to_owned(),
@@ -877,33 +1022,116 @@ impl Session {
         // before anything is replaced, and again before the commit deletes
         // what an overwrite replaces.
         crate::access::still_physical(self, &at)?;
+        let job = job_uuid();
         let Some(write) =
-            DirectoryWrite::begin(&io, at.store.clone(), at.path.clone(), mode, job_uuid()).await?
+            DirectoryWrite::begin(&io, at.store.clone(), at.path.clone(), mode, job.clone())
+                .await?
         else {
             // `ignore` found the path: nothing is written.
             return Ok(());
         };
         let schema = Arc::clone(physical.schema());
-        let sink = Arc::new(FileWriteSink::try_new(
-            Arc::clone(&format),
-            io.clone(),
-            Arc::clone(&schema),
-            options.clone(),
-            write.write_options(0),
-        )?);
-        let plan = physical.into_write(&sink)?;
-        let worker = self.worker(env).with_write_sink(Arc::clone(&sink));
+        let plan = physical.into_write(WritePlan {
+            format: format.name().to_owned(),
+            options: options.clone(),
+            store: at.store.to_string(),
+            dir: at.path.as_ref().to_owned(),
+            job_uuid: job,
+            max_records_per_file: max_records_per_file(&options, format.name())?,
+            target_file_bytes: 0,
+        });
+        let worker = self.worker(env);
         let mut rows = self.run_on(&plan, worker, env).await?;
+        let mut batches = Vec::new();
         while let Some(batch) = rows.next().await {
-            batch?;
+            batches.push(batch?);
         }
         drop(rows);
+        let files = committed_files(&batches)?;
         crate::access::still_physical(self, &at)?;
         write
-            .commit(&io, format.as_ref(), schema, &options, sink.files())
+            .commit(&io, format.as_ref(), schema, &parsed, files)
             .await?;
         Ok(())
     }
+}
+
+/// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
+/// insensitive; 0 (unlimited) when unset.
+fn max_records_per_file(
+    options: &BTreeMap<String, OptionValue>,
+    format: &str,
+) -> Result<u64, KrishivError> {
+    let Some((key, value)) = options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("maxRecordsPerFile"))
+    else {
+        return Ok(0);
+    };
+    let Some(raw) = value.as_plain() else {
+        return Err(krishiv_common::error::KrishivInvalidFormatOptionValue {
+            value: "<secret>".to_owned(),
+            option: format!("\"{key}\""),
+            format: format!("\"{format}\""),
+            reason: "a secret is not allowed here".to_owned(),
+        }
+        .into());
+    };
+    raw.trim().parse::<u64>().map_err(|_| {
+        krishiv_common::error::KrishivInvalidFormatOptionValue {
+            value: format!("'{raw}'"),
+            option: format!("\"{key}\""),
+            format: format!("\"{format}\""),
+            reason: "expected an integer in 0..=18446744073709551615".to_owned(),
+        }
+        .into()
+    })
+}
+
+/// The commit's files from the write plan's result rows (one per file:
+/// `path`, `size`, `rows`).
+fn committed_files(
+    batches: &[RecordBatch],
+) -> Result<Vec<krishiv_io::WrittenFileInfo>, KrishivError> {
+    use arrow_array::Int64Array;
+    use arrow_array::StringViewArray;
+    use krishiv_io::{FileStatistics, Precision};
+    let mut out = Vec::new();
+    for batch in batches {
+        if batch.num_columns() != 3 {
+            return Err(internal(
+                "a write result without path, size and rows".to_owned(),
+            ));
+        }
+        let path = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .ok_or_else(|| internal("a write result whose path is not a string".to_owned()))?;
+        let size = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| internal("a write result whose size is not an integer".to_owned()))?;
+        let rows = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .ok_or_else(|| internal("a write result whose rows are not an integer".to_owned()))?;
+        for i in 0..batch.num_rows() {
+            let size = u64::try_from(size.value(i))
+                .map_err(|_| internal(format!("a written file of {} bytes", size.value(i))))?;
+            let rows = u64::try_from(rows.value(i))
+                .map_err(|_| internal(format!("a written file of {} rows", rows.value(i))))?;
+            out.push(krishiv_io::WrittenFileInfo {
+                path: object_store::path::Path::from(path.value(i)),
+                size,
+                rows,
+                statistics: FileStatistics::with_rows(Precision::Exact(rows)),
+            });
+        }
+    }
+    Ok(out)
 }
 
 impl Session {
@@ -918,16 +1146,23 @@ impl Session {
     }
 
     /// What a query's plans are instantiated with in this process: the
-    /// query's tables, and its spill scope under the session's spill
-    /// directory (created at instantiation).
+    /// query's tables, its UDFs, and its spill scope under the session's
+    /// spill directory (created at instantiation). Writes build their sink
+    /// from the plan with the query's I/O context, formats and configuration;
+    /// batch splits resolve through the session's relation store.
     fn worker(&self, env: &QueryEnv) -> WorkerContext {
         WorkerContext::new(
             Arc::clone(&env.catalog) as Arc<dyn krishiv_exec::planner::TableProviderResolver>
         )
+        .with_udfs(Arc::clone(&self.state.udfs))
+        .with_relations(Arc::clone(&self.state.relations))
         .with_spill_scopes(Arc::new(QuerySpill {
             state: Arc::clone(&self.state),
             config: Arc::clone(&env.config),
         }))
+        .with_io(self.state.io.context())
+        .with_formats(Arc::clone(&self.state.formats))
+        .with_config(Arc::clone(&env.config))
     }
 }
 
@@ -1171,5 +1406,139 @@ struct AbortOnDrop(krishiv_exec::TaskHandle);
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{committed_files, max_records_per_file};
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    use arrow_array::{Int32Array, Int64Array, RecordBatch, StringViewArray};
+    use arrow_schema::{DataType, Field, Schema};
+    use krishiv_common::secret::OptionValue;
+
+    fn options(pairs: &[(&str, &str)]) -> BTreeMap<String, OptionValue> {
+        pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), OptionValue::from_user(k, *v)))
+            .collect()
+    }
+
+    #[test]
+    fn max_records_per_file_reads_the_write_option() {
+        assert_eq!(
+            max_records_per_file(&BTreeMap::new(), "parquet").unwrap(),
+            0
+        );
+        assert_eq!(
+            max_records_per_file(&options(&[("maxRecordsPerFile", "10")]), "parquet").unwrap(),
+            10
+        );
+        assert_eq!(
+            max_records_per_file(&options(&[("MAXRECORDSPERFILE", " 7 ")]), "parquet").unwrap(),
+            7
+        );
+        let e =
+            max_records_per_file(&options(&[("maxRecordsPerFile", "ten")]), "parquet").unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_FORMAT_OPTION_VALUE"
+        );
+        let secret = BTreeMap::from([(
+            "maxRecordsPerFile".to_owned(),
+            OptionValue::reference("s", "k"),
+        )]);
+        let e = max_records_per_file(&secret, "parquet").unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_INVALID_FORMAT_OPTION_VALUE"
+        );
+    }
+
+    fn result_batch(paths: &[&str], sizes: &[i64], rows: &[i64]) -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("path", DataType::Utf8View, false),
+            Field::new("size", DataType::Int64, false),
+            Field::new("rows", DataType::Int64, false),
+        ]));
+        RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(StringViewArray::from_iter_values(paths.iter().copied())),
+                Arc::new(Int64Array::from(sizes.to_vec())),
+                Arc::new(Int64Array::from(rows.to_vec())),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn committed_files_reads_path_size_and_rows() {
+        let batch = result_batch(&["a/p", "a/q"], &[10, 20], &[1, 2]);
+        let files = committed_files(std::slice::from_ref(&batch)).unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].path.as_ref(), "a/p");
+        assert_eq!((files[0].size, files[0].rows), (10, 1));
+        assert_eq!((files[1].size, files[1].rows), (20, 2));
+        assert!(committed_files(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn committed_files_refuses_a_malformed_result() {
+        let batch = result_batch(&["a/p"], &[10], &[1]);
+        // Fewer columns.
+        let narrow = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "path",
+                DataType::Utf8View,
+                false,
+            )])),
+            vec![Arc::clone(batch.column(0))],
+        )
+        .unwrap();
+        assert!(
+            committed_files(std::slice::from_ref(&narrow))
+                .unwrap_err()
+                .to_string()
+                .contains("path, size and rows")
+        );
+        // A path that is not a string.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("path", DataType::Int32, false),
+            Field::new("size", DataType::Int64, false),
+            Field::new("rows", DataType::Int64, false),
+        ]));
+        let bad = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int64Array::from(vec![10])),
+                Arc::new(Int64Array::from(vec![1])),
+            ],
+        )
+        .unwrap();
+        assert!(
+            committed_files(std::slice::from_ref(&bad))
+                .unwrap_err()
+                .to_string()
+                .contains("not a string")
+        );
+        // Negative sizes and rows.
+        let bad = result_batch(&["a/p"], &[-1], &[1]);
+        assert!(
+            committed_files(std::slice::from_ref(&bad))
+                .unwrap_err()
+                .to_string()
+                .contains("bytes")
+        );
+        let bad = result_batch(&["a/p"], &[10], &[-1]);
+        assert!(
+            committed_files(std::slice::from_ref(&bad))
+                .unwrap_err()
+                .to_string()
+                .contains("rows")
+        );
     }
 }

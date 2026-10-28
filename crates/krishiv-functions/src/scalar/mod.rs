@@ -31,6 +31,7 @@ mod chars;
 mod codec;
 mod datetime;
 mod hash;
+mod json;
 mod map;
 mod math;
 mod misc;
@@ -41,6 +42,7 @@ mod regex;
 mod session;
 mod string;
 mod r#struct;
+mod udf;
 mod url;
 
 pub use regex::{extract_all_pieces, split_regex};
@@ -58,6 +60,7 @@ use krishiv_kernels::map::DedupPolicy;
 
 pub use args::Arg;
 use args::{Inputs, broadcast, internal, unsupported};
+pub use udf::{bind_udf, failed_execute};
 
 /// An argument as the planner knows it when binding.
 #[derive(Debug, Clone)]
@@ -403,7 +406,7 @@ type FamilyResult = Option<(&'static str, Result<Binding, KrishivError>)>;
 type Binder = fn(&str, &[BindArg], &BindOptions) -> FamilyResult;
 
 /// The families (their names and binder), in lookup order.
-const FAMILIES: [(&[&str], Binder); 18] = [
+const FAMILIES: [(&[&str], Binder); 19] = [
     (array::NAMES, array::bind),
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
@@ -411,6 +414,7 @@ const FAMILIES: [(&[&str], Binder); 18] = [
     (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),
     (hash::NAMES, hash::bind),
+    (json::NAMES, json::bind),
     (map::NAMES, map::bind),
     (session::NAMES, session::bind),
     (bitwise::NAMES, bitwise::bind),
@@ -438,14 +442,27 @@ pub fn scalar_names() -> Vec<&'static str> {
 
 /// Whether the result of the scalar function `name` depends only on its
 /// arguments and `spark.sql.ansi.enabled`: the string (with its character and
-/// encoding families), math, arithmetic, struct and map families (the map family also reads
-/// `spark.sql.mapKeyDedupPolicy`). The datetime, session and
-/// hash families read the session time zone, the user or the query start, so a
-/// caller that evaluates a call before execution (constant folding) must not
-/// evaluate those.
+/// encoding families), math, arithmetic, struct and map families, and the zone-free
+/// JSON functions (`schema_of_json`, `json_array_length`, `json_object_keys`,
+/// `get_json_object`; `from_json` and `to_json` read the session time zone for
+/// timestamps, and the map family also reads
+/// `spark.sql.mapKeyDedupPolicy`). The datetime, session and hash families
+/// read the session time zone, the user or the query start, so a caller that
+/// evaluates a call before execution (constant folding) must not evaluate
+/// those.
 #[must_use]
 pub fn is_argument_pure(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
+    if [
+        "schema_of_json",
+        "json_array_length",
+        "json_object_keys",
+        "get_json_object",
+    ]
+    .contains(&lower.as_str())
+    {
+        return true;
+    }
     [
         string::NAMES,
         chars::NAMES,

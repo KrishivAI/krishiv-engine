@@ -227,11 +227,12 @@ impl Builtin {
 
 /// The identity of a resolved function.
 ///
-/// A function is identified by its canonical name: [`Builtin::name`] or the
-/// registry's lower-case name. Only the name (with the kind) enters the
-/// canonical encoding and the structural hash; a registry id is an
-/// in-process lookup handle and never part of a key, so keys stay valid
-/// across builds whose registries number functions differently.
+/// A function is identified by its canonical name: [`Builtin::name`], the
+/// registry's lower-case name, or a UDF's lower-case name and version. Only
+/// the name (with the kind), and for a UDF its version, enter the canonical
+/// encoding and the structural hash; a registry id is an in-process lookup
+/// handle and never part of a key, so keys stay valid across builds whose
+/// registries number functions differently.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum FunctionId {
@@ -244,6 +245,15 @@ pub enum FunctionId {
         /// The registry's handle for this process; not part of any key.
         id: u32,
     },
+    /// A session-registered native Rust UDF: its lower-case name and the
+    /// implementation [`version`](krishiv_udf_sdk::ScalarUdf::version) the
+    /// call was analyzed with.
+    Udf {
+        /// The canonical (lower-case) name: the identity, with `version`.
+        name: String,
+        /// The implementation version: part of the identity.
+        version: u32,
+    },
 }
 
 impl FunctionId {
@@ -252,7 +262,7 @@ impl FunctionId {
     pub fn name(&self) -> &str {
         match self {
             Self::Builtin(b) => b.name(),
-            Self::Registry { name, .. } => name,
+            Self::Registry { name, .. } | Self::Udf { name, .. } => name,
         }
     }
 }

@@ -103,6 +103,30 @@ pub(crate) fn scan_columns() -> Vec<BoundColumn> {
     ]
 }
 
+/// A write of a scan as Parquet files: the plan data a file sink is built
+/// from (format, options with a secret reference, store, directory, job
+/// id and file limits).
+pub(crate) fn write_plan() -> krishiv_exec::physical::WritePlan {
+    krishiv_exec::physical::WritePlan {
+        format: "parquet".to_owned(),
+        options: BTreeMap::from([
+            (
+                "compression".to_owned(),
+                OptionValue::Plain("zstd".to_owned()),
+            ),
+            (
+                "token".to_owned(),
+                OptionValue::reference("prod", "warehouse-token"),
+            ),
+        ]),
+        store: "memory://suite".to_owned(),
+        dir: "out".to_owned(),
+        job_uuid: "job-1".to_owned(),
+        max_records_per_file: 600,
+        target_file_bytes: 1 << 20,
+    }
+}
+
 /// A scan of a table, with a pushed filter and both runtime-filter specs.
 pub(crate) fn table_scan() -> ScanNode {
     let options = BTreeMap::from([
@@ -717,6 +741,14 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
             "write_files",
             PhysNode::WriteFiles {
                 input: boxed(scan()),
+                write: None,
+            },
+        ),
+        (
+            "write_files_with_plan",
+            PhysNode::WriteFiles {
+                input: boxed(scan()),
+                write: Some(write_plan()),
             },
         ),
         (
@@ -911,6 +943,38 @@ pub(crate) fn expressions() -> PhysNode {
     }
 }
 
+/// A call of a session-registered native Rust UDF (`rust_udf`): the plan
+/// references it by name and version only.
+pub(crate) fn udf_call() -> PhysNode {
+    PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "u".to_owned(),
+            expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Udf {
+                        name: "my_udf".to_owned(),
+                        version: 7,
+                    },
+                    kind: FunctionKind::Scalar,
+                    args: vec![
+                        col(1, "a", DataType::Integer),
+                        lit(Literal::String("x".to_owned())),
+                    ],
+                    distinct: false,
+                    filter: None,
+                    data_type: DataType::String,
+                    nullable: true,
+                    deterministic: true,
+                },
+            )))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    }
+}
+
 /// Lambda expressions and variables: a `transform` over an array column
 /// (`transform(xs, x -> x * 2)`). The array type needs `nested_types` too.
 pub(crate) fn lambda_functions() -> PhysNode {
@@ -1017,6 +1081,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
         .map(|(name, node)| (name.to_owned(), plan_of(node)))
         .collect();
     out.push(("expressions".to_owned(), plan_of(expressions())));
+    out.push(("rust_udf".to_owned(), plan_of(udf_call())));
     // The expression environment flag the `legacy_statistical_aggregate`
     // feature is about: the same root as `one_row`, under a session with
     // `spark.sql.legacy.statisticalAggregate` set. With no moment aggregate

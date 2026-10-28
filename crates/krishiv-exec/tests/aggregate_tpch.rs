@@ -103,9 +103,9 @@ fn rows(batches: &[Batch]) -> Vec<String> {
 }
 
 /// Runs `plan` on `slots` deterministic drivers under a per-query `limit`,
-/// with the default aggregate tables and again with the row-layout ones
+/// with the columnar aggregate tables and again with the row-layout ones
 /// (`krishiv.exec.agg.rowLayout`), which must return the same rows; returns
-/// the default run.
+/// the columnar run.
 async fn run(plan: Arc<dyn ExecNode>, slots: usize, limit: usize) -> (Vec<Batch>, QueryMetrics) {
     let off = run_with(Arc::clone(&plan), slots, limit, false).await;
     let on = run_with(plan, slots, limit, true).await;
@@ -114,8 +114,8 @@ async fn run(plan: Arc<dyn ExecNode>, slots: usize, limit: usize) -> (Vec<Batch>
 }
 
 /// [`run`] on a fresh plan from `make` per layout (operator counters add up
-/// across runs of one plan); returns the default run's rows and both
-/// metrics, default first.
+/// across runs of one plan); returns the columnar run's rows and both
+/// metrics, columnar first.
 async fn run_each(
     make: impl Fn() -> Arc<dyn ExecNode>,
     slots: usize,
@@ -141,6 +141,7 @@ async fn run_with(
             spill_wait_timeout: Duration::from_secs(5),
             abort_release_timeout: Duration::from_secs(30),
             spill_scratch_reserve: krishiv_memory::DEFAULT_SPILL_SCRATCH_RESERVE,
+            resident_guard: true,
         },
         Arc::new(TokioClock),
     );

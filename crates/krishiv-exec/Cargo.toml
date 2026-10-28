@@ -29,6 +29,7 @@ krishiv-memory = { path = "../krishiv-memory" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-types = { path = "../krishiv-types" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 thiserror.workspace = true
 # The query profile's JSON document (`profile`).
 serde_json = { workspace = true, features = ["std"] }
@@ -55,6 +56,10 @@ loom = { workspace = true, features = ["futures"] }
 [features]
 # Row-layout key-page prototype (P2-T157); not part of the default build.
 row-table-prototype = []
+
+[[bench]]
+name = "udf"
+harness = false
 
 [[bench]]
 name = "pipeline"

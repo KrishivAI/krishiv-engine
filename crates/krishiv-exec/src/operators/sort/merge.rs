@@ -467,7 +467,8 @@ impl Merger {
             let mut reader = run
                 .file
                 .reader(handle.reservation().releasing_to_credit())?;
-            let mut keys = handle.reservation().releasing_to_credit();
+            // A refusal here fails the merge (no spill to fall back on).
+            let mut keys = handle.reservation().releasing_to_credit().unguarded();
             if let Some((batch, rows)) = next_batch(&mut reader, &encoder, &mut keys)? {
                 cursors.push(Cursor {
                     pos: 0,

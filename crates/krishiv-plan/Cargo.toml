@@ -19,6 +19,8 @@ krishiv-functions = { path = "../krishiv-functions" }
 krishiv-io = { path = "../krishiv-io" }
 # Spark's decimal result types, shared with the kernels that compute them.
 krishiv-kernels = { path = "../krishiv-kernels" }
+# Session UDFs, for constant folding through the registry.
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk" }
 krishiv-types = { path = "../krishiv-types" }
 thiserror.workspace = true
 twox-hash = { workspace = true, features = ["xxhash3_128"] }

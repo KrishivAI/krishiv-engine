@@ -527,10 +527,37 @@ pub struct UnionNode {
     #[prost(uint32, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<u32>,
 }
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WriteFilesNode {
     #[prost(uint32, tag = "1")]
     pub input: u32,
+    /// feature: write_plan
+    /// What the write writes (format, store, directory, job id, limits).
+    #[prost(message, optional, tag = "2")]
+    pub write: ::core::option::Option<WritePlan>,
+}
+/// feature: write_plan
+/// A file write as plan data: the sink is built at instantiation from this
+/// with the task's partition and attempt.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WritePlan {
+    #[prost(string, tag = "1")]
+    pub format: ::prost::alloc::string::String,
+    #[prost(btree_map = "string, message", tag = "2")]
+    pub options: ::prost::alloc::collections::BTreeMap<
+        ::prost::alloc::string::String,
+        OptionValue,
+    >,
+    #[prost(string, tag = "3")]
+    pub store: ::prost::alloc::string::String,
+    #[prost(string, tag = "4")]
+    pub dir: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub job_uuid: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "6")]
+    pub max_records_per_file: u64,
+    #[prost(uint64, tag = "7")]
+    pub target_file_bytes: u64,
 }
 /// v2: moves rows between partitions.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -807,19 +834,24 @@ pub struct Function {
     pub nullable: bool,
     #[prost(bool, tag = "9")]
     pub deterministic: bool,
-    /// A canonical operator name (`==`, `and`, ...), or a registry function.
-    #[prost(oneof = "function::Id", tags = "1, 2")]
+    /// A canonical operator name (`==`, `and`, ...), a registry function, or
+    /// a session UDF.
+    #[prost(oneof = "function::Id", tags = "1, 2, 10")]
     pub id: ::core::option::Option<function::Id>,
 }
 /// Nested message and enum types in `Function`.
 pub mod function {
-    /// A canonical operator name (`==`, `and`, ...), or a registry function.
+    /// A canonical operator name (`==`, `and`, ...), a registry function, or
+    /// a session UDF.
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Id {
         #[prost(string, tag = "1")]
         Builtin(::prost::alloc::string::String),
         #[prost(message, tag = "2")]
         Registry(super::RegistryFunction),
+        /// feature: rust_udf
+        #[prost(message, tag = "10")]
+        Udf(super::UdfFunction),
     }
 }
 /// A function of the registry, by name and registry id. A worker must run
@@ -830,6 +862,16 @@ pub struct RegistryFunction {
     pub name: ::prost::alloc::string::String,
     #[prost(uint32, tag = "2")]
     pub id: u32,
+}
+/// A session-registered native Rust UDF, by name and implementation
+/// version. A worker must hold the same version to run the plan.
+/// feature: rust_udf
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UdfFunction {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub version: u64,
 }
 /// A Spark type.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

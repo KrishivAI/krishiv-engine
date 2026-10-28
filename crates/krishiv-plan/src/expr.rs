@@ -160,7 +160,8 @@ pub struct FunctionCall {
     /// The qualifier parts (`builtin` in `builtin.abs(x)`), outermost
     /// first; empty for an unqualified call. The analyzer resolves
     /// `builtin.` / `system.builtin.` (case-insensitively) to the builtin
-    /// function and reports any other qualifier as an unresolved routine.
+    /// function, `session.` / `system.session.` to a session UDF, and
+    /// reports any other qualifier as an unresolved routine.
     pub qualifier: Vec<String>,
     /// The arguments.
     pub args: Vec<Arc<Expr>>,
@@ -173,6 +174,15 @@ pub struct FunctionCall {
     pub distinct: bool,
     /// `f(...) FILTER (WHERE filter)`.
     pub filter: Option<Arc<Expr>>,
+}
+
+impl FunctionCall {
+    /// The name when it is unqualified (no qualifier), as operators and
+    /// the name-based function checks require.
+    #[must_use]
+    pub fn unqualified(&self) -> Option<&str> {
+        self.qualifier.is_empty().then_some(&self.name)
+    }
 }
 
 /// How a cast handles invalid input.
@@ -723,7 +733,7 @@ impl Expr {
 /// resolved): a frame bound written `x PRECEDING`.
 pub(crate) fn negated(e: &Expr) -> Option<&Arc<Expr>> {
     let (name, args) = match &e.node {
-        ExprNode::Function(f) => (f.name.as_str(), &f.args),
+        ExprNode::Function(f) => (f.unqualified()?, &f.args),
         ExprNode::Resolved(ResolvedExpr::Function(f)) => (f.id.name(), &f.args),
         _ => return None,
     };
@@ -763,5 +773,52 @@ impl From<Literal> for Expr {
 impl Drop for Expr {
     fn drop(&mut self) {
         walk::teardown_expr(self);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::literal::Literal;
+
+    #[test]
+    fn negated_finds_negative_operands_resolved_or_not() {
+        let inner = Arc::new(Expr::literal(Literal::Integer(3)));
+        // Unresolved `negative(x)`.
+        let unresolved = Expr::new(ExprNode::Function(FunctionCall {
+            name: "negative".to_owned(),
+            qualifier: Vec::new(),
+            args: vec![Arc::clone(&inner)],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+        }));
+        assert!(negated(&unresolved).is_some());
+        // A qualified name is never an operator.
+        let qualified = Expr::new(ExprNode::Function(FunctionCall {
+            name: "negative".to_owned(),
+            qualifier: vec!["session".to_owned()],
+            args: vec![Arc::clone(&inner)],
+            arg_names: Vec::new(),
+            distinct: false,
+            filter: None,
+        }));
+        assert!(negated(&qualified).is_none());
+        // Resolved `-x` (a UDF id works like any other: only the name matters).
+        let resolved = Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+            ResolvedFunction {
+                id: FunctionId::Builtin(Builtin::Negative),
+                kind: FunctionKind::Scalar,
+                args: vec![Arc::clone(&inner)],
+                distinct: false,
+                filter: None,
+                data_type: DataType::Integer,
+                nullable: false,
+                deterministic: true,
+            },
+        )));
+        assert!(negated(&resolved).is_some());
+        // Anything else is not negated.
+        assert!(negated(&Expr::literal(Literal::Integer(1))).is_none());
     }
 }

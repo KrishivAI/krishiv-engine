@@ -16,7 +16,8 @@ use krishiv_plan::{Expr, ReadSource};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
     CodecError, FORMAT_VERSION, Feature, FeatureKind, Limits, MIN_READER_VERSION,
-    POST_MIGRATION_READER_VERSION, ReaderFeatures, decode, decode_with, encode, to_message,
+    POST_MIGRATION_READER_VERSION, ReaderFeatures, decode, decode_with, encode, plan_features,
+    to_message,
 };
 use prost::Message as _;
 
@@ -149,6 +150,140 @@ fn scan_with(options: BTreeMap<String, OptionValue>) -> PhysicalPlan {
         options,
     };
     plan_of(PhysNode::Scan(scan))
+}
+
+fn write_with(options: BTreeMap<String, OptionValue>) -> PhysicalPlan {
+    let mut write = inventory::write_plan();
+    write.options = options;
+    plan_of(PhysNode::WriteFiles {
+        input: Box::new(inventory::scan()),
+        write: Some(write),
+    })
+}
+
+#[test]
+fn a_write_plan_with_a_secret_reference_round_trips_without_the_secret() {
+    let canary = "canary-write-4d2a-secret";
+    let plan = write_with(BTreeMap::from([
+        (
+            "compression".to_owned(),
+            OptionValue::Plain("zstd".to_owned()),
+        ),
+        (
+            "token".to_owned(),
+            OptionValue::reference("prod-scope", "warehouse-key"),
+        ),
+    ]));
+    let bytes = encode(&plan).unwrap();
+    for needle in [&b"prod-scope"[..], b"warehouse-key"] {
+        assert!(bytes.windows(needle.len()).any(|w| w == needle));
+    }
+    assert!(!bytes.windows(canary.len()).any(|w| w == canary.as_bytes()));
+    assert_eq!(decode(&bytes).unwrap(), plan);
+}
+
+#[test]
+fn a_write_plan_with_an_inline_secret_is_refused_without_naming_it() {
+    let canary = "canary-write-9f3a-hunter2";
+    let plan = write_with(BTreeMap::from([(
+        "password".to_owned(),
+        OptionValue::from_user("password", canary),
+    )]));
+    let err = encode(&plan).unwrap_err();
+    assert!(matches!(err, CodecError::Unsupported(_)), "{err:?}");
+    let text = format!("{err} {err:?}");
+    assert!(text.contains("`password` is an inline secret"), "{text}");
+    assert!(!text.contains(canary), "{text}");
+}
+
+#[test]
+fn a_write_plan_with_a_url_with_credentials_is_refused_without_naming_it() {
+    let canary = "canary-write-7c21-sig";
+    let url = format!("s3://bucket/data?X-Amz-Signature={canary}");
+    let option = OptionValue::from_user("path", url);
+    assert!(matches!(option, OptionValue::Url(_)), "not a URL option");
+    let plan = write_with(BTreeMap::from([("path".to_owned(), option)]));
+    let err = encode(&plan).unwrap_err();
+    let text = format!("{err} {err:?}");
+    assert!(text.contains("`path` is a URL with credentials"), "{text}");
+    assert!(!text.contains(canary), "{text}");
+}
+
+#[test]
+fn a_reader_without_write_plan_refuses_the_plan_by_name() {
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "write_files_with_plan")
+        .unwrap();
+    assert!(plan_features(&plan).contains(&Feature::WritePlan));
+    let bytes = encode(&plan).unwrap();
+    let reader = ReaderFeatures::only([Feature::LimitOffset]);
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["write_plan".to_owned()]
+        }
+    );
+    assert_eq!(decode(&bytes).unwrap(), plan);
+}
+
+#[test]
+fn a_write_plan_without_a_format_job_id_or_store_is_corrupt() {
+    let m = message("write_files_with_plan");
+    let edit = |f: &dyn Fn(&mut pb::WritePlan)| {
+        let mut m = m.clone();
+        for node in &mut m.nodes {
+            if let Some(pb::node::Kind::WriteFiles(w)) = &mut node.kind
+                && let Some(write) = w.write.as_mut()
+            {
+                f(write);
+            }
+        }
+        m
+    };
+    corrupt(
+        &edit(&|w| w.format.clear()),
+        "a write plan without a format",
+    );
+    corrupt(
+        &edit(&|w| w.job_uuid.clear()),
+        "a write plan without a job id",
+    );
+    corrupt(&edit(&|w| w.store.clear()), "a write plan without a store");
+    // An absent `write` is a plan written before the `write_plan`
+    // feature, not corruption: it decodes to the legacy plan.
+    let mut missing = message("write_files_with_plan");
+    for node in &mut missing.nodes {
+        if let Some(pb::node::Kind::WriteFiles(w)) = &mut node.kind {
+            w.write = None;
+        }
+    }
+    missing.features.retain(|f| f != "write_plan");
+    missing.min_reader_version = MIN_READER_VERSION;
+    let (_, legacy) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "write_files")
+        .unwrap();
+    assert_eq!(decode(&missing.encode_to_vec()).unwrap(), legacy);
+}
+
+#[test]
+fn a_write_without_a_write_plan_is_the_baseline() {
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "write_files")
+        .unwrap();
+    assert!(plan_features(&plan).is_empty());
+    let m = to_message(&plan).unwrap();
+    assert!(m.features.is_empty());
+    assert_eq!(m.min_reader_version, MIN_READER_VERSION);
+    for node in &m.nodes {
+        if let Some(pb::node::Kind::WriteFiles(w)) = &node.kind {
+            assert!(w.write.is_none());
+        }
+    }
+    assert_eq!(round_trip(&plan), plan);
 }
 
 #[test]
@@ -294,6 +429,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             n if n.starts_with("expand") => 5,
             // A feature added after the freeze: above every frozen version.
             "window_group_limit"
+            | "rust_udf"
             | "nested_types"
             | "struct_field"
             | "lambda_functions"
@@ -304,7 +440,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "nested_loop_existence"
             | "exchange_hash_key_group"
             | "window_frames"
-            | "window_offset_values" => POST_MIGRATION_READER_VERSION,
+            | "window_offset_values"
+            | "write_files_with_plan" => POST_MIGRATION_READER_VERSION,
             _ => MIN_READER_VERSION,
         };
         assert_eq!(m.min_reader_version, expected, "{name}");

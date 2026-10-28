@@ -97,7 +97,15 @@ def test_native_stub_matches_runtime() -> None:
                 has_default = sig.parameters[param].default is not inspect.Parameter.empty
                 assert (param in stub_defaults) == has_default, f"{cls_name}.{name}.{param}: default mismatch"
     stub_fns = _stub_functions(tree)
-    assert set(stub_fns) == {"col", "lit", "expr", "call_function", "count_star", "count_distinct"}
+    assert set(stub_fns) == {
+        "col",
+        "lit",
+        "map_literal",
+        "expr",
+        "call_function",
+        "count_star",
+        "count_distinct",
+    }
     for name, fn in stub_fns.items():
         assert callable(getattr(krishiv_native, name)), f"{name} is in the stub but missing at runtime"
         stub_names = _stub_params(fn)

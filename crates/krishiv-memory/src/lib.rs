@@ -25,6 +25,14 @@
 //!   abort the query furthest above its fair share, waiting for aborted
 //!   queries to release before aborting another.
 //!
+//! - **Resident-set guard.** With a probe installed
+//!   ([`set_resident_probe`], by the program that owns the allocator), a
+//!   limited root samples the process's resident set and cuts what it holds
+//!   above the reservations plus an [`allowance`] from what ordinary grants
+//!   may take, so consumers spill allocator overhead too. Spill I/O,
+//!   [`Reservation::unguarded`] growth and arbitration rounds whose spills
+//!   are exhausted are exempt from the cut (see the `resident` module).
+//!
 //! # Driver protocol
 //! Each pipeline driver has a [`SpillOwner`] and registers every consumer
 //! it owns with a signal from [`SpillOwner::signal`]. At every batch
@@ -69,8 +77,10 @@ mod error;
 mod event;
 mod limit;
 mod pool;
+mod relation;
 mod release;
 mod reservation;
+mod resident;
 mod rounds;
 mod spill;
 mod spillfile;
@@ -81,11 +91,15 @@ pub use consumer::{ConsumerHandle, SpillStats};
 pub use error::MemoryError;
 pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
 pub use pool::{ArbitrationStats, DEFAULT_SPILL_SCRATCH_RESERVE, MemoryConfig, TreePool};
+pub use relation::{RelationHash, RelationLease, RelationRef, RelationStore};
 pub use release::{
     EPOCH_INTERVAL, pressure_epoch, release_if_pressured, release_if_pressured_here,
     set_release_hook,
 };
 pub use reservation::Reservation;
+pub use resident::{
+    ALLOWANCE_BASE, SAMPLE_INTERVAL, allowance, process_resident_bytes, set_resident_probe,
+};
 pub use spill::{OwnerId, SpillOwner, SpillService, SpillSignal, SpillTicket, Spillable};
 pub use spillfile::{
     SpillCodec, SpillConfig, SpillError, SpillFile, SpillManager, SpillReader, SpillScope,
@@ -128,6 +142,15 @@ pub trait MemoryPool: Send + Sync + std::fmt::Debug {
     /// # Errors
     /// As [`try_reserve`](Self::try_reserve).
     fn try_reserve_scratch(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.try_reserve(id, bytes)
+    }
+    /// [`try_reserve`](Self::try_reserve) outside the resident-set guard's
+    /// cut (see [`set_resident_probe`]): for growth whose refusal would fail
+    /// the query rather than make it spill ([`Reservation::unguarded`]).
+    ///
+    /// # Errors
+    /// As [`try_reserve`](Self::try_reserve).
+    fn try_reserve_unguarded(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
         self.try_reserve(id, bytes)
     }
     /// Slow path: may run arbitration. Called only by drivers between

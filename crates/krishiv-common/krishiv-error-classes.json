@@ -65,6 +65,12 @@
     ],
     "sqlState" : "53200"
   },
+  "KRISHIV_MALFORMED_JSON" : {
+    "message" : [
+      "The JSON string <json> is malformed. Provide valid JSON."
+    ],
+    "sqlState" : "22018"
+  },
   "KRISHIV_OBJECT_STORE_REQUEST_FAILED" : {
     "message" : [
       "Reading the file <path> failed: the object store did not complete the request after <attempts> attempt(s): <reason>. This is a storage failure, not a corrupt file, so it is never skipped by \"ignoreCorruptFiles\". Retry the query, or check the store's availability and permissions."
@@ -112,6 +118,12 @@
       "The config <key> is not a known Krishiv config. Verify the spelling, or see the configuration reference."
     ],
     "sqlState" : "42K0I"
+  },
+  "KRISHIV_UDF_NOT_AVAILABLE" : {
+    "message" : [
+      "The user-defined function <name>@<version> is not available on this worker: register it on the executing session before running the plan."
+    ],
+    "sqlState" : "39000"
   },
   "KRISHIV_UNKNOWN_FORMAT_OPTION" : {
     "message" : [

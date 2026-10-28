@@ -13,7 +13,7 @@ use krishiv_exec::aggregate::{AggInput, AggregateExpr, AggregateFunction, Aggreg
 use krishiv_exec::physical::{
     AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
     JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan,
-    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind,
+    Residual, ScanFilter, ScanNode, ScanRuntimeFilter, SubqueryPlan, SubqueryValueKind, WritePlan,
 };
 use krishiv_exec::planner::ExplainNode;
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
@@ -264,8 +264,9 @@ impl Encoder {
                     .map(|i| self.node_index(i))
                     .collect::<Result<_>>()?,
             }),
-            PhysNode::WriteFiles { input } => Kind::WriteFiles(pb::WriteFilesNode {
+            PhysNode::WriteFiles { input, write } => Kind::WriteFiles(pb::WriteFilesNode {
                 input: self.node_index(input)?,
+                write: write.as_ref().map(write_plan).transpose()?,
             }),
             PhysNode::Exchange(exchange) => Kind::Exchange(self.exchange(exchange)?),
             PhysNode::Expand {
@@ -525,6 +526,10 @@ impl Encoder {
             FunctionId::Registry { name, id } => pb::function::Id::Registry(pb::RegistryFunction {
                 name: name.clone(),
                 id: *id,
+            }),
+            FunctionId::Udf { name, version } => pb::function::Id::Udf(pb::UdfFunction {
+                name: name.clone(),
+                version: u64::from(*version),
             }),
             _ => return Err(unresolved("a function identity this version does not know")),
         };
@@ -810,6 +815,23 @@ fn read_source(source: &ReadSource) -> Result<pb::ReadSource> {
         }
     };
     Ok(pb::ReadSource { kind: Some(kind) })
+}
+
+/// A file write as plan data.
+fn write_plan(write: &WritePlan) -> Result<pb::WritePlan> {
+    Ok(pb::WritePlan {
+        format: write.format.clone(),
+        options: write
+            .options
+            .iter()
+            .map(|(k, v)| Ok((k.clone(), option(k, v)?)))
+            .collect::<Result<_>>()?,
+        store: write.store.clone(),
+        dir: write.dir.clone(),
+        job_uuid: write.job_uuid.clone(),
+        max_records_per_file: write.max_records_per_file,
+        target_file_bytes: write.target_file_bytes,
+    })
 }
 
 /// A plan carries plain text and `secret(scope, key)` references only.

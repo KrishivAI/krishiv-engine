@@ -145,7 +145,7 @@ impl HashAggregate {
                 return Ok(false);
             }
             let mut tables = std::mem::take(&mut inner.tables);
-            // The default path's merge order: the largest table first.
+            // The columnar path's merge order: the largest table first.
             if let Some(big) = (0..tables.len()).max_by_key(|&i| tables[i].0.len()) {
                 tables.swap(0, big);
             }

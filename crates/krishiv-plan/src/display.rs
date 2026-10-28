@@ -650,7 +650,7 @@ fn expr_pieces<'a>(e: &'a Expr, out: &mut Vec<Piece<'a>>) {
         })) => {
             let op = match id {
                 FunctionId::Builtin(b) => Some(*b),
-                FunctionId::Registry { .. } => None,
+                FunctionId::Registry { .. } | FunctionId::Udf { .. } => None,
             };
             call(id.name(), op, args, &[], *distinct, filter.as_deref(), out);
         }
@@ -978,6 +978,16 @@ impl Display for Literal {
                 Some(url) => write!(f, "'{}'", Escaped(&url.to_string())),
                 None => write!(f, "'{}'", Escaped(s)),
             },
+            Self::Map(pairs) => {
+                f.write_str("MAP(")?;
+                for (i, (k, v)) in pairs.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "'{}', '{}'", Escaped(k), Escaped(v))?;
+                }
+                f.write_str(")")
+            }
             Self::Binary(b) => {
                 f.write_str("X'")?;
                 b.iter().try_for_each(|byte| write!(f, "{byte:02X}"))?;

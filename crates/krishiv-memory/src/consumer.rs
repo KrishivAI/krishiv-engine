@@ -127,6 +127,11 @@ impl ConsumerHandle {
         self.credit.load(Ordering::Acquire)
     }
 
+    /// The bytes reservations made from this handle hold now.
+    pub fn held(&self) -> usize {
+        self.held.load(Ordering::Relaxed)
+    }
+
     /// Returns unused grant credit to the pool.
     pub fn release_credit(&self) {
         let unused = self.credit.swap(0, Ordering::AcqRel);

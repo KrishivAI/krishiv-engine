@@ -4,7 +4,7 @@
 //! A [`RowTable`] keeps its groups' keys as fixed-stride [`RowLayout`] rows,
 //! one row per group, in up to [`PARTS`] radix partitions chosen by the top
 //! bits of the row hash. Each partition owns its rows and its aggregates'
-//! states (the same [`Accumulator`]s as the default path): a group's id in
+//! states (the same [`Accumulator`]s as the columnar path): a group's id in
 //! its partition's accumulators is its row's position in the partition, so
 //! a row is only its key,
 //!
@@ -64,12 +64,26 @@
 //!
 //! # Width
 //! A thread-local table starts with **one partition** and widens to its
-//! radix partitions at [`WIDEN_GROUPS`] groups ([`RowTable::widen`]: rows,
-//! long key bytes and states are spread by `h`, in row order), so a
-//! low-cardinality aggregate never pays the per-partition fold (DuckDB's
-//! thread-local tables also start small and repartition as they grow).
-//! Widening is a cost choice: a table that cannot reserve the copy stays
-//! narrow. One thread never widens (nothing merges in parallel).
+//! radix partitions ([`RowTable::widen`]: rows, long key bytes and states
+//! are spread by `h`, in row order) once it holds [`WIDEN_GROUPS`] groups,
+//! so the final phase merges partitions in parallel and a low-cardinality
+//! aggregate never pays the per-partition fold. When it widens is a cost
+//! choice between that fold (a gather of the argument columns per touched
+//! partition, every batch) and the copy (every row of the table, once):
+//! - while the input is folded, when its input keeps making new rows
+//!   (nearly all rows so far, or a quarter of the rows since a settled
+//!   fixed index last adapted): the table grows with its input, and a
+//!   late copy costs several times the fold per row it copies;
+//! - otherwise when its input ends (`combine`, on each driver in
+//!   parallel): most rows find their group, so the fold would be paid on
+//!   every row for a copy of few groups.
+//!
+//! Measured on TPC-DS SF10 at eight threads: q22 (a `ROLLUP` of 132.6M
+//! expanded rows into 204K groups; a driver's table ends at 1.8M rows from
+//! 66M input rows) is faster widening at the end; q39, q65, q67 and q75
+//! (a quarter to all input rows new) are faster widening early.
+//! A table that cannot reserve the copy stays narrow (the final phase asks
+//! again). One thread never widens (nothing merges in parallel).
 //!
 //! # Memory
 //! [`projected`](RowTable::projected) bounds the bytes after an apply
@@ -216,10 +230,10 @@ fn word(row: &[u8], at: usize) -> u64 {
         .map_or(0, u64::from_le_bytes)
 }
 
-/// Groups at which a narrow thread-local table widens to its radix
-/// partitions (the final phase's groups per task): below it the table
-/// design does not matter (P2-T159 step 0) and one partition saves the
-/// per-partition fold.
+/// Groups from which a narrow thread-local table widens to its radix
+/// partitions (the final phase's groups per task; when, see the module's
+/// width docs): below it the table design does not matter (P2-T159 step 0)
+/// and one partition saves the per-partition fold.
 pub(crate) const WIDEN_GROUPS: usize = 32_768;
 
 /// Rows from which a thread-local table keeps per-partition sketches: a
@@ -240,7 +254,24 @@ struct Adapt {
     /// Rows pushed (groups created) so far.
     pushed: usize,
     next: usize,
+    /// `rows` and `pushed` when the current interval started.
+    window: (usize, usize),
+    /// At the last adaptation the index was settled (it did not grow) and
+    /// at least [`EARLY_RATE`] of the interval's rows were pushed: see
+    /// [`RowTable::wants_widen_early`].
+    early: bool,
 }
+
+/// Share of input rows that must make new rows, once a fixed index has
+/// settled, for a table to widen while its input is still folded. The
+/// late copy costs about 7x the early per-row fold per row it copies
+/// (TPC-DS SF10 profiles: a widen copies about 5M rows a second per
+/// driver; the per-partition fold adds about 30 ns per input row), so
+/// early wins above about 1/7 of rows new; a quarter leaves a margin.
+const EARLY_RATE: f64 = 0.25;
+/// Share of input rows that made new rows from which a table widens as
+/// soon as it is due: nearly every row is new (no adaptation needed).
+const ALL_NEW: f64 = 0.9;
 
 /// A batch prepared for [`RowTable::apply`].
 pub(crate) struct RowPrepared {
@@ -328,6 +359,8 @@ pub(crate) struct RowTable {
     mode: Mode,
     adapt: Option<Adapt>,
     groups: usize,
+    /// Input rows applied (see [`wants_widen_early`](Self::wants_widen_early)).
+    rows_in: usize,
     /// No key has two rows: the index was never cleared or dropped with
     /// rows in the table, and no row was appended without a lookup.
     unique: bool,
@@ -378,8 +411,11 @@ impl RowTable {
                 rows: 0,
                 pushed: 0,
                 next: ADAPT_ROWS,
+                window: (0, 0),
+                early: false,
             }),
             groups: 0,
+            rows_in: 0,
             unique: true,
             abandons: None,
         })
@@ -408,9 +444,23 @@ impl RowTable {
     /// Whether the table is due to widen ([`widen`](Self::widen)): the
     /// caller widens it when it can reserve
     /// [`widen_bytes`](Self::widen_bytes); a table that cannot stays narrow
-    /// (only a cost choice) and is asked again later.
+    /// (only a cost choice) and the final phase asks again.
     pub(crate) fn wants_widen(&self) -> bool {
         self.widen_to > self.bits && self.groups >= self.widen_at
+    }
+
+    /// Whether the table is due to widen while its input is still being
+    /// folded ([`wants_widen`](Self::wants_widen), and its input keeps
+    /// making new rows): nearly every input row so far made a new row
+    /// ([`ALL_NEW`]), or, at the last adaptation of a settled fixed index,
+    /// at least [`EARLY_RATE`] of the interval's rows did. While a fixed
+    /// index still grows, its rows overstate the keys (a cleared index
+    /// makes new rows of keys it has seen), so it does not decide then.
+    /// See the module's width docs.
+    pub(crate) fn wants_widen_early(&self) -> bool {
+        #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
+        let all_new = self.groups as f64 >= ALL_NEW * self.rows_in as f64;
+        self.wants_widen() && (all_new || self.adapt.as_ref().is_some_and(|a| a.early))
     }
 
     /// Spreads the rows (with their long key bytes) and states over
@@ -819,10 +869,15 @@ impl RowTable {
             self.unique &= self.groups == 0;
             self.index = HashTable::new();
         }
+        let grew = mode != self.mode && mode != Mode::Append;
         self.mode = mode;
         if let Some(a) = self.adapt.as_mut()
             && a.rows >= a.next
         {
+            #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
+            let rate = (a.pushed - a.window.1) as f64 / (a.rows - a.window.0).max(1) as f64;
+            a.early = !grew && rate >= EARLY_RATE;
+            a.window = (a.rows, a.pushed);
             a.next = a.rows + ADAPT_ROWS;
         }
     }
@@ -831,6 +886,7 @@ impl RowTable {
     /// [`projected`](Self::projected) bytes.
     pub(crate) fn apply(&mut self, p: &RowPrepared) -> Result<()> {
         let n = p.keys.len();
+        self.rows_in = self.rows_in.saturating_add(n);
         self.switch(self.next_mode());
         self.start_sketches(n);
         if let Some(a) = self.adapt.as_mut() {
@@ -1438,6 +1494,7 @@ impl RowTable {
                     mode: Mode::Append,
                     adapt: None,
                     groups,
+                    rows_in: 0,
                     unique: self.unique,
                     abandons: None,
                 }

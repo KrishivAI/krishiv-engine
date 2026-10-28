@@ -2,16 +2,27 @@ pub mod krishiv_session
 pub use krishiv_session::AccessDecision
 pub use krishiv_session::AccessPolicy
 pub use krishiv_session::AllowAll
+pub use krishiv_session::ArgField
 pub use krishiv_session::DenyAll
 pub use krishiv_session::ExplainKind
+pub use krishiv_session::InvokeContext
+pub use krishiv_session::NullHandling
 pub use krishiv_session::Principal
 pub use krishiv_session::PrincipalKind
 pub use krishiv_session::Privilege
 pub use krishiv_session::QueryProfile
+pub use krishiv_session::ReturnField
+pub use krishiv_session::ScalarUdf
 pub use krishiv_session::Securable
 pub use krishiv_session::SecurableUse
+pub use krishiv_session::Signature
 pub use krishiv_session::StatementClass
 pub use krishiv_session::TextOptions
+pub use krishiv_session::UdfArg
+pub use krishiv_session::UdfError
+pub use krishiv_session::UdfInputType
+pub use krishiv_session::UdfLibrary
+pub use krishiv_session::UdfProperties
 pub mod krishiv_session::functions
 pub trait krishiv_session::functions::IntoLiteral
 pub fn krishiv_session::functions::IntoLiteral::into_literal(self) -> krishiv_plan::literal::Literal
@@ -312,6 +323,7 @@ pub fn krishiv_session::Session::memory_reserved(&self) -> usize
 pub fn krishiv_session::Session::new() -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader
 pub fn krishiv_session::Session::register_batches(&self, &str, arrow_schema::schema::SchemaRef, alloc::vec::Vec<arrow_array::record_batch::RecordBatch>) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::Session::register_udf(&self, impl krishiv_udf_sdk::udf::ScalarUdf) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::Session::sql(&self, &str) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::table(&self, &str) -> krishiv_session::DataFrame
 pub fn krishiv_session::Session::temp_table_names(&self) -> alloc::vec::Vec<alloc::string::String>
@@ -332,6 +344,20 @@ pub fn krishiv_session::SessionBuilder::principal(self, krishiv_plan::analyzer::
 pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
 impl core::fmt::Debug for krishiv_session::SessionBuilder
 pub fn krishiv_session::SessionBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::SessionFunctions
+impl krishiv_session::SessionFunctions
+pub fn krishiv_session::SessionFunctions::library(&self) -> &alloc::sync::Arc<krishiv_udf_sdk::library::UdfLibrary>
+pub fn krishiv_session::SessionFunctions::new(alloc::sync::Arc<krishiv_udf_sdk::library::UdfLibrary>) -> Self
+pub fn krishiv_session::SessionFunctions::with_registry(alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::FunctionRegistry>, alloc::sync::Arc<krishiv_udf_sdk::library::UdfLibrary>) -> Self
+impl core::clone::Clone for krishiv_session::SessionFunctions
+pub fn krishiv_session::SessionFunctions::clone(&self) -> krishiv_session::SessionFunctions
+impl core::fmt::Debug for krishiv_session::SessionFunctions
+pub fn krishiv_session::SessionFunctions::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_plan::analyzer::catalog::FunctionRegistry for krishiv_session::SessionFunctions
+pub fn krishiv_session::SessionFunctions::lookup(&self, &[alloc::string::String], krishiv_functions::signature::SparkProfile) -> krishiv_plan::analyzer::catalog::FunctionLookup
+pub fn krishiv_session::SessionFunctions::resolve_udf(&self, &str, u32) -> core::option::Option<alloc::sync::Arc<dyn krishiv_udf_sdk::udf::ScalarUdf>>
+pub fn krishiv_session::SessionFunctions::spark_deterministic(&self, &str) -> core::option::Option<bool>
+pub fn krishiv_session::SessionFunctions::version(&self) -> u64
 #[non_exhaustive] pub struct krishiv_session::StatementInfo
 pub krishiv_session::StatementInfo::class: krishiv_sql::classify::StatementClass
 pub krishiv_session::StatementInfo::explain: core::option::Option<krishiv_sql::classify::ExplainKind>

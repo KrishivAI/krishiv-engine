@@ -30,7 +30,7 @@ use std::time::Duration;
 
 use krishiv_common::config::{
     Config, ConfigValue, MEMORY_ABORT_RELEASE_TIMEOUT, MEMORY_LIMIT, MEMORY_RESERVATION_QUANTUM,
-    MEMORY_SPILL_SCRATCH_RESERVE, MEMORY_SPILL_WAIT_TIMEOUT,
+    MEMORY_RESIDENT_GUARD, MEMORY_SPILL_SCRATCH_RESERVE, MEMORY_SPILL_WAIT_TIMEOUT,
 };
 
 use crate::arbitrate::Escalation;
@@ -73,6 +73,10 @@ pub struct MemoryConfig {
     /// at 1/8 of its limit (`krishiv.memory.spillScratchReserve`; see the
     /// module docs). 0 disables the floor.
     pub spill_scratch_reserve: usize,
+    /// Whether a limited root takes part in the resident-set guard
+    /// (`krishiv.memory.residentGuard`); it acts only once the program has
+    /// installed a probe ([`crate::set_resident_probe`]).
+    pub resident_guard: bool,
 }
 
 impl Default for MemoryConfig {
@@ -105,6 +109,10 @@ impl MemoryConfig {
             ),
             spill_scratch_reserve: size(config.get(&MEMORY_SPILL_SCRATCH_RESERVE))
                 .unwrap_or(DEFAULT_SPILL_SCRATCH_RESERVE),
+            resident_guard: config
+                .get(&MEMORY_RESIDENT_GUARD)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(true),
         }
     }
 }
@@ -186,6 +194,9 @@ pub(crate) struct Shared {
     pub(crate) rounds: Rounds,
     pub(crate) release: ReleaseSignal,
     pub(crate) stats: Stats,
+    /// Bytes the resident-set guard cuts from the root's limit for
+    /// ordinary reservations (`crate::resident`).
+    pub(crate) cut: AtomicUsize,
 }
 
 impl Shared {
@@ -303,6 +314,9 @@ pub(crate) enum Class {
     Ordinary,
     /// Spill scratch: up to each pool's limit.
     Scratch,
+    /// Below each pool's spill-scratch floor, without the resident-set
+    /// guard's cut: arbitration's last try before it fails or aborts.
+    Unguarded,
 }
 
 /// Why a fast-path reservation was refused.
@@ -395,7 +409,16 @@ impl Node {
     /// The most an ordinary reservation can ever hold here: the limit minus
     /// the spill-scratch floor.
     pub(crate) fn grant_limit(&self) -> Option<usize> {
-        self.limit.map(|_| self.cap(Class::Ordinary))
+        self.limit.map(|_| self.cap(Class::Unguarded))
+    }
+
+    /// Bytes that must be freed here before `need` more fit under the
+    /// ceiling of `class`: more than `need` while the resident-set guard's
+    /// cut holds the ceiling below what is reserved.
+    pub(crate) fn shortfall(&self, need: usize, class: Class) -> usize {
+        self.reserved()
+            .saturating_add(need)
+            .saturating_sub(self.cap(class))
     }
 
     /// The counter's ceiling for a grant of `class`.
@@ -403,7 +426,15 @@ impl Node {
         match (self.limit, class) {
             (None, _) => MAX_BYTES,
             (Some(l), Class::Scratch) => l,
-            (Some(l), Class::Ordinary) => l - self.floor,
+            (Some(l), Class::Unguarded) => l - self.floor,
+            (Some(l), Class::Ordinary) => {
+                let cut = if self.depth == 0 {
+                    self.shared.cut.load(Ordering::Acquire)
+                } else {
+                    0
+                };
+                (l - self.floor).saturating_sub(cut)
+            }
         }
     }
 
@@ -591,9 +622,14 @@ impl Node {
             return Ok(());
         }
         let quantised = match class {
-            Class::Ordinary => round_up(new_used, consumer.quantum).min(MAX_BYTES),
+            Class::Ordinary | Class::Unguarded => {
+                round_up(new_used, consumer.quantum).min(MAX_BYTES)
+            }
             Class::Scratch => new_used,
         };
+        if class == Class::Ordinary {
+            crate::resident::sample();
+        }
         let mut result = self
             .add_chain(quantised - u.granted, class)
             .map(|()| quantised);
@@ -692,8 +728,9 @@ impl TreePool {
             rounds: Rounds::default(),
             release: ReleaseSignal::default(),
             stats: Stats::default(),
+            cut: AtomicUsize::new(0),
         });
-        Arc::new(Self {
+        let pool = Arc::new(Self {
             node: Arc::new(Node {
                 name: "root".to_owned(),
                 limit: config.limit.map(|l| l.min(MAX_BYTES)),
@@ -706,7 +743,11 @@ impl TreePool {
                 consumers: Mutex::new(HashMap::new()),
                 shared,
             }),
-        })
+        });
+        if pool.node.limit.is_some() && config.resident_guard {
+            crate::resident::register(&pool.node);
+        }
+        pool
     }
 
     fn new_child(
@@ -834,6 +875,10 @@ impl MemoryPool for TreePool {
 
     fn try_reserve_scratch(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
         self.try_reserve_class(id, bytes, Class::Scratch)
+    }
+
+    fn try_reserve_unguarded(&self, id: ConsumerId, bytes: usize) -> Result<(), MemoryError> {
+        self.try_reserve_class(id, bytes, Class::Unguarded)
     }
 
     fn reserve<'a>(

@@ -54,8 +54,10 @@ mod sum_rewrite;
 
 use std::sync::Arc;
 
+use krishiv_common::config::{ANSI_ENABLED, Config, SESSION_TIME_ZONE};
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{Expr, ExprNode, Grouping, LogicalPlan, Plan, PlanNode, ResolvedExpr};
+use krishiv_udf_sdk::UdfLibrary;
 
 pub use group_limit::{
     DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD, RankLikeFunction, WindowGroupLimit,
@@ -114,7 +116,23 @@ pub fn optimize(plan: &Plan) -> Result<Plan, KrishivError> {
 /// be started. A rewrite nesting deeper than [`krishiv_plan::MAX_DEPTH`] is
 /// not an error: the input plan is returned unoptimised.
 pub fn optimize_with(plan: &Plan, stats: &dyn Statistics) -> Result<Plan, KrishivError> {
-    Ok(run(plan, Some(stats), false)?.0)
+    Ok(run(plan, Some(stats), false, None)?.0)
+}
+
+/// As [`optimize_with`], also folding deterministic session-UDF calls of
+/// literal arguments to their values (`udfs`, with the session settings in
+/// `config`). A failure leaves the call in the plan, so the error surfaces
+/// at execution.
+///
+/// # Errors
+/// As [`optimize_with`].
+pub fn optimize_with_udfs(
+    plan: &Plan,
+    stats: &dyn Statistics,
+    udfs: &UdfLibrary,
+    config: &Config,
+) -> Result<Plan, KrishivError> {
+    Ok(run(plan, Some(stats), false, Some((udfs, config)))?.0)
 }
 
 /// As [`optimize_with`], also returning every rule application that
@@ -128,7 +146,21 @@ pub fn optimize_traced(
     plan: &Plan,
     stats: &dyn Statistics,
 ) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
-    run(plan, Some(stats), true)
+    run(plan, Some(stats), true, None)
+}
+
+/// As [`optimize_traced`], also folding deterministic session-UDF calls of
+/// literal arguments to their values (see [`optimize_with_udfs`]).
+///
+/// # Errors
+/// As [`optimize_with`].
+pub fn optimize_traced_with_udfs(
+    plan: &Plan,
+    stats: &dyn Statistics,
+    udfs: &UdfLibrary,
+    config: &Config,
+) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
+    run(plan, Some(stats), true, Some((udfs, config)))
 }
 
 /// As [`optimize_with`], keeping the joins in the order the query wrote
@@ -137,7 +169,7 @@ pub fn optimize_traced(
 /// # Errors
 /// As [`optimize_with`].
 pub fn optimize_as_written(plan: &Plan) -> Result<Plan, KrishivError> {
-    Ok(run(plan, None, false)?.0)
+    Ok(run(plan, None, false, None)?.0)
 }
 
 /// Records the steps that changed the plan, when tracing.
@@ -182,6 +214,7 @@ fn run(
     plan: &Plan,
     stats: Option<&dyn Statistics>,
     tracing: bool,
+    udfs: Option<(&UdfLibrary, &Config)>,
 ) -> Result<(Plan, Vec<RuleStep>), KrishivError> {
     if !plan.root().is_resolved() {
         return Err(InternalError {
@@ -200,7 +233,28 @@ fn run(
                 Ok(pushdown::imply_join_condition(p))
             })
         })?;
-        let root = batch(root, "Rewrite", &mut t)?;
+        // UDF calls of literals fold with the rewrite batch to a fixed
+        // point: folding exposes the constants rewriting folds, and
+        // rewriting exposes the literals folding folds (casts, arithmetic
+        // and nested calls), so neither alone reaches the fixed point.
+        // Only this pass needs the UDFs.
+        let mut root = root;
+        if let Some((library, config)) = udfs {
+            for round in 1..=MAX_ITERATIONS {
+                let before = Arc::clone(&root);
+                let prev = Arc::clone(&root);
+                root = dag::rewrite_up(Arc::clone(&root), &mut |p| {
+                    Ok(fold::fold_plan(p, &fold_ctx(library, config)))
+                })?;
+                t.step("FoldUdfs", round, "FoldUdfs", &prev, &root);
+                root = batch(root, "Rewrite", &mut t)?;
+                if Arc::ptr_eq(&before, &root) {
+                    break;
+                }
+            }
+        } else {
+            root = batch(root, "Rewrite", &mut t)?;
+        }
         let root = t.once("AlgebraicSum", &root, |r| {
             sum_rewrite::rewrite(Arc::clone(r))
         })?;
@@ -242,6 +296,27 @@ fn run(
     }
 }
 
+/// The UDF folding context of one optimization: the session's library and
+/// the plain values a folded UDF call may read.
+fn fold_ctx<'a>(library: &'a UdfLibrary, config: &'a Config) -> fold::UdfFoldCtx<'a> {
+    use krishiv_common::config::ConfigValue;
+    use krishiv_kernels::cast::FixedOffset;
+
+    let ansi = config
+        .get(&ANSI_ENABLED)
+        .and_then(ConfigValue::as_bool)
+        .unwrap_or(true);
+    let zone = config
+        .get(&SESSION_TIME_ZONE)
+        .and_then(|v| v.as_str())
+        .and_then(|z| FixedOffset::parse(z).map(|o| o.0));
+    fold::UdfFoldCtx {
+        library,
+        ansi,
+        zone,
+    }
+}
+
 /// Runs [`REWRITE`] to a fixed point.
 fn batch(
     mut root: Arc<LogicalPlan>,
@@ -278,7 +353,7 @@ fn fold_node(p: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     }
 }
 
-fn groups_by_columns(g: &Grouping) -> bool {
+pub(crate) fn groups_by_columns(g: &Grouping) -> bool {
     let column = |e: &Arc<Expr>| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_)));
     match g {
         Grouping::GroupBy(v) | Grouping::Rollup(v) | Grouping::Cube(v) => v.iter().all(column),

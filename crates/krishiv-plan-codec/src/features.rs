@@ -42,7 +42,7 @@ use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{AggregateFunction, is_moment};
 use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
-use krishiv_plan::{Expr, ExprNode, Literal, ResolvedExpr};
+use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr};
 use krishiv_types::DataType;
 
 /// The `min_reader_version` of a plan that uses no feature (the epoch-1
@@ -127,11 +127,13 @@ registry! {
     (limit_offset, LimitOffset, 3, Semantic, "A `Limit` that skips leading rows (a nonzero offset)."),
     (map_key_dedup_policy, MapKeyDedupPolicy, POST_MIGRATION_READER_VERSION, Semantic, "The session's map-key dedup policy (`LAST_WIN`); without it a worker keeps the first value on duplicate map keys."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
     (window_offset_functions, WindowOffsetFunctions, POST_MIGRATION_READER_VERSION, Semantic, "The window functions `lag`, `lead` and `nth_value`."),
+    (write_plan, WritePlan, POST_MIGRATION_READER_VERSION, Semantic, "The `WriteFiles` node's `WritePlan` (format, store, directory, job id and file limits): the file sink is built at instantiation from it with the task's partition and attempt."),
 }
 
 /// Ids retired at an epoch change: never reused.
@@ -169,6 +171,8 @@ pub enum Construct<'a> {
     Frame(&'a WindowFrame),
     /// An aggregate function (of an aggregate or a window).
     Aggregate(AggregateFunction),
+    /// A resolved function call: only a session UDF needs a feature.
+    Function(&'a FunctionId),
     /// A resolved expression (a struct field access needs its feature).
     Expr(&'a Expr),
     /// A Spark type in an expression or a column.
@@ -207,6 +211,10 @@ pub(crate) fn arrow_type_is_nested(t: &arrow_schema::DataType) -> bool {
 
 /// The feature `construct` needs, or `None` for the epoch-1 baseline.
 #[must_use]
+#[expect(
+    clippy::match_same_arms,
+    reason = "every current FunctionId is listed explicitly"
+)]
 pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
     match construct {
         Construct::Node(node) => match node {
@@ -215,6 +223,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Window { .. } => Some(Feature::Window),
             PhysNode::Expand { .. } => Some(Feature::Expand),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
+            PhysNode::WriteFiles { write, .. } => write.is_some().then_some(Feature::WritePlan),
             PhysNode::Scan(_)
             | PhysNode::OneRow
             | PhysNode::Filter { .. }
@@ -225,7 +234,6 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | PhysNode::Aggregate { .. }
             | PhysNode::NestedLoopJoin(_)
             | PhysNode::Union { .. }
-            | PhysNode::WriteFiles { .. }
             | PhysNode::Exchange(_) => None,
         },
         Construct::Item(item) => match item {
@@ -317,6 +325,15 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::MaxBy
             | AggregateFunction::MinBy => None,
         },
+        // Built-ins and registry functions travel by name; only a
+        // session UDF (by name and version) needs a reader with it.
+        Construct::Function(id) => match id {
+            FunctionId::Udf { .. } => Some(Feature::RustUdf),
+            FunctionId::Builtin(_) => None,
+            // A future identity is baseline until it is classified
+            // (encoding refuses it first).
+            FunctionId::Registry { .. } | _ => None,
+        },
     }
 }
 
@@ -370,6 +387,9 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             f(Construct::Lambda);
         }
         f(Construct::Expr(e));
+        // A UDF call hides in any expression of the node (`exprs_of`
+        // already yields every descendant, so one node check is enough).
+        functions_in(e, f);
     }
 }
 
@@ -480,6 +500,20 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
         e.for_each_child(&mut |c| stack.push(c));
     }
     out
+}
+
+/// Calls `f` with the function call `e` holds, if one: only a session UDF
+/// needs a feature, so only that arm matters. The call site already visits
+/// every descendant (see `exprs_of`), so one node check covers the whole
+/// subtree. Every current [`ExprNode`] variant appears in the call-site
+/// walk explicitly, so a new expression kind holding a call cannot
+/// silently skip UDF feature detection (encoding refuses unknown nodes
+/// first). Physical expressions hold no subquery nodes (the codec refuses
+/// them).
+fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
+    if let ExprNode::Resolved(ResolvedExpr::Function(c)) = &e.node {
+        f(Construct::Function(&c.id));
+    }
 }
 
 /// The features `plan` uses: a pure function of its content. Subquery plans

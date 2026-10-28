@@ -361,7 +361,9 @@ impl Buffer {
         Self {
             batches: Vec::new(),
             reservation: handle.reservation(),
-            headroom: handle.reservation(),
+            // Filled from credit just moved off the batch's reservation; a
+            // refusal fails the sink, so the resident-set guard never cuts it.
+            headroom: handle.reservation().unguarded(),
             row_bytes: 0,
             handle: Arc::clone(handle),
         }

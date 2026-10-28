@@ -27,6 +27,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_SPILL_WAIT_TIMEOUT,
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
+    &MEMORY_RESIDENT_GUARD,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -97,6 +98,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
@@ -314,11 +316,11 @@ pub static EXEC_BATCH_SIZE: ConfigEntry = ConfigEntry {
 pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.agg.rowLayout",
     value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
+    default: Some(ConfigValue::Bool(true)),
     doc: "Internal: grouped aggregations keep their keys as fixed-width rows in \
           radix-partitioned tables and merge the partitions in parallel. Results are the \
-          same either way; aggregations with string, binary, nested or dictionary keys \
-          keep the default path.",
+          same either way; aggregations with nested or dictionary keys \
+          keep the columnar path.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
@@ -328,11 +330,11 @@ pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
 pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.join.rowLayout",
     value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
+    default: Some(ConfigValue::Bool(true)),
     doc: "Internal: hash joins store their keys as fixed-width rows and index them with a \
           table that switches by size between a flat and a salted directory. Results are \
           the same either way; joins whose key types have no row encoding keep the \
-          default path.",
+          columnar path.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
@@ -437,6 +439,23 @@ pub static MEMORY_SPILL_SCRATCH_RESERVE: ConfigEntry = ConfigEntry {
           spill writers' scratch buffers may use, so a full pool can still fund the spill that \
           frees it. Shared by every spill under the pool and released when each write ends. \
           `0` disables it.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Whether a limited memory pool spills allocator overhead (the resident-set guard).
+pub static MEMORY_RESIDENT_GUARD: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.residentGuard",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether the root memory pool keeps what the process holds beyond its reservations \
+          (allocator overhead, memory used without a reservation) within an allowance of 1/8 of \
+          the limit plus 64 MiB, by lowering the memory ordinary reservations may take so \
+          operators spill. It needs a resident-set probe from the program that owns the \
+          allocator: the `krishiv` CLI and the bench runner install one when started with a \
+          limit below 4 GiB; elsewhere the setting has no effect. Spill I/O and arbitration \
+          rounds whose spills are exhausted are exempt from it.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
