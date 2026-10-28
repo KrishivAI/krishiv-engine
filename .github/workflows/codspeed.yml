@@ -36,16 +36,38 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  benchmarks:
-    name: Benchmarks
+  # The benchmark targets are split over parallel jobs so the run is not one serial
+  # build-and-run of every target. Every shard runs the CodSpeed action on its own
+  # targets and CodSpeed merges the uploads of one workflow run into a single report.
+  # Each target belongs to exactly one shard (a target run twice is reported as a
+  # duplicate variation); the `Benchmarks` job below fails when one is unassigned, so a
+  # new `[[bench]]` has to be added here. Shards are balanced by estimated build + run
+  # time. The exec shards carry the heaviest targets; every shard rebuilds the workspace
+  # crates its targets depend on.
+  shards:
+    name: Bench shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # Cold-cache runs took 27-73 minutes (instrumented build, then the run); a job
-    # cancelled at the limit gets no cache save, so the retry started cold again.
+    # Cold-cache runs of the former single job took 27-73 minutes (instrumented build,
+    # then the run); a job cancelled at the limit gets no cache save, so the retry
+    # started cold again. A shard builds a share of that, but the limit stays.
     timeout-minutes: 90
     permissions:
       contents: read
       # OIDC authentication with CodSpeed (no token needed on public repositories).
       id-token: write
+    strategy:
+      # Let every shard finish: each one saves its own cache and uploads its results.
+      fail-fast: false
+      matrix:
+        include:
+          - shard: exec-agg-sort
+            bench_flags: "--bench aggregate --bench sort"
+          - shard: exec-join-ops
+            bench_flags: "--bench hash_join --bench operators --bench routing_hash"
+          - shard: pipeline-io
+            bench_flags: "--bench pipeline --bench spill_file --bench io --bench runtime_filter"
+          - shard: kernels-sql
+            bench_flags: "--bench binary_add --bench arith --bench compare --bench cast --bench list --bench parse --bench lower --bench plan --bench plan_key --bench optimize --bench batch_filter --bench config_lookup"
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -59,18 +81,80 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Its own cache entry: the benchmark build (bench profile, codspeed instrumentation)
-          # shares no artifacts with the other workflows' dev/test builds, and a run that is
-          # cut off or fails after the build still saves what it compiled.
-          shared-key: codspeed-bench
+          # One cache entry per shard: the benchmark build (bench profile, codspeed
+          # instrumentation) shares no artifacts with the other workflows' dev/test builds,
+          # and a run that is cut off or fails after the build still saves what it compiled.
+          # Shards build different targets, so a shared entry would keep only the artifacts
+          # of whichever shard saved first.
+          shared-key: codspeed-bench-${{ matrix.shard }}
           cache-on-failure: true
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-codspeed
+      # `--workspace` keeps feature resolution identical to the former whole-workspace
+      # build; `--bench` limits the build to this shard's targets.
       - name: Build benchmarks
-        run: cargo codspeed build --workspace
+        run: cargo codspeed build --workspace ${{ matrix.bench_flags }}
       - name: Run benchmarks
         uses: CodSpeedHQ/action@821a40cd6c80e3cfe387caf55668287addd808da # v5.5.0
         with:
           mode: simulation
-          run: cargo codspeed run --workspace
+          run: cargo codspeed run --workspace ${{ matrix.bench_flags }}
+
+  # The required check. Branch protection names `Benchmarks`, so it stays one job with
+  # that name; it passes only when every shard passed and no benchmark target is
+  # missing from, or repeated across, the shards.
+  benchmarks:
+    name: Benchmarks
+    needs: shards
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Check the shards
+        env:
+          RESULT: ${{ needs.shards.result }}
+        run: |
+          echo "shards: $RESULT"
+          [ "$RESULT" = success ]
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check every benchmark target is in exactly one shard
+        run: |
+          python3 - <<'PY'
+          import glob, re, sys, tomllib
+          from collections import Counter
+
+          workflow = open(".github/workflows/codspeed.yml").read()
+          assigned = Counter()
+          for flags in re.findall(r'^\s*bench_flags:\s*"([^"]*)"\s*$', workflow, re.M):
+              assigned.update(re.findall(r"--bench\s+(\w+)", flags))
+
+          # A target behind `required-features` is not built by a default workspace build.
+          existing = set()
+          for path in glob.glob("crates/*/Cargo.toml"):
+              with open(path, "rb") as f:
+                  manifest = tomllib.load(f)
+              for bench in manifest.get("bench", []):
+                  if not bench.get("required-features"):
+                      existing.add(bench["name"])
+
+          missing = sorted(existing - set(assigned))
+          unknown = sorted(set(assigned) - existing)
+          repeated = sorted(n for n, c in assigned.items() if c > 1)
+          for label, names in (
+              ("in no shard", missing),
+              ("in a shard but not a bench target", unknown),
+              ("in more than one shard", repeated),
+          ):
+              if names:
+                  print(f"::error::benchmark targets {label}: {', '.join(names)}")
+          sys.exit(1 if missing or unknown or repeated else 0)
+          PY
