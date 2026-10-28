@@ -1406,7 +1406,10 @@ impl Resolver<'_> {
                 // contributes its name, a struct field its field name), so a
                 // call with any named child becomes `named_struct(name, ...)`
                 // with `colN` defaults; all-default calls stay `struct`.
-                if entry.id.name() == "struct"
+                // Only for the built-in: a qualified session UDF named
+                // `struct` runs the UDF.
+                if is_builtin_entry(&entry)
+                    && entry.id.name() == "struct"
                     && let Some(rewritten) = self.struct_names(f, &kids[..n], e.origin)
                 {
                     // The children are bound already, and rebinding a
@@ -1522,15 +1525,20 @@ impl Resolver<'_> {
                 // The registry lookup is ASCII case-insensitive and
                 // `id.name()` is the canonical lower-case name, so a
                 // case-variant call (`SCHEMA_OF_CSV`) resolves here too.
-                let is_schema_of_csv = entry.id.name() == "schema_of_csv";
-                if is_builtin_entry(&entry) && lookup_name.eq_ignore_ascii_case("mask") {
+                // Only for the built-in: a qualified session UDF of the
+                // same name runs the UDF.
+                let is_schema_of_csv =
+                    is_builtin_entry(&entry) && entry.id.name() == "schema_of_csv";
+                if is_builtin_entry(&entry) && entry.id.name() == "mask" {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
                 // `typeof(x)` is Spark's `RuntimeReplaceable`; its type
-                // name is known once the call is typed.
-                let is_typeof = entry.id.name() == "typeof";
+                // name is known once the call is typed. Only for the
+                // built-in: a qualified session UDF named `typeof` runs
+                // the UDF.
+                let is_typeof = is_builtin_entry(&entry) && entry.id.name() == "typeof";
                 let call = ResolvedFunction {
                     id: entry.id,
                     kind: entry.kind,
