@@ -58,7 +58,7 @@
 //! Every value whose key is sensitive (see
 //! [`is_sensitive_key`](krishiv_common::secret::is_sensitive_key): every key
 //! above but the endpoints, the region and the account name) is wrapped in a
-//! [`SecretString`] the moment it is read and is only exposed at the builder
+//! [`SecretString`](krishiv_common::secret::SecretString) the moment it is read and is only exposed at the builder
 //! call. [`StoreRegistry`]'s `Debug`, every error here and every store id
 //! and path are free of secret values: builder errors name the bucket, the
 //! endpoint or a credential file path at most.
@@ -73,19 +73,29 @@
 //! until per-service rates are calibrated. Multipart
 //! uploads rely on the cloud clients' own per-part retries (their default
 //! `RetryConfig` is left enabled), as `upload.rs` documents.
+//!
+//! Cloud builders live behind the crate's `cloud` feature (the `aws`,
+//! `azure` and `gcp` features of `object_store`): without it, building a
+//! cloud store fails with `KRISHIV_UNSUPPORTED_FEATURE`, while parsing URLs
+//! and pacing policies keep working so plans still qualify paths.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use krishiv_common::config::Config;
+#[cfg(feature = "cloud")]
 use krishiv_common::error::KrishivInvalidConfigValue;
-use krishiv_common::secret::{OptionValue, REDACTED, SecretString, SecretValue};
+use krishiv_common::secret::{OptionValue, SecretValue};
+#[cfg(feature = "cloud")]
+use krishiv_common::secret::{REDACTED, SecretString};
 use object_store::ObjectStore;
 use object_store::path::Path;
 
 use super::{IoScheduler, StoreId, StorePolicy};
-use crate::error::{Result, store_failed, unsupported};
+#[cfg(feature = "cloud")]
+use crate::error::store_failed;
+use crate::error::{Result, unsupported};
 
 /// `fs.s3a.endpoint`: custom endpoint (MinIO, LocalStack).
 pub const S3_ENDPOINT: &str = "fs.s3a.endpoint";
@@ -365,6 +375,7 @@ impl fmt::Debug for StoreRegistry {
 
 /// The store of `url` built from `config` with per-read `options`
 /// overriding it (see the module docs for the keys).
+#[cfg(feature = "cloud")]
 fn build(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -382,6 +393,20 @@ fn build(
         ObjectScheme::Gcs => gcs_store(config, options, url),
         ObjectScheme::Azure => azure_store(config, options, url),
     }
+}
+
+/// Without the `cloud` feature there are no builders: cloud URLs parse (so
+/// plans still qualify paths) but no store is built.
+#[cfg(not(feature = "cloud"))]
+fn build(
+    _config: &Config,
+    _options: &BTreeMap<String, OptionValue>,
+    url: &ParsedUrl,
+) -> Result<Arc<dyn ObjectStore>> {
+    Err(unsupported(format!(
+        "cloud object stores are not enabled in this build (enable the `cloud` feature): {}",
+        url.display
+    )))
 }
 
 /// The store id for `base` with per-read `options`: `base` when no `fs.*`
@@ -423,6 +448,7 @@ pub(crate) fn is_store_option(key: &str) -> bool {
 }
 
 /// Finds `key` in the per-read `options`, ASCII case-insensitively.
+#[cfg(feature = "cloud")]
 fn find_option<'a>(
     options: &'a BTreeMap<String, OptionValue>,
     key: &str,
@@ -489,6 +515,7 @@ fn options_hash(relevant: &[(&str, &OptionValue)]) -> u64 {
 ///
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` for anything but `true`/`false`.
+#[cfg(feature = "cloud")]
 fn path_style_access(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -508,6 +535,7 @@ fn path_style_access(
 /// layer documents case-insensitive matching and the per-read side already
 /// honours it; resolving both sides the same way keeps one spelling from
 /// meaning different things depending on where it is set.
+#[cfg(feature = "cloud")]
 fn session_raw(config: &Config, key: &str) -> Option<String> {
     if let Some(value) = config.get_unregistered(key) {
         return Some(value.to_owned());
@@ -531,6 +559,7 @@ fn session_raw(config: &Config, key: &str) -> Option<String> {
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
 /// value (naming the key and the redaction marker, never the value).
+#[cfg(feature = "cloud")]
 fn cred(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -588,6 +617,7 @@ fn cred(
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
 /// value (naming the key and the redaction marker, never the value).
+#[cfg(feature = "cloud")]
 fn text(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -614,6 +644,7 @@ fn text(
 /// (emulators); anything else keeps the builders' HTTPS default. The scheme
 /// matches ASCII case-insensitively, over bytes (never slicing a `&str` at a
 /// non-boundary).
+#[cfg(feature = "cloud")]
 fn allows_http(text: Option<&str>) -> bool {
     text.is_some_and(|e| e.len() >= 7 && e.as_bytes()[..7].eq_ignore_ascii_case(b"http://"))
 }
@@ -626,6 +657,7 @@ fn allows_http(text: Option<&str>) -> bool {
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` for anything else. The error names the
 /// key and the redaction marker, never the value.
+#[cfg(feature = "cloud")]
 fn flag(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -659,6 +691,7 @@ fn flag(
 
 /// The `KRISHIV_INVALID_CONFIG_VALUE` for `key`: the key and the redaction
 /// marker, never the value.
+#[cfg(feature = "cloud")]
 fn invalid_option(key: &str, reason: &str) -> KrishivInvalidConfigValue {
     KrishivInvalidConfigValue {
         key: format!("\"{key}\""),
@@ -674,6 +707,7 @@ fn invalid_option(key: &str, reason: &str) -> KrishivInvalidConfigValue {
 /// value (see [`cred`]); `KRISHIV_OBJECT_STORE_REQUEST_FAILED` when the
 /// builder rejects the configuration (names the bucket and the endpoint
 /// at most, never a secret).
+#[cfg(feature = "cloud")]
 fn s3_store(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -715,6 +749,7 @@ fn s3_store(
 /// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
 /// value (see [`cred`]); `KRISHIV_OBJECT_STORE_REQUEST_FAILED` when the
 /// builder rejects the configuration (never a secret).
+#[cfg(feature = "cloud")]
 fn gcs_store(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -745,6 +780,7 @@ fn gcs_store(
 /// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
 /// value (see [`cred`]); `KRISHIV_OBJECT_STORE_REQUEST_FAILED` when the
 /// builder rejects the configuration (never a secret).
+#[cfg(feature = "cloud")]
 fn azure_store(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -782,6 +818,7 @@ fn azure_store(
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
 /// value (see [`cred`]).
+#[cfg(feature = "cloud")]
 fn azure_key(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -803,6 +840,7 @@ fn azure_key(
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
 /// value (see [`cred`]).
+#[cfg(feature = "cloud")]
 fn azure_sas(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -825,6 +863,7 @@ fn azure_sas(
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` for an empty or wrong-kind per-read
 /// value (see [`cred`]).
+#[cfg(feature = "cloud")]
 fn dotted(
     config: &Config,
     options: &BTreeMap<String, OptionValue>,
@@ -851,6 +890,7 @@ fn dotted(
 /// Splits a SAS token (`sv=..&sig=..`) into its query pairs, redacting any
 /// complaint: the token itself must never reach an error. A leading `?` (as
 /// Azure portals copy it) and surrounding whitespace are ignored.
+#[cfg(feature = "cloud")]
 fn sas_pairs(secret: &SecretString) -> Result<Vec<(String, String)>, String> {
     let token = secret.expose_secret().trim();
     let token = token.strip_prefix('?').unwrap_or(token);
@@ -874,6 +914,7 @@ mod tests {
     use super::*;
     use krishiv_common::error::ErrorClass;
 
+    #[cfg(feature = "cloud")]
     const CANARY: &str = "Canary-7f3a9c";
 
     fn config(pairs: &[(&str, &str)]) -> Arc<Config> {
@@ -881,6 +922,7 @@ mod tests {
         Arc::new(c)
     }
 
+    #[cfg(feature = "cloud")]
     fn shown(value: &OptionValue) -> String {
         format!("{value} {value:?} {value:#?}")
     }
@@ -1033,6 +1075,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn config_keys_are_typed_secrets() {
         // Keys the shared classifier marks sensitive classify as secrets
@@ -1073,6 +1116,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn stores_build_offline_without_touching_the_network() {
         let s3 = StoreRegistry::new(config(&[
@@ -1110,6 +1154,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn failures_name_keys_and_buckets_but_never_secrets() {
         // A store that cannot be built names what is missing, never a
@@ -1184,6 +1229,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn stores_are_cached_per_bucket() {
         let registry = StoreRegistry::new(config(&[]));
@@ -1204,6 +1250,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn per_read_options_override_session_config() {
         use super::ObjectScheme;
@@ -1234,6 +1281,7 @@ mod tests {
         assert_eq!(url.scheme, ObjectScheme::S3);
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn session_keys_match_case_insensitively_like_per_read_keys() {
         // The session side resolves the same case-insensitive way the
@@ -1258,6 +1306,7 @@ mod tests {
         assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn mistyped_per_read_values_fail_naming_the_key() {
         // Every per-read value below would have fallen back to the valid
@@ -1311,6 +1360,7 @@ mod tests {
         assert!(!error.to_string().contains(CANARY));
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn empty_per_read_values_are_present_values() {
         // Hadoop keeps `""` as a value: an empty per-read value is invalid
@@ -1337,6 +1387,7 @@ mod tests {
         assert_eq!(error.error_class(), ErrorClass::KrishivInvalidConfigValue);
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn per_read_options_get_their_own_store_id() {
         let registry = StoreRegistry::new(config(&[]));
@@ -1372,6 +1423,7 @@ mod tests {
         assert!(Arc::ptr_eq(&base, &plain));
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn per_read_secrets_never_print() {
         // A per-read secret overrides the session value without ever
@@ -1450,6 +1502,7 @@ mod tests {
         assert_eq!(relevant_options(&options).len(), 1);
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn sas_tokens_allow_a_leading_question_mark() {
         let with_mark = SecretString::new("?sv=2024-01-01&sig=abc".to_owned());
@@ -1477,6 +1530,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn http_scheme_matches_ascii_case_insensitively() {
         assert!(allows_http(Some("http://127.0.0.1:9000")));
@@ -1490,5 +1544,24 @@ mod tests {
         assert_eq!(policy_for(ObjectScheme::S3), StorePolicy::S3);
         assert_eq!(policy_for(ObjectScheme::Gcs), StorePolicy::GCS);
         assert_eq!(policy_for(ObjectScheme::Azure), StorePolicy::AZURE);
+    }
+
+    #[cfg(not(feature = "cloud"))]
+    #[test]
+    fn cloud_stores_need_the_cloud_feature() {
+        // Without the feature, cloud URLs still parse (so plans qualify
+        // paths) but no store is built: the exact unsupported error names
+        // the missing feature, never a secret.
+        let registry = StoreRegistry::new(config(&[]));
+        for input in ["s3://bucket/k", "gs://bucket/k", "abfss://cont/k"] {
+            let url = parse_object_url(input).unwrap();
+            let error = registry.store(&url).unwrap_err();
+            assert_eq!(
+                error.error_class(),
+                ErrorClass::KrishivUnsupportedFeature,
+                "{input}"
+            );
+            assert!(error.to_string().contains("`cloud`"), "{input}");
+        }
     }
 }

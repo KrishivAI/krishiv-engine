@@ -179,9 +179,10 @@ impl PathLocator for LocalPaths {
 /// which builds (or reuses, within the query) the bucket's store from the
 /// session configuration with the read's per-relation `fs.*` options
 /// overriding it (Spark's per-relation Hadoop configuration) and registers
-/// it on the scheduler. Locating is synchronous and performs no I/O: store
-/// construction only reads configuration and the environment. A located
-/// cloud path re-parses to itself through its [`LocatedPath::display`].
+/// it on the scheduler. Cloud URLs need the `cloud` feature: without it the
+/// registry reports them as unsupported. Locating is synchronous and performs
+/// no I/O: store construction only reads configuration and the environment.
+/// A located cloud path re-parses to itself through its [`LocatedPath::display`].
 #[derive(Debug, Clone)]
 pub struct ObjectPaths {
     local: LocalPaths,
@@ -584,6 +585,7 @@ mod tests {
         assert_eq!(locate("1a:b").unwrap().display, "file:/work/dir/1a:b");
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn cloud_urls_locate_in_their_bucket_stores() {
         use krishiv_common::config::Config;
@@ -647,6 +649,7 @@ mod tests {
         assert_eq!(display_name("mock"), "mock");
     }
 
+    #[cfg(feature = "cloud")]
     #[test]
     fn cloud_locating_honours_per_read_options() {
         use std::collections::BTreeMap;

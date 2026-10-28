@@ -50,4 +50,7 @@ wasm-udf = ["krishiv/wasm-udf"]
 ui = ["krishiv/ui", "dep:krishiv-server"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc", "dep:krishiv-memory"]
+# Cloud object stores (S3, GCS, Azure). Opt-in so the default build stays
+# inside the dependency and binary-size budgets.
+cloud = ["krishiv/cloud"]
 full = ["krishiv/full"]
