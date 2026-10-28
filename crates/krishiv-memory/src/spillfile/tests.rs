@@ -106,6 +106,7 @@ impl Pool {
             quantum: 1,
             // Exact budgets: no spill-scratch floor below the limit.
             spill_scratch_reserve: 0,
+            resident_guard: true,
             ..MemoryConfig::default()
         });
         let query = root.child("query", None);
@@ -1652,6 +1653,40 @@ fn ids_are_unique_across_threads() {
     let unique: std::collections::HashSet<&String> = all.iter().collect();
     assert_eq!(unique.len(), all.len());
     assert!(all.iter().all(|id| super::dir::valid_id(id)));
+}
+
+/// The resident-set guard's cut never refuses spill I/O: a reader and an
+/// ordinary (non-scratch) writer fit above the cut ceiling, below the limit.
+#[test]
+fn spill_reads_and_writes_are_outside_the_resident_guards_cut() {
+    let (_dir, _manager, scope, writer_pool) = env(SpillCodec::None);
+    let batches: Vec<Batch> = (0..4)
+        .map(|i| int_batch(i * 1000, 1000, Weights::Const(1)))
+        .collect();
+    let file = write_file(&scope, &writer_pool, &batches);
+    let one = batches[0].data().get_array_memory_size();
+
+    let pool = Pool::new(Some(one * 60));
+    // Everything below the cut ceiling is taken: ordinary growth is refused.
+    pool.root
+        .node()
+        .shared
+        .cut
+        .store(one * 20, crate::sync::Ordering::Release);
+    let mut blocker = pool.reservation();
+    blocker.try_grow(one * 40).unwrap();
+    assert!(pool.reservation().try_grow(16).is_err(), "the cut applies");
+
+    let rows: usize = file
+        .reader(pool.reservation())
+        .unwrap()
+        .map(|b| b.unwrap().num_rows())
+        .sum();
+    assert_eq!(rows, 4_000);
+    let copy = write_file(&scope, &pool, &batches);
+    assert_eq!(read_all(&copy, &pool).unwrap().len(), 4);
+    drop(blocker);
+    assert_eq!(pool.root.reserved(), 0);
 }
 
 #[test]
