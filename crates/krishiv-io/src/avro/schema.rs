@@ -657,3 +657,35 @@ pub(crate) fn null_branch_index(schema: &AvroSchema) -> Option<u32> {
 fn float_default(v: f64) -> f32 {
     v as f32
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arrow_of_rejects_types_with_no_spark_type() {
+        // `bigdecimal` has no fixed scale, so no Arrow decimal holds it.
+        let e = arrow_of(&AvroSchema::BigDecimal).unwrap_err();
+        assert!(e.to_string().contains("bigdecimal"), "{e}");
+        // Recursive schemas have no Arrow mapping either.
+        let name = apache_avro::schema::Name::new("n").unwrap();
+        let e = arrow_of(&AvroSchema::Ref { name }).unwrap_err();
+        assert!(e.to_string().contains("recursive"), "{e}");
+    }
+
+    #[test]
+    fn json_string_escapes_json_and_avro_name_sanitizes_names() {
+        assert_eq!(json_string("plain"), "\"plain\"");
+        assert_eq!(
+            json_string("a\"b\\c\nd\re\tf\x01"),
+            "\"a\\\"b\\\\c\\nd\\re\\tf\\u0001\""
+        );
+        assert_eq!(avro_name("9 lives!"), "_9_lives_");
+        assert_eq!(avro_name("ok_name2"), "ok_name2");
+        assert_eq!(avro_name(""), "_");
+        assert_eq!(decimal_size(1), 1);
+        assert_eq!(decimal_size(9), 4);
+        // Thirty-eight digits need the whole sixteen bytes.
+        assert_eq!(decimal_size(38), 16);
+    }
+}

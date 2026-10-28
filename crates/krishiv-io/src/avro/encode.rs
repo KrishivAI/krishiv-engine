@@ -595,3 +595,197 @@ impl Encoder for AvroEncoder {
         self.taken + self.out.len() as u64 + self.pending.len() as u64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow_array::{
+        BinaryArray, BinaryViewArray, BooleanArray, Int8Array, Int16Array, Int32Array,
+        LargeBinaryArray, LargeStringArray, StringArray, StringViewArray, Time32MillisecondArray,
+        Time64MicrosecondArray,
+    };
+
+    fn parse(schema: &str) -> AvroSchema {
+        AvroSchema::parse_str(schema).unwrap()
+    }
+
+    fn cell_bytes(schema: &AvroSchema, array: &ArrayRef) -> Result<Vec<u8>, FormatError> {
+        let mut out = Vec::new();
+        put_cell(&mut out, schema, array, 0).map(|()| out)
+    }
+
+    #[test]
+    fn window_rejects_offsets_outside_the_values() {
+        assert_eq!(window(&[0_i32, 2], 0, 2).unwrap(), (0, 2));
+        // No window starts at `row`.
+        assert!(window(&[0_i32], 0, 0).is_err());
+        // A negative offset never converts.
+        assert!(window(&[-1_i32, 1], 0, 1).is_err());
+        // An inverted or over-long window is not a window.
+        assert!(window(&[2_i32, 1], 0, 2).is_err());
+        assert!(window(&[0_i32, 9], 0, 2).is_err());
+    }
+
+    #[test]
+    fn str_at_reads_the_utf8_layouts_only() {
+        let view: ArrayRef = Arc::new(StringViewArray::from(vec![Some("a")]));
+        let plain: ArrayRef = Arc::new(StringArray::from(vec![Some("b")]));
+        let large: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("c")]));
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        assert_eq!(str_at(&view, 0), Some("a"));
+        assert_eq!(str_at(&plain, 0), Some("b"));
+        assert_eq!(str_at(&large, 0), Some("c"));
+        assert_eq!(str_at(&ints, 0), None);
+    }
+
+    #[test]
+    fn put_cell_checks_union_branches_and_nullability() {
+        let nullable = parse(r#"["null","int"]"#);
+        // A null takes the null branch (`NullArray` reports no nulls, so a
+        // nullable array carries it).
+        let nulls: ArrayRef = Arc::new(Int32Array::from(vec![None]));
+        assert!(cell_bytes(&nullable, &nulls).is_ok());
+        // Without a null branch a null has nowhere to go.
+        assert!(cell_bytes(&parse(r#""int""#), &nulls).is_err());
+        // A union without a null branch still holds its one branch's values.
+        let one: ArrayRef = Arc::new(Int32Array::from(vec![7]));
+        assert!(cell_bytes(&nullable, &one).is_ok());
+        // Two non-null branches are not one column.
+        assert!(cell_bytes(&parse(r#"["int","string"]"#), &one).is_err());
+        // A null branch that is not null-indexed is still an error.
+        assert!(cell_bytes(&parse(r#"["int"]"#), &nulls).is_err());
+    }
+
+    #[test]
+    fn put_scalar_widens_narrow_ints_and_floats() {
+        let one_i8: ArrayRef = Arc::new(Int8Array::from(vec![-3]));
+        let one_i16: ArrayRef = Arc::new(Int16Array::from(vec![300]));
+        let one_f32: ArrayRef = Arc::new(arrow_array::Float32Array::from(vec![1.5]));
+        assert!(cell_bytes(&parse(r#""int""#), &one_i8).is_ok());
+        assert!(cell_bytes(&parse(r#""int""#), &one_i16).is_ok());
+        // A `float` column holds a `double`, widening as the readers do.
+        assert!(cell_bytes(&parse(r#""double""#), &one_f32).is_ok());
+        assert!(cell_bytes(&parse(r#""float""#), &one_f32).is_ok());
+    }
+
+    #[test]
+    fn put_scalar_moves_bytes_and_strings_across_layouts() {
+        let binary: ArrayRef = Arc::new(BinaryArray::from(vec![b"xy".as_slice()]));
+        let large: ArrayRef = Arc::new(LargeBinaryArray::from(vec![b"z".as_slice()]));
+        let view: ArrayRef = Arc::new(BinaryViewArray::from(vec![b"v".as_slice()]));
+        let bytes_schema = parse(r#""bytes""#);
+        assert!(cell_bytes(&bytes_schema, &binary).is_ok());
+        assert!(cell_bytes(&bytes_schema, &large).is_ok());
+        assert!(cell_bytes(&bytes_schema, &view).is_ok());
+        // `Utf8View` bytes are bytes too.
+        let text: ArrayRef = Arc::new(StringViewArray::from(vec!["hi"]));
+        assert!(cell_bytes(&parse(r#""bytes""#), &text).is_ok());
+        // A `string` column holds binary bytes that are UTF-8, nothing else.
+        assert!(cell_bytes(&parse(r#""string""#), &text).is_ok());
+        assert!(cell_bytes(&parse(r#""string""#), &view).is_ok());
+        let bad: ArrayRef = Arc::new(BinaryViewArray::from(vec![b"\xff".as_slice()]));
+        let e = cell_bytes(&parse(r#""string""#), &bad).unwrap_err();
+        assert!(e.to_string().contains("not UTF-8"), "{e}");
+    }
+
+    #[test]
+    fn put_scalar_checks_fixed_sizes() {
+        let ok: ArrayRef = Arc::new(BinaryViewArray::from(vec![b"ab".as_slice()]));
+        let plain: ArrayRef = Arc::new(BinaryArray::from(vec![b"ab".as_slice()]));
+        let short: ArrayRef = Arc::new(BinaryViewArray::from(vec![b"a".as_slice()]));
+        let fixed = parse(r#"{"type":"fixed","name":"f","size":2}"#);
+        assert!(cell_bytes(&fixed, &ok).is_ok());
+        assert!(cell_bytes(&fixed, &plain).is_ok());
+        assert!(cell_bytes(&fixed, &short).is_err());
+    }
+
+    #[test]
+    fn put_scalar_writes_times_and_millis_timestamps() {
+        let t32: ArrayRef = Arc::new(Time32MillisecondArray::from(vec![1]));
+        let t64: ArrayRef = Arc::new(Time64MicrosecondArray::from(vec![2]));
+        assert!(
+            cell_bytes(
+                &parse(r#"{"type":"int","logicalType":"time-millis"}"#),
+                &t32
+            )
+            .is_ok()
+        );
+        assert!(
+            cell_bytes(
+                &parse(r#"{"type":"long","logicalType":"time-micros"}"#),
+                &t64
+            )
+            .is_ok()
+        );
+        let ms: ArrayRef = Arc::new(arrow_array::TimestampMillisecondArray::from(vec![3]));
+        assert!(
+            cell_bytes(
+                &parse(r#"{"type":"long","logicalType":"timestamp-millis"}"#),
+                &ms
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn put_scalar_needs_the_records_fields_and_list_shapes() {
+        // A batch without the record's field fails, naming it.
+        let record = parse(
+            r#"{"type":"record","name":"r","fields":[{"name":"a","type":"int"},{"name":"b","type":"int"}]}"#,
+        );
+        let half = arrow_array::StructArray::new(
+            arrow_schema::Fields::from(vec![arrow_schema::Field::new("a", DataType::Int32, true)]),
+            vec![Arc::new(Int32Array::from(vec![1])) as ArrayRef],
+            None,
+        );
+        let half: ArrayRef = Arc::new(half);
+        let e = cell_bytes(&record, &half).unwrap_err();
+        assert!(e.to_string().contains('b'), "{e}");
+        // A `large` list and a fixed-size list hold the items like a list.
+        let items: ArrayRef = Arc::new(arrow_array::LargeListArray::new(
+            Arc::new(arrow_schema::Field::new("element", DataType::Int32, false)),
+            arrow_buffer::OffsetBuffer::new(vec![0_i64, 2].into()),
+            Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+            None,
+        ));
+        assert!(cell_bytes(&parse(r#"{"type":"array","items":"int"}"#), &items).is_ok());
+        let fixed_items: ArrayRef = Arc::new(arrow_array::FixedSizeListArray::new(
+            Arc::new(arrow_schema::Field::new("element", DataType::Int32, false)),
+            2,
+            Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+            None,
+        ));
+        assert!(cell_bytes(&parse(r#"{"type":"array","items":"int"}"#), &fixed_items).is_ok());
+    }
+
+    #[test]
+    fn put_scalar_resolves_enums_by_symbol() {
+        let schema = parse(r#"{"type":"enum","name":"e","symbols":["A","B"]}"#);
+        let ok: ArrayRef = Arc::new(StringViewArray::from(vec!["B"]));
+        let mut out = Vec::new();
+        put_cell(&mut out, &schema, &ok, 0).unwrap();
+        // One is the index of `B`.
+        assert_eq!(out, vec![2]);
+        let bad: ArrayRef = Arc::new(StringViewArray::from(vec!["Z"]));
+        assert!(cell_bytes(&schema, &bad).is_err());
+    }
+
+    #[test]
+    fn put_scalar_refuses_a_value_of_another_type() {
+        let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true]));
+        let e = cell_bytes(&parse(r#""int""#), &bools).unwrap_err();
+        let message = e.to_string();
+        assert!(message.contains("Boolean"), "{message}");
+        assert!(message.contains("int"), "{message}");
+    }
+
+    #[test]
+    fn rescale_keeps_zero_and_rejects_unrepresentable_decimals() {
+        assert_eq!(rescale(0, 9, 2, 4).unwrap(), 0);
+        // Non-zero dropped digits fail, as does a value past the precision.
+        assert!(rescale(15, 1, 0, 4).is_err());
+        assert!(rescale(10_000, 0, 0, 4).is_err());
+        // Down-scaling exact tens passes.
+        assert_eq!(rescale(1_500, 2, 0, 4).unwrap(), 15);
+    }
+}

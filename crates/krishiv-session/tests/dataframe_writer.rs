@@ -397,7 +397,7 @@ fn unknown_format_fails_with_unsupported_feature() {
     assert!(err.to_string().contains("writing the json format"), "{err}");
     // Any other Spark built-in source without an implementation, through
     // `format`.
-    for format in ["text", "orc", "avro"] {
+    for format in ["text", "orc"] {
         let path = out(&dir, format);
         let err = block_on(s.table("people").write().format(format).save(&path)).unwrap_err();
         assert_eq!(

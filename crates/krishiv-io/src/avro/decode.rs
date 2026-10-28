@@ -1641,3 +1641,292 @@ impl Decoder for AvroDecoder {
         self.metrics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(schema: &str) -> AvroSchema {
+        AvroSchema::parse_str(schema).unwrap()
+    }
+
+    /// Resolution names what the reader cannot hold: the specification's
+    /// promotion and conversion table, enforced value by value.
+    #[test]
+    fn resolve_names_unholdable_values() {
+        let int = parse(r#""int""#);
+        let string = parse(r#""string""#);
+        // Promotions hold.
+        assert!(resolve(&int, &parse(r#""long""#), AvroValue::Int(3), false).is_ok());
+        // Anything else names both sides.
+        let e = resolve(&int, &string, AvroValue::Int(3), false).unwrap_err();
+        assert!(
+            e.to_string().contains("a int value resolved as string"),
+            "{e}"
+        );
+        let en = parse(r#"{"type":"enum","name":"e","symbols":["A"]}"#);
+        let e = resolve(&en, &int, AvroValue::Enum(0, "A".to_owned()), false).unwrap_err();
+        assert!(
+            e.to_string().contains("an enum value resolved as int"),
+            "{e}"
+        );
+        let e = resolve(&int, &en, AvroValue::Int(3), false).unwrap_err();
+        assert!(
+            e.to_string().contains("a int value resolved as an enum"),
+            "{e}"
+        );
+        let e = resolve(
+            &en,
+            &parse(r#"{"type":"enum","name":"q","symbols":["B"]}"#),
+            AvroValue::Enum(0, "A".to_owned()),
+            false,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("the read schema lacks"), "{e}");
+        let fixed2 = parse(r#"{"type":"fixed","name":"f","size":2}"#);
+        let e = resolve(
+            &fixed2,
+            &parse(r#"{"type":"fixed","name":"f","size":4}"#),
+            AvroValue::Fixed(2, vec![0, 0]),
+            false,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("another size"), "{e}");
+        let e = resolve(&fixed2, &string, AvroValue::Fixed(2, vec![0, 0]), false).unwrap_err();
+        assert!(e.to_string().contains("another type"), "{e}");
+        // A null for a non-nullable field, and a union no branch takes.
+        let e = resolve(
+            &parse(r#"["null","int"]"#),
+            &int,
+            AvroValue::Union(0, Box::new(AvroValue::Null)),
+            false,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("non-nullable"), "{e}");
+        let e = resolve(
+            &parse(r#"["int","string"]"#),
+            &parse(r#"["int","long"]"#),
+            AvroValue::Union(1, Box::new(AvroValue::String("x".to_owned()))),
+            false,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("no reader branch accepts"), "{e}");
+        // Bytes that are not UTF-8 never become a string.
+        let e = resolve(
+            &parse(r#""bytes""#),
+            &string,
+            AvroValue::Bytes(vec![0xFF]),
+            false,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("an Avro string"), "{e}");
+        // A `uuid` reads as its underlying bytes, fixed or variable.
+        let uuid = "123e4567-e89b-12d3-a456-426614174000".parse().unwrap();
+        for fragment in [
+            r#"{"type":"string","logicalType":"uuid"}"#,
+            r#"{"type":"bytes","logicalType":"uuid"}"#,
+            r#"{"type":"fixed","name":"u","size":16,"logicalType":"uuid"}"#,
+        ] {
+            let schema = parse(fragment);
+            let seen = resolve(&schema, &schema, AvroValue::Uuid(uuid), false).unwrap();
+            assert_eq!(seen, AvroValue::Uuid(uuid), "{fragment}");
+        }
+    }
+
+    #[test]
+    fn decimal_i128_sign_extends_and_rejects_long_decimals() {
+        assert_eq!(decimal_i128(&[0x01]).unwrap(), 1);
+        assert_eq!(decimal_i128(&[0xFF]).unwrap(), -1);
+        assert!(decimal_i128(&[0_u8; 17]).is_err());
+    }
+
+    /// Builders hold what they are given: lengths count rows, values
+    /// append in reader terms, and anything else names both sides. The
+    /// decoder checks rows before appending them, so these errors are the
+    /// dry-run path of a corrupt record, not a scan failure.
+    #[test]
+    fn builders_hold_values_and_name_mismatches() {
+        // Lengths count rows, whatever the leaf.
+        assert_eq!(node_len(&Node::Null { len: 5 }), 5);
+        assert_eq!(node_len(&Node::Bool(BooleanBuilder::new())), 0);
+        assert_eq!(node_len(&Node::Int32(Int32Builder::new())), 0);
+        assert_eq!(node_len(&Node::Int64(Int64Builder::new())), 0);
+        assert_eq!(node_len(&Node::Float32(Float32Builder::new())), 0);
+        assert_eq!(node_len(&Node::Float64(Float64Builder::new())), 0);
+        assert_eq!(node_len(&Node::String(StringViewBuilder::new())), 0);
+        assert_eq!(node_len(&Node::Binary(BinaryViewBuilder::new())), 0);
+        assert_eq!(
+            node_len(&Node::Decimal {
+                builder: Decimal128Builder::new(),
+                precision: 10,
+            }),
+            0
+        );
+        assert_eq!(node_len(&Node::Date(Date32Builder::new())), 0);
+        assert_eq!(
+            node_len(&Node::Timestamp(TimestampMicrosecondBuilder::new())),
+            0
+        );
+        assert_eq!(
+            node_len(&Node::Struct {
+                schemas: Vec::new(),
+                children: Vec::new(),
+                nulls: NullBufferBuilder::new(0),
+                len: 2,
+            }),
+            2
+        );
+        assert_eq!(
+            node_len(&Node::List {
+                item: Arc::new(Field::new("element", DataType::Int32, false)),
+                item_schema: parse(r#""int""#),
+                values: Box::new(Node::Int32(Int32Builder::new())),
+                offsets: vec![0],
+                nulls: NullBufferBuilder::new(0),
+            }),
+            0
+        );
+        assert_eq!(
+            node_len(&Node::Map {
+                entries: Arc::new(Field::new("entries", DataType::Int32, false)),
+                value_schema: parse(r#""int""#),
+                keys: Box::new(Node::String(StringViewBuilder::new())),
+                values: Box::new(Node::Int32(Int32Builder::new())),
+                offsets: vec![0, 0],
+                nulls: NullBufferBuilder::new(0),
+            }),
+            1
+        );
+        // Converted leaves append; a `bool` column cannot hold an `int`.
+        let mut node = Node::String(StringViewBuilder::new());
+        append(
+            &mut node,
+            &parse(r#""string""#),
+            &AvroValue::Bytes(b"hi".to_vec()),
+            false,
+        )
+        .unwrap();
+        assert_eq!(node_len(&node), 1);
+        let mut node = Node::Binary(BinaryViewBuilder::new());
+        append(
+            &mut node,
+            &parse(r#""bytes""#),
+            &AvroValue::String("yo".to_owned()),
+            false,
+        )
+        .unwrap();
+        let uuid = "123e4567-e89b-12d3-a456-426614174000".parse().unwrap();
+        append(
+            &mut node,
+            &parse(r#""bytes""#),
+            &AvroValue::Uuid(uuid),
+            false,
+        )
+        .unwrap();
+        assert_eq!(node_len(&node), 2);
+        let mut node = Node::Bool(BooleanBuilder::new());
+        let e = append(&mut node, &parse(r#""boolean""#), &AvroValue::Int(1), false).unwrap_err();
+        assert!(e.to_string().contains("int value"), "{e}");
+        assert!(e.to_string().contains("boolean column"), "{e}");
+        // A struct takes exactly its fields; builders finish into arrays
+        // and reject builders of another shape.
+        let mut node = Node::Struct {
+            schemas: vec![parse(r#""int""#)],
+            children: vec![Node::Int32(Int32Builder::new())],
+            nulls: NullBufferBuilder::new(0),
+            len: 0,
+        };
+        let e = append(
+            &mut node,
+            &parse(r#""int""#),
+            &AvroValue::Record(vec![
+                ("a".to_owned(), AvroValue::Int(1)),
+                ("b".to_owned(), AvroValue::Int(2)),
+            ]),
+            false,
+        )
+        .unwrap_err();
+        assert!(e.to_string().contains("another shape"), "{e}");
+        let e = finish_node(node, &Field::new("s", DataType::Int32, true)).unwrap_err();
+        assert!(e.to_string().contains("non-struct field"), "{e}");
+        let field = Field::new(
+            "m",
+            DataType::Map(
+                Arc::new(Field::new("entries", DataType::Int32, false)),
+                false,
+            ),
+            true,
+        );
+        let node = Node::Map {
+            entries: Arc::new(field.clone()),
+            keys: Box::new(Node::String(StringViewBuilder::new())),
+            values: Box::new(Node::Int32(Int32Builder::new())),
+            value_schema: parse(r#""int""#),
+            offsets: vec![0],
+            nulls: NullBufferBuilder::new(0),
+        };
+        let e = finish_node(node, &field).unwrap_err();
+        assert!(e.to_string().contains("non-map field"), "{e}");
+        // Entries without both a key and a value field fail too.
+        let short = Field::new(
+            "entries",
+            DataType::Struct(vec![Field::new("key", DataType::Utf8View, false)].into()),
+            false,
+        );
+        let node = Node::Map {
+            entries: Arc::new(short.clone()),
+            keys: Box::new(Node::String(StringViewBuilder::new())),
+            values: Box::new(Node::Int32(Int32Builder::new())),
+            value_schema: parse(r#""int""#),
+            offsets: vec![0],
+            nulls: NullBufferBuilder::new(0),
+        };
+        let e = finish_node(node, &short).unwrap_err();
+        assert!(e.to_string().contains("without key and value"), "{e}");
+    }
+
+    /// Every value has its short kind name for mismatch messages.
+    #[test]
+    fn every_value_has_its_kind_name() {
+        use apache_avro::{Days, Duration, Millis, Months};
+        let uuid = "123e4567-e89b-12d3-a456-426614174000".parse().unwrap();
+        let cases: &[(AvroValue, &str)] = &[
+            (AvroValue::Null, "null"),
+            (AvroValue::Boolean(true), "boolean"),
+            (AvroValue::Int(1), "int"),
+            (AvroValue::Date(1), "int"),
+            (AvroValue::TimeMillis(1), "int"),
+            (AvroValue::Long(1), "long"),
+            (AvroValue::TimeMicros(1), "long"),
+            (AvroValue::Float(1.0), "float"),
+            (AvroValue::Double(1.0), "double"),
+            (AvroValue::Bytes(vec![0]), "bytes"),
+            (AvroValue::String(String::new()), "string"),
+            (AvroValue::Fixed(1, vec![0]), "fixed"),
+            (AvroValue::Enum(0, String::new()), "enum"),
+            (AvroValue::Union(0, Box::new(AvroValue::Null)), "union"),
+            (AvroValue::Array(vec![]), "array"),
+            (AvroValue::Map(Default::default()), "map"),
+            (AvroValue::Record(vec![]), "record"),
+            (
+                AvroValue::Decimal(apache_avro::Decimal::from(vec![0x01])),
+                "decimal",
+            ),
+            (AvroValue::BigDecimal(1.into()), "bigdecimal"),
+            (AvroValue::TimestampMillis(1), "timestamp-millis"),
+            (AvroValue::TimestampMicros(1), "timestamp-micros"),
+            (AvroValue::TimestampNanos(1), "timestamp-nanos"),
+            (AvroValue::LocalTimestampMillis(1), "local-timestamp-millis"),
+            (AvroValue::LocalTimestampMicros(1), "local-timestamp-micros"),
+            (AvroValue::LocalTimestampNanos(1), "local-timestamp-nanos"),
+            (
+                AvroValue::Duration(Duration::new(Months::new(0), Days::new(0), Millis::new(0))),
+                "duration",
+            ),
+            (AvroValue::Uuid(uuid), "uuid"),
+        ];
+        for (value, want) in cases {
+            assert_eq!(value_kind(value), *want);
+        }
+    }
+}
