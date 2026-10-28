@@ -314,11 +314,11 @@ pub static EXEC_BATCH_SIZE: ConfigEntry = ConfigEntry {
 pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.agg.rowLayout",
     value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
+    default: Some(ConfigValue::Bool(true)),
     doc: "Internal: grouped aggregations keep their keys as fixed-width rows in \
           radix-partitioned tables and merge the partitions in parallel. Results are the \
-          same either way; aggregations with string, binary, nested or dictionary keys \
-          keep the default path.",
+          same either way; aggregations with nested or dictionary keys \
+          keep the columnar path.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,
@@ -328,11 +328,11 @@ pub static EXEC_AGG_ROW_LAYOUT: ConfigEntry = ConfigEntry {
 pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.join.rowLayout",
     value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
+    default: Some(ConfigValue::Bool(true)),
     doc: "Internal: hash joins store their keys as fixed-width rows and index them with a \
           table that switches by size between a flat and a salted directory. Results are \
           the same either way; joins whose key types have no row encoding keep the \
-          default path.",
+          columnar path.",
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: None,

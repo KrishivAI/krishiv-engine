@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Join keys in one of two formats, chosen per join instance ([`Hashing`]):
 //!
-//! - **arrow-row** (the default): Spark-normalized arrow-row key rows on the
+//! - **arrow-row** (when `krishiv.exec.join.rowLayout` is off, or the keys
+//!   have no row encoding): Spark-normalized arrow-row key rows on the
 //!   shared hash blocks ([`crate::hash`]), hashed with the seeded hash, which
 //!   also picks the spill partitions;
 //! - **row layout** (`krishiv.exec.join.rowLayout`, P2-T158): fixed-width
