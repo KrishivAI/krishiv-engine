@@ -1,0 +1,13 @@
+{
+  "category": "object-stores",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature paths with the scheme",
+      "order": 340
+    }
+  ],
+  "summary": "remote paths (https and object stores)",
+  "task": "P2-T084"
+}

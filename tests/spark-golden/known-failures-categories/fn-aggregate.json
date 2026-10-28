@@ -1,0 +1,20 @@
+{
+  "category": "fn-aggregate",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature WITHIN GROUP",
+      "order": 370
+    },
+    {
+      "family": [
+        "agg",
+        "sketch"
+      ],
+      "order": 420
+    }
+  ],
+  "summary": "aggregate and sketch functions beyond P2a, WITHIN GROUP",
+  "task": "P2-T032"
+}

@@ -32,6 +32,9 @@ use super::parse::Statement;
 pub struct Rule {
     /// Category key the rule assigns.
     pub category: String,
+    /// Position among all rules: lower matches first. Not part of the rule's
+    /// identity ([`PartialEq`] compares the rule as written).
+    pub order: u32,
     command: Option<bool>,
     depends: Option<bool>,
     file: Option<Regex>,
@@ -108,6 +111,7 @@ impl Rule {
             detail: re("detail")?,
             family,
             source: v.clone(),
+            order: 0,
             category,
         };
         if rule.source.as_object().is_some_and(|o| o.len() == 1) {

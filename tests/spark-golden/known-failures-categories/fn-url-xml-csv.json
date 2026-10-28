@@ -1,0 +1,18 @@
+{
+  "category": "fn-url-xml-csv",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "family": [
+        "url",
+        "xml",
+        "csv",
+        "protobuf"
+      ],
+      "order": 480
+    }
+  ],
+  "summary": "URL, XML, CSV and protobuf functions",
+  "task": "P2-T038"
+}

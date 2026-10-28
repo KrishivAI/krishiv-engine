@@ -1,0 +1,23 @@
+{
+  "category": "time-geo-types",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "file": "^st-functions$",
+      "order": 100
+    },
+    {
+      "detail": "The feature (TIME literals|the time data type)",
+      "order": 260
+    },
+    {
+      "family": [
+        "st"
+      ],
+      "order": 490
+    }
+  ],
+  "summary": "Spark 4.x TIME type and literals; GEOMETRY/GEOGRAPHY types and ST functions",
+  "task": "P2-T181"
+}

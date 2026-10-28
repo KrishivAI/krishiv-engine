@@ -1,0 +1,13 @@
+{
+  "category": "variant-type",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature the variant data type",
+      "order": 250
+    }
+  ],
+  "summary": "the VARIANT type",
+  "task": "P2-T001c"
+}
