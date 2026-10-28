@@ -64,12 +64,26 @@
 //!
 //! # Width
 //! A thread-local table starts with **one partition** and widens to its
-//! radix partitions at [`WIDEN_GROUPS`] groups ([`RowTable::widen`]: rows,
-//! long key bytes and states are spread by `h`, in row order), so a
-//! low-cardinality aggregate never pays the per-partition fold (DuckDB's
-//! thread-local tables also start small and repartition as they grow).
-//! Widening is a cost choice: a table that cannot reserve the copy stays
-//! narrow. One thread never widens (nothing merges in parallel).
+//! radix partitions ([`RowTable::widen`]: rows, long key bytes and states
+//! are spread by `h`, in row order) once it holds [`WIDEN_GROUPS`] groups,
+//! so the final phase merges partitions in parallel and a low-cardinality
+//! aggregate never pays the per-partition fold. When it widens is a cost
+//! choice between that fold (a gather of the argument columns per touched
+//! partition, every batch) and the copy (every row of the table, once):
+//! - while the input is folded, when at least half of its rows so far made
+//!   a new row: the table grows with its input, so a late copy would cost
+//!   about a fold of every row anyway, and more memory at once;
+//! - otherwise when its input ends (`combine`, on each driver in
+//!   parallel): most rows find their group, so the fold would be paid on
+//!   every row for a copy of few groups.
+//!
+//! Profiled on TPC-DS SF10 at eight threads: q22 (a `ROLLUP` folding 132.6M
+//! expanded rows into 204K groups, few rows new) ran in 13.7 s widening at
+//! 32K groups and 11.1 s widening at the end (the columnar path: 9.6 s);
+//! q39 (6.1M groups from 26.5M rows, most rows new) ran in 7.6 s widening
+//! early and 9-11 s widening at the end, a copy of every row.
+//! A table that cannot reserve the copy stays narrow (the final phase asks
+//! again). One thread never widens (nothing merges in parallel).
 //!
 //! # Memory
 //! [`projected`](RowTable::projected) bounds the bytes after an apply
@@ -216,10 +230,10 @@ fn word(row: &[u8], at: usize) -> u64 {
         .map_or(0, u64::from_le_bytes)
 }
 
-/// Groups at which a narrow thread-local table widens to its radix
-/// partitions (the final phase's groups per task): below it the table
-/// design does not matter (P2-T159 step 0) and one partition saves the
-/// per-partition fold.
+/// Groups from which a narrow thread-local table widens to its radix
+/// partitions (the final phase's groups per task; when, see the module's
+/// width docs): below it the table design does not matter (P2-T159 step 0)
+/// and one partition saves the per-partition fold.
 pub(crate) const WIDEN_GROUPS: usize = 32_768;
 
 /// Rows from which a thread-local table keeps per-partition sketches: a
@@ -328,6 +342,8 @@ pub(crate) struct RowTable {
     mode: Mode,
     adapt: Option<Adapt>,
     groups: usize,
+    /// Input rows applied (see [`wants_widen_early`](Self::wants_widen_early)).
+    rows_in: usize,
     /// No key has two rows: the index was never cleared or dropped with
     /// rows in the table, and no row was appended without a lookup.
     unique: bool,
@@ -380,6 +396,7 @@ impl RowTable {
                 next: ADAPT_ROWS,
             }),
             groups: 0,
+            rows_in: 0,
             unique: true,
             abandons: None,
         })
@@ -408,9 +425,16 @@ impl RowTable {
     /// Whether the table is due to widen ([`widen`](Self::widen)): the
     /// caller widens it when it can reserve
     /// [`widen_bytes`](Self::widen_bytes); a table that cannot stays narrow
-    /// (only a cost choice) and is asked again later.
+    /// (only a cost choice) and the final phase asks again.
     pub(crate) fn wants_widen(&self) -> bool {
         self.widen_to > self.bits && self.groups >= self.widen_at
+    }
+
+    /// Whether the table is due to widen while its input is still being
+    /// folded ([`wants_widen`](Self::wants_widen), and at least half of
+    /// the input rows so far made a new row): see the module's width docs.
+    pub(crate) fn wants_widen_early(&self) -> bool {
+        self.wants_widen() && self.groups.saturating_mul(2) >= self.rows_in
     }
 
     /// Spreads the rows (with their long key bytes) and states over
@@ -831,6 +855,7 @@ impl RowTable {
     /// [`projected`](Self::projected) bytes.
     pub(crate) fn apply(&mut self, p: &RowPrepared) -> Result<()> {
         let n = p.keys.len();
+        self.rows_in = self.rows_in.saturating_add(n);
         self.switch(self.next_mode());
         self.start_sketches(n);
         if let Some(a) = self.adapt.as_mut() {
@@ -1438,6 +1463,7 @@ impl RowTable {
                     mode: Mode::Append,
                     adapt: None,
                     groups,
+                    rows_in: 0,
                     unique: self.unique,
                     abandons: None,
                 }

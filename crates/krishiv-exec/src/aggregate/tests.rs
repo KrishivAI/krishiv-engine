@@ -2263,7 +2263,7 @@ struct ByHand {
     rows: Vec<String>,
     /// Bytes the query pool held once every driver combined.
     combined: usize,
-    /// The finalizing consumer's peak bytes.
+    /// The final phase's peak bytes.
     peak: usize,
 }
 
@@ -2304,8 +2304,12 @@ async fn by_hand(
         agg.combine(l, &g).unwrap();
     }
     let combined = root.reserved();
-    agg.finalize(&g, &sink_ctx).await.unwrap();
-    let peak = sink_ctx.consumer().consumer().peak();
+    // The final phase runs on a consumer of its own (the tables are charged
+    // to it), so its peak is the final phase's, not the drivers' (who widen
+    // their tables when they combine).
+    let final_ctx = ctx(0, "agg");
+    agg.finalize(&g, &final_ctx).await.unwrap();
+    let peak = final_ctx.consumer().consumer().peak();
     let src = ctx(1, "src").with_dependency(Arc::clone(&g));
     let sg = Source::global_state(&**agg, &src).unwrap();
     let mut sl = Source::local_state(&**agg, &src, &sg).unwrap();
@@ -2313,7 +2317,7 @@ async fn by_hand(
     while let Some(b) = agg.get_data(&mut sl, &sg).await.unwrap() {
         out.push(b);
     }
-    drop((sl, sg, src, g, sink_ctx));
+    drop((sl, sg, src, g, sink_ctx, final_ctx));
     assert_eq!(root.reserved(), 0);
     ByHand {
         rows: rows(&out),
