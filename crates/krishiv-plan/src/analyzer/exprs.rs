@@ -404,6 +404,9 @@ pub(super) fn literal_type(v: &Literal) -> Option<DataType> {
         Literal::Double(_) => DataType::Double,
         Literal::Decimal { data_type, .. } => DataType::Decimal(*data_type),
         Literal::String(_) => DataType::String,
+        Literal::Map(_) => DataType::Map(
+            krishiv_types::MapType::new(DataType::String, DataType::String, false).into(),
+        ),
         Literal::Binary(_) => DataType::Binary,
         Literal::Date(_) => DataType::Date,
         Literal::Timestamp(_) => DataType::Timestamp,
@@ -3961,6 +3964,12 @@ fn call(
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{})", name.to_lowercase(), k[0])
         }
+        // `JsonToStructs` has the JSON text as its only child: the schema and
+        // the options are not shown.
+        _ if name.eq_ignore_ascii_case("from_json") && !k.is_empty() => {
+            let d = if distinct { "DISTINCT " } else { "" };
+            format!("from_json({d}{})", k[0])
+        }
         // The bitwise operators show infix (`(20181117 >> 2)`), `~`
         // prefix; `to_varchar` shows as `to_char`.
         _ if k.len() == 2 && matches!(name, "&" | "|" | "^" | "<<" | ">>" | ">>>") => infix(name),
@@ -4282,6 +4291,18 @@ const fn frame_shape(b: &crate::FrameBound) -> u8 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_map_literal_types_and_prints_as_a_string_map() {
+        let literal = Literal::Map(vec![("mode".to_owned(), "FAILFAST".to_owned())]);
+        assert_eq!(
+            literal_type(&literal),
+            Some(DataType::Map(
+                krishiv_types::MapType::new(DataType::String, DataType::String, false).into()
+            ))
+        );
+        assert_eq!(literal.to_string(), "MAP('mode', 'FAILFAST')");
+    }
+
     /// `lambdafunction(body, arg1, ...)`: a resolved lambda variable
     /// prints as its name, like Spark's `NamedLambdaVariable`.
     #[test]
@@ -4350,6 +4371,21 @@ mod tests {
             ),
             "notlikeall(c)"
         );
+    }
+
+    /// `from_json` is named after its JSON argument alone, with or without
+    /// options (Spark's `JsonToStructs` has one child).
+    #[test]
+    fn from_json_is_named_after_the_json_argument() {
+        for k in [
+            &["value", "a INT"][..],
+            &["value", "a INT", "MAP('mode', 'FAILFAST')"][..],
+        ] {
+            assert_eq!(
+                call("from_json", None, false, k, None, None),
+                "from_json(value)"
+            );
+        }
     }
 
     /// The `UNRECOGNIZED_PARAMETER_NAME` proposal follows Spark's similarity

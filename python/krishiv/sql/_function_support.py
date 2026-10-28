@@ -23,6 +23,7 @@ __all__ = [
     "_num_or_col",
     "_one_of",
     "_opt",
+    "_opts",
 ]
 
 ColumnOrName = Column | str
@@ -56,6 +57,19 @@ def _lit(value: Any, arg: str) -> _native.Column:
     if value is None or isinstance(value, bool | int | float | str):
         return _literal(value)
     raise not_expected_type(arg, "Column, bool, int, float or str", value)
+
+
+def _opts(value: Any, arg: str) -> _native.Column:
+    """A Column stays one; a ``dict[str, str]`` is a map literal (``from_json("c", "s", {"mode": "x"})``);
+    any other value is a literal, as with ``_lit``."""
+    if isinstance(value, Column):
+        return value._c
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str) or not isinstance(item, str):
+                raise not_expected_type(arg, "dict[str, str]", value)
+        return _native.map_literal(list(value.items()))
+    return _lit(value, arg)
 
 
 def _opt(convert: Callable[[Any, str], _native.Column], value: Any, arg: str) -> tuple[_native.Column, ...]:

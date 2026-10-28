@@ -65,6 +65,12 @@
     ],
     "sqlState" : "53200"
   },
+  "KRISHIV_MALFORMED_JSON" : {
+    "message" : [
+      "The JSON string <json> is malformed. Provide valid JSON."
+    ],
+    "sqlState" : "22018"
+  },
   "KRISHIV_OBJECT_STORE_REQUEST_FAILED" : {
     "message" : [
       "Reading the file <path> failed: the object store did not complete the request after <attempts> attempt(s): <reason>. This is a storage failure, not a corrupt file, so it is never skipped by \"ignoreCorruptFiles\". Retry the query, or check the store's availability and permissions."

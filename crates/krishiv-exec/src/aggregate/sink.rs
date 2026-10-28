@@ -209,9 +209,9 @@ impl HashAggregate {
     fn new_table(&self, g: &Global, local: bool) -> Result<Table> {
         Ok(match g.rows {
             Some(mode) => {
-                // A thread-local table starts with one partition and widens
-                // to the radix partitions once large; merge tables of the
-                // disk phase need none.
+                // A thread-local table starts with one partition and, once
+                // large, widens to the radix partitions (see `rowtable`'s
+                // width docs); merge tables of the disk phase need none.
                 let (mode, widen) = if local {
                     (mode, g.row_bits)
                 } else {
@@ -1273,7 +1273,7 @@ impl Sink for HashAggregate {
         l.table.apply(&p)?;
         // Widening is a cost choice: only with memory to spare.
         let r = &mut l.reservation;
-        l.table.widen_if(|bytes| r.try_grow(bytes).is_ok())?;
+        l.table.widen_if(true, |bytes| r.try_grow(bytes).is_ok())?;
         shrink_to(&mut l.reservation, l.table.memory_size() + self.headroom());
         if self.core.spec.spill.is_some() {
             let combined = global(&l.global)?.combined.load(AtomicOrdering::Relaxed);
@@ -1288,12 +1288,17 @@ impl Sink for HashAggregate {
             .downcast::<Local>()
             .map_err(|_| internal("wrong local state for HashAggregate".to_owned()))?;
         let Local {
-            table,
+            mut table,
             mut reservation,
             signal,
             consumer,
             ..
         } = *l;
+        // A large row table still narrow widens to its radix partitions
+        // now its input has ended, on this driver (in parallel with the
+        // others), so the final phase merges partitions in parallel (see
+        // `rowtable`'s width docs). Only with memory to spare.
+        table.widen_if(false, |bytes| reservation.try_grow(bytes).is_ok())?;
         // Keep the headroom: a later spill of this table needs scratch.
         shrink_to(&mut reservation, table.memory_size() + self.headroom());
         let g = global(g)?;
