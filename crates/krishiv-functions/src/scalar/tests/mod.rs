@@ -598,7 +598,6 @@ mod predicate;
 mod random;
 mod r#struct;
 mod text;
-mod udf;
 mod url;
 
 #[test]

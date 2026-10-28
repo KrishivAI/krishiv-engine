@@ -306,3 +306,523 @@ fn to_input(t: &UdfInputType) -> Option<InputType> {
         _ => return None,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use krishiv_plan::analyzer::BuiltinFunctions;
+    use krishiv_types::DataType;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct Doubles {
+        version: u32,
+    }
+
+    impl ScalarUdf for Doubles {
+        fn name(&self) -> &str {
+            "doubles"
+        }
+
+        fn version(&self) -> u32 {
+            self.version
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Coercible(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+
+        fn return_field(
+            &self,
+            _: &[ArgField],
+        ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+            Ok(krishiv_udf_sdk::ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            _: &[krishiv_udf_sdk::UdfArg<'_>],
+            _: usize,
+            _: &krishiv_udf_sdk::InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, krishiv_udf_sdk::UdfError> {
+            Err(krishiv_udf_sdk::UdfError::new("test only"))
+        }
+    }
+
+    fn functions() -> SessionFunctions {
+        SessionFunctions::new(Arc::new(UdfLibrary::new()))
+    }
+
+    /// A UDF named like a built-in, for the precedence tests.
+    #[derive(Debug)]
+    struct UpperShadow;
+
+    impl ScalarUdf for UpperShadow {
+        fn name(&self) -> &str {
+            "upper"
+        }
+
+        fn version(&self) -> u32 {
+            1
+        }
+
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Coercible(vec![UdfInputType::Exact(DataType::String)]))
+        }
+
+        fn return_field(
+            &self,
+            _: &[ArgField],
+        ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+            Ok(krishiv_udf_sdk::ReturnField {
+                data_type: DataType::String,
+                nullable: true,
+            })
+        }
+
+        fn invoke(
+            &self,
+            _: &[krishiv_udf_sdk::UdfArg<'_>],
+            _: usize,
+            _: &krishiv_udf_sdk::InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, krishiv_udf_sdk::UdfError> {
+            Err(krishiv_udf_sdk::UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn bare_names_prefer_builtins() {
+        let f = functions();
+        // `upper` is a built-in: with no UDF registered, the built-in wins.
+        let found = f.lookup(&["upper".to_owned()], SparkProfile::V4_2);
+        assert!(matches!(found, FunctionLookup::Found(_)));
+        // Registering `upper` does not shadow it.
+        f.library().register(Arc::new(UpperShadow)).unwrap();
+        let found = f.lookup(&["upper".to_owned()], SparkProfile::V4_2);
+        assert!(matches!(
+            found,
+            FunctionLookup::Found(FunctionEntry {
+                id: FunctionId::Registry { .. },
+                ..
+            })
+        ));
+        // But `system.session.upper` reaches the UDF.
+        let found = f.lookup(
+            &[
+                "system".to_owned(),
+                "session".to_owned(),
+                "upper".to_owned(),
+            ],
+            SparkProfile::V4_2,
+        );
+        assert!(matches!(
+            found,
+            FunctionLookup::Found(FunctionEntry {
+                id: FunctionId::Udf { .. },
+                ..
+            })
+        ));
+        // And `system.builtin.upper` reaches the built-in only.
+        let found = f.lookup(
+            &[
+                "system".to_owned(),
+                "builtin".to_owned(),
+                "upper".to_owned(),
+            ],
+            SparkProfile::V4_2,
+        );
+        assert!(matches!(
+            found,
+            FunctionLookup::Found(FunctionEntry {
+                id: FunctionId::Registry { .. },
+                ..
+            })
+        ));
+        // `session.upper` reaches the UDF only.
+        let found = f.lookup(
+            &["session".to_owned(), "upper".to_owned()],
+            SparkProfile::V4_2,
+        );
+        assert!(matches!(
+            found,
+            FunctionLookup::Found(FunctionEntry {
+                id: FunctionId::Udf { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn resolutions_carry_name_and_version() {
+        let f = functions();
+        assert!(matches!(
+            f.lookup(&["doubles".to_owned()], SparkProfile::V4_2),
+            FunctionLookup::NotFound
+        ));
+        f.library()
+            .register(Arc::new(Doubles { version: 2 }))
+            .unwrap();
+        let entry = match f.lookup(&["DOUBLES".to_owned()], SparkProfile::V4_2) {
+            FunctionLookup::Found(entry) => entry,
+            other => panic!("a registered UDF resolves, not {other:?}"),
+        };
+        assert_eq!(
+            entry.id,
+            FunctionId::Udf {
+                name: "doubles".to_owned(),
+                version: 2,
+            }
+        );
+        assert_eq!(entry.kind, FunctionKind::Scalar);
+        assert!(entry.arity.accepts(1) && !entry.arity.accepts(2));
+        assert!(entry.deterministic);
+        assert!(f.resolve_udf("doubles", 2).is_some());
+        assert!(f.resolve_udf("doubles", 1).is_none());
+        // Re-registering replaces and bumps the registry version.
+        let before = f.version();
+        f.library()
+            .register(Arc::new(Doubles { version: 3 }))
+            .unwrap();
+        assert!(f.version() != before);
+        let FunctionLookup::Found(entry) = f.lookup(&["doubles".to_owned()], SparkProfile::V4_2)
+        else {
+            panic!("a re-registered UDF resolves");
+        };
+        assert_eq!(
+            entry.id,
+            FunctionId::Udf {
+                name: "doubles".to_owned(),
+                version: 3,
+            }
+        );
+        assert!(f.resolve_udf("doubles", 2).is_none());
+    }
+
+    #[test]
+    fn unknown_and_qualified_builtins_resolve_as_before() {
+        let f = functions();
+        assert!(matches!(
+            f.lookup(&["nosuchfn".to_owned()], SparkProfile::V4_2),
+            FunctionLookup::NotFound
+        ));
+        // `system.builtin.nosuchfn` is not found either (built-ins only).
+        assert!(matches!(
+            f.lookup(
+                &[
+                    "system".to_owned(),
+                    "builtin".to_owned(),
+                    "nosuchfn".to_owned()
+                ],
+                SparkProfile::V4_2,
+            ),
+            FunctionLookup::NotFound
+        ));
+        // Anything else qualified is not found.
+        assert!(matches!(
+            f.lookup(&["mydb".to_owned(), "myfn".to_owned()], SparkProfile::V4_2,),
+            FunctionLookup::NotFound
+        ));
+        assert!(matches!(
+            f.lookup(
+                &[
+                    "a".to_owned(),
+                    "b".to_owned(),
+                    "c".to_owned(),
+                    "d".to_owned()
+                ],
+                SparkProfile::V4_2
+            ),
+            FunctionLookup::NotFound
+        ));
+        // Spark's determinism table still answers.
+        assert_eq!(f.spark_deterministic("upper"), Some(true));
+        let plain = BuiltinFunctions::new();
+        assert_eq!(f.version(), plain.version().wrapping_add(0));
+    }
+
+    #[test]
+    fn debug_names_the_library() {
+        let f = functions();
+        let text = format!("{f:?}");
+        assert!(text.contains("SessionFunctions"), "{text}");
+    }
+
+    /// UDFs whose trait methods panic resolve to failing entries, and the
+    /// determinism table answers from the UDFs.
+    #[derive(Debug)]
+    struct PanicVersion;
+    impl ScalarUdf for PanicVersion {
+        fn name(&self) -> &str {
+            "panic_version"
+        }
+        fn version(&self) -> u32 {
+            panic!("version went bang")
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+        fn return_field(
+            &self,
+            _: &[ArgField],
+        ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+            Ok(krishiv_udf_sdk::ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+        fn invoke(
+            &self,
+            _: &[krishiv_udf_sdk::UdfArg<'_>],
+            _: usize,
+            _: &krishiv_udf_sdk::InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, krishiv_udf_sdk::UdfError> {
+            Err(krishiv_udf_sdk::UdfError::new("test only"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct PanicSig;
+    impl ScalarUdf for PanicSig {
+        fn name(&self) -> &str {
+            "panic_sig"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            panic!("signature went bang")
+        }
+        fn return_field(
+            &self,
+            _: &[ArgField],
+        ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+            Ok(krishiv_udf_sdk::ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+        fn invoke(
+            &self,
+            _: &[krishiv_udf_sdk::UdfArg<'_>],
+            _: usize,
+            _: &krishiv_udf_sdk::InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, krishiv_udf_sdk::UdfError> {
+            Err(krishiv_udf_sdk::UdfError::new("test only"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct PanicProps;
+    impl ScalarUdf for PanicProps {
+        fn name(&self) -> &str {
+            "panic_props"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+        fn return_field(
+            &self,
+            _: &[ArgField],
+        ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+            Ok(krishiv_udf_sdk::ReturnField {
+                data_type: DataType::Integer,
+                nullable: true,
+            })
+        }
+        fn properties(&self) -> krishiv_udf_sdk::UdfProperties {
+            panic!("properties went bang")
+        }
+        fn invoke(
+            &self,
+            _: &[krishiv_udf_sdk::UdfArg<'_>],
+            _: usize,
+            _: &krishiv_udf_sdk::InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, krishiv_udf_sdk::UdfError> {
+            Err(krishiv_udf_sdk::UdfError::new("test only"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct FailingReturn;
+    impl ScalarUdf for FailingReturn {
+        fn name(&self) -> &str {
+            "failing_return"
+        }
+        fn version(&self) -> u32 {
+            1
+        }
+        fn signature(&self) -> &Signature {
+            use std::sync::OnceLock;
+            static SIG: OnceLock<Signature> = OnceLock::new();
+            SIG.get_or_init(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Integer)]))
+        }
+        fn return_field(
+            &self,
+            _: &[ArgField],
+        ) -> Result<krishiv_udf_sdk::ReturnField, krishiv_udf_sdk::UdfError> {
+            Err(krishiv_udf_sdk::UdfError::new("no result"))
+        }
+        fn invoke(
+            &self,
+            _: &[krishiv_udf_sdk::UdfArg<'_>],
+            _: usize,
+            _: &krishiv_udf_sdk::InvokeContext,
+        ) -> Result<arrow_array::ArrayRef, krishiv_udf_sdk::UdfError> {
+            Err(krishiv_udf_sdk::UdfError::new("test only"))
+        }
+    }
+
+    #[test]
+    fn panicking_and_failing_udfs_fail_at_analysis() {
+        use krishiv_common::error::ErrorClass;
+        let f = functions();
+        for (udf, needle, deterministic) in [
+            (
+                Arc::new(PanicVersion) as Arc<dyn ScalarUdf>,
+                "version went bang",
+                Some(true),
+            ),
+            (
+                Arc::new(PanicSig) as Arc<dyn ScalarUdf>,
+                "signature went bang",
+                Some(true),
+            ),
+            (
+                Arc::new(PanicProps) as Arc<dyn ScalarUdf>,
+                "properties went bang",
+                None,
+            ),
+        ] {
+            let name = udf.name().to_lowercase();
+            f.library().register(udf).unwrap();
+            let FunctionLookup::Found(entry) =
+                f.lookup(std::slice::from_ref(&name), SparkProfile::V4_2)
+            else {
+                panic!("{name} resolves");
+            };
+            let call = CallTypes::new(&[], &[]);
+            let result = (entry.result)(&call).unwrap_err();
+            assert_eq!(result.error_class(), ErrorClass::FailedExecuteUdf, "{name}");
+            assert!(result.to_string().contains(needle), "{name}: {result}");
+            // Determinism is unknown only when `properties` panics.
+            assert_eq!(f.spark_deterministic(&name), deterministic, "{name}");
+        }
+        // A `return_field` failure also fails at analysis.
+        f.library().register(Arc::new(FailingReturn)).unwrap();
+        let FunctionLookup::Found(entry) =
+            f.lookup(&["failing_return".to_owned()], SparkProfile::V4_2)
+        else {
+            panic!("failing_return resolves");
+        };
+        let call = CallTypes::new(&[], &[]);
+        let err = (entry.result)(&call).unwrap_err();
+        assert_eq!(err.error_class(), ErrorClass::FailedExecuteUdf);
+        assert!(err.to_string().contains("no result"), "{err}");
+    }
+
+    #[test]
+    fn determinism_comes_from_the_udf_when_builtins_are_silent() {
+        let f = functions();
+        f.library()
+            .register(Arc::new(Doubles { version: 2 }))
+            .unwrap();
+        assert_eq!(f.spark_deterministic("doubles"), Some(true));
+        assert_eq!(f.spark_deterministic("nosuch"), None);
+    }
+
+    #[test]
+    fn input_forms_map_as_the_analyzer_coerces() {
+        use krishiv_plan::analyzer::{InputType, Inputs};
+        // Every current input form maps (future forms do not).
+        assert!(matches!(
+            super::to_input(&UdfInputType::Any),
+            Some(InputType::Any)
+        ));
+        assert!(matches!(
+            super::to_input(&UdfInputType::Exact(DataType::Integer)),
+            Some(InputType::Exact(_))
+        ));
+        assert!(matches!(
+            super::to_input(&UdfInputType::Strict(DataType::Integer)),
+            Some(InputType::Strict(_))
+        ));
+        assert!(matches!(
+            super::to_input(&UdfInputType::Numeric { intervals: false }),
+            Some(InputType::Numeric { .. })
+        ));
+        assert!(matches!(
+            super::to_input(&UdfInputType::Numeric { intervals: true }),
+            Some(InputType::Numeric { .. })
+        ));
+        assert!(matches!(
+            super::to_input(&UdfInputType::OneOf(vec![DataType::Integer])),
+            Some(InputType::OneOf(_))
+        ));
+        // Coercible positions match strictly.
+        assert!(matches!(
+            super::to_strict(InputType::Exact(DataType::Integer)),
+            InputType::Strict(_)
+        ));
+        assert!(matches!(super::to_strict(InputType::Any), InputType::Any));
+        // Exact and coercible arities, and variadic tails.
+        let (arity, inputs) =
+            super::signature_parts(&Signature::Exact(vec![UdfInputType::Any])).unwrap();
+        assert!(arity.accepts(1) && !arity.accepts(2));
+        assert!(matches!(inputs, Inputs::Expects(_)));
+        let (arity, _) =
+            super::signature_parts(&Signature::Coercible(vec![UdfInputType::Any])).unwrap();
+        assert!(arity.accepts(1));
+        let (arity, inputs) = super::signature_parts(&Signature::Variadic {
+            element: UdfInputType::Any,
+            min_arity: 1,
+        })
+        .unwrap();
+        assert!(!arity.accepts(0) && arity.accepts(2));
+        assert!(matches!(inputs, Inputs::Expects(_)));
+        // The fixtures expose their contracts.
+        let doubles = Doubles { version: 2 };
+        assert!(doubles.return_field(&[]).is_ok());
+        assert!(
+            doubles
+                .invoke(
+                    &[],
+                    0,
+                    &krishiv_udf_sdk::InvokeContext {
+                        partition: 0,
+                        ansi: true,
+                        time_zone: None,
+                    }
+                )
+                .is_err()
+        );
+        let shadow = UpperShadow;
+        assert!(shadow.return_field(&[]).is_ok());
+        assert!(
+            shadow
+                .invoke(
+                    &[],
+                    0,
+                    &krishiv_udf_sdk::InvokeContext {
+                        partition: 0,
+                        ansi: true,
+                        time_zone: None,
+                    }
+                )
+                .is_err()
+        );
+    }
+}

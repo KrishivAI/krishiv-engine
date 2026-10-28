@@ -366,3 +366,111 @@ pub trait ScalarUdf: Send + Sync + fmt::Debug + 'static {
         ctx: &InvokeContext,
     ) -> Result<ArrayRef, UdfError>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_types_print_as_spark() {
+        assert_eq!(UdfInputType::Any.sql(), r#""ANY""#);
+        assert_eq!(UdfInputType::Exact(DataType::Date).sql(), r#""DATE""#);
+        assert_eq!(UdfInputType::Strict(DataType::Integer).sql(), r#""INT""#);
+        assert_eq!(
+            UdfInputType::Numeric { intervals: false }.sql(),
+            r#""NUMERIC""#
+        );
+        assert_eq!(
+            UdfInputType::Numeric { intervals: true }.sql(),
+            r#""NUMERIC" or "ANSI INTERVAL""#
+        );
+        assert_eq!(
+            UdfInputType::OneOf(vec![DataType::String, DataType::Binary]).sql(),
+            r#"("STRING" or "BINARY")"#
+        );
+        assert_eq!(
+            UdfInputType::OneOf(vec![DataType::Timestamp, DataType::TimestampNtz]).sql(),
+            r#""(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)""#
+        );
+    }
+
+    #[test]
+    fn signatures_print_arity_and_inputs() {
+        assert_eq!(Signature::Exact(vec![]).arity_text(), "0");
+        assert_eq!(
+            Signature::Exact(vec![
+                UdfInputType::Exact(DataType::Integer),
+                UdfInputType::Exact(DataType::String),
+            ])
+            .arity_text(),
+            "2"
+        );
+        assert_eq!(
+            Signature::Coercible(vec![UdfInputType::Exact(DataType::Integer)]).arity_text(),
+            "1"
+        );
+        assert_eq!(
+            Signature::Variadic {
+                element: UdfInputType::Exact(DataType::String),
+                min_arity: 0,
+            }
+            .arity_text(),
+            ""
+        );
+        assert_eq!(
+            Signature::Variadic {
+                element: UdfInputType::Exact(DataType::String),
+                min_arity: 2,
+            }
+            .arity_text(),
+            "> 1"
+        );
+        assert!(Signature::Exact(vec![]).accepts(0));
+        assert!(!Signature::Exact(vec![]).accepts(1));
+        assert_eq!(Signature::Exact(vec![]).inputs_sql(), "");
+    }
+
+    #[test]
+    fn panics_become_failed_execute_udf_with_their_payload() {
+        let via_string = guard_call("f", "invoke", || -> i32 {
+            std::panic::panic_any("owned".to_owned())
+        })
+        .unwrap_err();
+        assert!(via_string.message().contains("owned"), "{via_string}");
+        let via_str = guard_call("f", "invoke", || -> i32 { panic!("borrowed") }).unwrap_err();
+        assert!(via_str.message().contains("borrowed"), "{via_str}");
+        let via_other =
+            guard_call("f", "invoke", || -> i32 { std::panic::panic_any(42_i32) }).unwrap_err();
+        assert!(
+            via_other.message().contains("without a message"),
+            "{via_other}"
+        );
+    }
+
+    #[test]
+    fn properties_default_to_deterministic_strict() {
+        let props = UdfProperties::default();
+        assert!(props.deterministic);
+        assert_eq!(props.null_handling, NullHandling::Strict);
+        assert_eq!(NullHandling::default(), NullHandling::Strict);
+    }
+
+    #[test]
+    fn udf_errors_carry_their_message() {
+        let e = UdfError::new("boom");
+        assert_eq!(e.message(), "boom");
+        assert_eq!(format!("{e}"), "boom");
+        assert_eq!(UdfError::from("x".to_owned()), UdfError::new("x"));
+        assert_eq!(UdfError::from("y"), UdfError::new("y"));
+        let _: &dyn std::error::Error = &e;
+    }
+
+    #[test]
+    fn args_borrow_their_arrays() {
+        let array: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
+        let arg = UdfArg::Column(&array);
+        assert!(Arc::ptr_eq(&arg.array(), &array));
+        let lit = UdfArg::Scalar(&array);
+        assert!(Arc::ptr_eq(&lit.array(), &array));
+    }
+}
