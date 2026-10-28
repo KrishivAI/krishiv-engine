@@ -150,6 +150,7 @@ fn query_pool(limit: Option<usize>) -> (Arc<TreePool>, Arc<dyn MemoryPool>) {
         limit,
         quantum: 1,
         spill_scratch_reserve: 0,
+        resident_guard: true,
         ..MemoryConfig::default()
     });
     let query = root.child("query", None);

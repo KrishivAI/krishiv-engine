@@ -27,6 +27,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_SPILL_WAIT_TIMEOUT,
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
+    &MEMORY_RESIDENT_GUARD,
     &SPILL_DIR,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
@@ -65,6 +66,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_ADAPTIVE_MIN_ROWS,
     &WINDOW_GROUP_LIMIT_THRESHOLD,
     &LEGACY_STATISTICAL_AGGREGATE,
+    &AVRO_COMPRESSION_CODEC,
+    &AVRO_DATETIME_REBASE_MODE_IN_READ,
 ];
 
 /// Every key and Spark alias with its entry, sorted by (length, name) for
@@ -97,6 +100,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
     ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
+    ("krishiv.memory.residentGuard", &MEMORY_RESIDENT_GUARD),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
@@ -123,6 +127,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
+    ("spark.sql.avro.compression.codec", &AVRO_COMPRESSION_CODEC),
     ("krishiv.exec.targetPartitionBytes", &TARGET_PARTITION_BYTES),
     (
         "krishiv.memory.reservationQuantum",
@@ -155,6 +160,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.memory.spillScratchReserve",
         &MEMORY_SPILL_SCRATCH_RESERVE,
+    ),
+    (
+        "krishiv.sql.avro.compression.codec",
+        &AVRO_COMPRESSION_CODEC,
     ),
     (
         "krishiv.sql.shuffle.partitionsHint",
@@ -201,6 +210,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &LEGACY_STATISTICAL_AGGREGATE,
     ),
     (
+        "spark.sql.avro.datetimeRebaseModeInRead",
+        &AVRO_DATETIME_REBASE_MODE_IN_READ,
+    ),
+    (
         "krishiv.runtimeFilter.exactSet.maxValues",
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
     ),
@@ -211,6 +224,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.experimental.unalignedCheckpoints",
         &EXPERIMENTAL_UNALIGNED_CHECKPOINTS,
+    ),
+    (
+        "krishiv.sql.avro.datetimeRebaseModeInRead",
+        &AVRO_DATETIME_REBASE_MODE_IN_READ,
     ),
     (
         "krishiv.runtimeFilter.adaptive.maxPassPercent",
@@ -437,6 +454,23 @@ pub static MEMORY_SPILL_SCRATCH_RESERVE: ConfigEntry = ConfigEntry {
           spill writers' scratch buffers may use, so a full pool can still fund the spill that \
           frees it. Shared by every spill under the pool and released when each write ends. \
           `0` disables it.",
+    scope: Scope::Cluster,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Whether a limited memory pool spills allocator overhead (the resident-set guard).
+pub static MEMORY_RESIDENT_GUARD: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.residentGuard",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether the root memory pool keeps what the process holds beyond its reservations \
+          (allocator overhead, memory used without a reservation) within an allowance of 1/8 of \
+          the limit plus 64 MiB, by lowering the memory ordinary reservations may take so \
+          operators spill. It needs a resident-set probe from the program that owns the \
+          allocator: the `krishiv` CLI and the bench runner install one when started with a \
+          limit below 4 GiB; elsewhere the setting has no effect. Spill I/O and arbitration \
+          rounds whose spills are exhausted are exempt from it.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
@@ -931,4 +965,37 @@ pub static LEGACY_STATISTICAL_AGGREGATE: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.legacy.statisticalAggregate"),
+};
+
+/// `spark.sql.avro.compression.codec`.
+pub static AVRO_COMPRESSION_CODEC: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.avro.compression.codec",
+    value_type: ValueType::Enum(&[
+        "uncompressed",
+        "deflate",
+        "snappy",
+        "bzip2",
+        "xz",
+        "zstandard",
+    ]),
+    default: Some(ConfigValue::String(Cow::Borrowed("snappy"))),
+    doc: "The block codec of Avro files written without a `compression` option. Writing with \
+          `bzip2`, `xz` or `zstandard` is refused.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.avro.compression.codec"),
+};
+
+/// `spark.sql.avro.datetimeRebaseModeInRead`.
+pub static AVRO_DATETIME_REBASE_MODE_IN_READ: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.avro.datetimeRebaseModeInRead",
+    value_type: ValueType::Enum(&["EXCEPTION", "CORRECTED", "LEGACY"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("EXCEPTION"))),
+    doc: "How an Avro read treats dates and timestamps before 1582-10-15 in files whose writer \
+          is unknown (files written by Spark 3.0 or later say how they were written): \
+          `EXCEPTION` fails, `CORRECTED` reads the stored values, `LEGACY` is refused. Used when \
+          the `datetimeRebaseMode` option is not given.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.avro.datetimeRebaseModeInRead"),
 };

@@ -1565,6 +1565,7 @@ mod tests {
             limit: Some(LIMIT),
             quantum: 1,
             spill_scratch_reserve: 0,
+            resident_guard: true,
             ..MemoryConfig::default()
         });
         let query = QueryContext::new(
@@ -1638,6 +1639,7 @@ mod tests {
             limit: Some(LIMIT),
             quantum: 1,
             spill_scratch_reserve: 0,
+            resident_guard: true,
             ..MemoryConfig::default()
         });
         let query = QueryContext::new(
@@ -1867,6 +1869,7 @@ mod tests {
             limit: Some(LIMIT),
             quantum: 1,
             spill_scratch_reserve: 0,
+            resident_guard: true,
             ..MemoryConfig::default()
         });
         let query = QueryContext::new(
@@ -1927,6 +1930,7 @@ mod tests {
             limit: Some(LIMIT),
             quantum: 1,
             spill_scratch_reserve: SPILL_SCRATCH,
+            resident_guard: true,
             ..MemoryConfig::default()
         });
         let query = QueryContext::new(

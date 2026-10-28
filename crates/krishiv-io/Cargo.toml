@@ -12,12 +12,15 @@ publish = false
 workspace = true
 
 [dependencies]
+apache-avro.workspace = true
 arrow-array.workspace = true
 arrow-buffer.workspace = true
 arrow-schema.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+# Avro field defaults (`RecordField::default`) are JSON values.
+serde_json = { workspace = true, features = ["std"] }
 # Exact runtime-filter sets, placed by the row hash (P2-T163).
 hashbrown.workspace = true
 futures = { workspace = true, features = ["alloc", "std"] }
