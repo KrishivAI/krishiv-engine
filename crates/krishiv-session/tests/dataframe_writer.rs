@@ -395,8 +395,9 @@ fn unknown_format_fails_with_unsupported_feature() {
     let err = block_on(s.table("people").write().json(&out(&dir, "j"))).unwrap_err();
     assert_eq!(err.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
     assert!(err.to_string().contains("writing the json format"), "{err}");
-    // Any other unregistered format, through `format`.
-    for format in ["text", "orc"] {
+    // Any other Spark built-in source without an implementation, through
+    // `format`.
+    for format in ["text", "orc", "avro"] {
         let path = out(&dir, format);
         let err = block_on(s.table("people").write().format(format).save(&path)).unwrap_err();
         assert_eq!(
@@ -412,6 +413,21 @@ fn unknown_format_fails_with_unsupported_feature() {
         // The failed write leaves nothing behind.
         assert!(!dir.path().join(format).exists());
     }
+}
+
+#[test]
+fn unknown_format_name_fails_with_data_source_not_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session();
+    // A name Spark does not know at all: Spark's DATA_SOURCE_NOT_FOUND.
+    let format = "nosuchformat";
+    let path = out(&dir, format);
+    let err = block_on(s.table("people").write().format(format).save(&path)).unwrap_err();
+    assert_eq!(err.error_class().name(), "DATA_SOURCE_NOT_FOUND");
+    assert_eq!(err.error_class().sql_state(), Some("42K02"));
+    assert!(err.to_string().contains(format), "{err}");
+    // The failed write leaves nothing behind.
+    assert!(!dir.path().join(format).exists());
 }
 
 #[test]
