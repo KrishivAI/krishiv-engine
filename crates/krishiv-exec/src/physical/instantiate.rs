@@ -89,10 +89,10 @@ pub trait SpillScopes: Send + Sync + fmt::Debug {
 }
 
 /// What a worker resolves a plan's references against: the tables its
-/// scans read, the session UDFs its function calls invoke, the relation
-/// store its batch splits resolve through, the spill scope of the query,
-/// the I/O context, formats and configuration a write builds its sink
-/// from, and the values of the plan. One per query
+/// scans read, the session UDFs its function calls invoke, the relation store
+/// its batch splits resolve through, the spill scope of the query, the I/O
+/// context, formats and configuration a write builds its sink from, and the
+/// values of the plan. One per query
 /// and worker.
 #[derive(Clone)]
 pub struct WorkerContext {
