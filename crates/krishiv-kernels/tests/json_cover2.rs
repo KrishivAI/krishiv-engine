@@ -459,4 +459,29 @@ fn malformed_rows_do_not_contaminate_later_rows() {
     fail.mode = krishiv_kernels::json::ParseMode::FailFast;
     assert!(read_json(&strs(&[Some("{\"a\":1,}")]), &map_int, &fail, &zone(), 0).is_err());
     assert!(read_json(&strs(&[Some("[1,2")]), &list_int, &fail, &zone(), 0).is_err());
+    // A failing element seals the whole list row; a later row reads clean.
+    let list_map = list_of(Arc::new(Field::new("element", map_int.clone(), true)));
+    let out = read(
+        &[Some("[{\"a\":1,},{\"b\":2}]"), Some("[{\"c\":3}]")],
+        &list_map,
+        &opts,
+    );
+    let list = out.as_any().downcast_ref::<ListArray>().unwrap();
+    assert!(list.is_null(0));
+    assert!(!list.is_null(1));
+    assert_eq!(list.value_length(1), 1);
+    // A failing map value seals the outer map row the same way.
+    let map_map = map_of(
+        Field::new("key", DataType::Utf8View, false),
+        Field::new("value", map_int.clone(), true),
+    );
+    let out = read(
+        &[Some("{\"a\":{\"b\":1,}}"), Some("{\"c\":{\"d\":2}}")],
+        &map_map,
+        &opts,
+    );
+    let map = out.as_any().downcast_ref::<MapArray>().unwrap();
+    assert!(map.is_null(0));
+    assert!(!map.is_null(1));
+    assert_eq!(map.value_length(1), 1);
 }

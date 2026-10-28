@@ -297,7 +297,7 @@ def test_argument_checks(recorded: None) -> None:
     with pytest.raises(errors.PySparkTypeError, match="options"):
         F.to_json("c", {1: "x"})  # ty: ignore[invalid-argument-type]
     # A Column of options passes through; any other scalar is a literal.
-    assert F.from_json("c", "a INT", F.col("o"))._c == (
+    assert F.from_json("c", "a INT", F.col("o"))._c == (  # ty: ignore[invalid-argument-type]
         "call",
         "from_json",
         (("col", "c"), ("lit", "a INT"), ("col", "o")),
