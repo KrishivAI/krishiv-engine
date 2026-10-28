@@ -113,17 +113,9 @@ impl PhysExpr for InList {
                 None,
             ))));
         }
-        // The kernels take at most one literal side: broadcast a scalar
-        // value once, and reuse it across the elements.
-        let scalar = v.is_scalar();
-        let v = if scalar {
-            Value::Array(v.into_array(rows)?)
-        } else {
-            v
-        };
         let mut matched = vec![false; rows];
         let mut saw_null = vec![false; rows];
-        let mut saw_array = !scalar;
+        let mut saw_array = !v.is_scalar();
         for item in &self.items {
             if matched.iter().all(|m| *m) {
                 break;
@@ -131,8 +123,7 @@ impl PhysExpr for InList {
             let other = item.eval(batch, partition)?;
             saw_array = saw_array || !other.is_scalar();
             let eq = cmp(CompareKind::Equal, &v, &other, &self.kernels)?;
-            // One row per batch row: a scalar value was broadcast above,
-            // so only a one-row batch keeps `eq` short.
+            // `eq` is one row for scalar-vs-scalar, else `rows`.
             let scalar_eq = eq.len() == 1 && rows != 1;
             for i in 0..rows {
                 if matched[i] {
@@ -230,20 +221,12 @@ impl PhysExpr for Between {
                 None,
             ))));
         }
-        // The kernels take at most one literal side: broadcast a scalar
-        // value once, and reuse it for both bounds.
-        let scalar = v.is_scalar();
-        let v = if scalar {
-            Value::Array(v.into_array(rows)?)
-        } else {
-            v
-        };
         let ge = cmp(CompareKind::GreaterEq, &v, &lo, &self.kernels)?;
         let scalar_ge = ge.len() == 1 && rows != 1;
         // `false AND _` is `false`: skip `hi` where every row decided.
         let all_false = (0..ge.len()).all(|i| ge.is_valid(i) && !ge.value(i));
         if all_false {
-            if scalar && lo.is_scalar() {
+            if ge.len() == 1 && v.is_scalar() && lo.is_scalar() {
                 let out: ArrayRef =
                     Arc::new(BooleanArray::new(BooleanBuffer::from(vec![false]), None));
                 return Ok(Value::Scalar(out));
@@ -262,7 +245,7 @@ impl PhysExpr for Between {
             return Ok(Value::Array(out));
         }
         let hi = self.hi.eval(batch, partition)?;
-        let all_scalar = scalar && lo.is_scalar() && hi.is_scalar();
+        let all_scalar = v.is_scalar() && lo.is_scalar() && hi.is_scalar();
         let le = cmp(CompareKind::LessEq, &v, &hi, &self.kernels)?;
         let n = if all_scalar { 1 } else { rows };
         let mut values = Vec::with_capacity(n);
@@ -1680,6 +1663,64 @@ mod tests {
         );
     }
 
+    /// `LargeUtf8` is one more encoding of `STRING`: `IN` and `BETWEEN`
+    /// meet it in the canonical carrier like `Utf8`; a dictionary-encoded
+    /// string is no encoding of it and fails as `=` does.
+    #[test]
+    fn large_utf8_meets_the_view_and_dictionaries_do_not() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("l", ArrowType::LargeUtf8, true),
+            Field::new(
+                "d",
+                ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8)),
+                true,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::LargeStringArray::from(vec![Some("b"), None])) as ArrayRef,
+                Arc::new(
+                    arrow_array::DictionaryArray::<arrow_array::types::Int32Type>::from_iter([
+                        Some("b"),
+                        None,
+                    ]),
+                ),
+            ],
+        )
+        .unwrap();
+        let lit_s = |t: &str| lit(&Literal::String(t.to_owned()));
+        let e = in_list(
+            vec![
+                column(0, ArrowType::LargeUtf8, true),
+                lit_s("b"),
+                lit_s("c"),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        let e = between(
+            column(0, ArrowType::LargeUtf8, true),
+            lit_s("a"),
+            lit_s("c"),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        let dictionary =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        assert!(in_list(vec![column(1, dictionary.clone(), true), lit_s("b")], &env).is_err());
+        assert!(between(column(1, dictionary, true), lit_s("a"), lit_s("c"), &env).is_err());
+    }
+
     /// `BETWEEN` over a batch without rows answers an empty column.
     #[test]
     fn between_on_an_empty_batch_answers_empty() {
@@ -1769,6 +1810,13 @@ mod tests {
                 Literal::Long(5),
                 Literal::Long(1),
                 Literal::Long(3),
+                Some(false),
+            ),
+            // `false AND NULL` is `false`: the lower bound already decided.
+            (
+                Literal::Long(0),
+                Literal::Long(1),
+                Literal::Null(None),
                 Some(false),
             ),
             (

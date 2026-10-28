@@ -318,6 +318,8 @@ mod tests {
             (T::Int32, None),
             (T::Boolean, None),
             (T::Null, None),
+            // A dictionary is not an encoding of the value type here.
+            (T::Dictionary(Box::new(T::Int32), Box::new(T::Utf8)), None),
         ] {
             assert_eq!(canonical_carrier(&t), want, "{t}");
         }

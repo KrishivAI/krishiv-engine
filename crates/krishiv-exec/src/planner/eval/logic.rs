@@ -326,6 +326,11 @@ pub(super) fn cmp(
     r: &Value,
     ctx: &KernelCtx,
 ) -> Result<BooleanArray> {
+    // The primitive kernels need an array operand: of two scalars, one
+    // goes in as its own one-row array (no copy), so the answer is one row.
+    if let (Value::Scalar(one), Value::Scalar(_)) = (l, r) {
+        return cmp(kind, &Value::Array(Arc::clone(one)), r, ctx);
+    }
     macro_rules! prim {
         ($t:ty) => {{
             let (a, b) = (prim::<$t>(l), prim::<$t>(r));
