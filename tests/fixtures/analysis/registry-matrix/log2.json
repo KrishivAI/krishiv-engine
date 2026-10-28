@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "log2#0784ad8106b9/ansi_on",
-      "reason": "SELECT log2(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
-      "id": "log2#0784ad8106b9/ansi_off",
-      "reason": "SELECT log2(map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
-    },
-    {
       "id": "log2#5b428c8fab2e/ansi_on",
       "reason": "SELECT log2(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

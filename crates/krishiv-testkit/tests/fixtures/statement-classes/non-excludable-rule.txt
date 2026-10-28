@@ -1,0 +1,6 @@
+SESSION	SET spark.sql.optimizer.excludedRules=org.apache.spark.sql.catalyst.optimizer.ReplaceCTERefWithRepartition
+READ	SELECT
+SESSION	SET spark.sql.optimizer.excludedRules=org.apache.spark.sql.catalyst.optimizer.Optimizer$OptimizeSubqueries
+READ	WITH tmp AS (
+SESSION	SET spark.sql.optimizer.excludedRules=org.apache.spark.sql.catalyst.optimizer.RewriteLateralSubquery
+READ	SELECT * FROM testData, LATERAL (SELECT * FROM testData) LIMIT 1

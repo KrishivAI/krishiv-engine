@@ -197,14 +197,6 @@
       "reason": "SELECT try_subtract(INTERVAL '1-2' YEAR TO MONTH, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     },
     {
-      "id": "try_subtract#df292aab8ace/ansi_on",
-      "reason": "SELECT try_subtract(map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#df292aab8ace/ansi_off",
-      "reason": "SELECT try_subtract(map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
       "id": "try_subtract#e73b9f9913d5/ansi_off",
       "reason": "SELECT try_subtract('1', 1) | KRISHIV_UNSUPPORTED_FEATURE: implicit string casts with spark.sql.ansi.enabled off"
     },
@@ -223,14 +215,6 @@
     {
       "id": "try_subtract#f6e4926b7d7b/ansi_off",
       "reason": "SELECT try_subtract(CAST(NULL AS timestamp), interval 1 day) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
-    },
-    {
-      "id": "try_subtract#fca7663b148c/ansi_on",
-      "reason": "SELECT try_subtract(2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
-    },
-    {
-      "id": "try_subtract#fca7663b148c/ansi_off",
-      "reason": "SELECT try_subtract(2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES"
     }
   ],
   "format_version": 1,

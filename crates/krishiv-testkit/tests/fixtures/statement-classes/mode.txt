@@ -1,0 +1,28 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW basic_pays AS SELECT * FROM VALUES
+READ	SELECT mode(department), mode(salary) FROM basic_pays
+READ	SELECT department, mode(salary) FROM basic_pays GROUP BY department ORDER BY department
+READ	SELECT department, mode(DISTINCT salary) FROM basic_pays GROUP BY department ORDER BY department
+READ	SELECT mode(col) FROM VALUES (-10), (0), (10) AS tab(col)
+READ	SELECT mode(col, false) FROM VALUES (-10), (0), (10) AS tab(col)
+READ	SELECT mode(col, true) FROM VALUES (-10), (0), (10) AS tab(col)
+READ	SELECT mode(col, 'true') FROM VALUES (-10), (0), (10) AS tab(col)
+READ	SELECT mode(col, null) FROM VALUES (-10), (0), (10) AS tab(col)
+READ	SELECT mode(col, b) FROM VALUES (-10, false), (0, false), (10, false) AS tab(col, b)
+READ	SELECT mode(col) FROM VALUES (map(1, 'a')) AS tab(col)
+READ	SELECT mode(col, false) FROM VALUES (map(1, 'a')) AS tab(col)
+READ	SELECT mode(col, true) FROM VALUES (map(1, 'a')) AS tab(col)
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+SESSION	CREATE OR REPLACE TEMPORARY VIEW intervals AS SELECT * FROM VALUES
+READ	SELECT
+READ	SELECT

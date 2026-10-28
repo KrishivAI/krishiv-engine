@@ -1,0 +1,13 @@
+SESSION	create temporary view nt1 as select * from values
+SESSION	create temporary view nt2 as select * from values
+READ	SELECT * FROM nt1 cross join nt2
+READ	SELECT * FROM nt1 cross join nt2 where udf(nt1.k) = udf(nt2.k)
+READ	SELECT * FROM nt1 cross join nt2 on (udf(nt1.k) = udf(nt2.k))
+READ	SELECT * FROM nt1 cross join nt2 where udf(nt1.v1) = "1" and udf(nt2.v2) = "22"
+READ	SELECT udf(a.key), udf(b.key) FROM
+SESSION	create temporary view A(a, va) as select * from nt1
+SESSION	create temporary view B(b, vb) as select * from nt1
+SESSION	create temporary view C(c, vc) as select * from nt1
+SESSION	create temporary view D(d, vd) as select * from nt1
+READ	select * from ((A join B on (udf(a) = udf(b))) cross join C) join D on (udf(a) = udf(d))
+READ	SELECT * FROM nt1 CROSS JOIN nt2 ON (udf(nt1.k) > udf(nt2.k))

@@ -17,14 +17,6 @@
       "reason": "SELECT nvl2(INTERVAL '1-2' YEAR TO MONTH, 2, 1) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
     },
     {
-      "id": "nvl2#92c35e6b7596/ansi_on",
-      "reason": "SELECT nvl2(NULL, map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl2#92c35e6b7596/ansi_off",
-      "reason": "SELECT nvl2(NULL, map('a', 1), 1) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
       "id": "nvl2#9537be4ef8c8/ansi_on",
       "reason": "SELECT nvl2(NULL, 2, INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
@@ -39,22 +31,6 @@
     {
       "id": "nvl2#997859899362/ansi_off",
       "reason": "SELECT nvl2(NULL, 2, INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl2#9987e2ffcc74/ansi_on",
-      "reason": "SELECT nvl2(map('a', 1), 2, 1) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "nvl2#9987e2ffcc74/ansi_off",
-      "reason": "SELECT nvl2(map('a', 1), 2, 1) | KRISHIV_UNSUPPORTED_FEATURE: function map"
-    },
-    {
-      "id": "nvl2#b713cf78a1f7/ansi_on",
-      "reason": "SELECT nvl2(NULL, 2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
-    },
-    {
-      "id": "nvl2#b713cf78a1f7/ansi_off",
-      "reason": "SELECT nvl2(NULL, 2, map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES"
     },
     {
       "id": "nvl2#d68aaefed581/ansi_on",

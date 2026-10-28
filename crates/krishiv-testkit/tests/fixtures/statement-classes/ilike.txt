@@ -1,0 +1,26 @@
+READ	select null ilike 'a'
+READ	select 'a' ilike null
+READ	select null ilike null
+READ	select 'a' ilike 'a'
+READ	select 'a' ilike 'b'
+READ	select 'A' ilike 'a'
+READ	select 'a' ilike 'A'
+READ	select 'abdef' ilike 'aBdef'
+READ	select 'a_%b' ilike 'a\\__b'
+READ	select 'addb' ilike 'A_%b'
+READ	select 'abC' ilike 'a%'
+READ	select 'a\nb' ilike 'a_B'
+READ	select '' ilike ''
+READ	select 'A' ilike ''
+READ	select '' ilike 'a'
+READ	select ilike('\__', '\\\__')
+READ	select ilike('\\\__', '%\\%\%')
+READ	select 'a\u20ACA' ilike '_\u20AC_'
+READ	select 'A€a' ilike '_€_'
+READ	select 'a€AA' ilike '_\u20AC_a'
+READ	select 'a\u20ACaz' ilike '_€_Z'
+READ	select 'ЀЁЂѺΏỀ' ilike 'ѐёђѻώề'
+READ	select 'Addb' ilike 'a%#%b' escape '#'
+READ	select 'a_%b' ilike 'a%#%B' escape '#'
+READ	select 'Addb' ilike 'A%$%b' escape '$'
+READ	select 'a_%b' ilike 'a%+%B' escape '+'

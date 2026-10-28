@@ -1,0 +1,22 @@
+DDL	drop table if exists x
+DDL	drop table if exists y
+DDL	create table x(x1 int, x2 int) using json
+WRITE	insert into x values (1, 1), (2, 2)
+DDL	create table y(y1 int, y2 int) using json
+WRITE	insert into y values (1, 1), (1, 2), (2, 4)
+READ	select * from x where exists (select * from y where x1 = y1 limit 1 offset 2)
+READ	select * from x join lateral (select * from y where x1 = y1 limit 1 offset 2)
+READ	select * from x where x1 in (select y1 from y limit 1 offset 2)
+READ	select * from x where (select sum(y2) from y where x1 = y1 limit 1 offset 2) > 2
+READ	select * from x where exists (select * from y where x1 = y1 offset 2)
+READ	select * from x join lateral (select * from y where x1 = y1 offset 2)
+READ	select * from x where x1 in (select y1 from y offset 2)
+READ	select * from x where (select sum(y2) from y where x1 = y1 offset 2) > 2
+SESSION	CREATE TEMPORARY VIEW EMP AS SELECT * FROM VALUES
+SESSION	CREATE TEMPORARY VIEW DEPT AS SELECT * FROM VALUES
+READ	SELECT emp_name
+READ	SELECT emp_name
+READ	SELECT emp_name
+READ	SELECT emp_name
+DDL	drop table x
+DDL	drop table y

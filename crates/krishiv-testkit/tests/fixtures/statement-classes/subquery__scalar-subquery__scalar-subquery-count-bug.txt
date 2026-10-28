@@ -1,0 +1,21 @@
+SESSION	create temp view l (a, b)
+SESSION	create temp view r (c, d)
+READ	select *, (select count(*) from r where l.a = r.c) from l
+READ	select *, (select count(*) from r where l.a = r.c group by c) from l
+READ	select *, (select count(*) from r where l.a = r.c group by 'constant') from l
+READ	select *, (
+READ	select *, (
+READ	select *, (select count(*) from r where l.a = r.c having count(*) <= 1) from l
+READ	select *, (select count(*) from r where l.a = r.c having count(*) >= 2) from l
+SESSION	CREATE TEMPORARY VIEW null_view(a, b) AS SELECT CAST(null AS int), CAST(null as int)
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+READ	SELECT
+SESSION	set spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled = true
+READ	select *, (select count(*) from r where l.a = r.c) from l
+READ	select *, (select count(*) from r where l.a = r.c group by c) from l
+READ	select *, (select count(*) from r where l.a = r.c group by 'constant') from l
+SESSION	reset spark.sql.optimizer.decorrelateSubqueryLegacyIncorrectCountHandling.enabled

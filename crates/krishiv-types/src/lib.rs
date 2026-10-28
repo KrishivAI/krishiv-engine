@@ -15,6 +15,7 @@ mod ddl;
 pub mod error;
 mod json;
 mod nested;
+pub mod variant;
 
 pub use data_type::{DataType, DecimalStorage, DecimalType};
 pub use ddl::parse_data_type;

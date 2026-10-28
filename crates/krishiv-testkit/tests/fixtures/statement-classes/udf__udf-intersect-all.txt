@@ -1,0 +1,22 @@
+SESSION	CREATE TEMPORARY VIEW tab1 AS SELECT * FROM VALUES
+SESSION	CREATE TEMPORARY VIEW tab2 AS SELECT * FROM VALUES
+READ	SELECT udf(k), v FROM tab1
+READ	SELECT k, udf(v) FROM tab1
+READ	SELECT udf(k), udf(v) FROM tab1 WHERE k > udf(2)
+READ	SELECT udf(k), v FROM tab1
+READ	SELECT udf(k), v FROM tab1
+READ	SELECT k, udf(v) FROM tab1
+READ	SELECT udf(k) FROM tab1
+READ	SELECT udf(k), v FROM tab2
+READ	SELECT udf(k), v FROM tab1
+READ	SELECT udf(k), udf(v) FROM tab1
+READ	(
+READ	SELECT *
+READ	SELECT *
+READ	SELECT udf(v) FROM tab1 GROUP BY v
+SESSION	SET spark.sql.legacy.setopsPrecedence.enabled= true
+READ	SELECT udf(k), v FROM tab1
+READ	SELECT k, udf(v) FROM tab1
+SESSION	SET spark.sql.legacy.setopsPrecedence.enabled = false
+SESSION	DROP VIEW IF EXISTS tab1
+SESSION	DROP VIEW IF EXISTS tab2

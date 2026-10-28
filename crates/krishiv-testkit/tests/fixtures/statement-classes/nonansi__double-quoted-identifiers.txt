@@ -1,0 +1,30 @@
+PARSE_ERROR	SELECT 1 FROM "not_exist"
+PARSE_ERROR	USE SCHEMA "not_exist"
+PARSE_ERROR	ALTER TABLE "not_exist" ADD COLUMN not_exist int
+PARSE_ERROR	ALTER TABLE not_exist ADD COLUMN "not_exist" int
+PARSE_ERROR	SELECT 1 AS "not_exist" FROM not_exist
+PARSE_ERROR	SELECT 1 FROM not_exist AS X("hello")
+PARSE_ERROR	SELECT "not_exist"()
+PARSE_ERROR	SELECT "not_exist".not_exist()
+PARSE_ERROR	select 1 from "not_""exists"
+READ	SELECT 1 FROM `hello`
+SESSION	USE SCHEMA `not_exist`
+DDL	ALTER TABLE `not_exist` ADD COLUMN not_exist int
+DDL	ALTER TABLE not_exist ADD COLUMN `not_exist` int
+READ	SELECT 1 AS `not_exist` FROM `not_exist`
+READ	SELECT 1 FROM not_exist AS X(`hello`)
+READ	SELECT `not_exist`()
+READ	SELECT `not_exist`.not_exist()
+READ	SELECT "hello"
+SESSION	CREATE TEMPORARY VIEW v(c1 COMMENT "hello") AS SELECT 1
+SESSION	DROP VIEW v
+READ	SELECT INTERVAL "1" YEAR
+READ	SELECT 'hello'
+SESSION	CREATE TEMPORARY VIEW v(c1 COMMENT 'hello') AS SELECT 1
+SESSION	DROP VIEW v
+READ	SELECT INTERVAL '1' YEAR
+PARSE_ERROR	CREATE SCHEMA "myschema"
+PARSE_ERROR	CREATE TEMPORARY VIEW "myview"("c1") AS
+PARSE_ERROR	SELECT "a1" AS "a2" FROM "myview" AS "atab"("a1")
+PARSE_ERROR	DROP TABLE "myview"
+PARSE_ERROR	DROP SCHEMA "myschema"

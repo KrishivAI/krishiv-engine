@@ -1,0 +1,40 @@
+SESSION	CREATE TEMPORARY VIEW t AS SELECT 1
+READ	select cast(1 as tinyint) + interval 2 day
+READ	select cast(1 as smallint) + interval 2 day
+READ	select cast(1 as int) + interval 2 day
+READ	select cast(1 as bigint) + interval 2 day
+READ	select cast(1 as float) + interval 2 day
+READ	select cast(1 as double) + interval 2 day
+READ	select cast(1 as decimal(10, 0)) + interval 2 day
+READ	select cast('2017-12-11' as string) + interval 2 day
+READ	select cast('2017-12-11 09:30:00' as string) + interval 2 day
+READ	select cast('1' as binary) + interval 2 day
+READ	select cast(1 as boolean) + interval 2 day
+READ	select cast('2017-12-11 09:30:00.0' as timestamp) + interval 2 day
+READ	select cast('2017-12-11 09:30:00' as date) + interval 2 day
+READ	select interval 2 day + cast(1 as tinyint)
+READ	select interval 2 day + cast(1 as smallint)
+READ	select interval 2 day + cast(1 as int)
+READ	select interval 2 day + cast(1 as bigint)
+READ	select interval 2 day + cast(1 as float)
+READ	select interval 2 day + cast(1 as double)
+READ	select interval 2 day + cast(1 as decimal(10, 0))
+READ	select interval 2 day + cast('2017-12-11' as string)
+READ	select interval 2 day + cast('2017-12-11 09:30:00' as string)
+READ	select interval 2 day + cast('1' as binary)
+READ	select interval 2 day + cast(1 as boolean)
+READ	select interval 2 day + cast('2017-12-11 09:30:00.0' as timestamp)
+READ	select interval 2 day + cast('2017-12-11 09:30:00' as date)
+READ	select cast(1 as tinyint) - interval 2 day
+READ	select cast(1 as smallint) - interval 2 day
+READ	select cast(1 as int) - interval 2 day
+READ	select cast(1 as bigint) - interval 2 day
+READ	select cast(1 as float) - interval 2 day
+READ	select cast(1 as double) - interval 2 day
+READ	select cast(1 as decimal(10, 0)) - interval 2 day
+READ	select cast('2017-12-11' as string) - interval 2 day
+READ	select cast('2017-12-11 09:30:00' as string) - interval 2 day
+READ	select cast('1' as binary) - interval 2 day
+READ	select cast(1 as boolean) - interval 2 day
+READ	select cast('2017-12-11 09:30:00.0' as timestamp) - interval 2 day
+READ	select cast('2017-12-11 09:30:00' as date) - interval 2 day

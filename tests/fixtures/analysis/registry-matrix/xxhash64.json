@@ -2,19 +2,19 @@
   "entries": [
     {
       "id": "xxhash64#27bf617616cb/ansi_on",
-      "reason": "SELECT xxhash64('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT xxhash64('Spark', map('a', 1), 2) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#27bf617616cb/ansi_off",
-      "reason": "SELECT xxhash64('Spark', map('a', 1), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT xxhash64('Spark', map('a', 1), 2) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#30b81390e09c/ansi_on",
-      "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#30b81390e09c/ansi_off",
-      "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT xxhash64('Spark', array(123), map('a', 1)) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#36cc90cab019/ansi_on",
@@ -58,11 +58,11 @@
     },
     {
       "id": "xxhash64#f5d3d559ad3a/ansi_on",
-      "reason": "SELECT xxhash64(map('a', 1), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT xxhash64(map('a', 1), array(123), 2) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#f5d3d559ad3a/ansi_off",
-      "reason": "SELECT xxhash64(map('a', 1), array(123), 2) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
+      "reason": "SELECT xxhash64(map('a', 1), array(123), 2) | resolves to bigint where Spark has DATATYPE_MISMATCH.HASH_MAP_TYPE"
     },
     {
       "id": "xxhash64#f916e9e6b8e7/ansi_on",

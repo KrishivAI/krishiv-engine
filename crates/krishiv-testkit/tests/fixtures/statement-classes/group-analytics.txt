@@ -1,0 +1,52 @@
+SESSION	CREATE OR REPLACE TEMPORARY VIEW testData AS SELECT * FROM VALUES
+READ	SELECT a + b, b, SUM(a - b) FROM testData GROUP BY a + b, b WITH CUBE
+READ	SELECT a, b, SUM(b) FROM testData GROUP BY a, b WITH CUBE
+READ	SELECT a + b, b, SUM(a - b) FROM testData GROUP BY a + b, b WITH ROLLUP
+READ	SELECT a, b, SUM(b) FROM testData GROUP BY a, b WITH ROLLUP
+SESSION	CREATE OR REPLACE TEMPORARY VIEW courseSales AS SELECT * FROM VALUES
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY ROLLUP(course, year) ORDER BY course, year
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY ROLLUP(course, year, (course, year)) ORDER BY course, year
+PARSE_ERROR	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY ROLLUP(course, year, (course, year), ()) ORDER BY course, y
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY CUBE(course, year) ORDER BY course, year
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY CUBE(course, year, (course, year)) ORDER BY course, year
+PARSE_ERROR	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY CUBE(course, year, (course, year), ()) ORDER BY course, yea
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY course, year GROUPING SETS(course, year)
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY course, year GROUPING SETS(course, year, ())
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY course, year GROUPING SETS(course)
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY course, year GROUPING SETS(year)
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY course, CUBE(course, year) ORDER BY course, year
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY CUBE(course, year), ROLLUP(course, year) ORDER BY course, y
+READ	SELECT course, year, SUM(earnings) FROM courseSales GROUP BY CUBE(course, year), ROLLUP(course, year), GROUPING SETS(cou
+READ	SELECT course, SUM(earnings) AS sum FROM courseSales
+READ	SELECT course, SUM(earnings) AS sum, GROUPING_ID(course, earnings) FROM courseSales
+READ	SELECT course, year, GROUPING(course), GROUPING(year), GROUPING_ID(course, year) FROM courseSales
+READ	SELECT course, year, GROUPING(course) FROM courseSales GROUP BY course, year
+READ	SELECT course, year, GROUPING_ID(course, year) FROM courseSales GROUP BY course, year
+READ	SELECT course, year, grouping__id FROM courseSales GROUP BY CUBE(course, year) ORDER BY grouping__id, course, year
+READ	SELECT course, year FROM courseSales GROUP BY CUBE(course, year)
+READ	SELECT course, year FROM courseSales GROUP BY course, year HAVING GROUPING(course) > 0
+READ	SELECT course, year FROM courseSales GROUP BY course, year HAVING GROUPING_ID(course) > 0
+READ	SELECT course, year FROM courseSales GROUP BY CUBE(course, year) HAVING grouping__id > 0
+READ	SELECT course, year, GROUPING(course), GROUPING(year) FROM courseSales GROUP BY CUBE(course, year)
+READ	SELECT course, year, GROUPING_ID(course, year) FROM courseSales GROUP BY CUBE(course, year)
+READ	SELECT course, year FROM courseSales GROUP BY course, year ORDER BY GROUPING(course)
+READ	SELECT course, year FROM courseSales GROUP BY course, year ORDER BY GROUPING_ID(course)
+READ	SELECT course, year FROM courseSales GROUP BY CUBE(course, year) ORDER BY grouping__id, course, year
+READ	SELECT a + b AS k1, b AS k2, SUM(a - b) FROM testData GROUP BY CUBE(k1, k2)
+READ	SELECT a + b AS k, b, SUM(a - b) FROM testData GROUP BY ROLLUP(k, b)
+READ	SELECT a + b, b AS k, SUM(a - b) FROM testData GROUP BY a + b, k GROUPING SETS(k)
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, b, CUBE(a, b)
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, b, ROLLUP(a, b)
+READ	SELECT a, b, count(1) FROM testData GROUP BY CUBE(a, b), ROLLUP(a, b)
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, CUBE(a, b), ROLLUP(b)
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS((a, b), (a), ())
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, CUBE(a, b), GROUPING SETS((a, b), (a), ())
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, CUBE(a, b), ROLLUP(a, b), GROUPING SETS((a, b), (a), ())
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS(ROLLUP(a, b))
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS(GROUPING SETS((a, b), (a), ()))
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS((a, b), GROUPING SETS(ROLLUP(a, b)))
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS((a, b, a, b), (a, b, a), (a, b))
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS(GROUPING SETS((a, b, a, b), (a, b, a), (a, b)))
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS(ROLLUP(a, b), CUBE(a, b))
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS(GROUPING SETS((a, b), (a), ()), GROUPING SETS((a, b), (a),
+READ	SELECT a, b, count(1) FROM testData GROUP BY a, GROUPING SETS((a, b), (a), (), (a, b), (a), (b), ())

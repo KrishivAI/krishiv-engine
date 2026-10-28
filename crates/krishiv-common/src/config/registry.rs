@@ -13,6 +13,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
     &SESSION_TIME_ZONE,
     &STORE_ASSIGNMENT_POLICY,
+    &MAP_KEY_DEDUP_POLICY,
     &TARGET_PARTITION_BYTES,
     &EXEC_BATCH_SIZE,
     &EXEC_AGG_ROW_LAYOUT,
@@ -97,6 +98,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("spark.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("krishiv.exec.join.radixBits", &EXEC_JOIN_RADIX_BITS),
     ("krishiv.exec.join.rowLayout", &EXEC_JOIN_ROW_LAYOUT),
+    ("spark.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.sql.session.timeZone", &SESSION_TIME_ZONE),
     ("spark.sql.shuffle.partitions", &SHUFFLE_PARTITIONS_HINT),
     ("krishiv.exec.sort.hashBuckets", &EXEC_SORT_HASH_BUCKETS),
@@ -105,6 +107,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.spill.dropBehindBytes", &SPILL_DROP_BEHIND_BYTES),
+    ("krishiv.sql.mapKeyDedupPolicy", &MAP_KEY_DEDUP_POLICY),
     ("krishiv.io.lateMaterialization", &IO_LATE_MATERIALIZATION),
     (
         "krishiv.io.coalesceWasteDivisor",
@@ -283,6 +286,19 @@ pub static STORE_ASSIGNMENT_POLICY: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     version_added: "0.1.0",
     spark_alias: Some("spark.sql.storeAssignmentPolicy"),
+};
+
+/// Map key deduplication policy.
+pub static MAP_KEY_DEDUP_POLICY: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.mapKeyDedupPolicy",
+    value_type: ValueType::Enum(&["EXCEPTION", "LAST_WIN"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("EXCEPTION"))),
+    doc: "How duplicate map keys are handled by the map functions (`map`, `map_concat`, \
+          `map_from_arrays`, `map_from_entries`, `str_to_map`): `EXCEPTION` fails the query, \
+          `LAST_WIN` keeps the value inserted last.",
+    scope: Scope::Session,
+    version_added: "0.1.0",
+    spark_alias: Some("spark.sql.mapKeyDedupPolicy"),
 };
 
 /// Target partition size, replacing a fixed shuffle partition count.

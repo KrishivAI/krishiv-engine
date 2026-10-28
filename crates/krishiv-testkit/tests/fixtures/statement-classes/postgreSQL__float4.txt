@@ -1,0 +1,43 @@
+DDL	CREATE TABLE FLOAT4_TBL (f1  float) USING parquet
+WRITE	INSERT INTO FLOAT4_TBL VALUES (float('    0.0'))
+WRITE	INSERT INTO FLOAT4_TBL VALUES (float('1004.30   '))
+WRITE	INSERT INTO FLOAT4_TBL VALUES (float('     -34.84    '))
+WRITE	INSERT INTO FLOAT4_TBL VALUES (float('1.2345678901234e+20'))
+WRITE	INSERT INTO FLOAT4_TBL VALUES (float('1.2345678901234e-20'))
+READ	SELECT float('NaN')
+READ	SELECT float('nan')
+READ	SELECT float('   NAN  ')
+READ	SELECT float('infinity')
+READ	SELECT float('          -INFINiTY   ')
+READ	SELECT float('N A N')
+READ	SELECT float('NaN x')
+READ	SELECT float(' INFINITY    x')
+READ	SELECT float('Infinity') + 100.0
+READ	SELECT float('Infinity') / float('Infinity')
+READ	SELECT float('nan') / float('nan')
+READ	SELECT float(decimal('nan'))
+READ	SELECT '' AS five, * FROM FLOAT4_TBL
+READ	SELECT '' AS four, f.* FROM FLOAT4_TBL f WHERE f.f1 <> '1004.3'
+READ	SELECT '' AS one, f.* FROM FLOAT4_TBL f WHERE f.f1 = '1004.3'
+READ	SELECT '' AS three, f.* FROM FLOAT4_TBL f WHERE '1004.3' > f.f1
+READ	SELECT '' AS three, f.* FROM FLOAT4_TBL f WHERE  f.f1 < '1004.3'
+READ	SELECT '' AS four, f.* FROM FLOAT4_TBL f WHERE '1004.3' >= f.f1
+READ	SELECT '' AS four, f.* FROM FLOAT4_TBL f WHERE  f.f1 <= '1004.3'
+READ	SELECT '' AS three, f.f1, f.f1 * '-10' AS x FROM FLOAT4_TBL f
+READ	SELECT '' AS three, f.f1, f.f1 + '-10' AS x FROM FLOAT4_TBL f
+READ	SELECT '' AS three, f.f1, f.f1 / '-10' AS x FROM FLOAT4_TBL f
+READ	SELECT '' AS three, f.f1, f.f1 - '-10' AS x FROM FLOAT4_TBL f
+READ	SELECT '' AS five, * FROM FLOAT4_TBL
+READ	SELECT smallint(float('32767.4'))
+READ	SELECT smallint(float('32767.6'))
+READ	SELECT smallint(float('-32768.4'))
+READ	SELECT smallint(float('-32768.6'))
+READ	SELECT int(float('2147483520'))
+READ	SELECT int(float('2147483647'))
+READ	SELECT int(float('-2147483648.5'))
+READ	SELECT int(float('-2147483900'))
+READ	SELECT bigint(float('9223369837831520256'))
+READ	SELECT bigint(float('9223372036854775807'))
+READ	SELECT bigint(float('-9223372036854775808.5'))
+READ	SELECT bigint(float('-9223380000000000000'))
+DDL	DROP TABLE FLOAT4_TBL

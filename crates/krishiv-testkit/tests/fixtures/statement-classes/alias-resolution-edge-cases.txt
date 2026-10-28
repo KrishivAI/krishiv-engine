@@ -1,0 +1,10 @@
+DDL	CREATE TABLE t1(col1 INT, col2 STRING)
+DDL	CREATE TABLE t2(col1 STRUCT<a: STRING>, a STRING)
+READ	SELECT LEN(LOWER('X')) AS a, 1 AS b, b AS c GROUP BY LOWER('X') ORDER BY LOWER('X')
+READ	SELECT LEN(LOWER('X')) AS a, 1 AS b, b AS c GROUP BY LOWER('X') HAVING LOWER('X') = 'x'
+READ	SELECT col1.field, field FROM VALUES(named_struct('field', 1))
+READ	SELECT col1.field, field FROM VALUES(map('field', 1))
+READ	SELECT COUNT(col1) as alias, SUM(col1) + alias FROM t1 GROUP BY ALL
+READ	SELECT COUNT(col1) as alias, SUM(col1) + alias, SUM(col1) + col1 FROM t1 GROUP BY ALL
+DDL	DROP TABLE t1
+DDL	DROP TABLE t2

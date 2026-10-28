@@ -1,0 +1,28 @@
+DDL	CREATE TABLE test_change(a INT, b STRING, c INT) using parquet
+READ	DESC test_change
+PARSE_ERROR	ALTER TABLE test_change CHANGE a
+READ	DESC test_change
+DDL	ALTER TABLE test_change RENAME COLUMN a TO a1
+READ	DESC test_change
+DDL	ALTER TABLE test_change CHANGE a TYPE STRING
+READ	DESC test_change
+DDL	ALTER TABLE test_change CHANGE a AFTER b
+DDL	ALTER TABLE test_change CHANGE b FIRST
+READ	DESC test_change
+DDL	ALTER TABLE test_change CHANGE a COMMENT 'this is column a'
+DDL	ALTER TABLE test_change CHANGE b COMMENT '#*02?`'
+DDL	ALTER TABLE test_change CHANGE c COMMENT ''
+READ	DESC test_change
+DDL	ALTER TABLE test_change CHANGE a TYPE INT
+DDL	ALTER TABLE test_change CHANGE a COMMENT 'this is column a'
+READ	DESC test_change
+DDL	ALTER TABLE test_change CHANGE invalid_col TYPE INT
+READ	DESC test_change
+DDL	ALTER TABLE test_change CHANGE A COMMENT 'case insensitivity'
+READ	DESC test_change
+SESSION	CREATE TEMPORARY VIEW temp_view(a, b) AS SELECT 1, "one"
+DDL	ALTER TABLE temp_view CHANGE a TYPE INT
+DDL	CREATE GLOBAL TEMPORARY VIEW global_temp_view(a, b) AS SELECT 1, "one"
+DDL	ALTER TABLE global_temp.global_temp_view CHANGE a TYPE INT
+DDL	DROP TABLE test_change
+DDL	DROP VIEW global_temp.global_temp_view
