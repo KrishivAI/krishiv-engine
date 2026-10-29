@@ -536,6 +536,24 @@ async fn deterministic_mode_replays_morsel_order() {
     assert_eq!(sorted, ordered, "same morsels, different order");
 }
 
+/// Spins until this thread has run for `d` of CPU time. The stall detector
+/// charges a poll its slice minus the thread's run-queue wait, so a spin
+/// timed by the wall clock holds the CPU for less than `d` on a loaded
+/// machine (the thread is preempted for part of it) and may not trip it.
+fn spin_on_cpu(d: Duration) {
+    let cpu = || {
+        let t = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);
+        Duration::new(
+            t.tv_sec.unsigned_abs(),
+            u32::try_from(t.tv_nsec).unwrap_or(0),
+        )
+    };
+    let start = cpu();
+    while cpu().saturating_sub(start) < d {
+        std::hint::spin_loop();
+    }
+}
+
 /// The stall detector fails a driver that does not yield for longer than
 /// the threshold (in fail-on-stall mode).
 #[tokio::test]
@@ -549,10 +567,7 @@ async fn the_stall_detector_fails_a_non_yielding_driver() {
     let q = query(&root, 1, config);
     let (_, scan) = scan(4 * DEFAULT_BATCH_SIZE as u64);
     let spin = hook(|_| {
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(30) {
-            std::hint::spin_loop();
-        }
+        spin_on_cpu(Duration::from_millis(30));
         Ok(())
     });
     let e = run(&runner, pipe(scan, spin), &q).await.unwrap_err();

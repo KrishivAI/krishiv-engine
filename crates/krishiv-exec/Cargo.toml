@@ -52,6 +52,7 @@ arrow-ipc = { workspace = true, features = ["zstd"] }
 criterion.workspace = true
 object_store = { workspace = true, features = ["fs"] }
 proptest = { workspace = true, features = ["std"] }
+rustix = { workspace = true, features = ["time"] }
 serde_json = { workspace = true, features = ["std"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "test-util", "time"] }
