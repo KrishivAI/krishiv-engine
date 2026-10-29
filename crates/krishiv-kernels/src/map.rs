@@ -666,7 +666,8 @@ fn hash_all(arrays: &[&dyn Array], counts: &[usize]) -> Result<Vec<i32>, KernelE
         if *n == 0 {
             continue;
         }
-        let h = hash::hash(std::slice::from_ref(a), *n)?;
+        let plain = hashable(*a);
+        let h = hash::hash(&[plain.as_ref()], *n)?;
         out.extend(h.values().iter().copied());
     }
     Ok(out)
@@ -1094,6 +1095,20 @@ pub fn build_map(
     MapArray::try_new(entries, offsets, body, nulls, false).map_err(internal)
 }
 
+/// `array` with view string and binary carriers read as the plain ones the
+/// hash kernel takes (the same bytes hash the same).
+fn hashable(array: &dyn Array) -> ArrayRef {
+    match array.data_type() {
+        DataType::Utf8View => Arc::new(arrow_array::StringArray::from_iter(
+            array.as_string_view().iter(),
+        )),
+        DataType::BinaryView => Arc::new(arrow_array::BinaryArray::from_iter(
+            array.as_binary_view().iter(),
+        )),
+        _ => arrow_array::make_array(array.to_data()),
+    }
+}
+
 /// The Murmur3 hashes of the first `len` keys (empty for none).
 fn hash_keys(keys: &dyn Array, len: usize) -> Result<Vec<i32>, KernelError> {
     if keys.len() < len {
@@ -1105,7 +1120,9 @@ fn hash_keys(keys: &dyn Array, len: usize) -> Result<Vec<i32>, KernelError> {
     if len == 0 {
         return Ok(Vec::new());
     }
-    let sliced = keys.slice(0, len);
+    // The hash kernel reads plain string and binary carriers; the view
+    // carriers (Spark's `STRING` here) hash as the same bytes.
+    let sliced = hashable(keys.slice(0, len).as_ref());
     Ok(hash::hash(&[sliced.as_ref()], len)?.values().to_vec())
 }
 
@@ -2194,5 +2211,18 @@ mod tests {
         assert_eq!(m.len(), 1);
         let short: ArrayRef = Arc::new(Int32Array::from(vec![1]));
         assert!(build_map(&keys, &short, offsets, None, false).is_err());
+    }
+
+    #[test]
+    fn view_keys_hash_like_plain_keys() {
+        let views: ArrayRef = Arc::new(StringViewArray::from(vec!["a", "b", "a"]));
+        let err = KrishivError::from(dedup_entries(views.as_ref(), 3, false).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::DuplicatedMapKey);
+        let bins: ArrayRef = Arc::new(arrow_array::BinaryViewArray::from(vec![
+            b"x".as_slice(),
+            b"x".as_slice(),
+        ]));
+        let (kept, taken) = dedup_entries(bins.as_ref(), 2, true).unwrap();
+        assert_eq!((kept, taken), (vec![0], vec![1]));
     }
 }

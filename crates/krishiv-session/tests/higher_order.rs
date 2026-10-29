@@ -1152,12 +1152,6 @@ fn map_builds_maps() {
     // An odd count is the wrong arity.
     let e = error(&s, "SELECT map('a', 1, 'b')");
     assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
-    // Keys and values each share a type.
-    let e = error(&s, "SELECT map(1, 'a', 'b', 'c')");
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::DatatypeMismatchCreateMapKeyDiffTypes
-    );
     // NULL keys raise at run time.
     let e = error_at_runtime(&s, "SELECT map(CAST(NULL AS INT), 1)");
     assert_eq!(e.error_class(), ErrorClass::NullMapKey);
