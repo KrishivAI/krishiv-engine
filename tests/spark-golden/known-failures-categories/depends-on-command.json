@@ -5,6 +5,12 @@
   "rules": [
     {
       "depends": true,
+      "detail": "^rows differ",
+      "file": "^explain",
+      "order": 40
+    },
+    {
+      "depends": true,
       "detail": "TABLE_OR_VIEW_NOT_FOUND|UNRESOLVED_ROUTINE|UNRESOLVED_COLUMN|UNRESOLVABLE_TABLE_VALUED_FUNCTION|VARIABLE_NOT_FOUND|UNBOUND_SQL_PARAMETER",
       "order": 50
     },

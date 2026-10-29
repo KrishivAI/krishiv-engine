@@ -1,6 +1,6 @@
 {
   "cases": {
-    "explain-text": [
+    "depends-on-command": [
       4
     ],
     "sql-commands": [

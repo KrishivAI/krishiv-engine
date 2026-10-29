@@ -446,7 +446,9 @@ pub fn run_file_with(
         file.unclassified_errors += u64::from(o.unclassified);
         if let (Some(v), Some((class, parse_phase))) = (o.negative, o.class.clone()) {
             let entry = file.classes.entry(class).or_default();
-            entry.parse_phase = parse_phase;
+            // A class raised in both phases is a parse-phase class whatever the
+            // statement order (the gate would otherwise depend on it).
+            entry.parse_phase |= parse_phase;
             entry.tally.record(v);
         }
         let mut case = case;

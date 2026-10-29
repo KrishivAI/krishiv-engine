@@ -52,7 +52,7 @@ pub fn negative_by_class(run: &RunResult) -> BTreeMap<String, ClassTally> {
     for f in &run.files {
         for (class, c) in &f.classes {
             let e = out.entry(class.clone()).or_default();
-            e.parse_phase = c.parse_phase;
+            e.parse_phase |= c.parse_phase;
             e.tally.add(c.tally);
         }
     }
@@ -288,6 +288,29 @@ mod tests {
         ClassTally {
             tally: Tally { passed, total },
             parse_phase,
+        }
+    }
+
+    /// A class raised in both phases is a parse-phase class in either file order.
+    #[test]
+    fn a_class_raised_in_both_phases_is_parse_phase_whatever_the_file_order() {
+        let file = |parse_phase| FileResult {
+            classes: BTreeMap::from([("DUPLICATE_KEY".to_owned(), class(1, 1, parse_phase))]),
+            ..FileResult::default()
+        };
+        for files in [vec![file(true), file(false)], vec![file(false), file(true)]] {
+            let by = negative_by_class(&RunResult {
+                files,
+                ..RunResult::default()
+            });
+            assert!(by["DUPLICATE_KEY"].parse_phase);
+            assert_eq!(
+                by["DUPLICATE_KEY"].tally,
+                Tally {
+                    passed: 2,
+                    total: 2
+                }
+            );
         }
     }
 

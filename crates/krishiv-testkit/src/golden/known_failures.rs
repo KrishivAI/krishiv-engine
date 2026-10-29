@@ -854,7 +854,7 @@ impl KnownFailures {
         );
         if let Some(category) = reclassify {
             msg.push_str(&format!(
-                "\nreclassified {} statement(s) of `{category}`:\n{}",
+                "\nmoved {} statement(s) out of `{category}`:\n{}",
                 up.moved.len(),
                 up.moved_summary()
             ));
