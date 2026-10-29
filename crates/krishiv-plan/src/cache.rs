@@ -87,6 +87,19 @@ struct Encoder {
     /// instance reads as its own attributes, so the bias is part of the key.
     ids: HashMap<(u64, u64), u64>,
     next: u64,
+    /// The digest of each plan and expression node already encoded, by
+    /// address and shift bias. A shared (`Arc`) subtree is reached once per
+    /// path; the digest makes that one encoding of its body, and a node
+    /// writes only its children's 16-byte digests. A second visit assigns no
+    /// new attribute ids (the first did), so a separate copy of the same
+    /// subtree has the same digest: shared and copied plans hash equal.
+    seen: HashMap<(NodeKind, usize, u64), u128>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum NodeKind {
+    Plan,
+    Expr,
 }
 
 impl Encoder {
@@ -222,7 +235,23 @@ impl Encoder {
         }
     }
 
+    /// Writes `e` as the digest of its encoding, computed once per node.
     fn expr(&mut self, e: &Expr, bias: u64) {
+        let key = (NodeKind::Expr, std::ptr::from_ref(e) as usize, bias);
+        let digest = match self.seen.get(&key) {
+            Some(d) => *d,
+            None => {
+                let outer = std::mem::take(&mut self.out);
+                self.expr_body(e, bias);
+                let d = XxHash3_128::oneshot(&std::mem::replace(&mut self.out, outer));
+                self.seen.insert(key, d);
+                d
+            }
+        };
+        self.out.extend_from_slice(&digest.to_le_bytes());
+    }
+
+    fn expr_body(&mut self, e: &Expr, bias: u64) {
         match &e.node {
             ExprNode::Column(c) => {
                 self.tag("column");
@@ -427,7 +456,23 @@ impl Encoder {
         }
     }
 
+    /// Writes `plan` as the digest of its encoding, computed once per node.
     fn plan(&mut self, plan: &LogicalPlan, bias: u64) {
+        let key = (NodeKind::Plan, std::ptr::from_ref(plan) as usize, bias);
+        let digest = match self.seen.get(&key) {
+            Some(d) => *d,
+            None => {
+                let outer = std::mem::take(&mut self.out);
+                self.plan_body(plan, bias);
+                let d = XxHash3_128::oneshot(&std::mem::replace(&mut self.out, outer));
+                self.seen.insert(key, d);
+                d
+            }
+        };
+        self.out.extend_from_slice(&digest.to_le_bytes());
+    }
+
+    fn plan_body(&mut self, plan: &LogicalPlan, bias: u64) {
         match &plan.node {
             PlanNode::Read(s) => {
                 self.tag("Read");

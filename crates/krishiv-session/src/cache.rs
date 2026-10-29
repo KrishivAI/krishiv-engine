@@ -79,13 +79,52 @@ struct CacheState {
 }
 
 /// What a fill was started under: [`RelationCache::insert`] refuses the
-/// snapshot if an invalidation ran after `generation` or it exceeds `cap`.
-#[derive(Debug, Clone, Copy)]
+/// snapshot if an invalidation ran after `generation` or it exceeds `cap`,
+/// and takes over the bytes the fill reserved from the pool.
+#[derive(Debug)]
 pub(crate) struct FillLimits {
     /// The cache generation before the fill's query was analyzed.
     pub(crate) generation: u64,
     /// The fill query's own `krishiv.cache.maxBytes`.
     pub(crate) cap: usize,
+    /// The bytes held while the result streams.
+    pub(crate) reservation: FillReservation,
+}
+
+/// Bytes a running fill holds in the `relation_cache` pool consumer, so the
+/// batches it buffers count against `krishiv.memory.limit` while the query
+/// runs. Released on drop: an abandoned, failed or cancelled fill, or an
+/// `insert` that refuses the snapshot, gives them back. A stored snapshot
+/// keeps them ([`Self::adopt`]).
+#[derive(Debug)]
+pub(crate) struct FillReservation {
+    pool: Arc<dyn MemoryPool>,
+    consumer: ConsumerId,
+    bytes: usize,
+}
+
+impl FillReservation {
+    /// Reserves `bytes` more; `false` (nothing reserved) when the pool refuses.
+    pub(crate) fn grow(&mut self, bytes: usize) -> bool {
+        if self.pool.try_reserve(self.consumer, bytes).is_err() {
+            return false;
+        }
+        self.bytes = self.bytes.saturating_add(bytes);
+        true
+    }
+
+    /// The bytes held, handed over to the stored entry instead of released.
+    fn adopt(mut self) -> usize {
+        std::mem::take(&mut self.bytes)
+    }
+}
+
+impl Drop for FillReservation {
+    fn drop(&mut self) {
+        if self.bytes > 0 {
+            self.pool.release(self.consumer, self.bytes);
+        }
+    }
 }
 
 /// The session relation cache: snapshots under the `relation_cache` pool.
@@ -121,6 +160,15 @@ impl RelationCache {
             .and_then(ConfigValue::as_size)
             .unwrap_or(u64::MAX);
         usize::try_from(cap).unwrap_or(usize::MAX)
+    }
+
+    /// An empty reservation in the cache's pool consumer, for one fill.
+    pub(crate) fn reserve_fill(&self) -> FillReservation {
+        FillReservation {
+            pool: Arc::clone(&self.pool),
+            consumer: self.consumer,
+            bytes: 0,
+        }
     }
 
     /// The invalidation generation: a fill captures it when it starts and
@@ -176,12 +224,17 @@ impl RelationCache {
         tables: Vec<String>,
         limits: FillLimits,
     ) -> Option<String> {
-        let FillLimits { generation, cap } = limits;
+        // Any early return drops the reservation, which releases the bytes.
+        let FillLimits {
+            generation,
+            cap,
+            reservation,
+        } = limits;
         let mut names = std::collections::HashSet::new();
         if !schema.fields().iter().all(|f| names.insert(f.name())) {
             return None;
         }
-        let bytes: usize = batches.iter().map(batch_bytes).sum();
+        let bytes = reservation.bytes;
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         // A cap of 0 disables caching, the empty result included. The
         // generation is read under the state lock, which every invalidation
@@ -193,9 +246,7 @@ impl RelationCache {
         if (state.used.saturating_sub(old)).saturating_add(bytes) > cap {
             return None;
         }
-        if self.pool.try_reserve(self.consumer, bytes).is_err() {
-            return None;
-        }
+        reservation.adopt();
         if let Some(old) = state.entries.get(&key) {
             self.pool.release(self.consumer, old.bytes);
             state.used = state.used.saturating_sub(old.bytes);

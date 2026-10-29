@@ -187,6 +187,7 @@ impl CacheFill {
                 bytes: 0,
                 cap,
                 generation,
+                reservation: Some(cache.reserve_fill()),
                 filled: false,
             }),
         }
@@ -221,6 +222,9 @@ struct FillStream {
     /// The fill query's cache cap.
     cap: usize,
     generation: u64,
+    /// The pool bytes `batches` hold; dropped (released) when the fill is
+    /// abandoned, fails or is cancelled, handed to the cache on success.
+    reservation: Option<crate::cache::FillReservation>,
     filled: bool,
 }
 
@@ -243,14 +247,20 @@ impl futures::Stream for FillStream {
                 {
                     // A stream that changes shape mid-way is not one snapshot.
                     self.batches.clear();
+                    self.reservation = None;
                     self.schema = None;
                     self.filled = true;
                     return Poll::Ready(Some(Ok(batch)));
                 }
-                self.bytes = self.bytes.saturating_add(crate::cache::batch_bytes(&batch));
-                if self.bytes > self.cap {
-                    // The snapshot cannot be stored: stop holding it.
+                let size = crate::cache::batch_bytes(&batch);
+                self.bytes = self.bytes.saturating_add(size);
+                // Over the cap, or the pool (`krishiv.memory.limit`) refuses
+                // the bytes: the snapshot cannot be stored, stop holding it.
+                let reserved = self.bytes <= self.cap
+                    && self.reservation.as_mut().is_some_and(|r| r.grow(size));
+                if !reserved {
                     self.batches = Vec::new();
+                    self.reservation = None;
                     self.schema = None;
                     self.filled = true;
                     return Poll::Ready(Some(Ok(batch)));
@@ -270,6 +280,9 @@ impl futures::Stream for FillStream {
                         .take()
                         .unwrap_or_else(|| Arc::clone(&this.fallback));
                     let cache = Arc::clone(&this.cache);
+                    let Some(reservation) = this.reservation.take() else {
+                        return Poll::Ready(None);
+                    };
                     cache.insert(
                         this.key.clone(),
                         schema,
@@ -279,6 +292,7 @@ impl futures::Stream for FillStream {
                         crate::cache::FillLimits {
                             generation: this.generation,
                             cap: this.cap,
+                            reservation,
                         },
                     );
                 }
@@ -286,6 +300,7 @@ impl futures::Stream for FillStream {
             }
             Poll::Ready(Some(Err(e))) => {
                 self.batches.clear();
+                self.reservation = None;
                 self.filled = true;
                 Poll::Ready(Some(Err(e)))
             }

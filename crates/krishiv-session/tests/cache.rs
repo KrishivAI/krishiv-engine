@@ -220,6 +220,50 @@ fn the_cap_runs_uncached_not_failed() {
     assert_eq!(s.cache_reserved(), baseline);
 }
 
+/// A running fill holds its batches in the `relation_cache` pool, so they
+/// count against the memory limit while the query streams; a cancelled fill
+/// gives them back and caches nothing.
+#[test]
+fn a_running_fill_is_charged_to_the_pool_and_released_on_cancel() {
+    use futures::StreamExt as _;
+    let s = int_session((0..4096).collect());
+    let baseline = s.cache_reserved();
+    let df = s.table("t").cache();
+    let mut stream = block_on(df.execute_stream()).unwrap();
+    let first = block_on(stream.next()).unwrap().unwrap();
+    assert!(first.num_rows() > 0);
+    assert!(
+        s.cache_reserved() > baseline,
+        "the buffered batch is not charged: {} <= {baseline}",
+        s.cache_reserved()
+    );
+    // Dropped before the end: nothing stored, the bytes given back.
+    drop(stream);
+    assert_eq!(s.cache_reserved(), baseline);
+    assert!(!block_on(df.is_cached()).unwrap());
+    // Run to the end, the same bytes become the stored snapshot.
+    assert_eq!(block_on(df.count()).unwrap(), 4096);
+    assert!(block_on(df.is_cached()).unwrap());
+    assert!(s.cache_reserved() > baseline);
+    block_on(df.unpersist()).unwrap();
+    assert_eq!(s.cache_reserved(), baseline);
+}
+
+/// A pool that refuses the fill's bytes (`krishiv.memory.limit`) leaves the
+/// query uncached, never failed.
+#[test]
+fn a_refused_reservation_runs_uncached_not_failed() {
+    let s = Session::builder()
+        .config("krishiv.memory.limit", "1b")
+        .build()
+        .unwrap();
+    register(&s, "t", (0..4096).collect());
+    let df = s.table("t").cache();
+    assert_eq!(block_on(df.count()).unwrap(), 4096);
+    assert!(!block_on(df.is_cached()).unwrap());
+    assert_eq!(s.cache_reserved(), 0);
+}
+
 #[test]
 fn refresh_table_drops_only_that_tables_entries() {
     let s = int_session(vec![1]);
