@@ -86,7 +86,7 @@ jobs:
           HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'size-approved') }}
           APPROVER: ${{ vars.SIZE_APPROVER }}
         run: echo "SIZE_APPROVED=$(.github/scripts/approval-label.sh size-approved)" >> "$GITHUB_ENV"
-      - name: PR size cap (5,000 counted lines; tests at half weight; allowlisted data files excluded)
+      - name: PR size cap (10,000 counted lines; tests at half weight; allowlisted data files excluded)
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
