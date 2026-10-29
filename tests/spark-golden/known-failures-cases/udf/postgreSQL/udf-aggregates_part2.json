@@ -1,11 +1,9 @@
 {
   "cases": {
-    "depends-on-command": [
+    "test-udfs": [
       2,
       3,
-      4
-    ],
-    "test-udfs": [
+      4,
       12,
       13,
       14,
