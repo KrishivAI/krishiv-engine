@@ -20,6 +20,8 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/codspeed.yml"
+      - ".github/codspeed-shards.json"
+      - ".github/scripts/codspeed-plan.py"
   push:
     branches: [main]
   workflow_dispatch:
@@ -36,16 +38,54 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  benchmarks:
-    name: Benchmarks
+  # The shard matrix. The named shards live in `.github/codspeed-shards.json`, balanced by
+  # estimated build + run time; a benchmark target in no named shard runs in a final
+  # `catch-all` shard, so a new `[[bench]]` is measured without editing the workflow. A
+  # target listed in two shards fails the plan (a target run twice is reported as a
+  # duplicate variation).
+  plan:
+    name: Plan the benchmark shards
     runs-on: ubuntu-latest
-    # Cold-cache runs took 27-73 minutes (instrumented build, then the run); a job
-    # cancelled at the limit gets no cache save, so the retry started cold again.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # `cargo metadata` lists the bench targets, auto-discovered ones included.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: 1.99.1
+      - id: plan
+        run: python3 .github/scripts/codspeed-plan.py
+
+  # The benchmark targets are split over parallel jobs so the run is not one serial
+  # build-and-run of every target. Every shard runs the CodSpeed action on its own
+  # targets and CodSpeed merges the uploads of one workflow run into a single report.
+  # Every shard rebuilds the workspace crates its targets depend on.
+  shards:
+    name: Bench shard ${{ matrix.shard }}
+    needs: plan
+    runs-on: ubuntu-latest
+    # Cold-cache runs of the former single job took 27-73 minutes (instrumented build,
+    # then the run); a job cancelled at the limit gets no cache save, so the retry
+    # started cold again. A shard builds a share of that, but the limit stays.
     timeout-minutes: 90
     permissions:
       contents: read
       # OIDC authentication with CodSpeed (no token needed on public repositories).
       id-token: write
+    strategy:
+      # Let every shard finish: each one saves its own cache and uploads its results.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -59,18 +99,49 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          # Its own cache entry: the benchmark build (bench profile, codspeed instrumentation)
-          # shares no artifacts with the other workflows' dev/test builds, and a run that is
-          # cut off or fails after the build still saves what it compiled.
-          shared-key: codspeed-bench
+          # One cache entry per shard: the benchmark build (bench profile, codspeed
+          # instrumentation) shares no artifacts with the other workflows' dev/test builds,
+          # and a run that is cut off or fails after the build still saves what it compiled.
+          # Shards build different targets, so a shared entry would keep only the artifacts
+          # of whichever shard saved first.
+          shared-key: codspeed-bench-${{ matrix.shard }}
           cache-on-failure: true
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-codspeed
+      # `--workspace` keeps feature resolution identical to the former whole-workspace
+      # build; `--bench` limits the build to this shard's targets.
       - name: Build benchmarks
-        run: cargo codspeed build --workspace
+        env:
+          BENCH_FLAGS: ${{ matrix.bench_flags }}
+        # Unquoted on purpose: the value is the list of `--bench NAME` arguments.
+        run: cargo codspeed build --workspace $BENCH_FLAGS
       - name: Run benchmarks
         uses: CodSpeedHQ/action@821a40cd6c80e3cfe387caf55668287addd808da # v5.5.0
         with:
           mode: simulation
-          run: cargo codspeed run --workspace
+          run: cargo codspeed run --workspace ${{ matrix.bench_flags }}
+
+  # One job that passes only when the plan and every shard passed. CodSpeed runs on
+  # `pull_request` only (it rejects `merge_group`), so this check is advisory and is not
+  # a required status on main.
+  benchmarks:
+    name: Benchmarks
+    needs: [plan, shards]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Check the plan and the shards
+        env:
+          PLAN: ${{ needs.plan.result }}
+          SHARDS: ${{ needs.shards.result }}
+        run: |
+          echo "plan: $PLAN, shards: $SHARDS"
+          [ "$PLAN" = success ] && [ "$SHARDS" = success ]
