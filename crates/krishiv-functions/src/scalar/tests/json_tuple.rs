@@ -408,3 +408,66 @@ fn the_registry_resolves_json_tuple_as_a_generator() {
     .unwrap();
     assert_eq!(f.name(), "json_tuple");
 }
+
+/// Fields the query does not ask for are skipped whole, whatever their
+/// shape, without disturbing the requested ones after them.
+#[test]
+fn unrequested_values_of_every_shape_are_skipped() {
+    let doc = r#"{"skip1":{"x":[1,{"y":null},[],{}],"z":"s\"q"},"skip2":[],"skip3":{},
+        "skip4":true,"skip5":false,"skip6":null,"skip7":-1.5e3,"skip8":"é\nA",
+        "skip9":[1,[2,[3]],{"k":{"j":[]}}],"want":"v"}"#;
+    let json = strs(&[Some(doc)]);
+    let f = bind(&json, &fields(&["want"]));
+    assert_eq!(
+        run(&f, &json, &fields(&["want"]), 1),
+        vec![vec![Some("v".to_owned())]]
+    );
+}
+
+/// A malformed value inside a skipped field makes the whole document
+/// invalid (every column NULL), as a malformed value anywhere does.
+#[test]
+fn malformed_skipped_values_invalidate_the_document() {
+    for doc in [
+        r#"{"a":{"x" 1},"want":"v"}"#,
+        r#"{"a":{"x":1 "y":2},"want":"v"}"#,
+        r#"{"a":{"x":1,},"want":"v"}"#,
+        r#"{"a":[1 2],"want":"v"}"#,
+        r#"{"a":[1,],"want":"v"}"#,
+        r#"{"a":[1,2,"want":"v"}"#,
+        r#"{"a":tru,"want":"v"}"#,
+        r#"{"a":nul,"want":"v"}"#,
+        r#"{"a":fals,"want":"v"}"#,
+        r#"{"a":-,"want":"v"}"#,
+        r#"{"a":1.,"want":"v"}"#,
+        r#"{"a":"unterminated,"want":"v"}"#,
+        r#"{"a":?,"want":"v"}"#,
+    ] {
+        let json = strs(&[Some(doc)]);
+        let f = bind(&json, &fields(&["want"]));
+        assert_eq!(
+            run(&f, &json, &fields(&["want"]), 1),
+            vec![vec![None]],
+            "{doc}"
+        );
+    }
+}
+
+/// Nesting past the depth limit inside a skipped value is invalid too.
+#[test]
+fn deeply_nested_skipped_values_are_invalid_past_the_limit() {
+    for (open, close) in [("[", "]"), ("{\"k\":", "}")] {
+        let doc = format!(
+            "{{\"a\":{}1{},\"want\":\"v\"}}",
+            open.repeat(1_001),
+            close.repeat(1_001)
+        );
+        let json = strs(&[Some(doc.as_str())]);
+        let f = bind(&json, &fields(&["want"]));
+        assert_eq!(
+            run(&f, &json, &fields(&["want"]), 1),
+            vec![vec![None]],
+            "{open}"
+        );
+    }
+}

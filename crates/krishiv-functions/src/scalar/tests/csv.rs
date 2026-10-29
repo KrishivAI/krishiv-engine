@@ -501,3 +501,269 @@ fn empty_input_and_type_failures() {
     let out = f.invoke(&[col(&csv), lit(&schema)], 1).unwrap();
     assert!(out.as_struct().column(0).is_null(0));
 }
+
+/// Binds `from_csv` over `rows` with the options and returns its struct.
+fn from_csv_rows(rows: &[&str], schema: &str, pairs: &[(&str, &str)]) -> ArrayRef {
+    let csv = strs(&rows.iter().map(|r| Some(*r)).collect::<Vec<_>>());
+    let opts = map_lit(pairs);
+    let (f, schema_arr, opt) = bind_from_csv(&csv, schema, Some(&opts));
+    let o = opt.unwrap();
+    f.invoke(&[col(&csv), lit(&schema_arr), lit(&o)], rows.len())
+        .unwrap()
+}
+
+/// The binding error of `from_csv` with the options.
+fn from_csv_bind_error(schema: &str, pairs: &[(&str, &str)]) -> String {
+    let opts = map_lit(pairs);
+    let schema_arr: ArrayRef = Arc::new(StringArray::from(vec![Some(schema)]));
+    bind_scalar(
+        "from_csv",
+        &[
+            BindArg::Column {
+                ty: DataType::Utf8,
+                nullable: true,
+            },
+            BindArg::Literal(schema_arr),
+            BindArg::Literal(opts),
+        ],
+        &BindOptions::new(),
+    )
+    .err()
+    .map(|e| e.to_string())
+    .unwrap_or_default()
+}
+
+/// A string cell of a struct column, whatever its string carrier.
+fn string_cell(a: &ArrayRef, row: usize) -> String {
+    match a.data_type() {
+        DataType::Utf8View => a.as_string_view().value(row).to_owned(),
+        DataType::LargeUtf8 => a.as_string::<i64>().value(row).to_owned(),
+        _ => a.as_string::<i32>().value(row).to_owned(),
+    }
+}
+
+/// Date, timestamp and timestamp-without-zone patterns, a custom separator,
+/// and every scalar type (values from Spark 4.2.0 under UTC).
+#[test]
+fn from_csv_patterns_and_scalar_types() {
+    use arrow_array::types::{Date32Type, Int64Type, TimestampMicrosecondType};
+    let out = from_csv_rows(
+        &["02/01/2020|2020-01-02T03:04:05|2020-01-02T03:04:05|x"],
+        "dt DATE, ts TIMESTAMP, ntz TIMESTAMP_NTZ, s STRING",
+        &[
+            ("sep", "|"),
+            ("dateFormat", "dd/MM/yyyy"),
+            ("timestampFormat", "yyyy-MM-dd'T'HH:mm:ss"),
+            ("timestampNTZFormat", "yyyy-MM-dd'T'HH:mm:ss"),
+        ],
+    );
+    let s = out.as_struct();
+    assert_eq!(s.column(0).as_primitive::<Date32Type>().value(0), 18_263);
+    let micros = 1_577_934_245_000_000;
+    assert_eq!(
+        s.column(1)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        micros
+    );
+    assert_eq!(
+        s.column(2)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        micros
+    );
+    assert_eq!(string_cell(s.column(3), 0), "x");
+    // Every scalar type under the default patterns.
+    let out = from_csv_rows(
+        &["1,2,3,4,5.5,6.5,7.25,2020-01-02,2020-01-02 03:04:05,abc,true"],
+        "b TINYINT, s SMALLINT, i INT, l BIGINT, f FLOAT, d DOUBLE, dec DECIMAL(5,2), \
+         dt DATE, ts TIMESTAMP, str STRING, bo BOOLEAN",
+        &[("header", "true")],
+    );
+    let s = out.as_struct();
+    assert_eq!(s.column(3).as_primitive::<Int64Type>().value(0), 4);
+    assert_eq!(s.column(7).as_primitive::<Date32Type>().value(0), 18_263);
+    assert_eq!(
+        s.column(8)
+            .as_primitive::<TimestampMicrosecondType>()
+            .value(0),
+        micros
+    );
+    assert_eq!(string_cell(s.column(9), 0), "abc");
+    assert!(s.column(10).as_boolean().value(0));
+    // Out-of-range integers are malformed fields (NULL) under PERMISSIVE.
+    let out = from_csv_rows(
+        &["9999999999,300,70000"],
+        "i INT, b TINYINT, s SMALLINT",
+        &[],
+    );
+    let s = out.as_struct();
+    assert!((0..3).all(|k| s.column(k).is_null(0)));
+}
+
+/// The option names `from_csv` accepts, case-insensitively, and the ones it
+/// refuses with the option named.
+#[test]
+fn from_csv_option_names_and_values() {
+    let accepted: &[(&str, &str)] = &[
+        ("DELIMITER", ";"),
+        ("quote", "'"),
+        ("escape", "\\"),
+        ("charToEscapeQuoteEscaping", "\\"),
+        ("nullValue", "N"),
+        ("emptyValue", "E"),
+        ("nanValue", "nan"),
+        ("positiveInf", "+inf"),
+        ("negativeInf", "-inf"),
+        ("mode", "failfast"),
+        ("columnNameOfCorruptRecord", "_bad"),
+        ("enableDateTimeParsingFallback", "true"),
+        ("ignoreLeadingWhiteSpace", "true"),
+        ("ignoreTrailingWhiteSpace", "true"),
+        ("lineSep", "\r\n"),
+        ("maxColumns", "10"),
+        ("maxCharsPerColumn", "100"),
+        ("maxCharsPerColumn", "-1"),
+    ];
+    for (k, v) in accepted {
+        assert_eq!(from_csv_bind_error("a INT", &[(*k, *v)]), "", "{k}={v}");
+    }
+    for handling in [
+        "STOP_AT_CLOSING_QUOTE",
+        "BACK_TO_DELIMITER",
+        "STOP_AT_DELIMITER",
+        "SKIP_VALUE",
+        "RAISE_ERROR",
+    ] {
+        assert_eq!(
+            from_csv_bind_error("a INT", &[("unescapedQuoteHandling", handling)]),
+            "",
+            "{handling}"
+        );
+    }
+    for (pairs, named) in [
+        (
+            vec![("unescapedQuoteHandling", "BAD")],
+            "unescapedQuoteHandling=BAD",
+        ),
+        (vec![("timeFormat", "HH")], "timeFormat"),
+        (vec![("dateFormat", "yyyy-MM-dd'")], "dateFormat"),
+        (vec![("timestampFormat", "yyyy-MM-dd'")], "timestampFormat"),
+        (
+            vec![("timestampNTZFormat", "yyyy-MM-dd'")],
+            "timestampNTZFormat",
+        ),
+        (vec![("quote", "ab")], "quote"),
+    ] {
+        let err = from_csv_bind_error("a INT", &pairs);
+        assert!(err.contains(named), "{pairs:?}: {err}");
+    }
+    // A corrupt-record column that is not a string is refused.
+    let err = from_csv_bind_error("a INT, _corrupt_record INT", &[("mode", "PERMISSIVE")]);
+    assert!(err.contains("from_csv("), "{err}");
+}
+
+/// `to_csv` over every scalar type, and its quoting, null and format options
+/// (values from Spark 4.2.0 under UTC).
+#[test]
+fn to_csv_writes_every_scalar_type_and_option() {
+    use arrow_array::{
+        BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+        Int8Array, Int16Array, Int64Array, TimestampMicrosecondArray,
+    };
+    use arrow_schema::TimeUnit;
+    let columns: Vec<(&str, ArrayRef)> = vec![
+        ("b", Arc::new(Int8Array::from(vec![1]))),
+        ("s", Arc::new(Int16Array::from(vec![2]))),
+        ("l", Arc::new(Int64Array::from(vec![4]))),
+        ("f", Arc::new(Float32Array::from(vec![1.5]))),
+        ("d", Arc::new(Float64Array::from(vec![2.5]))),
+        (
+            "dec",
+            Arc::new(
+                Decimal128Array::from(vec![725])
+                    .with_precision_and_scale(5, 2)
+                    .unwrap(),
+            ),
+        ),
+        ("dt", Arc::new(Date32Array::from(vec![18_263]))),
+        (
+            "ts",
+            Arc::new(
+                TimestampMicrosecondArray::from(vec![1_577_934_245_000_000]).with_timezone("UTC"),
+            ),
+        ),
+        (
+            "ntz",
+            Arc::new(TimestampMicrosecondArray::from(vec![1_577_934_245_000_000])),
+        ),
+        ("bin", Arc::new(BinaryArray::from(vec![&b"ab"[..]]))),
+        ("bo", Arc::new(BooleanArray::from(vec![false]))),
+    ];
+    let to_csv = |columns: &[(&str, ArrayRef)], pairs: Option<&[(&str, &str)]>| -> String {
+        let fields: Vec<Field> = columns
+            .iter()
+            .map(|(n, a)| Field::new(*n, a.data_type().clone(), true))
+            .collect();
+        let input: ArrayRef = Arc::new(StructArray::new(
+            fields.into(),
+            columns.iter().map(|(_, a)| Arc::clone(a)).collect(),
+            None,
+        ));
+        let mut bind = vec![BindArg::Column {
+            ty: input.data_type().clone(),
+            nullable: true,
+        }];
+        let opts = pairs.map(map_lit);
+        if let Some(o) = &opts {
+            bind.push(BindArg::Literal(Arc::clone(o)));
+        }
+        let f = bind_scalar("to_csv", &bind, &BindOptions::new()).unwrap();
+        let mut args = vec![col(&input)];
+        if let Some(o) = &opts {
+            args.push(lit(o));
+        }
+        text(&f.invoke(&args, 1).unwrap())[0].clone().unwrap()
+    };
+    let _ = TimeUnit::Microsecond;
+    assert_eq!(
+        to_csv(&columns, None),
+        "1,2,4,1.5,2.5,7.25,2020-01-02,2020-01-02T03:04:05.000Z,2020-01-02T03:04:05.000,[61 62],false"
+    );
+    let strings: Vec<(&str, ArrayRef)> = vec![
+        ("a", strs(&[Some("x,y")])),
+        ("b", strs(&[Some("q\"r")])),
+        ("c", strs(&[None])),
+        ("d", strs(&[Some("")])),
+    ];
+    assert_eq!(
+        to_csv(
+            &strings,
+            Some(&[("nullValue", "NULLV"), ("emptyValue", "EMPTYV")])
+        ),
+        "\"x,y\",\"q\\\"r\",NULLV,EMPTYV"
+    );
+    assert_eq!(
+        to_csv(
+            &columns[6..8],
+            Some(&[
+                ("dateFormat", "dd/MM/yyyy"),
+                ("timestampFormat", "yyyy/MM/dd HH-mm"),
+            ])
+        ),
+        "02/01/2020,2020/01/02 03-04"
+    );
+    let pair: Vec<(&str, ArrayRef)> = vec![("a", strs(&[Some("1")])), ("b", strs(&[Some("x")]))];
+    assert_eq!(
+        to_csv(&pair, Some(&[("sep", ";"), ("quoteAll", "true")])),
+        "\"1\";\"x\""
+    );
+    let quoted: Vec<(&str, ArrayRef)> =
+        vec![("a", strs(&[Some("x;y")])), ("b", strs(&[Some("z")]))];
+    assert_eq!(
+        to_csv(&quoted, Some(&[("sep", ";"), ("quote", "'")])),
+        "'x;y';z"
+    );
+    let escaped: Vec<(&str, ArrayRef)> = vec![("a", strs(&[Some("q\"r")]))];
+    assert_eq!(to_csv(&escaped, Some(&[("escapeQuotes", "false")])), "q\"r");
+}

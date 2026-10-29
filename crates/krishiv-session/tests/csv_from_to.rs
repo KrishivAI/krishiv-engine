@@ -190,3 +190,67 @@ fn from_csv_to_csv_goldens() {
         ["{\"cube\":1}"]
     );
 }
+
+/// The first column of the first row of `sql` as text, or the error class.
+fn one(sql: &str) -> String {
+    let s = session();
+    // Spark's reference run used UTC.
+    s.conf().set("spark.sql.session.timeZone", "UTC").unwrap();
+    match block_on(s.sql(sql)).and_then(|df| block_on(df.collect())) {
+        Ok(batches) => rows_of(&batches).into_iter().next().unwrap_or_default(),
+        Err(e) => format!("ERR {}", e.error_class().name()),
+    }
+}
+
+/// Every scalar type through `from_csv`, malformed-record modes and empty
+/// input; the expected values are what Spark 4.2.0 returns for the same
+/// statements (checked against a live 4.2.0 server). Options travel as
+/// `map(...)`, which the engine cannot evaluate over string views yet, so
+/// they are covered by the function-level tests.
+#[test]
+fn from_csv_reads_every_scalar_type_and_option() {
+    let json = |csv: &str, schema: &str, options: &str| {
+        let opt = if options.is_empty() {
+            String::new()
+        } else {
+            format!(", map({options})")
+        };
+        one(&format!(
+            "SELECT to_json(from_csv('{csv}', '{schema}'{opt}))"
+        ))
+    };
+    assert_eq!(
+        json(
+            "1,2,3,4,5.5,6.5,7.25,2020-01-02,2020-01-02 03:04:05,2020-01-02 03:04:05,abc,true",
+            "b TINYINT, s SMALLINT, i INT, l BIGINT, f FLOAT, d DOUBLE, dec DECIMAL(5,2), \
+             dt DATE, ts TIMESTAMP, ntz TIMESTAMP_NTZ, str STRING, bo BOOLEAN",
+            "",
+        ),
+        r#"{"b":1,"s":2,"i":3,"l":4,"f":5.5,"d":6.5,"dec":7.25,"dt":"2020-01-02","ts":"2020-01-02T03:04:05.000Z","ntz":"2020-01-02T03:04:05.000","str":"abc","bo":true}"#
+    );
+    // Out-of-range integers, decimals, signed zero, empty input and short rows.
+    assert_eq!(
+        json("9999999999,300,70000", "i INT, b TINYINT, s SMALLINT", ""),
+        "{}"
+    );
+    assert_eq!(
+        json("1.5,-0,1e3", "a DECIMAL(4,1), b DOUBLE, c FLOAT", ""),
+        r#"{"a":1.5,"b":-0.0,"c":1000.0}"#
+    );
+    assert_eq!(json("", "a STRING, b INT", ""), "{}");
+    assert_eq!(json("x", "a STRING, b INT", ""), r#"{"a":"x"}"#);
+}
+
+/// Every scalar type through `to_csv` (values from Spark 4.2.0).
+#[test]
+fn to_csv_writes_every_scalar_type_and_option() {
+    assert_eq!(
+        one(
+            "SELECT to_csv(named_struct('b', CAST(1 AS TINYINT), 's', CAST(2 AS SMALLINT), \
+             'l', 4L, 'f', CAST(1.5 AS FLOAT), 'd', 2.5D, 'dec', CAST(7.25 AS DECIMAL(5,2)), \
+             'dt', DATE'2020-01-02', 'ts', TIMESTAMP'2020-01-02 03:04:05', \
+             'ntz', TIMESTAMP_NTZ'2020-01-02 03:04:05', 'bin', X'6162', 'bo', false))"
+        ),
+        "1,2,4,1.5,2.5,7.25,2020-01-02,2020-01-02T03:04:05.000Z,2020-01-02T03:04:05.000,[61 62],false"
+    );
+}
