@@ -1,7 +1,7 @@
 {
   "exec-agg-sort": ["aggregate", "sort"],
   "exec-join-ops": ["hash_join", "operators", "routing_hash", "udf"],
-  "pipeline-io": ["pipeline", "spill_file", "io", "runtime_filter"],
+  "pipeline-io": ["pipeline", "spill_file", "io", "coalesce", "runtime_filter"],
   "kernels-sql": [
     "binary_add", "arith", "compare", "cast", "list", "parse", "lower", "plan",
     "plan_key", "optimize", "batch_filter", "config_lookup"
