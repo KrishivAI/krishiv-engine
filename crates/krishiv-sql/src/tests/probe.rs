@@ -197,16 +197,18 @@ fn agrees_with_spark_on_the_type_string_fixture() {
                     Err(e) => e.error.error_class(),
                     Ok(t) => t.to_data_type().unwrap_err().error_class(),
                 };
-                assert!(
-                    [
-                        ErrorClass::DecimalPrecisionExceedsMaxPrecision,
-                        ErrorClass::LegacyErrorTemp1228,
-                        ErrorClass::UnsupportedTimePrecision,
-                        ErrorClass::StInvalidSridValue,
-                    ]
-                    .contains(&class),
-                    "{ddl}: {class:?}"
-                );
+                // Spark raises a Java `NumberFormatException` for these (no
+                // class); the class each is refused with here is pinned.
+                let expected = match ddl {
+                    "decimal(99999999999,0)" | "decimal(99999999999)" => {
+                        ErrorClass::DecimalPrecisionExceedsMaxPrecision
+                    }
+                    "decimal(5,99999999999)" => ErrorClass::LegacyErrorTemp1228,
+                    "time(99999999999)" => ErrorClass::UnsupportedTimePrecision,
+                    "geometry(99999999999)" => ErrorClass::StInvalidSridValue,
+                    other => panic!("{other}: an UNCLASSIFIED case without an expected class"),
+                };
+                assert_eq!(class, expected, "{ddl}");
             }
             // Inside a struct field the SQL parser reports these syntax
             // errors at a later token than Spark's `'<'` (its ANTLR

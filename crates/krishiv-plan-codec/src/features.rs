@@ -615,7 +615,7 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
         stack.extend(node.children());
     }
     for field in plan.schema().fields() {
-        out.extend(feature_of(Construct::ArrowType(field.data_type())));
+        visit_arrow(field.data_type(), &mut |c| out.extend(feature_of(c)));
     }
     if has_moment && plan.env().legacy_statistical_aggregate {
         out.insert(Feature::LegacyStatisticalAggregate);

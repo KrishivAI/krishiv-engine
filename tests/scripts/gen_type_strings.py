@@ -32,6 +32,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -364,12 +365,15 @@ LOCAL_PATH = re.compile(r"/home/|/Users/|[A-Za-z]:\\\\")
 def local_spark_shell(spark_home: Path, script: str, data: str) -> list[str]:
     """Run the Scala script with a local `spark-shell -I`; returns its `@@` lines.
 
-    The script reads its cases from the fixed path the container run uses.
+    The script reads its cases from a path the container run fixes; here both
+    files live in a private temporary directory, so concurrent runs never share
+    inputs.
     """
-    files = {Path("/tmp/krishiv_script.scala"): script, Path("/tmp/krishiv_cases.jsonl"): data}
-    for path, text in files.items():
-        path.write_text(text, encoding="utf-8")
-    try:
+    with tempfile.TemporaryDirectory(prefix="krishiv_types_") as tmp:
+        script_path = Path(tmp) / "script.scala"
+        cases_path = Path(tmp) / "cases.jsonl"
+        cases_path.write_text(data, encoding="utf-8")
+        script_path.write_text(script.replace("/tmp/krishiv_cases.jsonl", str(cases_path)), encoding="utf-8")
         cmd = [
             str(spark_home / "bin" / "spark-shell"),
             "--master",
@@ -377,14 +381,11 @@ def local_spark_shell(spark_home: Path, script: str, data: str) -> list[str]:
             "--driver-memory",
             "2g",
             "-I",
-            "/tmp/krishiv_script.scala",
+            str(script_path),
         ]
         out = subprocess.run(
             cmd, capture_output=True, text=True, timeout=3600, check=True, stdin=subprocess.DEVNULL
         ).stdout
-    finally:
-        for path in files:
-            path.unlink(missing_ok=True)
     lines = [line for line in out.splitlines() if line.startswith("@@")]
     if "@@END" not in lines:
         raise SystemExit("spark-shell script did not complete:\n" + out[-2000:])

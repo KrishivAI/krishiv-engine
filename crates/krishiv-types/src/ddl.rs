@@ -463,7 +463,11 @@ impl<'a> Parser<'a> {
                 }
             }
             if matches!(lower.as_str(), "geometry" | "geography") && self.any_srid()? {
-                if let Some(tok) = self.peek() {
+                // Inside a complex type the next token is legitimate (`>`,
+                // `,`, `NOT NULL`, `COMMENT`); only a top-level type ends here.
+                if depth == 0
+                    && let Some(tok) = self.peek()
+                {
                     return Err(error::extra_input(&format!("'{}'", tok.raw)));
                 }
                 return Ok(if lower == "geometry" {

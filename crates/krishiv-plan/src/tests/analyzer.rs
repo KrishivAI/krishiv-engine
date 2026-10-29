@@ -4569,7 +4569,8 @@ fn types_without_evaluation_are_refused() {
     );
     // The same shapes over evaluable types resolve.
     let fine = Expr::from(Literal::Null(None)).cast(DataType::Date);
-    assert!(run(one_row().project(vec![fine]), &ctx()).is_ok());
+    let analyzed = run(one_row().project(vec![fine]), &ctx()).unwrap();
+    assert_eq!(analyzed.output[0].data_type, DataType::Date);
 }
 
 /// The refusal looks inside nested types: a `TIME` array element, map value

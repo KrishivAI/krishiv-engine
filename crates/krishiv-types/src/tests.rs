@@ -869,3 +869,23 @@ fn malformed_wkb_is_a_wkb_parse_error() {
         ]
     );
 }
+
+/// `geometry(any)` and `geography(any)` nest like any other type: the token
+/// after `(any)` is the enclosing type's, and only at the top level is more
+/// input an error.
+#[test]
+fn any_srid_spatial_types_nest() {
+    for (ddl, want) in [
+        ("array<geometry(any)>", "array<geometry(any)>"),
+        ("map<string,geography(any)>", "map<string,geography(any)>"),
+        (
+            "struct<a:geometry(any) not null,b:int>",
+            "struct<a:geometry(any),b:int>",
+        ),
+    ] {
+        let t = parse_data_type(ddl).unwrap_or_else(|e| panic!("{ddl}: {e}"));
+        assert_eq!(t.simple_string(), want, "{ddl}");
+    }
+    let e = parse_data_type("geography(any) int").unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::ParseSyntaxError);
+}
