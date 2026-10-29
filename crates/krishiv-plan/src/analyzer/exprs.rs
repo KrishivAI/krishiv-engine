@@ -966,7 +966,8 @@ impl Resolver<'_> {
         let ExprNode::Function(f) = &e.node else {
             return Ok(None);
         };
-        if f.name.eq_ignore_ascii_case("count")
+        if f.unqualified()
+            .is_some_and(|n| n.eq_ignore_ascii_case("count"))
             && let [a] = &f.args[..]
             && let ExprNode::Star(s) = &a.node
             && !s.qualifier.is_empty()

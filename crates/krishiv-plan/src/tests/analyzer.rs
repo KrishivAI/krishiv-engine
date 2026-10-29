@@ -3671,6 +3671,48 @@ fn legacy_cte_inlining_of_a_doubling_chain_is_linear() {
     assert_eq!(single_reads(&gone), ["base"]);
 }
 
+/// `EXCEPTION` checks a plan whose nodes are shared at every level in
+/// linear time (the walk keeps the nodes it has finished).
+#[test]
+fn exception_conflict_check_is_linear_on_shared_plans() {
+    use crate::analyzer::CtePrecedencePolicy;
+    use crate::analyzer::legacy::{CtePolicy, nested_conflict};
+    let policy = CtePolicy {
+        precedence: CtePrecedencePolicy::Exception,
+        case_sensitive: false,
+    };
+    let mut plan = Arc::new(LogicalPlan::table(["base"]));
+    for _ in 0..30 {
+        plan = Arc::new(Arc::clone(&plan).as_ref().clone().join(
+            (*plan).clone(),
+            JoinKind::Inner,
+            JoinCondition::None,
+        ));
+    }
+    assert!(nested_conflict(&plan, policy).unwrap().is_none());
+}
+
+/// The cache key of an analysis is the caller's plan, also under `LEGACY`
+/// (where the analyzer resolves an inlined copy).
+#[test]
+fn legacy_analysis_keeps_the_input_key_of_the_callers_plan() {
+    use crate::analyzer::CtePrecedencePolicy;
+    let plan = LogicalPlan::new(PlanNode::WithCte {
+        input: Arc::new(LogicalPlan::table(["t"]).project(vec![star()])),
+        ctes: vec![Cte {
+            name: "t".to_owned(),
+            plan: Arc::new(LogicalPlan::table(["u"])),
+        }],
+    });
+    let expected = crate::Plan::try_new(Arc::new(plan.clone()))
+        .unwrap()
+        .structural_hash();
+    let mut legacy = ctx();
+    legacy.conf.cte_precedence = CtePrecedencePolicy::Legacy;
+    let a = run(plan, &legacy);
+    assert_eq!(a.map(|a| a.input_key).ok(), Some(expected));
+}
+
 /// Every single-part table read of an unresolved plan, in order, and whether
 /// any `WITH` survived elimination.
 fn single_reads(plan: &Arc<LogicalPlan>) -> Vec<String> {

@@ -606,10 +606,11 @@ impl Analyzer for DefaultAnalyzer {
                 case_sensitive: ctx.conf.case_sensitive,
             };
             if policy.precedence == CtePrecedencePolicy::Exception
-                && let Some(conflict) = legacy::nested_conflict(plan.root(), policy)
+                && let Some(conflict) = legacy::nested_conflict(plan.root(), policy)?
             {
                 return Err(conflict);
             }
+            let input = plan;
             let owned;
             let plan = if policy.precedence == CtePrecedencePolicy::Legacy {
                 let inlined = legacy::eliminate(plan.root(), policy)
@@ -639,7 +640,7 @@ impl Analyzer for DefaultAnalyzer {
                 output,
                 pins,
                 securables,
-                input_key: plan.structural_hash(),
+                input_key: input.structural_hash(),
                 context: fingerprint(ctx, epochs),
                 query_text,
                 reads_files,

@@ -637,6 +637,10 @@ fn consecutive_string_literals_parse_like_spark() {
     assert_eq!(value("\"S\\\"par\\\"k\"", &legacy), "S\"par\"k");
     assert_eq!(value("'S\"\"par\"\"k'", &legacy), "S\"\"par\"\"k");
     assert_eq!(value("'S' 'par' 'k'", &legacy), "Spark");
+    // Typed literals are not string expressions: the doubled quote collapses.
+    // (the value is invalid as a date, but is reported as written, collapsed).
+    let err = parse_named_expression("DATE 'a''b'", &legacy).unwrap_err();
+    assert!(format!("{err:?}").contains("'a'b'"), "{err:?}");
 }
 
 #[test]
