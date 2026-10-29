@@ -140,6 +140,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
+                | PlanNode::TableFunction { .. }
                 | PlanNode::Distinct { .. } => false,
                 PlanNode::Union { by_name, .. } => !by_name,
                 PlanNode::Join { condition, .. } => match condition {
@@ -147,6 +148,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                     JoinCondition::None | JoinCondition::On(_) => true,
                 },
                 PlanNode::Scan(_)
+                | PlanNode::Range { .. }
                 | PlanNode::OneRowRelation
                 | PlanNode::CteRef(_)
                 | PlanNode::Shift { .. }
@@ -252,6 +254,7 @@ impl Teardown {
         match node {
             PlanNode::Read(_)
             | PlanNode::Scan(_)
+            | PlanNode::Range { .. }
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation => {}
             PlanNode::Sql { args, .. } => match args {
@@ -304,6 +307,9 @@ impl Teardown {
             }
             PlanNode::InlineTable { rows, .. } => {
                 self.exprs.extend(rows.into_iter().flatten());
+            }
+            PlanNode::TableFunction { args, .. } => {
+                self.exprs.extend(args);
             }
             PlanNode::Aggregate {
                 input,

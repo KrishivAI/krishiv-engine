@@ -1,0 +1,1442 @@
+{
+  "entries": [
+    {
+      "id": "subtract/ARRAY<INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"ARRAY<INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"ARRAY<INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"ARRAY<INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"ARRAY<INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BIGINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BIGINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BINARY)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BINARY)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BOOLEAN)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BOOLEAN)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DECIMAL(10,2))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DECIMAL(10,2))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DOUBLE)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DOUBLE)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS FLOAT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS FLOAT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/INT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS INT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/INT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS INT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS SMALLINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS SMALLINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS TINYINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS TINYINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/VOID/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "subtract/ARRAY<INT>/VOID/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS ARRAY<INT>) - CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"ARRAY<INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/BIGINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BIGINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/BIGINT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BIGINT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BIGINT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BINARY\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/BINARY/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BINARY) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BINARY) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"BOOLEAN\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/BOOLEAN/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS BOOLEAN) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS BOOLEAN) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS ARRAY<INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS ARRAY<INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/BIGINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS BIGINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/BIGINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS BIGINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/BINARY/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS BINARY)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/BINARY/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS BINARY)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS BOOLEAN)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS BOOLEAN)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/DATE/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/DATE/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS DOUBLE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS DOUBLE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/FLOAT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/FLOAT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/INT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS INT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to date"
+    },
+    {
+      "id": "subtract/DATE/INT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS INT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to date"
+    },
+    {
+      "id": "subtract/DATE/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS MAP<STRING,INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS MAP<STRING,INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to date"
+    },
+    {
+      "id": "subtract/DATE/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to date"
+    },
+    {
+      "id": "subtract/DATE/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/STRING/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/DATE/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS STRUCT<a INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS STRUCT<a INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"(\\\"INT\\\" or \\\"SMALLINT\\\" or \\\"TINYINT\\\")\", \"sqlExpr\": \"\\\"date_sub(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DATE/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/DATE/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/DATE/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/DATE/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/DATE/TINYINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to date"
+    },
+    {
+      "id": "subtract/DATE/TINYINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to date"
+    },
+    {
+      "id": "subtract/DATE/VOID/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS VOID)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/DATE/VOID/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DATE) - CAST(NULL AS VOID)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DECIMAL(10,2)\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/DECIMAL(10,2)/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DECIMAL(10,2)) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/DOUBLE/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/DOUBLE/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS DOUBLE) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS DOUBLE) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/FLOAT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"FLOAT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/FLOAT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS FLOAT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS FLOAT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/INT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"INT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/INT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS INT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS INT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS BIGINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS BIGINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS BINARY)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS BINARY)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS BOOLEAN)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS BOOLEAN)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS DECIMAL(10,2))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS DECIMAL(10,2))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS DOUBLE)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS DOUBLE)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS FLOAT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS FLOAT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/INT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS INT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/INT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS INT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"MAP<STRING, INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"MAP<STRING, INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"MAP<STRING, INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"MAP<STRING, INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS SMALLINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS SMALLINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS TINYINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS TINYINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/VOID/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "subtract/MAP<STRING,INT>/VOID/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS MAP<STRING,INT>) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS MAP<STRING, INT>) - CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"MAP<STRING, INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/SMALLINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"SMALLINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/SMALLINT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS SMALLINT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS SMALLINT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS ARRAY<INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/BIGINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS BIGINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/BINARY/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS BINARY)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS BOOLEAN)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/STRING/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/STRING/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS DOUBLE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/FLOAT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/INT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS INT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS MAP<STRING,INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS STRING))\\\"\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS STRUCT<a INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"DOUBLE\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRING\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"STRING\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/STRING/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"STRING\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRING/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/STRING/TINYINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/VOID/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS VOID))\\\"\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/STRING/VOID/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRING) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRING) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS BIGINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS BIGINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BIGINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS BINARY)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS BINARY)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BINARY\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS BOOLEAN)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS BOOLEAN)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"BOOLEAN\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS DECIMAL(10,2))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS DECIMAL(10,2))) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DECIMAL(10,2)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS DOUBLE)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS DOUBLE)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS FLOAT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS FLOAT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"FLOAT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/INT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS INT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/INT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS INT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"INT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS SMALLINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS SMALLINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"SMALLINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"DOUBLE\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRUCT<a: INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRUCT<a: INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRUCT<a: INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRUCT<a: INT>\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(NULL - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS TINYINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS TINYINT)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"TINYINT\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/VOID/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "subtract/STRUCT<a INT>/VOID/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS STRUCT<a INT>) - CAST(NULL AS VOID)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS STRUCT<a: INT>) - CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"STRUCT<a: INT>\\\"\", \"right\": \"\\\"VOID\\\"\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS ARRAY<INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS ARRAY<INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/BIGINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BIGINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/BIGINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BIGINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/BINARY/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BINARY)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/BINARY/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BINARY)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BOOLEAN)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BOOLEAN)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DOUBLE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DOUBLE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/FLOAT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/FLOAT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/INT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS INT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/INT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS INT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS MAP<STRING,INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS MAP<STRING,INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"STRING\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/STRING/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS STRUCT<a INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS STRUCT<a INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP/TINYINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/TINYINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP) - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP/VOID/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS VOID)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP/VOID/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP) - CAST(NULL AS VOID)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS ARRAY<INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS ARRAY<INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/BIGINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BIGINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/BIGINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BIGINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"BIGINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/BINARY/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BINARY)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/BINARY/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BINARY)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"BINARY\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BOOLEAN)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BOOLEAN)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"BOOLEAN\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DECIMAL(10,2))) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"DECIMAL(10,2)\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DOUBLE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DOUBLE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"DOUBLE\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/FLOAT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/FLOAT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS FLOAT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"FLOAT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/INT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS INT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/INT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS INT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"INT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS MAP<STRING,INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS MAP<STRING,INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS SMALLINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"SMALLINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"STRING\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/STRING/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS STRUCT<a INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS STRUCT<a INT>)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/TINYINT/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/TINYINT/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS TINYINT)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/VOID/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS VOID)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TIMESTAMP_NTZ/VOID/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ) - CAST(NULL AS VOID)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/TINYINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"DATE\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS STRING)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/TINYINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"TINYINT\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/TINYINT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS TINYINT) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"TINYINT\\\"\", \"paramIndex\": \"first\", \"requiredType\": \"\\\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS TINYINT) - CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "subtract/VOID/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/VOID/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS ARRAY<INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"ARRAY<INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/VOID/DATE/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/VOID/DATE/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS DATE)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day"
+    },
+    {
+      "id": "subtract/VOID/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/VOID/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS MAP<STRING,INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"MAP<STRING, INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/VOID/STRING/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS STRING))\\\"\"} where Spark resolves to double"
+    },
+    {
+      "id": "subtract/VOID/STRING/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS STRING)) | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"(\\\"NUMERIC\\\" or \\\"INTERVAL DAY TO SECOND\\\" or \\\"INTERVAL YEAR TO MONTH\\\" or \\\"INTERVAL\\\")\", \"sqlExpr\": \"\\\"(NULL - CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "subtract/VOID/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/VOID/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS STRUCT<a INT>)) | DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES {\"left\": \"\\\"VOID\\\"\", \"right\": \"\\\"STRUCT<a: INT>\\\"\", \"sqlExpr\": \"\\\"(CAST(NULL AS VOID) - NULL)\\\"\"}"
+    },
+    {
+      "id": "subtract/VOID/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/VOID/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS TIMESTAMP)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/VOID/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    },
+    {
+      "id": "subtract/VOID/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(CAST(NULL AS VOID) - CAST(NULL AS TIMESTAMP_NTZ)) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"date and timestamp arithmetic\"} where Spark resolves to interval day to second"
+    }
+  ],
+  "form": "subtract",
+  "format_version": 1
+}

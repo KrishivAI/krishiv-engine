@@ -79,6 +79,7 @@ mod resolve;
 mod setops;
 mod subquery;
 mod suggest;
+pub mod table_functions;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 mod unexecutable;
@@ -98,11 +99,12 @@ use twox_hash::XxHash3_128;
 pub use access::{authorize, insufficient_permissions, namespace_parts, table_ident};
 pub use builtins::BuiltinFunctions;
 pub use catalog::{
-    AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, CallTypes, Catalog,
-    CatalogResolver, Constant, DenyAll, FileSchemaResolver, FunctionEntry, FunctionLookup,
-    FunctionRegistry, InputBuilder, InputType, Inputs, MemoryCatalog, NameForm, Operator,
-    PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy, Securable,
-    SourceKind, SqlFrontend, TableColumn, TableIdent, TableKind, TableMeta,
+    AccessDecision, AccessPolicy, AllowAll, ArgType, Arity, BoxFuture, BuiltinTableFunctions,
+    CallTypes, Catalog, CatalogResolver, Constant, DenyAll, FileSchemaResolver, FunctionEntry,
+    FunctionLookup, FunctionRegistry, InputBuilder, InputType, Inputs, MemoryCatalog, NameForm,
+    Operator, PolicyVersion, Principal, PrincipalKind, Privilege, ResultType, RowColumnPolicy,
+    Securable, SourceKind, SqlFrontend, TableColumn, TableFunctionKind, TableFunctionLookup,
+    TableFunctionRegistry, TableIdent, TableKind, TableMeta,
 };
 pub use variables::{SessionVariable, VariableSnapshot, variable_name};
 
@@ -237,6 +239,8 @@ pub struct AnalysisContext {
     pub catalogs: Arc<dyn CatalogResolver>,
     /// The function registry.
     pub functions: Arc<dyn FunctionRegistry>,
+    /// The table-function registry.
+    pub table_functions: Arc<dyn TableFunctionRegistry>,
     /// The SQL front end, for SQL text inside plans.
     pub sql: Option<Arc<dyn SqlFrontend>>,
     /// Files read by path, for this query only (see
@@ -265,6 +269,8 @@ pub struct ContextFingerprint {
     pub catalog_epochs: BTreeMap<String, u64>,
     /// [`FunctionRegistry::version`].
     pub functions: u64,
+    /// [`TableFunctionRegistry::version`].
+    pub table_functions: u64,
     /// [`SqlFrontend::fingerprint`], when there is a front end.
     pub sql: Option<u64>,
     /// [`Principal::id`].
@@ -325,6 +331,7 @@ impl ContextFingerprint {
             num(&mut b, *epoch);
         }
         num(&mut b, self.functions);
+        num(&mut b, self.table_functions);
         match self.sql {
             None => num(&mut b, 0),
             Some(v) => {
@@ -490,6 +497,7 @@ pub(crate) fn fingerprint(
         catalogs: ctx.catalogs.epoch(),
         catalog_epochs,
         functions: ctx.functions.version(),
+        table_functions: ctx.table_functions.version(),
         sql: ctx.sql.as_ref().map(|f| f.fingerprint()),
         principal: ctx.principal.id(),
         policy: ctx.policy.version(),

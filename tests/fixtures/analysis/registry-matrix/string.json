@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "string#99fd48392a7a/ansi_on",
+      "reason": "SELECT string(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "string#99fd48392a7a/ansi_off",
+      "reason": "SELECT string(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "string#dae25b97d486/ansi_on",
+      "reason": "SELECT string(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "string#dae25b97d486/ansi_off",
+      "reason": "SELECT string(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "string"
+}

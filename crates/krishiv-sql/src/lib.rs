@@ -36,6 +36,7 @@ mod generated {
     pub(crate) mod letters;
 }
 mod keywords;
+pub use keywords::{SQL_KEYWORDS, sql_keywords};
 pub mod lexer;
 mod lower;
 mod parser;

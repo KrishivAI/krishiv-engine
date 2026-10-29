@@ -433,6 +433,17 @@ impl Decoder {
         Ok(match required(&m.kind, "a node kind")? {
             Kind::Scan(s) => PhysNode::Scan(self.scan(s)?),
             Kind::OneRow(_) => PhysNode::OneRow,
+            Kind::Range(r) if r.step == 0 => return Err(corrupt("a range with step 0")),
+            Kind::Range(r) if r.num_slices == Some(0) => {
+                return Err(corrupt("a range with 0 slices"));
+            }
+            Kind::Range(r) => PhysNode::Range(krishiv_exec::physical::RangeNode {
+                start: r.start,
+                end: r.end,
+                step: r.step,
+                num_slices: r.num_slices,
+                output: krishiv_plan::AttrId(r.output),
+            }),
             Kind::Filter(f) => PhysNode::Filter {
                 input: self.boxed(f.input)?,
                 layout: layout(&f.layout),
@@ -891,6 +902,7 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         })?,
         arg_type: type_from(&a.arg_type)?,
         name: a.name.clone(),
+        mask: a.mask.map(usize_of).transpose()?,
     })
 }
 

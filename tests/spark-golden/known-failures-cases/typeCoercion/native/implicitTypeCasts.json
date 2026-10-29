@@ -1,18 +1,14 @@
 {
   "cases": {
     "depends-on-command": [
-      21,
       22,
-      31,
       32,
       33,
       34,
       35,
       39,
       40,
-      41,
-      43,
-      46
+      41
     ]
   },
   "file": "typeCoercion/native/implicitTypeCasts",

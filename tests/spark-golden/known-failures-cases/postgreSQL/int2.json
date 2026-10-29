@@ -1,10 +1,5 @@
 {
   "cases": {
-    "cast-matrix": [
-      29,
-      30,
-      31
-    ],
     "depends-on-command": [
       6,
       7,
@@ -29,10 +24,6 @@
       26,
       27,
       28
-    ],
-    "query-features": [
-      32,
-      33
     ],
     "sql-commands": [
       0,

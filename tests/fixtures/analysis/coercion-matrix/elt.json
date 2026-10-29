@@ -1,0 +1,750 @@
+{
+  "entries": [
+    {
+      "id": "elt/ARRAY<INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DATE)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DATE)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/INT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/INT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/VOID/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS VOID)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "elt/ARRAY<INT>/VOID/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS ARRAY<INT>), CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS VOID)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "elt/BIGINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BIGINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BIGINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BIGINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BIGINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BIGINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BIGINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BINARY/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BINARY/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BINARY/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BINARY/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BINARY/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BINARY/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BINARY)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BOOLEAN/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BOOLEAN/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BOOLEAN/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BOOLEAN/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BOOLEAN/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/BOOLEAN/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS BOOLEAN)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DATE/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DATE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DATE/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DATE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DATE/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DATE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DATE/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DATE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DATE/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DATE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DATE/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DATE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DECIMAL(10,2)/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DECIMAL(10,2)/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DECIMAL(10,2)/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DECIMAL(10,2)/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DECIMAL(10,2)/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DECIMAL(10,2)/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DECIMAL(10,2))\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DOUBLE/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DOUBLE/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DOUBLE/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DOUBLE/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DOUBLE/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/DOUBLE/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS DOUBLE)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/FLOAT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/FLOAT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/FLOAT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/FLOAT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/FLOAT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/FLOAT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS FLOAT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/INT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/INT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/INT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/INT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/INT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/INT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS INT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DATE)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DATE)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/INT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/INT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/VOID/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS VOID)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "elt/MAP<STRING,INT>/VOID/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS VOID)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "elt/SMALLINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/SMALLINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/SMALLINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/SMALLINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/SMALLINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/SMALLINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS SMALLINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRING/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRING/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRING/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRING/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRING/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRING/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRING)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BIGINT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BINARY)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS BOOLEAN)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DATE)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DATE)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DECIMAL(10,2))\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS DOUBLE)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS FLOAT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/INT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/INT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS INT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS SMALLINT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS STRING)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS TINYINT)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/VOID/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS VOID)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "elt/STRUCT<a INT>/VOID/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS STRUCT<a INT>), CAST(NULL AS VOID))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS VOID))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"NULL\\\",\\\"CAST(NULL AS VOID)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\",\\\"STRING\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, NULL, CAST(NULL AS VOID))\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP_NTZ/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP_NTZ/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TIMESTAMP_NTZ)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TINYINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TINYINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TINYINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TINYINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TINYINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/TINYINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS TINYINT)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/VOID/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS VOID), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS VOID)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/VOID/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS VOID), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS ARRAY<INT>)\\\"\", \"inputType\": \"\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS VOID)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"ARRAY<INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/VOID/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS VOID), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS VOID)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/VOID/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS VOID), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS MAP<STRING, INT>)\\\"\", \"inputType\": \"\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS VOID)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"MAP<STRING, INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/VOID/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS VOID), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS VOID)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), NULL)\\\"\"}"
+    },
+    {
+      "id": "elt/VOID/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(elt(1, CAST(NULL AS VOID), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS STRUCT<a: INT>)\\\"\", \"inputType\": \"\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"third\", \"requiredType\": \"\\\"STRING\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE {\"inputSql\": \"\\\"CAST(NULL AS VOID)\\\",\\\"NULL\\\"\", \"inputType\": \"\\\"STRING\\\",\\\"STRUCT<a: INT>\\\"\", \"paramIndex\": \"second...\", \"requiredType\": \"\\\"STRING\\\" or \\\"BINARY\\\"\", \"sqlExpr\": \"\\\"elt(1, CAST(NULL AS VOID), NULL)\\\"\"}"
+    }
+  ],
+  "form": "elt",
+  "format_version": 1
+}

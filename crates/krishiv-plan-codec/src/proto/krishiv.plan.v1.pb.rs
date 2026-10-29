@@ -91,7 +91,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -136,7 +136,25 @@ pub mod node {
         /// feature: window_group_limit
         #[prost(message, tag = "17")]
         WindowGroupLimit(super::WindowGroupLimitNode),
+        /// feature: range
+        #[prost(message, tag = "18")]
+        Range(super::RangeNode),
     }
+}
+/// feature: range
+/// `range(start, end, step, numSlices)`: one `id BIGINT NOT NULL` column.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RangeNode {
+    #[prost(sint64, tag = "1")]
+    pub start: i64,
+    #[prost(sint64, tag = "2")]
+    pub end: i64,
+    #[prost(sint64, tag = "3")]
+    pub step: i64,
+    #[prost(uint32, optional, tag = "4")]
+    pub num_slices: ::core::option::Option<u32>,
+    #[prost(uint64, tag = "5")]
+    pub output: u64,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Empty {}
@@ -443,6 +461,11 @@ pub struct AggregateExpr {
     pub arg_type: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, tag = "6")]
     pub name: ::prost::alloc::string::String,
+    /// A boolean input column the aggregate is restricted to
+    /// (`FILTER (WHERE ...)`); absent reads all rows.
+    /// feature: aggregate_filter
+    #[prost(uint64, optional, tag = "7")]
+    pub mask: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {

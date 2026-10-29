@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "boolean#078c0174977e/ansi_on",
+      "reason": "SELECT boolean(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+    },
+    {
+      "id": "boolean#078c0174977e/ansi_off",
+      "reason": "SELECT boolean(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+    },
+    {
+      "id": "boolean#838f894ccc3a/ansi_on",
+      "reason": "SELECT boolean(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+    },
+    {
+      "id": "boolean#838f894ccc3a/ansi_off",
+      "reason": "SELECT boolean(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+    }
+  ],
+  "format_version": 1,
+  "function": "boolean"
+}

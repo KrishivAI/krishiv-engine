@@ -335,6 +335,40 @@ pub enum PlanNode {
         /// them).
         columns: Vec<String>,
     },
+    /// An unresolved table-valued function call (`FROM f(args)`), as
+    /// lowering shapes it: the name as written and the argument
+    /// expressions. Unresolved plans only: the analyzer resolves it
+    /// through the [`crate::analyzer::TableFunctionRegistry`] into a
+    /// [`PlanNode::Range`] (or an inline relation for `sql_keywords`),
+    /// and rejects anything else. No per-function logic lives in
+    /// lowering. The table alias (if any) wraps this node as a
+    /// [`PlanNode::SubqueryAlias`], as for every other table factor.
+    TableFunction {
+        /// The function name, as written.
+        name: String,
+        /// The argument expressions.
+        args: Vec<Arc<Expr>>,
+    },
+    /// `range(start, end, step, numSlices)` (Spark's `Range`): the
+    /// `id BIGINT NOT NULL` values `start, start + step, ...` below
+    /// `end` (above for a negative step). Resolved plans only. `start`
+    /// defaults to 0, `step` to 1; `num_slices` is the partition count
+    /// when written, else the task's default parallelism decides at
+    /// execution. The plan never stores a count it did not get from
+    /// `numSlices`.
+    Range {
+        /// First value (inclusive).
+        start: i64,
+        /// End (exclusive).
+        end: i64,
+        /// Step (never zero).
+        step: i64,
+        /// The partition count, when `numSlices` was written.
+        num_slices: Option<u32>,
+        /// The output attribute (`id BIGINT NOT NULL`), with the
+        /// analyzer-assigned id.
+        output: BoundColumn,
+    },
 }
 
 /// One value of a [`PlanNode::Pivot`]: one expression per pivot column,
@@ -667,6 +701,8 @@ impl LogicalPlan {
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
             | PlanNode::InlineTable { .. }
+            | PlanNode::TableFunction { .. }
+            | PlanNode::Range { .. }
             | PlanNode::OneRowRelation => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
@@ -704,6 +740,8 @@ impl LogicalPlan {
             | PlanNode::Scan(_)
             | PlanNode::CteRef(_)
             | PlanNode::InlineTable { .. }
+            | PlanNode::TableFunction { .. }
+            | PlanNode::Range { .. }
             | PlanNode::OneRowRelation => {}
             PlanNode::Project { input, .. }
             | PlanNode::WithColumns { input, .. }
@@ -744,6 +782,7 @@ impl LogicalPlan {
             | PlanNode::WithCte { .. }
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation
+            | PlanNode::Range { .. }
             | PlanNode::Shift { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
@@ -797,6 +836,7 @@ impl LogicalPlan {
                 .flat_map(|s| s.columns.iter())
                 .for_each(f),
             PlanNode::InlineTable { rows, .. } => rows.iter().flatten().for_each(f),
+            PlanNode::TableFunction { args, .. } => args.iter().for_each(f),
             PlanNode::Window {
                 exprs,
                 partition_by,
@@ -817,6 +857,7 @@ impl LogicalPlan {
             | PlanNode::WithCte { .. }
             | PlanNode::CteRef(_)
             | PlanNode::OneRowRelation
+            | PlanNode::Range { .. }
             | PlanNode::Shift { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
@@ -879,6 +920,9 @@ impl LogicalPlan {
                 .for_each(f),
             PlanNode::InlineTable { rows, .. } => {
                 rows.iter_mut().flatten().for_each(f);
+            }
+            PlanNode::TableFunction { args, .. } => {
+                args.iter_mut().for_each(f);
             }
             PlanNode::Window {
                 exprs,
@@ -945,6 +989,7 @@ impl LogicalPlan {
                 }
                 PlanNode::OneRowRelation => return Some(Vec::new()),
                 PlanNode::Expand { output, .. } => return Some(output.clone()),
+                PlanNode::Range { output, .. } => return Some(vec![output.clone()]),
                 PlanNode::Scan(s) => return Some(s.output.clone()),
                 PlanNode::CteRef(r) => return Some(r.output.clone()),
                 PlanNode::Shift { input, offset } => {
@@ -1018,6 +1063,7 @@ impl LogicalPlan {
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
+                | PlanNode::TableFunction { .. }
                 | PlanNode::Distinct { .. } => {
                     return None;
                 }

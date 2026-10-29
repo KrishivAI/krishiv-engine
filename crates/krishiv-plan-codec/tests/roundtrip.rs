@@ -38,6 +38,7 @@ macro_rules! variants {
 variants!(
     Scan,
     OneRow,
+    Range,
     Filter,
     Project,
     Limit,
@@ -59,6 +60,7 @@ fn variant_of(node: &PhysNode) -> Variant {
     match node {
         PhysNode::Scan(_) => Variant::Scan,
         PhysNode::OneRow => Variant::OneRow,
+        PhysNode::Range(_) => Variant::Range,
         PhysNode::Filter { .. } => Variant::Filter,
         PhysNode::Project { .. } => Variant::Project,
         PhysNode::Limit { .. } => Variant::Limit,
@@ -433,7 +435,9 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "nested_types"
             | "struct_field"
             | "lambda_functions"
-            | "map_key_dedup_policy" => 6,
+            | "map_key_dedup_policy"
+            | "aggregate_filter"
+            | "range" => 6,
             // Features added after the version was frozen: above every
             // sequential format version.
             n if n.starts_with("time_") || n.starts_with("geo_") => 6,

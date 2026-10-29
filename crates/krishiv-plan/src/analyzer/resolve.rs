@@ -675,6 +675,7 @@ impl Resolver<'_> {
                 name,
                 params,
             } => self.hint(p, input, name, params, env),
+            PlanNode::TableFunction { name, args } => self.table_function(p, name, args, env),
             // Listed, not wildcarded: a new `PlanNode` variant must be
             // placed here or in `leaf_node` to compile.
             PlanNode::Read(ReadSource::Files { .. })
@@ -684,6 +685,7 @@ impl Resolver<'_> {
             | PlanNode::Shift { .. }
             | PlanNode::ReplicateRows { .. }
             | PlanNode::Expand { .. }
+            | PlanNode::Range { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
         }
     }
@@ -783,6 +785,36 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                num_slices,
+                output,
+            } => {
+                // A built `Range` (the DataFrame API, Spark Connect) carries
+                // an id of its builder's choosing, which two ranges of one
+                // plan share; the leaf gets this analysis's own fresh id.
+                let col = BoundColumn {
+                    id: self.fresh(),
+                    ..output.clone()
+                };
+                let node = PlanNode::Range {
+                    start: *start,
+                    end: *end,
+                    step: *step,
+                    num_slices: *num_slices,
+                    output: col.clone(),
+                };
+                let qual: Arc<[String]> = Arc::from(Vec::new());
+                let out = vec![Attr {
+                    col,
+                    qual,
+                    source: None,
+                }];
+                let leaf = Arc::new(LogicalPlan::new(node).with_origin(o));
+                Ok(self.wrap(leaf, o.plan_id, out, &[]))
+            }
             // Handled in `node`, which never forwards them.
             PlanNode::Read(ReadSource::Table { .. })
             | PlanNode::OneRowRelation
@@ -802,6 +834,7 @@ impl Resolver<'_> {
             | PlanNode::Pivot { .. }
             | PlanNode::Unpivot { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Window { .. } => Err(unsupported("a plan shape", o)),
         }
