@@ -587,7 +587,7 @@ fn malformed_requested_values_are_all_null() {
         r#"{"o":[?]}"#,
         r#"{"o":{"a":?}}"#,
         r#"{"o":{1:2}}"#,
-        r#"{"o":[tru]}"#,
+        r#"{"o":[trux]}"#,
         r#"{"o":-}"#,
         r#"{"o":"\uZZZZ"}"#,
         r#"{"o":[1,]}"#,
