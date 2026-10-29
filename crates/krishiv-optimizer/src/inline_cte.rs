@@ -44,6 +44,10 @@ const MAX_ID: u64 = 1 << 62;
 
 /// `root` with its CTE references inlined where Spark inlines them.
 pub(crate) fn inline(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> {
+    // Most plans have no `WITH`: one walk, then nothing to do.
+    if !has_with(&root) {
+        return Ok(root);
+    }
     let mut defs: HashMap<Vec<AttrId>, Arc<LogicalPlan>> = HashMap::new();
     let mut refs: HashMap<Vec<AttrId>, usize> = HashMap::new();
     survey(&root, &mut defs, &mut refs);
@@ -63,6 +67,23 @@ pub(crate) fn inline(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, Krishiv
         next,
     };
     inliner.plan(root)
+}
+
+/// Whether a `WITH` is anywhere in `root` (subquery plans included).
+fn has_with(root: &Arc<LogicalPlan>) -> bool {
+    let mut seen = HashSet::new();
+    let mut stack = vec![Arc::clone(root)];
+    while let Some(p) = stack.pop() {
+        if matches!(p.node, PlanNode::WithCte { .. }) {
+            return true;
+        }
+        if !seen.insert(Arc::as_ptr(&p)) {
+            continue;
+        }
+        p.for_each_expr(&mut |e| stack.extend(subquery_plans(e)));
+        p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    false
 }
 
 /// Every definition (by its output ids) and how many references read it,

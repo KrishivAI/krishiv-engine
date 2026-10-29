@@ -177,8 +177,8 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
                 let hits = refs.iter().any(|id| aliases.contains_key(id));
                 // A predicate on no column (a folded `false`) commutes too:
                 // with grouping keys, no input rows means no groups.
-                let constant = references(p).is_empty() && !has_subquery(p);
-                ((!refs.is_empty() || constant) && grouped && !(hits && has_subquery(p)))
+                let constant = || references(p).is_empty() && !has_subquery(p);
+                ((!refs.is_empty() || constant()) && grouped && !(hits && has_subquery(p)))
                     .then(|| substitute(p, &aliases))
             })
         }
