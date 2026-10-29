@@ -458,6 +458,46 @@ async fn weights_multiply_in_inner_joins_and_pass_through_otherwise() {
     assert_released(&root);
 }
 
+/// The joins that return build rows by their matches take neither a
+/// weighted build side (a build row's net multiplicity is not tracked: a
+/// negative weight would come out as one row) nor a weighted probe side
+/// (whether a build row matched depends on the probe rows' net
+/// multiplicity).
+#[tokio::test]
+async fn right_joins_reject_weighted_inputs() {
+    let probe = [r(Some(1), None, 1), r(Some(2), None, 2)];
+    let build = [r(Some(1), None, 3), r(Some(3), None, 4)];
+    let weighted =
+        |rows: &[Row]| vec![Batch::with_weights(data(rows), Weights::Const(-1)).unwrap()];
+    let plain = |rows: &[Row]| vec![Batch::new(data(rows))];
+    for jt in [
+        JoinType::RightSemi,
+        JoinType::RightAnti,
+        JoinType::RightOuter,
+    ] {
+        for (build_side, probe_side) in [
+            (weighted(&build), plain(&probe)),
+            (plain(&build), weighted(&probe)),
+        ] {
+            let root = root(64 * MIB);
+            let q = query(&root, 1, ExecConfig::default());
+            let plan = join(
+                case(jt, 1, false, false).spec(None),
+                scan(&schema(), build_side),
+                scan(&schema(), probe_side),
+            );
+            let e = run(&runner(1), plan, &q).await.unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::KrishivUnsupportedFeature,
+                "{jt:?}"
+            );
+            assert!(e.to_string().contains("weighted"), "{jt:?}: {e}");
+            assert_released(&root);
+        }
+    }
+}
+
 fn skewed(rows: usize, keys: i64) -> Vec<Row> {
     (0..rows)
         .map(|i| {

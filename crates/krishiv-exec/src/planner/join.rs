@@ -154,7 +154,9 @@ impl Planner<'_> {
         // Which side the statistics say to build (design P2-T166): a semi,
         // anti or left outer join whose right input is much larger builds
         // its left input instead, as a right semi, right anti or right
-        // outer join. A hint keeps Spark's side.
+        // outer join. A hint keeps Spark's side. The planner plans batch
+        // queries only (unweighted rows): the right joins refuse weighted
+        // inputs, so an incremental (IVM) planning mode must not flip.
         let preferred = if choice.distribution.is_none() {
             let probe_stats = self.input_stats(probe_plan, &probe.schema);
             let build_stats = self.input_stats(build_plan, &build.schema);
@@ -276,8 +278,9 @@ impl Planner<'_> {
             detail.push_str(&format!(", {p}"));
         }
         if let Some((_, probe_stats, build_stats)) = preferred {
-            // The statistics that chose to build the left input (`probe`
-            // and `build` as Spark's side would have had them).
+            // The statistics that chose to build the left input, labelled
+            // by the logical inputs: `probe_stats` is the left input's and
+            // `build_stats` the right one's (taken before the swap).
             detail.push_str(&format!(
                 ", builds left (left: {}; right: {})",
                 probe_stats.describe(),

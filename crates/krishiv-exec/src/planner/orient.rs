@@ -5,10 +5,11 @@
 //! do. A semi, anti or left outer join whose right input is much larger
 //! than its left is better built on the left input, as a right semi, right
 //! anti or right outer join: the probe marks the build rows it matches and
-//! the join emits the build rows by their marks at the end. Those joins do
-//! not run yet; until they do, the planner keeps the right build and
-//! `EXPLAIN` shows the preference (`prefers RightSemi (probe: ...; build:
-//! ...)`). The decision is
+//! the join emits the build rows by their marks at the end. The planner
+//! then plans that join, and `EXPLAIN` shows the statistics that chose it
+//! as `builds left (left: ...; right: ...)`: `left` and `right` name the
+//! join's logical inputs (the left one is now built), not its probe and
+//! build sides. The decision is
 //! a pure function of the two inputs' statistics ([`InputStats`]), so the
 //! same function serves plan-time estimates now and statistics merged from
 //! materialized exchanges later; it never reads process state, so every

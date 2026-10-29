@@ -108,7 +108,10 @@ struct BuildLocal {
     hashing: Hashing,
     parts: Vec<Part>,
     /// This driver's build rows with a NULL `=` key that the join returns
-    /// (right anti, right outer), and their memory.
+    /// (right anti, right outer), and their memory. They are reserved but
+    /// never spilled: a build side with more NULL-key rows than memory
+    /// holds fails with the pool's error instead of spilling them (open
+    /// issue).
     nulls: Vec<Batch>,
     null_memory: Reservation,
     spilled: Arc<AtomicU64>,
@@ -529,6 +532,9 @@ impl Sink for BuildSink {
         if n == 0 {
             return Ok(SinkStatus::NeedMoreInput);
         }
+        // Covers the joins that return build rows by their matches too: a
+        // build row's net multiplicity is not tracked, so a negative weight
+        // would come out as one row.
         if !input.is_unweighted() && s.join_type != JoinType::Inner {
             return Err(unsupported(
                 "a weighted (change-stream) build side for a non-inner hash join",
