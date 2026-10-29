@@ -70,3 +70,46 @@ def test_roundtrip_sidecar(tmp_path):
     assert back[2] == 2.5
     assert back[5] is None
     assert back[4] == "2020-01-02"
+
+
+def test_sort_keys_with_implicit_aliases_and_terminator():
+    # TPC-DS q71's shape: aliases without AS, ORDER BY a base column the alias hides, a final `;`.
+    q71 = (
+        "SELECT i_brand_id brand_id, i_brand brand, t_hour, t_minute, sum(ext_price) ext_price FROM t "
+        "GROUP BY 1, 2, 3, 4 ORDER BY ext_price DESC NULLS FIRST, i_brand_id NULLS FIRST, t_hour NULLS FIRST;\n"
+    )
+    assert c.derive_sort_keys(q71) == [4, 0, 2]
+    assert c.derive_sort_keys("SELECT a, b FROM t ORDER BY b;") == [1]
+    assert c.derive_sort_keys("SELECT a AS x, count(*) n FROM t GROUP BY a ORDER BY n DESC, x") == [1, 0]
+
+
+def test_implicit_alias_is_not_taken_from_expression_words():
+    assert c._implicit_alias("x IS NULL") is None
+    assert c._implicit_alias("CASE WHEN a THEN 1 ELSE 0 END") is None
+    assert c._implicit_alias("INTERVAL 1 day") is None  # a number before the word: not an alias
+    assert c._implicit_alias("a + b") is None
+    assert c._implicit_alias("sum(x) total") == ("total", "sum(x)")
+    assert c._implicit_alias('t.col "My Col"') == ("mycol", "t.col")
+    # A doubtful item gets no name, so a key naming it is not derived (whole-row comparison).
+    assert c.derive_sort_keys("SELECT INTERVAL 1 day FROM t ORDER BY day") is None
+
+
+def test_implicit_alias_is_not_taken_after_an_operator_word_or_from_a_unit():
+    assert c._implicit_alias("a or b") is None
+    assert c._implicit_alias("not flag") is None
+    assert c._implicit_alias("a like b") is None
+    assert c._implicit_alias("a rlike b") is None
+    assert c._implicit_alias("x in y") is None
+    assert c._implicit_alias("d + interval '30' day") is None
+    assert c._implicit_alias("interval '1' hours") is None
+    assert c._implicit_alias("count(*) cnt") == ("cnt", "count(*)")
+    assert c._implicit_alias("s COLLATE UTF8_LCASE") is None
+    assert c.derive_sort_keys("SELECT s COLLATE UTF8_LCASE, id FROM t ORDER BY s COLLATE UTF8_LCASE") == [0]
+
+
+def test_order_by_names_an_output_alias_before_an_expression():
+    # Spark: ORDER BY x is the output column x (column 0), not the base column x selected as z.
+    assert c.derive_sort_keys("SELECT y x, x z FROM t ORDER BY x") == [0]
+    assert c.derive_sort_keys("SELECT y AS x, x AS z FROM t ORDER BY x DESC, z") == [0, 1]
+    assert c.derive_sort_keys("SELECT a x, b x FROM t ORDER BY x") is None  # ambiguous output name
+    assert c.derive_sort_keys("SELECT a + 1 AS s FROM t ORDER BY a + 1") == [0]  # no such name: the expression

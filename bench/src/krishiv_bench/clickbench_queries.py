@@ -16,6 +16,11 @@ transformations of that text, listed in ``bench/README.md``:
    arithmetic on ``EventTime``.
 3. Queries whose ``LIMIT`` result is not fully ordered upstream get tie-break sort keys (``TIE_BREAK``) so that all
    engines return the same rows.
+4. q29's ``REGEXP_REPLACE`` is written in each engine's dialect (``REGEX_Q29``) so that every engine computes Spark's
+   answer. Spark-dialect engines get the Spark text: the upstream ``'\\1'`` is the one-character string ``1`` in Spark
+   SQL (the group reference is ``$1``) and ``'\\.'`` is ``.``. Java's ``.`` stops at every line terminator (``\\n``,
+   ``\\r``, U+0085, U+2028, U+2029) and its ``$`` also matches before one final terminator; RE2 engines get a pattern
+   with those semantics spelled out (the final terminator is captured and put back).
 """
 
 from __future__ import annotations
@@ -62,6 +67,18 @@ TIE_BREAK: dict[str, list[str]] = {
     "q39": ["URL"],
     "q40": ["TraficSourceID", "SearchEngineID", "AdvEngineID", "Src", "Dst"],
     "q41": ["URLHash", "EventDate"],
+}
+
+# Engines that read SQL string literals and regular expressions as Spark does.
+SPARK_DIALECT: frozenset[str] = frozenset({"krishiv", "spark-connect", "spark-local", "sail"})
+# q29's domain extraction: the upstream (DuckDB, RE2) text, and its rewrite per dialect.
+REGEX_Q29_UPSTREAM = r"REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/.*$', '\1')"
+REGEX_Q29: dict[str, str] = {
+    "spark": r"REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '$1')",
+    "re2": (
+        r"REGEXP_REPLACE(Referer, '^https?://(?:www\.)?([^/]+)/[^\n\r\x{85}\x{2028}\x{2029}]*"
+        r"(\r\n|[\n\r\x{85}\x{2028}\x{2029}])?$', '\1\2')"
+    ),
 }
 
 Fetch = Callable[[str], bytes]
@@ -130,12 +147,17 @@ def _day_number(match: re.Match[str]) -> str:
     return f"EventDate {match.group(1)} {(d - dt.date(1970, 1, 1)).days}"
 
 
-def adapt(sql: str, qid: str, tie_break: Mapping[str, list[str]] = TIE_BREAK) -> str:
+def adapt(sql: str, qid: str, tie_break: Mapping[str, list[str]] = TIE_BREAK, engine: str = "duckdb") -> str:
+    """The upstream DuckDB text of ``qid`` adapted for ``engine`` (see the module docstring)."""
     sql = re.sub(r"\bSTRLEN\(", "length(", sql)
     sql = sql.replace("toDateTime(EventTime)", "EventTime")
     sql = re.sub(r"EventDate\s*(>=|<=)\s*'(\d{4}-\d{2}-\d{2})'", _day_number, sql)
     sql = re.sub(r"extract\(minute FROM EventTime\)", "CAST(FLOOR(EventTime % 3600 / 60) AS BIGINT)", sql)
     sql = re.sub(r"DATE_TRUNC\('minute', EventTime\)", "EventTime - EventTime % 60", sql)
+    if qid == "q29" and source_name(engine) != "clickhouse":  # ClickHouse's upstream text is its own dialect
+        if REGEX_Q29_UPSTREAM not in sql:
+            raise ValueError("q29: the upstream REGEXP_REPLACE call changed; update REGEX_Q29")
+        sql = sql.replace(REGEX_Q29_UPSTREAM, REGEX_Q29["spark" if engine in SPARK_DIALECT else "re2"])
     keys = tie_break.get(qid)
     if keys:
         head, sep, tail = sql.rstrip().rstrip(";").rpartition(" LIMIT ")
@@ -158,4 +180,4 @@ def load(
     lines = [ln for ln in fetch_file(source_name(engine), fetch, pins, commit).splitlines() if ln.strip()]
     if len(lines) != expected:
         raise ValueError(f"ClickBench query file has {len(lines)} queries, expected {expected}")
-    return {f"q{i:02d}": adapt(ln, f"q{i:02d}") for i, ln in enumerate(lines, 1)}
+    return {f"q{i:02d}": adapt(ln, f"q{i:02d}", engine=engine) for i, ln in enumerate(lines, 1)}
