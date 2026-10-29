@@ -1,7 +1,6 @@
 {
   "cases": {
     "depends-on-command": [
-      8,
       12,
       15,
       16,
@@ -15,6 +14,9 @@
       27,
       29,
       30
+    ],
+    "query-features": [
+      8
     ]
   },
   "file": "natural-join",

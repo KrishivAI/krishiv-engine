@@ -1,12 +1,14 @@
 {
   "cases": {
     "depends-on-command": [
-      4,
       5,
       7,
-      9,
       10,
       11
+    ],
+    "sql-commands": [
+      4,
+      9
     ]
   },
   "file": "cte-command",

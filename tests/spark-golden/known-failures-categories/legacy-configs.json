@@ -18,6 +18,10 @@
       "detail": "^no error|WRONG_NUM_ARGS",
       "file": "^count$",
       "order": 40
+    },
+    {
+      "file": "^grouping_set_grand_total_disabled$",
+      "order": 650
     }
   ],
   "summary": "legacy behaviour flags the session ignores instead of rejecting (ctePrecedencePolicy, consecutiveStringLiterals, allowStarWithSingleTableIdentifierInCount, allowParameterlessCount)"

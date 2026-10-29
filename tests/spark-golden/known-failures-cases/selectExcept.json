@@ -1,6 +1,9 @@
 {
   "cases": {
     "depends-on-command": [
+      33
+    ],
+    "query-features": [
       6,
       7,
       8,
@@ -8,13 +11,10 @@
       16,
       17,
       18,
-      33,
+      36,
       38,
       40,
       41
-    ],
-    "query-features": [
-      36
     ]
   },
   "file": "selectExcept",

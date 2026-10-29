@@ -4,7 +4,9 @@
       12,
       13,
       14,
-      15,
+      15
+    ],
+    "generators": [
       24
     ],
     "sql-commands": [

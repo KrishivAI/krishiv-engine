@@ -1,6 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
+    "fn-url-xml-csv": [
       3,
       4,
       5,

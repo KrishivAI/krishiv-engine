@@ -1,9 +1,14 @@
 {
   "cases": {
-    "depends-on-command": [
+    "fn-aggregate": [
       8,
       9,
       10,
+      31,
+      32,
+      33
+    ],
+    "parser-pipe-collate": [
       11,
       12,
       13,
@@ -11,11 +16,6 @@
       15,
       16,
       17
-    ],
-    "fn-aggregate": [
-      31,
-      32,
-      33
     ],
     "query-features": [
       18,

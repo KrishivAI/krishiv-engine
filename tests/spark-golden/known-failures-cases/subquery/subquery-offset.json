@@ -2,21 +2,25 @@
   "cases": {
     "depends-on-command": [
       6,
-      7,
       8,
       9,
       10,
-      11,
       12,
-      13,
-      16,
+      13
+    ],
+    "query-features": [
+      7,
+      11,
       17,
-      18,
       19
     ],
     "sql-commands": [
       3,
       5
+    ],
+    "subqueries": [
+      16,
+      18
     ]
   },
   "file": "subquery/subquery-offset",

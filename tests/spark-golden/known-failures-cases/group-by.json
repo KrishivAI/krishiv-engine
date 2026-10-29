@@ -1,14 +1,14 @@
 {
   "cases": {
     "depends-on-command": [
-      9,
-      10,
       15,
       97,
       99,
       101
     ],
     "fn-aggregate": [
+      9,
+      10,
       45
     ],
     "query-features": [
