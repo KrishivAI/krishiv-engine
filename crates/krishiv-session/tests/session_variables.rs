@@ -1515,8 +1515,5 @@ fn decimal_variable_comparisons_keep_the_variable() {
                 .collect::<Vec<_>>()
         })
         .collect();
-    // `range` rows arrive in no fixed order across drivers: compare the
-    // multiset (id 2 alone is above 1.5).
-    let trues = got.iter().filter(|b| **b).count();
-    assert_eq!((got.len(), trues), (3, 1));
+    assert_eq!(got, [false, false, true]);
 }

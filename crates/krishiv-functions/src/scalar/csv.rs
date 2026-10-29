@@ -294,7 +294,15 @@ impl Parsed {
                 "mode" => {
                     self.mode = match v.to_ascii_uppercase().as_str() {
                         "PERMISSIVE" => ParseMode::Permissive,
-                        "DROPMALFORMED" => ParseMode::DropMalformed,
+                        // Spark's `from_csv` and `to_csv` accept PERMISSIVE and
+                        // FAILFAST only.
+                        "DROPMALFORMED" => {
+                            return Err(krishiv_common::error::ParseModeUnsupported {
+                                func_name: format!("`{func}`"),
+                                mode: "DROPMALFORMED".to_owned(),
+                            }
+                            .into());
+                        }
                         "FAILFAST" => ParseMode::FailFast,
                         _ => {
                             return Err(unsupported(format!("{func} with option mode={v}")));
@@ -431,7 +439,6 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         return Err(bad_types("from_csv", args));
     }
     let return_type = DataType::Struct(fields.clone());
-    let ansi = opts.ansi;
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
     let date_pattern = parsed.date_pattern.clone();
     let timestamp_pattern = parsed.timestamp_pattern.clone();
@@ -448,10 +455,11 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         ntz_pattern,
         fallback: parsed.fallback,
     };
-    let _ = ansi;
+    // A time-only timestamp (`12:30:00`) is today's, in the session zone.
+    let today = krishiv_kernels::datetime::current_date(opts.query_start_micros, zone.as_ref())
+        .map_err(KrishivError::from)?;
     Ok(Binding::new(return_type, move |x: &Inputs<'_>| {
         let csv = x.strings(0)?;
-        let today = 0;
         let zone_ref: &dyn TimeZoneRules = zone.as_ref();
         let parse_timestamp = |s: &str| {
             spark_string_to_timestamp(s, zone_ref, today)
@@ -486,7 +494,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
     let kinds: Vec<FieldKind> = fields
         .iter()
         .map(|f| {
-            FieldKind::of(f.data_type()).map_err(|_| {
+            FieldKind::of_write(f.data_type()).map_err(|_| {
                 krishiv_common::error::UnsupportedDataTypeForDatasource {
                     format: "CSV".to_owned(),
                     column_name: format!("`{}`", f.name()),
@@ -496,6 +504,11 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         })
         .collect::<Result<_, _>>()?;
     let mut parsed = Parsed::defaults();
+    // Writing defaults (Spark's CSV writer): an empty string is written as
+    // two quotes, and the whitespace around a value is dropped.
+    parsed.syntax.empty_value = "\"\"".to_owned();
+    parsed.syntax.ltrim = true;
+    parsed.syntax.rtrim = true;
     if args.len() == 2 {
         if !matches!(args[1].data_type(), DataType::Map(_, _)) {
             return Err(bad_types("to_csv", args));

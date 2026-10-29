@@ -258,3 +258,26 @@ fn select_list_shapes_around_a_generator() -> R {
     }
     Ok(())
 }
+
+/// A generator outside the SELECT list is an analysis error naming
+/// `UNSUPPORTED_GENERATOR.OUTSIDE_SELECT`, as in Spark 4.2.0 (filters, sort
+/// keys and groupings), not a failure at execution.
+#[test]
+fn a_generator_outside_the_select_list_is_an_analysis_error() -> R {
+    let s = session()?;
+    let schema = Arc::new(Schema::new(vec![Field::new("j", DataType::Utf8, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(vec![Some("{\"a\":1}")])) as ArrayRef],
+    )?;
+    s.register_batches("w", schema, vec![batch])?;
+    for sql in [
+        "SELECT 1 FROM w WHERE json_tuple(j, 'a') IS NOT NULL",
+        "SELECT j FROM w ORDER BY json_tuple(j, 'a')",
+        "SELECT count(*) FROM w GROUP BY json_tuple(j, 'a')",
+    ] {
+        let (class, _) = error(&s, sql)?;
+        assert_eq!(class, "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT", "{sql}");
+    }
+    Ok(())
+}

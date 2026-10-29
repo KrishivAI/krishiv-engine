@@ -118,9 +118,9 @@ fn every_value_kind_reads_as_spark_reads_it() {
         [
             Some("a\"b\\c/d\u{e9}X\u{1f600}"),
             Some("-42"),
-            Some("1.50"),
-            Some("1e3"),
-            Some("-2.5E-2"),
+            Some("1.5"),
+            Some("1000.0"),
+            Some("-0.025"),
             Some("true"),
             Some("false"),
             None,
@@ -196,9 +196,6 @@ fn invalid_json_anywhere_yields_all_nulls() {
         "{",
         "{\"a\": 1",
         "{\"a\": 1,}",
-        "{'a': 1}",
-        "{\"a\": 1} trailing",
-        "{\"a\": 1} {\"b\": 2}",
         "{\"a\": trux}",
         "{\"a\": 01}",
         "{\"a\": +1}",
@@ -213,7 +210,6 @@ fn invalid_json_anywhere_yields_all_nulls() {
         "{\"a\": \"lone \\uD83D surrogate\"}",
         "{\"a\": \"lone \\uDE00 surrogate\"}",
         "{\"a\": \"\\u12\"}",
-        "{\"a\": \"raw \u{0001} control\"}",
         "{\"a\": [1, 2}",
         "{\"a\": {\"b\": 1}",
         "{\"a\" 1}",
@@ -481,4 +477,79 @@ fn deeply_nested_skipped_values_are_invalid_past_the_limit() {
             "{open}"
         );
     }
+}
+
+/// Numbers print as Jackson prints them: integers keep their digits (`-0`
+/// is `0`), anything with a fraction or exponent is a `double` printed as
+/// Java prints one, at the top level and inside objects and arrays (values
+/// from Spark 4.2.0).
+#[test]
+fn numbers_are_normalised_like_jackson() {
+    let doc = r#"{"a":1.0E5,"b":1.10,"c":-0,"d":1e3,"e":-2.5E-2,"f":12345678901234567890,
+        "g":0.1e1,"h":1E+2,"i":1.5e300,"o":{"b":1.10},"l":[1.0E5,-0,2]}"#;
+    let json = strs(&[Some(doc)]);
+    let names = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "o", "l"];
+    let f = bind(&json, &fields(&names));
+    let out = run(&f, &json, &fields(&names), 1);
+    let row: Vec<Option<&str>> = out.iter().map(|c| c[0].as_deref()).collect();
+    assert_eq!(
+        row,
+        [
+            Some("100000.0"),
+            Some("1.1"),
+            Some("0"),
+            Some("1000.0"),
+            Some("-0.025"),
+            Some("12345678901234567890"),
+            Some("1.0"),
+            Some("100.0"),
+            Some("1.5E300"),
+            Some(r#"{"b":1.1}"#),
+            Some("[100000.0,0,2]"),
+        ]
+    );
+}
+
+/// What Spark's parser accepts beyond strict JSON: text after the closing
+/// brace is ignored, strings may be single-quoted, and raw control
+/// characters may sit inside strings (values from Spark 4.2.0).
+#[test]
+fn the_parser_is_as_lenient_as_sparks() {
+    for (doc, want) in [
+        ("{\"a\":1} trailing", "1"),
+        ("{\"a\":1}{\"a\":2}", "1"),
+        ("{'a':'x'}", "x"),
+        ("{\"a\":\"x\ty\"}", "x\ty"),
+        ("{\"a\": \"raw \u{1} control\"}", "raw \u{1} control"),
+    ] {
+        let json = strs(&[Some(doc)]);
+        let f = bind(&json, &fields(&["a"]));
+        assert_eq!(
+            run(&f, &json, &fields(&["a"]), 1),
+            vec![vec![Some(want.to_owned())]],
+            "{doc:?}"
+        );
+    }
+}
+
+/// Literal field names build the key index once and still give every row
+/// its own values, and a changed name column rebuilds it.
+#[test]
+fn key_index_is_reused_across_rows_and_rebuilt_when_names_change() {
+    let json = strs(&[
+        Some(r#"{"a":1,"b":2}"#),
+        Some(r#"{"a":3,"b":4}"#),
+        Some(r#"{"a":5,"b":6}"#),
+    ]);
+    let names = strs(&[Some("a"), Some("a"), Some("b")]);
+    let f = bind(&json, std::slice::from_ref(&names));
+    let out = run(&f, &json, std::slice::from_ref(&names), 3);
+    assert_eq!(
+        out,
+        vec![vec![
+            Some("1".to_owned()),
+            Some("3".to_owned()),
+            Some("6".to_owned())
+        ]]
+    );
 }

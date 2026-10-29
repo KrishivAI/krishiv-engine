@@ -8,20 +8,25 @@
 //!
 //! Value semantics (Spark 4.2's `JsonTuple`): the JSON text must be an
 //! object; only top-level keys are looked up, by exact (case-sensitive)
-//! name. A string value gives its decoded text; a number or boolean gives
-//! its original token text (never reformatted); `null` gives NULL; an
-//! object or array value gives its compact JSON text (no spaces between
-//! tokens, original number tokens, strings escaped as a JSON generator
-//! writes them). A missing key gives NULL; a duplicate key resolves to the
-//! last occurrence. Invalid JSON, a non-object top level or a NULL input
-//! gives one row of N NULLs; a NULL field name gives a NULL column.
+//! name. A string value gives its decoded text; an integer gives its
+//! digits; a number with a fraction or an exponent is read as a `double`
+//! and printed as Java prints one (`1.0E5` is `100000.0`, `1.10` is `1.1`),
+//! as Jackson's generator does; a boolean gives its text; `null` gives
+//! NULL; an object or array value gives its compact JSON text (no spaces
+//! between tokens, numbers normalised the same way, strings escaped as a
+//! JSON generator writes them). A missing key gives NULL; a duplicate key
+//! resolves to the last occurrence. Invalid JSON, a non-object top level
+//! or a NULL input gives one row of N NULLs; a NULL field name gives a NULL
+//! column.
 //!
-//! The scanner below is strict: it validates the whole document (so a
-//! malformed document anywhere yields the all-NULL row, as Spark's parser
-//! does) and recurses with an explicit depth cap (nesting past
-//! [`MAX_DEPTH`] is invalid, so deeply nested input cannot overflow the
-//! stack) and allocation-bounded per row (buffers grow with the row's
-//! document only).
+//! The scanner reads what Jackson reads with Spark's parser options: single
+//! quoted strings and raw control characters inside strings are accepted;
+//! unquoted names, `NaN`, leading zeros, a leading `+` or `.`, bad escapes
+//! and trailing commas are not. It stops after the first value: text after
+//! the closing `}` is ignored (`{"a":1} x` reads as `{"a":1}`), while a
+//! malformed document before that point yields the all-NULL row. It
+//! recurses with a depth cap (nesting past [`MAX_DEPTH`] is invalid, so
+//! deeply nested input cannot overflow the stack).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -37,7 +42,7 @@ use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 pub(super) const NAMES: &[&str] = &["json_tuple"];
 
 /// Nesting past this depth is invalid (Spark's parser would also fail the
-/// document; the cap keeps evaluation iterative and stack-safe).
+/// document; the cap keeps the recursive scan stack-safe).
 const MAX_DEPTH: usize = 1000;
 
 /// Binds the `json_tuple` function: the JSON string and the N field names
@@ -63,45 +68,52 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 for k in 0..n {
                     names.push(x.strings(k + 1)?);
                 }
-                let mut columns: Vec<Vec<Option<String>>> =
-                    (0..n).map(|_| Vec::with_capacity(rows)).collect();
+                let mut builders: Vec<StringViewBuilder> = (0..n)
+                    .map(|_| StringViewBuilder::with_capacity(rows))
+                    .collect();
+                // The key index and the value buffer are reused across rows.
+                // Field names may be columns, so the index is rebuilt only
+                // when a row's names differ from the previous row's (literal
+                // names build it once); a NULL name matches nothing.
+                let mut wanted: HashMap<&str, Vec<usize>> = HashMap::new();
+                let mut built_for: Option<usize> = None;
+                let mut values: Vec<Option<String>> = vec![None; n];
                 for row in 0..rows {
-                    let doc = (!json.is_null(row)).then(|| json.value(row));
-                    // Field names may be columns (non-foldable arguments are
-                    // allowed), so the wanted-key index is built per row; a
-                    // NULL field name simply matches nothing and stays NULL.
-                    let mut wanted: HashMap<&str, Vec<usize>> = HashMap::new();
-                    for (k, column) in names.iter().enumerate() {
-                        if !column.is_null(row) {
-                            wanted.entry(column.value(row)).or_default().push(k);
+                    let same = built_for.is_some_and(|prev| {
+                        names.iter().all(|c| {
+                            c.is_null(prev) == c.is_null(row)
+                                && (c.is_null(row) || c.value(prev) == c.value(row))
+                        })
+                    });
+                    if !same {
+                        wanted.clear();
+                        for (k, column) in names.iter().enumerate() {
+                            if !column.is_null(row) {
+                                wanted.entry(column.value(row)).or_default().push(k);
+                            }
                         }
+                        built_for = Some(row);
                     }
-                    let mut values: Vec<Option<String>> = vec![None; n];
-                    if let Some(doc) = doc
+                    values.iter_mut().for_each(|v| *v = None);
+                    if !json.is_null(row)
                         && !wanted.is_empty()
-                        && let Some(found) = extract(doc, &wanted)
+                        && let Some(found) = extract(json.value(row), &wanted)
                     {
                         for (k, v) in found {
                             values[k] = v;
                         }
                     }
-                    // A NULL field name stays NULL; `extract` leaves missing
-                    // keys as NULL too.
-                    for (column, value) in columns.iter_mut().zip(values) {
-                        column.push(value);
-                    }
-                }
-                let mut children = Vec::with_capacity(n);
-                for column in columns {
-                    let mut builder = StringViewBuilder::with_capacity(rows);
-                    for value in &column {
+                    for (builder, value) in builders.iter_mut().zip(&values) {
                         match value {
                             Some(v) => builder.append_value(v),
                             None => builder.append_null(),
                         }
                     }
-                    children.push(Arc::new(builder.finish()) as ArrayRef);
                 }
+                let children: Vec<ArrayRef> = builders
+                    .into_iter()
+                    .map(|mut b| Arc::new(b.finish()) as ArrayRef)
+                    .collect();
                 Ok(Arc::new(krishiv_kernels::r#struct::build(
                     fields.clone(),
                     children,
@@ -126,9 +138,7 @@ fn extract(doc: &str, wanted: &HashMap<&str, Vec<usize>>) -> Option<Vec<(usize, 
     let mut out = Vec::new();
     skip_ws(bytes, &mut pos);
     if bytes.get(pos) == Some(&b'}') {
-        pos += 1;
-        skip_ws(bytes, &mut pos);
-        return (pos == bytes.len()).then_some(out);
+        return Some(out);
     }
     loop {
         skip_ws(bytes, &mut pos);
@@ -150,11 +160,7 @@ fn extract(doc: &str, wanted: &HashMap<&str, Vec<usize>>) -> Option<Vec<(usize, 
         skip_ws(bytes, &mut pos);
         match bytes.get(pos) {
             Some(b',') => pos += 1,
-            Some(b'}') => {
-                pos += 1;
-                skip_ws(bytes, &mut pos);
-                return (pos == bytes.len()).then_some(out);
-            }
+            Some(b'}') => return Some(out),
             _ => return None,
         }
     }
@@ -167,7 +173,7 @@ fn parse_value(doc: &str, pos: &mut usize, depth: usize) -> Result<Option<String
     let bytes = doc.as_bytes();
     skip_ws(bytes, pos);
     match bytes.get(*pos) {
-        Some(b'"') => Ok(Some(parse_string(doc, pos)?)),
+        Some(b'"' | b'\'') => Ok(Some(parse_string(doc, pos)?)),
         Some(b'{' | b'[') => {
             if depth >= MAX_DEPTH {
                 return Err(Invalid);
@@ -190,10 +196,26 @@ fn parse_value(doc: &str, pos: &mut usize, depth: usize) -> Result<Option<String
         }
         Some(c) if *c == b'-' || c.is_ascii_digit() => {
             let (start, end) = parse_number(doc, pos)?;
-            Ok(Some(doc[start..end].to_owned()))
+            Ok(Some(normal_number(&doc[start..end])))
         }
         _ => Err(Invalid),
     }
+}
+
+/// A number token as Jackson's generator prints it: an integer keeps its
+/// digits (`-0` is `0`), anything with a fraction or an exponent goes
+/// through a `double` and prints as Java's `Double.toString`.
+fn normal_number(token: &str) -> String {
+    if token.bytes().any(|b| matches!(b, b'.' | b'e' | b'E')) {
+        return token.parse::<f64>().map_or_else(
+            |_| token.to_owned(),
+            krishiv_kernels::text::java_double_string,
+        );
+    }
+    if token == "-0" {
+        return "0".to_owned();
+    }
+    token.to_owned()
 }
 
 /// Validates the value at `pos` without keeping it (for keys nobody asked
@@ -202,7 +224,7 @@ fn skip_value(doc: &str, pos: &mut usize, depth: usize) -> Result<(), Invalid> {
     let bytes = doc.as_bytes();
     skip_ws(bytes, pos);
     match bytes.get(*pos) {
-        Some(b'"') => {
+        Some(b'"' | b'\'') => {
             parse_string(doc, pos)?;
             Ok(())
         }
@@ -363,7 +385,7 @@ fn append_value_compact(
     let bytes = doc.as_bytes();
     skip_ws(bytes, pos);
     match bytes.get(*pos) {
-        Some(b'"') => {
+        Some(b'"' | b'\'') => {
             let text = parse_string(doc, pos)?;
             append_quoted(out, &text);
             Ok(())
@@ -374,7 +396,7 @@ fn append_value_compact(
         Some(b'n') => consume_into(doc, pos, "null", out),
         Some(c) if *c == b'-' || c.is_ascii_digit() => {
             let (start, end) = parse_number(doc, pos)?;
-            out.push_str(&doc[start..end]);
+            out.push_str(&normal_number(&doc[start..end]));
             Ok(())
         }
         _ => Err(Invalid),
@@ -404,30 +426,32 @@ fn append_quoted(out: &mut String, text: &str) {
     out.push('"');
 }
 
-/// The strictly-valid string at `pos` (which points at the opening quote),
-/// decoded. Surrogate pairs combine; lone surrogates are invalid.
+/// The string at `pos` (which points at its opening quote, `"` or `'`),
+/// decoded. Raw control characters are kept, surrogate pairs combine and
+/// lone surrogates are invalid.
 fn parse_string(doc: &str, pos: &mut usize) -> Result<String, Invalid> {
     let bytes = doc.as_bytes();
-    if bytes.get(*pos) != Some(&b'"') {
-        return Err(Invalid);
-    }
+    let quote = match bytes.get(*pos) {
+        Some(q @ (b'"' | b'\'')) => *q,
+        _ => return Err(Invalid),
+    };
     *pos += 1;
     let mut out = String::new();
     loop {
         let start = *pos;
         let mut i = start;
-        while i < bytes.len() && bytes[i] >= 0x20 && bytes[i] != b'"' && bytes[i] != b'\\' {
+        while i < bytes.len() && bytes[i] != quote && bytes[i] != b'\\' {
             i += 1;
         }
         out.push_str(doc.get(start..i).ok_or(Invalid)?);
         *pos = i;
         match bytes.get(i) {
-            Some(b'"') => {
+            Some(q) if *q == quote => {
                 *pos = i + 1;
                 return Ok(out);
             }
             Some(b'\\') => push_escape(doc, pos, &mut out)?,
-            None | Some(_) => return Err(Invalid),
+            _ => return Err(Invalid),
         }
     }
 }
@@ -439,6 +463,7 @@ fn push_escape(doc: &str, pos: &mut usize, out: &mut String) -> Result<(), Inval
     *pos += 2;
     match e {
         b'"' => out.push('"'),
+        b'\'' => out.push('\''),
         b'\\' => out.push('\\'),
         b'/' => out.push('/'),
         b'b' => out.push('\u{08}'),

@@ -193,7 +193,7 @@ fn to_csv_quoting_and_empty() {
     let out = f.invoke(&[col(&input)], 4).unwrap();
     assert_eq!(
         text(&out),
-        owned(&[Some("\"a,b\""), Some("\"a\\\"b\""), Some(""), Some("")])
+        owned(&[Some("\"a,b\""), Some("\"a\\\"b\""), Some("\"\""), Some("")])
     );
 }
 
@@ -226,10 +226,10 @@ fn from_csv_modes() {
             .is_null(1)
     );
     assert_eq!(s.column(1).as_string_view().value(1), "notanint,xyz");
-    // DROPMALFORMED yields NULL rows for malformed records.
+    // DROPMALFORMED is refused at bind (Spark: PARSE_MODE_UNSUPPORTED).
     let opts = map_lit(&[("mode", "DROPMALFORMED")]);
     let schema_arr: ArrayRef = Arc::new(StringArray::from(vec![Some("a INT")]));
-    let f = bind_scalar(
+    let err = bind_scalar(
         "from_csv",
         &[
             BindArg::Column {
@@ -241,12 +241,9 @@ fn from_csv_modes() {
         ],
         &BindOptions::new(),
     )
-    .unwrap();
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::ParseModeUnsupported);
     let csv = strs(&[Some("abc")]);
-    let out = f
-        .invoke(&[col(&csv), lit(&schema_arr), lit(&opts)], 1)
-        .unwrap();
-    assert!(out.as_struct().is_null(0) || out.as_struct().column(0).is_null(0));
     // FAILFAST raises.
     let opts = map_lit(&[("mode", "FAILFAST")]);
     let schema_arr: ArrayRef = Arc::new(StringArray::from(vec![Some("a INT")]));
@@ -270,6 +267,10 @@ fn from_csv_modes() {
         err.error_class(),
         ErrorClass::MalformedRecordInParsingWithoutSuggestion
     );
+    // The failed record is shown as the parsed row (`[null]`), as Spark
+    // shows it, not as the text that failed.
+    assert!(err.to_string().contains("[null]"), "{err}");
+    assert!(!err.to_string().contains("abc"), "{err}");
 }
 
 #[test]
@@ -457,25 +458,18 @@ fn rejects_invalid_options_and_nested_types() {
     .unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::KrishivUnsupportedFeature);
     assert!(err.to_string().contains("nested"), "{err}");
-    // `to_csv` over a struct with a nested field raises the datasource error.
+    // `to_csv` over a struct with a column of a type CSV cannot hold (a
+    // `NullType`-free exotic one) raises the datasource error.
     let fields: Fields = vec![Field::new(
         "a",
-        DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+        DataType::Duration(arrow_schema::TimeUnit::Microsecond),
         true,
     )]
     .into();
-    let input: ArrayRef = Arc::new(StructArray::new(
-        fields,
-        vec![arrow_array::new_null_array(
-            &DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
-            1,
-        )],
-        None,
-    ));
     let err = bind_scalar(
         "to_csv",
         &[BindArg::Column {
-            ty: input.data_type().clone(),
+            ty: DataType::Struct(fields),
             nullable: true,
         }],
         &BindOptions::new(),
@@ -766,4 +760,109 @@ fn to_csv_writes_every_scalar_type_and_option() {
     );
     let escaped: Vec<(&str, ArrayRef)> = vec![("a", strs(&[Some("q\"r")]))];
     assert_eq!(to_csv(&escaped, Some(&[("escapeQuotes", "false")])), "q\"r");
+}
+
+/// `to_csv` shows nested values the way Spark prints them (a struct
+/// `{2}`, an array `"[1, 2]"` quoted because it holds the separator), trims
+/// the whitespace around values and writes an empty string as two quotes,
+/// unless the options say otherwise (values from Spark 4.2.0).
+#[test]
+fn to_csv_nested_values_whitespace_and_empty_values() {
+    use arrow_array::builder::{Int32Builder, ListBuilder};
+    let mut list = ListBuilder::new(Int32Builder::new());
+    list.values().append_value(1);
+    list.values().append_value(2);
+    list.append(true);
+    let list: ArrayRef = Arc::new(list.finish());
+    let inner: ArrayRef = Arc::new(StructArray::new(
+        vec![Field::new("c", DataType::Int32, true)].into(),
+        vec![Arc::new(arrow_array::Int32Array::from(vec![2])) as ArrayRef],
+        None,
+    ));
+    let outer = |columns: Vec<(&str, ArrayRef)>| -> ArrayRef {
+        let fields: Vec<Field> = columns
+            .iter()
+            .map(|(n, a)| Field::new(*n, a.data_type().clone(), true))
+            .collect();
+        Arc::new(StructArray::new(
+            fields.into(),
+            columns.into_iter().map(|(_, a)| a).collect(),
+            None,
+        ))
+    };
+    let run = |input: &ArrayRef, pairs: Option<&[(&str, &str)]>| -> String {
+        let mut bind = vec![BindArg::Column {
+            ty: input.data_type().clone(),
+            nullable: true,
+        }];
+        let opts = pairs.map(map_lit);
+        if let Some(o) = &opts {
+            bind.push(BindArg::Literal(Arc::clone(o)));
+        }
+        let f = bind_scalar("to_csv", &bind, &BindOptions::new()).unwrap();
+        let mut args = vec![col(input)];
+        if let Some(o) = &opts {
+            args.push(lit(o));
+        }
+        text(&f.invoke(&args, 1).unwrap())[0].clone().unwrap()
+    };
+    let ones: ArrayRef = Arc::new(arrow_array::Int32Array::from(vec![1]));
+    assert_eq!(
+        run(&outer(vec![("a", Arc::clone(&ones)), ("b", inner)]), None),
+        "1,{2}"
+    );
+    assert_eq!(
+        run(&outer(vec![("a", ones), ("b", list)]), None),
+        "1,\"[1, 2]\""
+    );
+    let strings = outer(vec![
+        ("a", strs(&[Some("")])),
+        ("b", strs(&[Some(" x ")])),
+        ("c", strs(&[Some("y ")])),
+    ]);
+    assert_eq!(run(&strings, None), "\"\",x,y");
+    let two = outer(vec![("a", strs(&[Some("")])), ("b", strs(&[Some(" x ")]))]);
+    assert_eq!(
+        run(
+            &two,
+            Some(&[
+                ("emptyValue", "E"),
+                ("ignoreLeadingWhiteSpace", "false"),
+                ("ignoreTrailingWhiteSpace", "false"),
+            ])
+        ),
+        "E, x "
+    );
+}
+
+/// A time-only timestamp reads as today's date at that time, in the session
+/// zone (the Spark 4.2.0 oracle returned the current date for `12:30:00`);
+/// today is the query start's date.
+#[test]
+fn from_csv_time_only_timestamps_use_the_current_date() {
+    use arrow_array::types::TimestampMicrosecondType;
+    // 2027-01-15 08:00:00 UTC.
+    let start: i64 = 1_800_000_000_000_000;
+    let csv = strs(&[Some("12:30:00")]);
+    let schema: ArrayRef = Arc::new(StringArray::from(vec![Some("ts TIMESTAMP")]));
+    let f = bind_scalar(
+        "from_csv",
+        &[
+            BindArg::Column {
+                ty: csv.data_type().clone(),
+                nullable: true,
+            },
+            BindArg::Literal(Arc::clone(&schema)),
+        ],
+        &BindOptions::new().with_query_start(start),
+    )
+    .unwrap();
+    let out = f.invoke(&[col(&csv), lit(&schema)], 1).unwrap();
+    let micros = out
+        .as_struct()
+        .column(0)
+        .as_primitive::<TimestampMicrosecondType>()
+        .value(0);
+    let day = start.div_euclid(86_400_000_000) * 86_400_000_000;
+    assert_eq!(micros, day + (12 * 3600 + 30 * 60) * 1_000_000);
 }

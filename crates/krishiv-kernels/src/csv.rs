@@ -661,9 +661,27 @@ pub enum FieldKind {
     TimestampNtz,
     /// `VOID`.
     Null,
+    /// An array, map or struct (written only: `to_csv` shows it the way
+    /// Spark prints a nested value; `from_csv` has no such column).
+    Nested,
 }
 
 impl FieldKind {
+    /// The kind for a column `to_csv` writes: as [`Self::of`], and the
+    /// nested types too.
+    ///
+    /// # Errors
+    /// `KernelError` for a type CSV cannot hold.
+    pub fn of_write(dt: &DataType) -> Result<Self, KernelError> {
+        match dt {
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::Map(..)
+            | DataType::Struct(_) => Ok(Self::Nested),
+            other => Self::of(other),
+        }
+    }
+
     /// The kind for an Arrow type.
     ///
     /// # Errors
@@ -815,7 +833,9 @@ impl Converter<'_> {
                     None => return Err(bad()),
                 }
             }
-            FieldKind::Timestamp | FieldKind::TimestampNtz => return Err(bad()),
+            FieldKind::Timestamp | FieldKind::TimestampNtz | FieldKind::Nested => {
+                return Err(bad());
+            }
         })
     }
 }
@@ -1076,6 +1096,28 @@ pub struct FromCsvOptions {
     pub fallback: bool,
 }
 
+/// A parsed row as Spark prints a failed record: `[1,null,abc]`.
+fn row_text(vals: &[Val]) -> String {
+    let mut out = String::from("[");
+    for (i, v) in vals.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        match v {
+            Val::Null => out.push_str("null"),
+            Val::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Val::I64(n) => out.push_str(&n.to_string()),
+            Val::I128(n) => out.push_str(&n.to_string()),
+            Val::F32(f) => out.push_str(&java_float_string32(*f)),
+            Val::F64(f) => out.push_str(&java_double_string(*f)),
+            Val::Text(t) => out.push_str(t),
+            Val::Bytes(b) => binary_text(b, &mut out),
+        }
+    }
+    out.push(']');
+    out
+}
+
 /// Parses `input` rows into the struct `fields`.
 ///
 /// `parse_timestamp` parses a `TIMESTAMP` (an instant, micros since the
@@ -1113,6 +1155,12 @@ pub fn from_csv(
         .map(|f| Column::new(f.data_type()))
         .collect::<Result<_, _>>()?;
     let data: Vec<usize> = (0..fields.len()).filter(|i| Some(*i) != corrupt).collect();
+    // The token position of each field (the corrupt-record column has none).
+    let mut slot: Vec<Option<usize>> = vec![None; fields.len()];
+    for (k, i) in data.iter().enumerate() {
+        slot[*i] = Some(k);
+    }
+    let mut vals: Vec<Val> = Vec::with_capacity(fields.len());
     let mut tokens: Vec<Token> = Vec::new();
     let mut valid: Vec<bool> = Vec::with_capacity(input.len());
     for row in 0..input.len() {
@@ -1151,14 +1199,13 @@ pub fn from_csv(
             }
         }
         let mut bad = tokens.len() != data.len();
-        let mut vals: Vec<Val> = Vec::with_capacity(fields.len());
+        vals.clear();
         for (i, kind) in kinds.iter().enumerate() {
             if Some(i) == corrupt {
                 vals.push(Val::Null);
                 continue;
             }
-            let pos = data.iter().position(|d| *d == i);
-            let t = pos.and_then(|k| tokens.get(k).and_then(|x| x.as_deref()));
+            let t = slot[i].and_then(|k| tokens.get(k).and_then(|x| x.as_deref()));
             let v = match kind {
                 FieldKind::Timestamp => match t {
                     None => Val::Null,
@@ -1228,7 +1275,8 @@ pub fn from_csv(
                     continue;
                 }
                 ParseMode::FailFast => {
-                    return Err(KernelError::malformed_record(text));
+                    // Spark shows the parsed row (`[1,null]`), not the text.
+                    return Err(KernelError::malformed_record(&row_text(&vals)));
                 }
                 ParseMode::Permissive => {
                     for (v, i) in vals.iter_mut().zip(0..) {
@@ -1289,14 +1337,25 @@ fn binary_text(b: &[u8], out: &mut String) {
     out.push(']');
 }
 
-/// One value as the file shows it.
+/// One value as the file shows it. Whitespace at either end is dropped when
+/// the options ask for it (`ignoreLeadingWhiteSpace` and
+/// `ignoreTrailingWhiteSpace`, both on by default when writing), and a value
+/// left empty is written as the empty value.
 fn push_quoted(out: &mut String, value: Option<&str>, o: &ToCsvOptions) {
     let s = &o.syntax;
     let quote = s.quote.unwrap_or('\0');
-    let (text, is_null) = match value {
+    let (mut text, is_null) = match value {
         None => (o.null_value.as_str(), true),
         Some(v) => (v, false),
     };
+    if !is_null {
+        if s.ltrim {
+            text = text.trim_start_matches(|c: char| c <= ' ');
+        }
+        if s.rtrim {
+            text = text.trim_end_matches(|c: char| c <= ' ');
+        }
+    }
     if text.is_empty() {
         if is_null {
             if o.quote_all {
@@ -1336,6 +1395,141 @@ fn push_quoted(out: &mut String, value: Option<&str>, o: &ToCsvOptions) {
     out.push(quote);
 }
 
+/// Spark's text of a nested value: a struct `{a, b}`, an array `[a, b]`, a
+/// map `{k -> v}`, a null element `null`, and scalars as their plain text
+/// (dates and timestamps in the CSV formats).
+fn nested_text(
+    a: &ArrayRef,
+    row: usize,
+    out: &mut String,
+    format_date: &impl Fn(i32) -> Result<String, KernelError>,
+    format_timestamp: &impl Fn(i64) -> Result<String, KernelError>,
+    format_ntz: &impl Fn(i64) -> Result<String, KernelError>,
+) -> Result<(), KernelError> {
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{
+        Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
+        Int64Type, TimestampMicrosecondType,
+    };
+    use std::fmt::Write as _;
+    if a.is_null(row) {
+        out.push_str("null");
+        return Ok(());
+    }
+    let each = |child: &ArrayRef, range: std::ops::Range<usize>, out: &mut String| {
+        for (n, i) in range.enumerate() {
+            if n > 0 {
+                out.push_str(", ");
+            }
+            nested_text(child, i, out, format_date, format_timestamp, format_ntz)?;
+        }
+        Ok::<(), KernelError>(())
+    };
+    match a.data_type() {
+        DataType::Boolean => out.push_str(if a.as_boolean().value(row) {
+            "true"
+        } else {
+            "false"
+        }),
+        DataType::Int8 => {
+            let _ = write!(out, "{}", a.as_primitive::<Int8Type>().value(row));
+        }
+        DataType::Int16 => {
+            let _ = write!(out, "{}", a.as_primitive::<Int16Type>().value(row));
+        }
+        DataType::Int32 => {
+            let _ = write!(out, "{}", a.as_primitive::<Int32Type>().value(row));
+        }
+        DataType::Int64 => {
+            let _ = write!(out, "{}", a.as_primitive::<Int64Type>().value(row));
+        }
+        DataType::Float32 => out.push_str(&java_float_string32(
+            a.as_primitive::<Float32Type>().value(row),
+        )),
+        DataType::Float64 => out.push_str(&java_double_string(
+            a.as_primitive::<Float64Type>().value(row),
+        )),
+        DataType::Decimal128(_, sc) => out.push_str(&java_decimal_string(
+            a.as_primitive::<Decimal128Type>().value(row),
+            *sc,
+        )),
+        DataType::Utf8View => out.push_str(a.as_string_view().value(row)),
+        DataType::Utf8 => out.push_str(a.as_string::<i32>().value(row)),
+        DataType::LargeUtf8 => out.push_str(a.as_string::<i64>().value(row)),
+        DataType::Date32 => out.push_str(&format_date(a.as_primitive::<Date32Type>().value(row))?),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => out.push_str(&format_timestamp(
+            a.as_primitive::<TimestampMicrosecondType>().value(row),
+        )?),
+        DataType::Timestamp(TimeUnit::Microsecond, None) => out.push_str(&format_ntz(
+            a.as_primitive::<TimestampMicrosecondType>().value(row),
+        )?),
+        DataType::List(_) => {
+            let list = a.as_list::<i32>();
+            let o = list.value_offsets();
+            let (lo, hi) = (
+                usize::try_from(o[row]).unwrap_or(0),
+                usize::try_from(o[row + 1]).unwrap_or(0),
+            );
+            out.push('[');
+            each(list.values(), lo..hi, out)?;
+            out.push(']');
+        }
+        DataType::LargeList(_) => {
+            let list = a.as_list::<i64>();
+            let o = list.value_offsets();
+            let (lo, hi) = (
+                usize::try_from(o[row]).unwrap_or(0),
+                usize::try_from(o[row + 1]).unwrap_or(0),
+            );
+            out.push('[');
+            each(list.values(), lo..hi, out)?;
+            out.push(']');
+        }
+        DataType::Struct(_) => {
+            let st = a.as_struct();
+            out.push('{');
+            for (n, child) in st.columns().iter().enumerate() {
+                if n > 0 {
+                    out.push_str(", ");
+                }
+                nested_text(child, row, out, format_date, format_timestamp, format_ntz)?;
+            }
+            out.push('}');
+        }
+        DataType::Map(..) => {
+            let m = a.as_map();
+            let o = m.value_offsets();
+            let (lo, hi) = (
+                usize::try_from(o[row]).unwrap_or(0),
+                usize::try_from(o[row + 1]).unwrap_or(0),
+            );
+            out.push('{');
+            for (n, i) in (lo..hi).enumerate() {
+                if n > 0 {
+                    out.push_str(", ");
+                }
+                nested_text(m.keys(), i, out, format_date, format_timestamp, format_ntz)?;
+                out.push_str(" -> ");
+                nested_text(
+                    m.values(),
+                    i,
+                    out,
+                    format_date,
+                    format_timestamp,
+                    format_ntz,
+                )?;
+            }
+            out.push('}');
+        }
+        other => {
+            return Err(KernelError::unsupported(format!(
+                "CSV with a nested value of type {other}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Renders `col` rows into CSV lines.
 ///
 /// # Errors
@@ -1353,8 +1547,10 @@ pub fn struct_to_csv(
         Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
         Int64Type, TimestampMicrosecondType,
     };
+    use std::fmt::Write as _;
     let mut out = StringBuilder::new();
     let mut line = String::new();
+    let mut cell = String::new();
     for row in 0..col.len() {
         line.clear();
         if col.is_null(row) {
@@ -1366,74 +1562,102 @@ pub fn struct_to_csv(
                 line.push_str(&o.syntax.sep);
             }
             let a = col.column(k);
-            let value: Option<String> = if a.is_null(row) {
-                None
+            cell.clear();
+            let present = if a.is_null(row) {
+                false
             } else {
                 match (kind, a.data_type()) {
-                    (FieldKind::Bool, _) => Some(if a.as_boolean().value(row) {
-                        "true".to_owned()
-                    } else {
-                        "false".to_owned()
-                    }),
+                    (FieldKind::Bool, _) => {
+                        cell.push_str(if a.as_boolean().value(row) {
+                            "true"
+                        } else {
+                            "false"
+                        });
+                        true
+                    }
                     (FieldKind::Int(8), _) => {
-                        Some(a.as_primitive::<Int8Type>().value(row).to_string())
+                        let _ = write!(cell, "{}", a.as_primitive::<Int8Type>().value(row));
+                        true
                     }
                     (FieldKind::Int(16), _) => {
-                        Some(a.as_primitive::<Int16Type>().value(row).to_string())
+                        let _ = write!(cell, "{}", a.as_primitive::<Int16Type>().value(row));
+                        true
                     }
                     (FieldKind::Int(32), _) => {
-                        Some(a.as_primitive::<Int32Type>().value(row).to_string())
+                        let _ = write!(cell, "{}", a.as_primitive::<Int32Type>().value(row));
+                        true
                     }
                     (FieldKind::Int(_), _) => {
-                        Some(a.as_primitive::<Int64Type>().value(row).to_string())
+                        let _ = write!(cell, "{}", a.as_primitive::<Int64Type>().value(row));
+                        true
                     }
-                    (FieldKind::F32, _) => Some(java_float_string32(
-                        a.as_primitive::<Float32Type>().value(row),
-                    )),
-                    (FieldKind::F64, _) => Some(java_double_string(
-                        a.as_primitive::<Float64Type>().value(row),
-                    )),
-                    (FieldKind::Decimal(_, s), _) => Some(java_decimal_string(
-                        a.as_primitive::<Decimal128Type>().value(row),
-                        *s,
-                    )),
+                    (FieldKind::F32, _) => {
+                        cell.push_str(&java_float_string32(
+                            a.as_primitive::<Float32Type>().value(row),
+                        ));
+                        true
+                    }
+                    (FieldKind::F64, _) => {
+                        cell.push_str(&java_double_string(
+                            a.as_primitive::<Float64Type>().value(row),
+                        ));
+                        true
+                    }
+                    (FieldKind::Decimal(_, s), _) => {
+                        cell.push_str(&java_decimal_string(
+                            a.as_primitive::<Decimal128Type>().value(row),
+                            *s,
+                        ));
+                        true
+                    }
                     (FieldKind::Str, DataType::Utf8View) => {
-                        Some(a.as_string_view().value(row).to_owned())
+                        cell.push_str(a.as_string_view().value(row));
+                        true
                     }
                     (FieldKind::Str, DataType::Utf8) => {
-                        Some(a.as_string::<i32>().value(row).to_owned())
+                        cell.push_str(a.as_string::<i32>().value(row));
+                        true
                     }
-                    (FieldKind::Str, _) => Some(a.as_string::<i64>().value(row).to_owned()),
+                    (FieldKind::Str, _) => {
+                        cell.push_str(a.as_string::<i64>().value(row));
+                        true
+                    }
                     (FieldKind::Bin, DataType::BinaryView) => {
-                        let mut s = String::new();
-                        binary_text(a.as_binary_view().value(row), &mut s);
-                        Some(s)
+                        binary_text(a.as_binary_view().value(row), &mut cell);
+                        true
                     }
                     (FieldKind::Bin, DataType::Binary) => {
-                        let mut s = String::new();
-                        binary_text(a.as_binary::<i32>().value(row), &mut s);
-                        Some(s)
+                        binary_text(a.as_binary::<i32>().value(row), &mut cell);
+                        true
                     }
                     (FieldKind::Bin, _) => {
-                        let mut s = String::new();
-                        binary_text(a.as_binary::<i64>().value(row), &mut s);
-                        Some(s)
+                        binary_text(a.as_binary::<i64>().value(row), &mut cell);
+                        true
                     }
                     (FieldKind::Date, _) => {
-                        Some(format_date(a.as_primitive::<Date32Type>().value(row))?)
+                        cell.push_str(&format_date(a.as_primitive::<Date32Type>().value(row))?);
+                        true
                     }
-                    (FieldKind::Timestamp, _) => Some(format_timestamp(
-                        a.as_primitive::<TimestampMicrosecondType>().value(row),
-                    )?),
-                    (FieldKind::TimestampNtz, _) => Some(format_ntz(
-                        a.as_primitive::<TimestampMicrosecondType>().value(row),
-                    )?),
-                    (FieldKind::Null, _) => None,
+                    (FieldKind::Timestamp, _) => {
+                        cell.push_str(&format_timestamp(
+                            a.as_primitive::<TimestampMicrosecondType>().value(row),
+                        )?);
+                        true
+                    }
+                    (FieldKind::TimestampNtz, _) => {
+                        cell.push_str(&format_ntz(
+                            a.as_primitive::<TimestampMicrosecondType>().value(row),
+                        )?);
+                        true
+                    }
+                    (FieldKind::Nested, _) => {
+                        nested_text(a, row, &mut cell, format_date, format_timestamp, format_ntz)?;
+                        true
+                    }
+                    (FieldKind::Null, _) => false,
                 }
             };
-            let mut rendered = String::new();
-            push_quoted(&mut rendered, value.as_deref(), o);
-            line.push_str(&rendered);
+            push_quoted(&mut line, present.then_some(cell.as_str()), o);
         }
         out.append_value(&line);
     }
