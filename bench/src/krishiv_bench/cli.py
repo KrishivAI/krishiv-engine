@@ -126,6 +126,19 @@ def main(argv=None) -> None:
     xb.add_argument("--threads", type=int, default=8, help="threads for both sides")
     xb.add_argument("--memory-limit", default="12g", help="memory limit for both sides")
     xb.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    lg = sub.add_parser(
+        "ledger",
+        help="gap ledger: Krishiv vs DuckDB wall time split into operator buckets (perf + DuckDB profile)",
+    )
+    lg.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    lg.add_argument("--sf", type=float, default=10)
+    lg.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
+    lg.add_argument("--queries", help="comma list, e.g. q01,q05")
+    lg.add_argument("--threads", type=int, default=12)
+    lg.add_argument("--memory-limit", default="32g")
+    lg.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    lg.add_argument("--previous", help="ledger JSON to diff against (default: the newest earlier one)")
+    lg.add_argument("--runner", help=RUNNER_HELP + "; build it with frame pointers (see ledger.py)")
     rr = sub.add_parser(
         "reproduce",
         help="reference engines side by side: correctness vs DuckDB, then ours (interleaved) and/or theirs (best of N)",
@@ -183,6 +196,20 @@ def main(argv=None) -> None:
             a.runs,
             a.their_timeout,
             a.profile,
+        )
+    elif a.cmd == "ledger":
+        from .ledger import run_ledger
+
+        run_ledger(
+            a.suite,
+            a.sf,
+            a.dataset,
+            a.queries.split(",") if a.queries else None,
+            a.threads,
+            a.memory_limit,
+            a.timeout,
+            a.runner,
+            a.previous,
         )
     elif a.cmd == "abba":
         from .abba import run_abba
