@@ -87,7 +87,13 @@
       "Bash(docker compose -f * config *)",
       "Bash(docker compose -f * stop *)",
       "Bash(docker ps:*)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(tmux ls)",
+      "Bash(tmux capture-pane *)",
+      "Bash(typos)",
+      "Bash(crontab -l)",
+      "Bash(sccache --show-stats)",
+      "Bash(systemctl --user status *)"
     ],
     "deny": [
       "Bash(git push origin main:*)",
