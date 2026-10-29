@@ -40,6 +40,8 @@ use krishiv_plan::{
     Cte, Expr, ExprNode, LogicalPlan, Origin, PlanNode, ReadSource, Scan, TableVersion,
 };
 
+use crate::cache::{RelationCache, is_cache_name};
+
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
 /// The namespace temporary tables live in.
@@ -257,6 +259,11 @@ pub(crate) struct FileScans {
 /// table providers of its scans.
 pub(crate) struct QueryCatalog {
     session: Arc<SessionCatalog>,
+    cache: Arc<RelationCache>,
+    /// The cached snapshots this query's plan was rewritten to scan, by
+    /// hidden name: held so a concurrent `CLEAR CACHE` cannot pull them out
+    /// from under the query between substitution and planning.
+    pinned: Mutex<HashMap<String, Arc<MemoryTable>>>,
     files: Arc<FileReads>,
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
@@ -277,18 +284,29 @@ impl fmt::Debug for QueryCatalog {
 impl QueryCatalog {
     pub(crate) fn new(
         session: Arc<SessionCatalog>,
+        cache: Arc<RelationCache>,
         files: Arc<FileReads>,
         scans: FileScans,
     ) -> Self {
         let epoch = session.epoch();
         Self {
             session,
+            cache,
+            pinned: Mutex::new(HashMap::new()),
             files,
             scans,
             loaded: Mutex::new(HashMap::new()),
             opened: Mutex::new(Vec::new()),
             epoch,
         }
+    }
+
+    /// Keeps the snapshot `table` for this query's scans of the hidden `name`.
+    pub(crate) fn pin_cached(&self, name: String, table: Arc<MemoryTable>) {
+        self.pinned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(name, table);
     }
 
     fn loaded(&self, name: &str) -> Option<Arc<TempTable>> {
@@ -817,6 +835,17 @@ impl TableProviderResolver for QueryCatalog {
                 let last = name.last().map_or("", String::as_str);
                 // Analysis loaded every table a scan names.
                 let Some(table) = self.loaded(last) else {
+                    // ...except a cached snapshot substituted after
+                    // analysis, which reads the relation cache instead.
+                    let pinned = self
+                        .pinned
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .get(last)
+                        .cloned();
+                    if let Some(cached) = pinned.or_else(|| self.cache.table(last)) {
+                        return Ok(cached as Arc<dyn TableProvider>);
+                    }
                     return Err(InternalError {
                         message: format!("the scanned table {last} was not loaded"),
                     }
@@ -886,16 +915,17 @@ impl Expander<'_> {
         plan: Arc<LogicalPlan>,
         scope: &mut Vec<String>,
     ) -> Result<Arc<LogicalPlan>, KrishivError> {
-        // Snapshot pins are unreachable from user input however a read
-        // spells them: a read of one behaves exactly as a missing table,
-        // with or without read options. (The pins snapshot views read are
-        // scans, which pass through untouched below.)
+        // Snapshot pins and cached snapshots are unreachable from user
+        // input however a read spells them: a read of one behaves exactly
+        // as a missing table, with or without read options. (The pins
+        // snapshot views read are scans, which pass through untouched
+        // below.)
         if let PlanNode::Read(ReadSource::Table { name, .. }) = &plan.node
             && let [view] = name.as_slice()
             && !scope
                 .iter()
                 .any(|c| same_name(c, view, self.case_sensitive))
-            && is_hidden_name(view)
+            && (is_hidden_name(view) || is_cache_name(view))
         {
             return Err(TableOrViewNotFound {
                 relation_name: quote(view),
@@ -1187,7 +1217,7 @@ impl Pinner<'_> {
             && let ReadSource::Table { name, .. } = &scan.source
             && let Some(last) = name.last()
         {
-            if is_hidden_name(last) {
+            if is_hidden_name(last) || is_cache_name(last) {
                 self.owned.insert(last.to_lowercase());
                 return Ok(Arc::clone(plan));
             }
@@ -1260,13 +1290,19 @@ fn search_path() -> String {
 }
 
 /// `name` rejected as a temporary table or view name: it starts with the
-/// reserved snapshot prefix ([`HIDDEN_PREFIX`]), in any letter case. The
-/// `KRISHIV_RESERVED_TEMP_VIEW_NAME` error names the reserved prefix in
-/// its `prefix` parameter.
+/// reserved snapshot prefix ([`HIDDEN_PREFIX`]) or the cache prefix
+/// ([`CACHE_PREFIX`](crate::cache::CACHE_PREFIX)), in any letter case. The
+/// `KRISHIV_RESERVED_TEMP_VIEW_NAME` error names the matched prefix in its
+/// `prefix` parameter.
 pub(crate) fn reserved_temp_view_name(name: &str) -> KrishivError {
+    let prefix = if is_cache_name(name) {
+        crate::cache::CACHE_PREFIX
+    } else {
+        HIDDEN_PREFIX
+    };
     KrishivReservedTempViewName {
         relation_name: quote(name),
-        prefix: format!("`{HIDDEN_PREFIX}`"),
+        prefix: format!("`{prefix}`"),
     }
     .into()
 }
