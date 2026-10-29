@@ -144,7 +144,8 @@ pub(crate) fn spawn_driver(run: Arc<PipelineRun>, partition: u32) -> TaskHandle 
         query: Arc::clone(&query),
         executor: Arc::clone(&executor),
     };
-    executor.spawn(query.class(), Box::pin(timed))
+    let name = crate::console::driver_task_name(query.id(), pipeline, partition);
+    crate::console::spawn_named(&executor, &query, query.class(), &name, Box::pin(timed))
 }
 
 async fn drive(run: Arc<PipelineRun>, partition: u32) -> Result<()> {
@@ -226,6 +227,10 @@ impl Future for Timed {
 /// The file is opened once per thread and read with `pread`: a poll costs
 /// one syscall instead of open, statx, two reads and close.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "reading a pseudo-file served from memory with one pread per poll never blocks: the only deliberate sync read on a worker"
+)]
 fn runqueue_wait() -> Option<Duration> {
     use std::os::unix::fs::FileExt;
     thread_local! {

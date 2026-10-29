@@ -132,10 +132,13 @@ impl OutputSpill {
         // Always alive here: `self` is borrowed from the `Arc`.
         if let Some(me) = self.me.upgrade() {
             *running = true;
-            drop(
-                self.executor
-                    .spawn(self.query.class(), Box::pin(me.serve())),
-            );
+            drop(crate::console::spawn_named(
+                &self.executor,
+                &self.query,
+                self.query.class(),
+                &crate::console::io_task_name("spill"),
+                Box::pin(me.serve()),
+            ));
         }
     }
 
@@ -204,6 +207,10 @@ impl Spillable for OutputSpill {
 }
 
 #[cfg(all(test, not(loom)))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing via #[tokio::test]; never runs on a compute worker"
+)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

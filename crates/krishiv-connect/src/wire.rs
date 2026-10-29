@@ -28,9 +28,9 @@
 //! Only then does `prost` decode, on a thread with a big stack when the
 //! message is deeper than a few levels (`stack`). A server must decode with
 //! these functions, not with the codec of its gRPC stack: clippy's
-//! `disallowed_methods` (`clippy.toml`) rejects any other call of prost's
-//! decoding methods in the workspace, because the feature applies to every
-//! crate linked with this one.
+//! `disallowed_methods` (`clippy.toml`, denied at this crate's root)
+//! rejects any other call of prost's decoding methods in this crate,
+//! because the feature applies to every crate linked with this one.
 
 use std::ops::Deref;
 

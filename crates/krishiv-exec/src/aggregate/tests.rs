@@ -3,6 +3,10 @@
 //! queries are quoted next to each case); the property test compares with
 //! a row-at-a-time oracle.
 #![cfg(not(loom))]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing; never runs on a compute worker"
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

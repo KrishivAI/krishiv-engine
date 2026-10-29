@@ -76,7 +76,7 @@ def test_native_stub_matches_runtime() -> None:
     krishiv_native = pytest.importorskip("krishiv._native")
     tree = ast.parse((_installed_package_dir() / "_native.pyi").read_text())
     classes = _stub_methods(tree)
-    assert set(classes) == {"Session", "DataFrame", "GroupedData", "Column", "ArrowStream"}
+    assert set(classes) == {"Session", "DataFrame", "GroupedData", "Column", "WindowSpec", "ArrowStream"}
     for cls_name, methods in classes.items():
         runtime = getattr(krishiv_native, cls_name)
         for name, fn in methods.items():

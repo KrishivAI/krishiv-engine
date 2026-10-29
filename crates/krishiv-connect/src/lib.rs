@@ -5,6 +5,12 @@
 //! ([`arrow`]).
 
 #![forbid(unsafe_code)]
+// Untrusted bytes decode only through `wire`'s bounded decoder: the banned
+// prost paths live in the workspace `clippy.toml`, denied here (the
+// workspace level stays silent for crates with no compute worker).
+// Deliberate use carries `#[expect(clippy::disallowed_methods, reason =
+// "...")]`.
+#![deny(clippy::disallowed_methods)]
 
 pub mod arrow;
 pub mod proto;

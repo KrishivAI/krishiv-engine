@@ -54,6 +54,7 @@ pub fn krishiv_session::functions::count_star() -> krishiv_session::Column
 pub fn krishiv_session::functions::expr(&str) -> core::result::Result<krishiv_session::Column, krishiv_common::error::KrishivError>
 pub fn krishiv_session::functions::lit(impl krishiv_session::functions::IntoLiteral) -> krishiv_session::Column
 pub fn krishiv_session::functions::lit_null() -> krishiv_session::Column
+pub fn krishiv_session::functions::map_literal(alloc::vec::Vec<(alloc::string::String, alloc::string::String)>) -> krishiv_session::Column
 pub fn krishiv_session::functions::max(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::min(krishiv_session::Column) -> krishiv_session::Column
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
@@ -129,6 +130,8 @@ pub fn krishiv_session::Column::lt_eq(self, impl core::convert::Into<Self>) -> S
 pub fn krishiv_session::Column::not_eq(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::or(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::try_cast(self, krishiv_types::data_type::DataType) -> Self
+impl krishiv_session::Column
+pub fn krishiv_session::Column::over(self, krishiv_session::WindowSpec) -> Self
 impl core::clone::Clone for krishiv_session::Column
 pub fn krishiv_session::Column::clone(&self) -> krishiv_session::Column
 impl core::cmp::Eq for krishiv_session::Column
@@ -370,6 +373,23 @@ pub fn krishiv_session::StatementInfo::eq(&self, &krishiv_session::StatementInfo
 impl core::fmt::Debug for krishiv_session::StatementInfo
 pub fn krishiv_session::StatementInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::StatementInfo
+pub struct krishiv_session::WindowSpec
+impl krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::new() -> Self
+pub fn krishiv_session::WindowSpec::order_by(self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::WindowSpec::partition_by(self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::WindowSpec::range_between(self, i64, i64) -> Self
+pub fn krishiv_session::WindowSpec::rows_between(self, i64, i64) -> Self
+impl core::clone::Clone for krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::clone(&self) -> krishiv_session::WindowSpec
+impl core::cmp::Eq for krishiv_session::WindowSpec
+impl core::cmp::PartialEq for krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::eq(&self, &krishiv_session::WindowSpec) -> bool
+impl core::default::Default for krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::default() -> Self
+impl core::fmt::Debug for krishiv_session::WindowSpec
+pub fn krishiv_session::WindowSpec::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::WindowSpec
 pub const krishiv_session::VERBOSE_FORMAT: &str
 pub const krishiv_session::VERBOSE_VERSION: u64
 pub fn krishiv_session::dot_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String

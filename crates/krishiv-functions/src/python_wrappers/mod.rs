@@ -71,6 +71,10 @@ pub(crate) struct Row {
     check: Check,
     reversed: bool,
     deprecated: Option<&'static str>,
+    /// A parameter with a `None` default that is sent even when `None` (as a SQL NULL) instead
+    /// of being left out of the call: `lag`/`lead`'s `default`, which the parser fills with NULL,
+    /// so the wrapper builds the same call the SQL form builds.
+    always: Option<&'static str>,
 }
 
 impl Row {
@@ -83,6 +87,7 @@ impl Row {
             check: Check::None,
             reversed: false,
             deprecated: None,
+            always: None,
         }
     }
 
@@ -95,6 +100,12 @@ impl Row {
     /// Sends the arguments to the registry in reverse order.
     pub(crate) const fn reversed(mut self) -> Self {
         self.reversed = true;
+        self
+    }
+
+    /// Sends `param` even when it is `None` (as a SQL NULL).
+    pub(crate) const fn always(mut self, param: &'static str) -> Self {
+        self.always = Some(param);
         self
     }
 
@@ -179,11 +190,11 @@ impl Param {
         }
     }
 
-    fn argument(&self) -> String {
+    fn argument(&self, always: bool) -> String {
         let (name, helper) = (&self.name, self.conv.helper());
         if self.variadic {
             format!("*_cols({name})")
-        } else if self.default.as_deref() == Some("None") {
+        } else if !always && self.default.as_deref() == Some("None") {
             format!("*_opt({helper}, {name}, \"{name}\")")
         } else {
             format!("{helper}({name}, \"{name}\")")
@@ -299,7 +310,10 @@ fn natural_cmp(a: &str, b: &str) -> Ordering {
 fn render_function(row: &Row, params: &[Param]) -> (String, String) {
     let declarations: Vec<String> = params.iter().map(Param::declaration).collect();
     let head = format!("def {}(", row.py);
-    let mut args: Vec<String> = params.iter().map(Param::argument).collect();
+    let mut args: Vec<String> = params
+        .iter()
+        .map(|p| p.argument(row.always == Some(p.name.as_str())))
+        .collect();
     if row.reversed {
         args.reverse();
     }

@@ -786,7 +786,7 @@ def kurtosis(col: ColumnOrName) -> Column:
 
 def lag(col: ColumnOrName, offset: int = 1, default: Any | None = None) -> Column:
     """Calls the registry function ``lag``."""
-    return _call("lag", _named(col, "col"), _lit(offset, "offset"), *_opt(_lit, default, "default"))
+    return _call("lag", _named(col, "col"), _lit(offset, "offset"), _lit(default, "default"))
 
 
 def last(col: ColumnOrName, ignorenulls: bool = False) -> Column:
@@ -811,7 +811,7 @@ def lcase(str: ColumnOrName) -> Column:
 
 def lead(col: ColumnOrName, offset: int = 1, default: Any | None = None) -> Column:
     """Calls the registry function ``lead``."""
-    return _call("lead", _named(col, "col"), _lit(offset, "offset"), *_opt(_lit, default, "default"))
+    return _call("lead", _named(col, "col"), _lit(offset, "offset"), _lit(default, "default"))
 
 
 def least(*cols: ColumnOrName) -> Column:

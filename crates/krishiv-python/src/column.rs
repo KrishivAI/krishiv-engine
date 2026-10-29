@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyInt, PyString};
 
 use crate::errors::to_py;
+use crate::window::PyWindowSpec;
 
 /// A column expression.
 #[pyclass(name = "Column", module = "krishiv._native", frozen, from_py_object)]
@@ -148,6 +149,11 @@ impl PyColumn {
             (false, true) => c.desc_nulls_first(),
             (false, false) => c.desc(),
         })
+    }
+
+    /// `self OVER window` (PySpark's `Column.over`).
+    fn over(&self, window: &PyWindowSpec) -> Self {
+        Self::wrap(self.inner.clone().over(window.inner.clone()))
     }
 }
 

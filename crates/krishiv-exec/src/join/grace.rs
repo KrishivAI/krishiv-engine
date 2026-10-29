@@ -1370,6 +1370,10 @@ fn scatter(
 /// no rows). `RUSTFLAGS="--cfg loom" cargo test -p krishiv-exec --lib
 /// --release loom_model::`.
 #[cfg(all(test, loom))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "loom's own deterministic block_on inside a model; never runs on a compute worker"
+)]
 mod loom_model {
     use loom::future::block_on;
     use loom::thread;
@@ -1456,6 +1460,10 @@ mod loom_model {
 
 // Real pools and spill files: not under loom (loom state outside a model).
 #[cfg(all(test, not(loom)))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only temp-dir cleanup; never runs on a compute worker"
+)]
 mod tests {
     use arrow_array::{Int64Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};

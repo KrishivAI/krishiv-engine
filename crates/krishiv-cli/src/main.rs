@@ -86,6 +86,8 @@ fn main() {
 
 #[inline(never)]
 fn run() {
+    #[cfg(feature = "tokio-console")]
+    krishiv::maybe_init_tokio_console();
     let cli = Cli::parse();
     match cli.command {
         Command::Sql(args) => std::process::exit(sql::run(&args)),

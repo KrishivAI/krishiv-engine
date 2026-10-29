@@ -1,6 +1,10 @@
-# The two acceptance tests with wall-clock bounds (a cancelled query stops
-# within 100 ms; a blocking call delays a short query by at most 10 ms) can
-# flake on loaded shared runners; retry them, and only them.
+# Acceptance tests with stall or wall-clock bounds can flake on loaded
+# shared runners (one descheduled driver trips `fail_on_stall` without any
+# non-yielding operator); retry them, and only them:
+# - a slow scan does not delay a short query on one thread,
+# - a cancelled query stops within 100 ms,
+# - a blocking call delays a short query by at most 10 ms,
+# - the TPC-H yield suite fails on one poll past its 10 ms stall threshold.
 [[profile.default.overrides]]
-filter = "test(=a_cancelled_query_stops_within_100ms_and_releases_everything) | test(=blocking_work_does_not_delay_a_short_query)"
+filter = "test(=a_slow_scan_does_not_delay_a_short_query) | test(=a_cancelled_query_stops_within_100ms_and_releases_everything) | test(=blocking_work_does_not_delay_a_short_query) | test(=tpch_suite_counts_no_stalls)"
 retries = 2

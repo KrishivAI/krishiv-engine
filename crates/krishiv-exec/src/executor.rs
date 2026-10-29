@@ -55,6 +55,9 @@ pub trait Executor: Send + Sync + fmt::Debug {
     ) -> BoxFuture<'static, Result<()>>;
     /// The I/O runtime, for object-store and network futures.
     fn io_handle(&self) -> &Handle;
+    /// The compute runtime's handle, for spawning named tasks
+    /// ([`console`](crate::console) uses it for tokio-console task names).
+    fn compute_handle(&self) -> &Handle;
     /// Worker slots: the most drivers one pipeline runs at once.
     fn parallelism(&self) -> usize;
     /// The time source of the stall detector and the metrics (the paused
@@ -344,6 +347,10 @@ impl Executor for TokioExecutor {
         &self.io
     }
 
+    fn compute_handle(&self) -> &Handle {
+        &self.compute
+    }
+
     fn parallelism(&self) -> usize {
         self.parallelism
     }
@@ -357,6 +364,10 @@ impl Executor for TokioExecutor {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing and sleeps; never runs on a compute worker"
+)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
