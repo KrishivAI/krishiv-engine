@@ -111,3 +111,38 @@ def test_sql_clear_cache(spark: SparkSession) -> None:
     assert cached.count() == 1
     spark.sql("CLEAR CACHE")
     assert not cached.is_cached
+
+
+def test_catalog_cache_calls_check_argument_types(spark: SparkSession) -> None:
+    catalog = spark.catalog
+    for call in (
+        catalog.uncacheTable,
+        catalog.refreshTable,
+        catalog.refreshByPath,
+        catalog.isCached,
+        catalog.cacheTable,
+    ):
+        with pytest.raises(TypeError):
+            call(1)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(TypeError):
+        catalog.cacheTable("t", "MEMORY_ONLY")  # ty: ignore[invalid-argument-type]
+
+
+def test_refresh_by_path_and_refresh_table(spark: SparkSession) -> None:
+    spark.createDataFrame([(1, "a")], ["age", "name"]).createOrReplaceTempView("t")
+    cached = spark.table("t").cache()
+    assert cached.count() == 1
+    spark.catalog.refreshByPath("/no/such/dir")
+    assert spark.catalog.refreshTable("t").count() == 1
+
+
+def test_storage_level_repr_str_and_equality() -> None:
+    level = StorageLevel(True, True, False, True, 2)
+    assert repr(level) == "StorageLevel(True, True, False, True, 2)"
+    assert str(level) == "Disk Deserialized 2x Replicated"
+    assert str(StorageLevel.MEMORY_ONLY) == "Memory Deserialized 1x Replicated"
+    assert str(StorageLevel.OFF_HEAP) == "OffHeap Serialized 1x Replicated"
+    assert str(StorageLevel(False, False, False, False)) == "Serialized 1x Replicated"
+    assert level == StorageLevel(True, True, False, True, 2)
+    assert level != StorageLevel.MEMORY_AND_DISK
+    assert level != "Disk"
