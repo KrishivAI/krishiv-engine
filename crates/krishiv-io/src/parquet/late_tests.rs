@@ -118,6 +118,35 @@ fn the_filter_follows_each_row_groups_measured_fraction() {
     assert_eq!(zeros.len(), 25 + 1 + 10, "every matching row survives");
 }
 
+/// The decoder counts the row groups it decoded with and without the
+/// filter, and the rows the filter evaluated and kept (not the measured
+/// sample of a row group read whole).
+#[test]
+fn the_decoder_reports_how_the_filter_ran() {
+    let env = Env::new();
+    let (f, o, _) = file(&env);
+    let schema = env
+        .rt
+        .block_on(
+            env.io
+                .read_metadata(&ParquetFormat, &f, MetadataNeeds::default(), &o),
+        )
+        .unwrap()
+        .schema();
+    let mut req = ScanRequest::new(schema, vec![ColumnPath::new("k"), ColumnPath::new("v")]);
+    req.predicate = Some(k_is_zero());
+    req.row_filter = RowFilterPolicy::Auto;
+    let (out, m) = env.scan_metered(&f, &req, &o).unwrap();
+    assert_eq!(rows(&out), 25 + 5000 + 10);
+    assert_eq!((m.units_filtered, m.units_unfiltered), (2, 1));
+    assert_eq!((m.row_filter_rows, m.row_filter_kept), (2 * 5000, 25 + 10));
+    assert_eq!(m.rows, 25 + 5000 + 10);
+    req.row_filter = RowFilterPolicy::Off;
+    let (_, m) = env.scan_metered(&f, &req, &o).unwrap();
+    assert_eq!((m.units_filtered, m.units_unfiltered), (0, 3));
+    assert_eq!((m.row_filter_rows, m.row_filter_kept), (0, 0));
+}
+
 /// `krishiv.io.lateMaterialization` decides the scans that leave the
 /// policy to the session (`auto` requests); the scan's own
 /// `lateMaterialization` option beats the session's, and a request that
