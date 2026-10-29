@@ -453,17 +453,20 @@ pub fn range_slice(
 
 /// The number of rows of `range(start, end, step)`.
 pub fn range_count(start: i64, end: i64, step: i64) -> i128 {
-    if step > 0 {
-        if start >= end {
-            return 0;
-        }
-        (i128::from(end) - i128::from(start) + i128::from(step) - 1) / i128::from(step)
+    // Widened before negating: `-i64::MIN` does not fit `i64`. A zero step
+    // has no rows (the analyzer and decoder reject it; this never divides).
+    let (start, end, step) = (i128::from(start), i128::from(end), i128::from(step));
+    let (span, stride) = if step > 0 {
+        (end - start, step)
+    } else if step < 0 {
+        (start - end, -step)
     } else {
-        if start <= end {
-            return 0;
-        }
-        (i128::from(start) - i128::from(end) + i128::from(-step) - 1) / i128::from(-step)
+        return 0;
+    };
+    if span <= 0 {
+        return 0;
     }
+    (span + stride - 1) / stride
 }
 
 /// The `[lo, hi)` element indices of one slice of `count` rows.
@@ -675,6 +678,21 @@ mod tests {
             "{:?}",
             params_of(&r)
         );
+    }
+
+    /// The row count never divides by zero and survives `i64::MIN`.
+    #[test]
+    fn range_count_is_total() {
+        assert_eq!(range_count(0, 10, 3), 4);
+        assert_eq!(range_count(10, 0, -3), 4);
+        assert_eq!(range_count(5, 1, 1), 0);
+        assert_eq!(range_count(1, 5, -1), 0);
+        // A zero step has no rows rather than a division by zero.
+        assert_eq!(range_count(10, 0, 0), 0);
+        assert_eq!(range_count(0, 10, 0), 0);
+        // `-i64::MIN` is 2^63: one row from the top of the range.
+        assert_eq!(range_count(i64::MAX, i64::MIN, i64::MIN), 2);
+        assert_eq!(range_count(0, i64::MIN, i64::MIN), 1);
     }
 
     #[test]

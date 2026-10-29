@@ -433,6 +433,10 @@ impl Decoder {
         Ok(match required(&m.kind, "a node kind")? {
             Kind::Scan(s) => PhysNode::Scan(self.scan(s)?),
             Kind::OneRow(_) => PhysNode::OneRow,
+            Kind::Range(r) if r.step == 0 => return Err(corrupt("a range with step 0")),
+            Kind::Range(r) if r.num_slices == Some(0) => {
+                return Err(corrupt("a range with 0 slices"));
+            }
             Kind::Range(r) => PhysNode::Range(krishiv_exec::physical::RangeNode {
                 start: r.start,
                 end: r.end,

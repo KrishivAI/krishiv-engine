@@ -1605,10 +1605,13 @@ impl Accumulator {
             (Kind::Moments(m), false) => {
                 let cols = args.iter().map(|a| floats(a)).collect::<Result<Vec<_>>>()?;
                 let cols: Vec<&[f64]> = cols.iter().map(AsRef::as_ref).collect();
+                // A row the mask drops (`FILTER (WHERE ...)`) is skipped like
+                // a NULL argument.
                 let all_valid = |i: usize| {
-                    nulls
-                        .iter()
-                        .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
+                    active(i)
+                        && nulls
+                            .iter()
+                            .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
                 };
                 m.update(groups, &cols, all_valid)?;
             }

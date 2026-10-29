@@ -690,6 +690,12 @@ fn strength_reduce_comparison(op: Builtin, left: &Bound, right: &Bound) -> Compa
     /// The value of a bound decimal literal, if the bound expression is one:
     /// its unscaled value and scale.
     fn decimal(b: &Bound) -> Option<(i128, u32)> {
+        // Only a written decimal literal: a session variable binds its value
+        // as a literal too but keeps its name (`shown`), and Spark's rule
+        // matches `DecimalLiteral`, not `VariableReference`.
+        if b.shown.is_some() {
+            return None;
+        }
         match &b.expr.node {
             ExprNode::Literal(Literal::Decimal {
                 unscaled,

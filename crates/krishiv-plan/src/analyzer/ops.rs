@@ -2037,7 +2037,24 @@ impl Resolver<'_> {
                 ),
                 &r1_cx,
             )?;
-            new_call.insert(calls[i].0.clone(), b.expr);
+            let mut replaced = b.expr;
+            // A global count over no rows is 0, but `first` of the zero
+            // partial rows the second phase sees is NULL: the count family
+            // is coalesced to 0 (a grouped query always has a row per group).
+            if matches!(calls[i].1.id.name(), "count" | "count_if") {
+                replaced = self
+                    .bind(
+                        &synth_call(
+                            "coalesce",
+                            vec![replaced, Arc::new(Literal::Long(0).into())],
+                            None,
+                            origin,
+                        ),
+                        &r1_cx,
+                    )?
+                    .expr;
+            }
+            new_call.insert(calls[i].0.clone(), replaced);
         }
         // The grouping over the first aggregate, and the select list with
         // its calls and grouping expressions replaced. Keys match through

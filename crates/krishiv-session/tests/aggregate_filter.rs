@@ -178,6 +178,16 @@ fn filter_reads_only_passing_rows() -> R {
         )?,
         ["1|30"]
     );
+    // Moment aggregates read only the passing rows too: `b` is 10 and 20
+    // where `a = 1` (population variance 25) and 10 on every `p` row (0).
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT VAR_POP(b) FILTER (WHERE a = 1), VAR_POP(b) FILTER (WHERE p), \
+             STDDEV_SAMP(b) FILTER (WHERE a = 1) FROM t",
+        )?,
+        ["25.0|0.0|7.0710678118654755"]
+    );
     Ok(())
 }
 
@@ -493,6 +503,21 @@ fn having_over_multi_distinct() -> R {
             "SELECT a, COUNT(DISTINCT a) FROM t GROUP BY a HAVING COUNT(DISTINCT b) > 1 ORDER BY a",
         )?,
         "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    Ok(())
+}
+
+/// A global aggregate over no rows is one row: the regular counts beside
+/// several DISTINCT argument sets are 0, not NULL.
+#[test]
+fn counts_beside_multi_distinct_over_empty_input_are_zero() -> R {
+    let s = session()?;
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT COUNT(*), COUNT(b), COUNT(DISTINCT a), COUNT(DISTINCT b) FROM t WHERE false",
+        )?,
+        ["0|0|0|0"]
     );
     Ok(())
 }

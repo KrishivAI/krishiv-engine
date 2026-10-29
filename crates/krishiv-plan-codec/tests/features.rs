@@ -836,3 +836,21 @@ fn subquery_in_values_with_a_udf_need_rust_udf() {
     });
     assert!(plan_features(&plan).contains(&Feature::RustUdf));
 }
+
+/// A `Range` node of a decoded plan is external input: a zero step (which
+/// would divide by zero counting rows) and a zero slice count are corrupt.
+#[test]
+fn range_nodes_with_a_zero_step_or_zero_slices_are_corrupt() {
+    let edit = |f: &dyn Fn(&mut pb::RangeNode)| {
+        let mut m = message("range");
+        for node in &mut m.nodes {
+            if let Some(pb::node::Kind::Range(r)) = node.kind.as_mut() {
+                f(r);
+            }
+        }
+        m
+    };
+    assert!(decode(&edit(&|_| {}).encode_to_vec()).is_ok());
+    corrupt(&edit(&|r| r.step = 0), "a range with step 0");
+    corrupt(&edit(&|r| r.num_slices = Some(0)), "a range with 0 slices");
+}

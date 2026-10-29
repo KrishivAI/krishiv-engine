@@ -236,7 +236,7 @@ const GOLDEN_DEVIATIONS: &[(&str, &str)] = &[
     ),
     (
         "SELECT EXTRACT(IDENTIFIER('YEAR') FROM DATE'2024-01-15')",
-        "covered by `extract_identifier_reports_the_missing_paren`; listed until the golden run is green",
+        "the default-mode case matches (`extract_identifier_reports_the_missing_paren`); only the `identifier-clause-legacy` case [234] still differs",
     ),
     (
         "DESC FORMATTED t a AS JSON",
@@ -533,8 +533,8 @@ fn golden_syntax_negatives_match_spark() {
         }
     }
     assert!(
-        cases.len() >= 33,
-        "too few syntax-negative cases: {}",
+        cases.len() == 175,
+        "syntax-negative case count changed: {}",
         cases.len()
     );
     let mut mismatches: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -678,6 +678,19 @@ fn filter_without_where_reports_the_paren() {
         [("error", "'('".to_owned()), ("hint", String::new())]
     );
     assert_eq!(e.span.range(), 22..23);
+}
+
+/// The higher-order function `filter(array, f)` is no aggregate `FILTER`: a
+/// failure inside its arguments keeps its own position.
+#[test]
+fn higher_order_filter_keeps_its_error_position() {
+    let d = ParserOptions::default();
+    let sql = "SELECT filter(a, x -> x > 1 2) FROM t";
+    let e = parse_statement(sql, &d).unwrap_err();
+    assert_eq!(e.error.error_class().name(), "PARSE_SYNTAX_ERROR");
+    assert_eq!(e.error.message_parameters()[0], ("error", "'2'".to_owned()));
+    let at = sql.find('2').unwrap();
+    assert_eq!(e.span.range(), at..at + 1);
 }
 
 /// `EXTRACT(IDENTIFIER('...') FROM ...)` reports `FROM` with the missing `)`.

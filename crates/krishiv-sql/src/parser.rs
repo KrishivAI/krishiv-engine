@@ -1029,6 +1029,11 @@ impl<'s> Parser<'s> {
             if open.kind != TokenKind::Sym(Sym::LParen) {
                 continue;
             }
+            // An aggregate `FILTER` follows the `)` that closes the call;
+            // the higher-order function `filter(array, x -> p)` does not.
+            if i == 0 || self.toks[i - 1].kind != TokenKind::Sym(Sym::RParen) {
+                continue;
+            }
             // The `(` whose matching `)` (or the end of input) contains the
             // failure, and whose first token inside is not `WHERE`.
             let close = self.closers.get(i + 1).copied().unwrap_or(usize::MAX);
