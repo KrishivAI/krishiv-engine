@@ -276,6 +276,13 @@ fn cte_precedence_policy_parses_and_defaults() {
         c.get(&CTE_PRECEDENCE_POLICY).and_then(ConfigValue::as_str),
         Some("CORRECTED")
     );
+    // The Krishiv key takes the same values as its Spark alias.
+    c.set("krishiv.sql.legacy.ctePrecedencePolicy", "exception")
+        .unwrap();
+    assert_eq!(
+        c.get(&CTE_PRECEDENCE_POLICY).and_then(ConfigValue::as_str),
+        Some("EXCEPTION")
+    );
 }
 
 #[test]
