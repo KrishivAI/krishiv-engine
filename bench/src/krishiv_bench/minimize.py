@@ -316,9 +316,30 @@ class Oracle:
         self.runs = 0
         self.max_runs = max_runs
         self._data_key: tuple | None = None
+        self._sig: str | None = None
 
     def within_budget(self) -> bool:
         return self.runs < self.max_runs
+
+    def _setup(self, ds: Dataset) -> None:
+        for eng in (self.reference, self.krishiv):
+            eng.teardown()
+            eng.setup(ds)
+
+    def pin(self, ds: Dataset, sql: str) -> dict[str, Any]:
+        """Runs ``sql`` on the real dataset and pins the kind of difference every later check must keep.
+
+        Without it the reduction can slip onto a different, easier difference (a division by zero that only
+        appears once the data is tiny, say) and report that instead of the bug the query was chosen for.
+        """
+        self._setup(ds)
+        self._data_key = None
+        self.runs += 1
+        out = self._compare(sql)
+        if not out["differs"]:
+            raise ValueError("the query does not differ from the reference on the dataset")
+        self._sig = signature(out)
+        return out
 
     def _load(self, tables: dict[str, pa.Table]) -> None:
         key = tuple(
@@ -331,16 +352,16 @@ class Oracle:
         self.workdir.mkdir(parents=True)
         for n, t in tables.items():
             pq.write_table(t, self.workdir / f"{n}.parquet")
-        ds = Dataset("minimize", 0, self.workdir, sorted(tables))
-        for eng in (self.reference, self.krishiv):
-            eng.teardown()
-            eng.setup(ds)
+        self._setup(Dataset("minimize", 0, self.workdir, sorted(tables)))
         self._data_key = key
 
     def outcome(self, sql: str, tables: dict[str, pa.Table]) -> dict[str, Any]:
         """``{"differs": bool, "reference": rows | error, "krishiv": rows | error}``."""
         self._load(tables)
         self.runs += 1
+        return self._compare(sql)
+
+    def _compare(self, sql: str) -> dict[str, Any]:
         q = _Q(sql)
         try:
             ref_rows: Any = self.reference.run(q)
@@ -355,7 +376,18 @@ class Oracle:
         return {"differs": not ok, "reference": ref_rows, "krishiv": k_rows}
 
     def differs(self, sql: str, tables: dict[str, pa.Table]) -> bool:
-        return bool(self.outcome(sql, tables)["differs"])
+        """True when the engines disagree in the pinned way (any way, when nothing is pinned)."""
+        out = self.outcome(sql, tables)
+        return bool(out["differs"]) and (self._sig is None or signature(out) == self._sig)
+
+
+def signature(outcome: dict[str, Any]) -> str:
+    """The kind of difference: the error class when Krishiv failed, else ``rows`` (the answers differ)."""
+    k = outcome["krishiv"]
+    if isinstance(k, str):
+        m = re.search(r"\[([A-Z][A-Z0-9_.]+)\]", k)
+        return f"error:{m.group(1)}" if m else "error"
+    return "rows"
 
 
 class _Q:
@@ -373,11 +405,12 @@ def minimize(
     seed_rows: int = DEFAULT_SEED_ROWS,
     full_data: bool = False,
     whole_rows: int = DEFAULT_WHOLE_ROWS,
+    big: set[str] | None = None,
 ) -> tuple[str, dict[str, pa.Table]]:
     """The minimal ``(sql, tables)`` that still differs; ``ValueError`` when the start does not."""
     used = {n: tables[n] for n in referenced_tables(sql, list(tables))}
     if not full_data:
-        used = _first_slice(sql, used, oracle, seed_rows, whole_rows)
+        used = _first_slice(sql, used, oracle, seed_rows, whole_rows, big)
     elif not oracle.differs(sql, used):
         raise ValueError("the query does not differ on the full data")
     if not full_data:
@@ -390,26 +423,60 @@ def minimize(
 
 
 def _first_slice(
-    sql: str, used: dict[str, pa.Table], oracle: Oracle, seed_rows: int, whole_rows: int
+    sql: str, used: dict[str, pa.Table], oracle: Oracle, seed_rows: int, whole_rows: int, big: set[str] | None = None
 ) -> dict[str, pa.Table]:
     """The first slice that still differs: big tables cut to ``seed_rows`` x 1, 10, 100 rows (head, then strided).
 
-    Tables of at most ``whole_rows`` rows stay whole, so joins from a sliced fact table keep their dimension rows.
+    Tables of at most ``whole_rows`` rows (and any table not in ``big``) stay whole, so joins from a sliced fact
+    table keep their dimension rows.
     """
+    sliced_names = {n for n, t in used.items() if t.num_rows > whole_rows} if big is None else big & set(used)
     tried: list[int] = []
     for factor in ESCALATION:
         n = seed_rows * factor
-        if tried and all(t.num_rows <= n for t in used.values() if t.num_rows > whole_rows):
+        if tried and all(used[name].num_rows <= n for name in sliced_names):
             break  # the previous round already kept every big table whole
         tried.append(n)
         for make in (seed_slice, strided_slice):
-            sliced = {name: t if t.num_rows <= whole_rows else make(t, n) for name, t in used.items()}
+            sliced = {name: make(t, n) if name in sliced_names else t for name, t in used.items()}
             if oracle.differs(sql, sliced):
                 return sliced
     raise ValueError(
         f"the difference does not reproduce on slices of up to {tried[-1]} rows of the tables over {whole_rows} rows; "
         "use --full-data (query reduction only) or a larger --seed-rows"
     )
+
+
+def load_tables(root: Path, names: list[str], whole_rows: int, pool_rows: int) -> tuple[dict[str, pa.Table], set[str]]:
+    """The tables of ``names`` and the set of big ones.
+
+    A table of at most ``whole_rows`` rows is read whole. A bigger one is represented by a pool of about
+    ``pool_rows`` rows made of evenly spaced row groups, so a 100-million-row table is never read in full.
+    """
+    tables: dict[str, pa.Table] = {}
+    big: set[str] = set()
+    for t in names:
+        f = root / f"{t}.parquet"
+        src = f if f.is_file() else root / t
+        files = [src] if src.is_file() else sorted(src.glob("*.parquet"))
+        if len(files) == 1 and pq.ParquetFile(files[0]).metadata.num_rows > whole_rows:
+            tables[t] = _pool(files[0], pool_rows)
+            big.add(t)
+        else:
+            tables[t] = pa.concat_tables([pq.read_table(x) for x in files])
+            if tables[t].num_rows > whole_rows:
+                big.add(t)
+    return tables, big
+
+
+def _pool(path: Path, rows: int) -> pa.Table:
+    """Evenly spaced whole row groups of ``path`` until about ``rows`` rows are collected."""
+    pf = pq.ParquetFile(path)
+    groups = pf.metadata.num_row_groups
+    sizes = [pf.metadata.row_group(i).num_rows for i in range(groups)]
+    want = max(1, min(groups, round(rows / max(1, max(sizes)))))
+    chosen = sorted({int(i * groups / want) for i in range(want)})
+    return pf.read_row_groups(chosen)
 
 
 def sql_literal(v: Any) -> str:
@@ -473,6 +540,8 @@ def run_minimize(
     max_runs: int = DEFAULT_MAX_RUNS,
     full_data: bool = False,
     out_dir: str | None = None,
+    whole_rows: int = DEFAULT_WHOLE_ROWS,
+    pin: bool = True,
     threads: int = 2,
     spark_remote: str = "sc://127.0.0.1:15012",
 ) -> Path:
@@ -488,19 +557,19 @@ def run_minimize(
     if not names:
         raise SystemExit(f"no dataset at {root}")
     (q,) = load_queries(suite, "krishiv", [query])
-    tables = {}
-    for t in referenced_tables(q.sql, names):
-        f = root / f"{t}.parquet"
-        tables[t] = pq.read_table(f if f.is_file() else root / t)
+    used_names = referenced_tables(q.sql, names)
+    tables, big = load_tables(root, used_names, whole_rows, seed_rows * ESCALATION[-1])
     kwargs: dict[str, Any] = {"remote": spark_remote} if reference == "spark-connect" else {}
     ref = make_engine(reference, **kwargs)
     krishiv = KrishivEngine(threads=threads, binary=runner)
-    krishiv.timeout_s = 120
+    krishiv.timeout_s = 600
     work = Path(tempfile.mkdtemp(prefix="minimize-"))
     try:
         oracle = Oracle(ref, krishiv, work / "data", max_runs)
         try:
-            sql, small = minimize(q.sql, tables, oracle, seed_rows, full_data)
+            if pin:
+                oracle.pin(Dataset(name, sf, root, names), q.sql)
+            sql, small = minimize(q.sql, tables, oracle, seed_rows, full_data, whole_rows, big)
         except ValueError as e:
             raise SystemExit(str(e)) from e
         outcome = oracle.outcome(sql, small)

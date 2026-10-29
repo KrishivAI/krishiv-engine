@@ -276,8 +276,10 @@ def test_run_minimize_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert (out / "query.sql").is_file()
     assert json.loads((out / "expected.json").read_text())
     monkeypatch.setattr(mz, "KrishivEngine", lambda **kw: FakeEngine())
-    with pytest.raises(SystemExit, match="reproduce"):
+    with pytest.raises(SystemExit, match="does not differ"):
         mz.run_minimize("tpch", "q1", 1, seed_rows=20, out_dir=str(tmp_path / "case2"))
+    with pytest.raises(SystemExit, match="reproduce"):
+        mz.run_minimize("tpch", "q1", 1, seed_rows=20, out_dir=str(tmp_path / "case3"), pin=False, whole_rows=10)
 
 
 def test_where_conjuncts_are_halved_before_single_removal():
@@ -321,3 +323,60 @@ def test_krishiv_engine_can_be_set_up_again_after_teardown(tmp_path: Path):
     eng.setup(ds)
     assert eng.timed_run(Query("q", "select 1", "t"))[0] == 2
     eng.teardown()
+
+
+def test_signature_distinguishes_error_classes_from_wrong_rows():
+    assert mz.signature({"krishiv": [(1,)]}) == "rows"
+    assert mz.signature({"krishiv": "error: RunnerError: [DIVIDE_BY_ZERO] Division by zero"}) == "error:DIVIDE_BY_ZERO"
+    assert mz.signature({"krishiv": "error: something broke"}) == "error"
+
+
+def test_pin_keeps_the_reduction_on_the_original_difference(tmp_path: Path):
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.adapters.base import Dataset
+
+    class Zero(FakeEngine):
+        """Krishiv fails with a division error on a tiny table, answers wrongly on a big one."""
+
+        def run(self, q):
+            n = len(self.tables["t"])
+            if self.bug and n < 20:
+                raise RunnerError("[DIVIDE_BY_ZERO] Division by zero")
+            return [(n + (1 if self.bug else 0),)]
+
+    root = tmp_path / "full"
+    root.mkdir()
+    pq.write_table(_table(40), root / "t.parquet")
+    pinned = mz.Oracle(FakeEngine(), Zero(bug=True), tmp_path / "p")
+    out = pinned.pin(Dataset("d", 1, root, ["t"]), "select count(*) from t")
+    assert out["krishiv"] == [(41,)]
+    assert pinned.differs("select count(*) from t", {"t": _table(30)})
+    assert not pinned.differs("select count(*) from t", {"t": _table(5)})  # a different kind of failure
+    loose = mz.Oracle(FakeEngine(), Zero(bug=True), tmp_path / "q")
+    assert loose.differs("select count(*) from t", {"t": _table(5)})  # unpinned accepts it
+    equal = mz.Oracle(FakeEngine(), FakeEngine(), tmp_path / "r")
+    with pytest.raises(ValueError, match="does not differ"):
+        equal.pin(Dataset("d", 1, root, ["t"]), "select count(*) from t")
+
+
+def test_load_tables_reads_small_tables_whole_and_pools_big_ones(tmp_path: Path):
+    import pyarrow.parquet as pq
+
+    pq.write_table(_table(50), tmp_path / "dim.parquet")
+    pq.write_table(_table(10000), tmp_path / "fact.parquet", row_group_size=500)
+    parts = tmp_path / "parts"
+    parts.mkdir()
+    pq.write_table(_table(30), parts / "a.parquet")
+    pq.write_table(_table(30), parts / "b.parquet")
+    (tmp_path / "wide").mkdir()
+    pq.write_table(_table(3000), tmp_path / "wide" / "x.parquet")
+    tables, big = mz.load_tables(tmp_path, ["dim", "fact", "parts", "wide"], whole_rows=1000, pool_rows=1500)
+    assert tables["dim"].num_rows == 50
+    assert tables["parts"].num_rows == 60
+    assert big == {"fact", "wide"}
+    assert tables["fact"].num_rows == 1500  # three evenly spaced row groups of 500
+    ks = tables["fact"].column("k").to_pylist()
+    assert ks[0] == 0
+    assert ks[-1] > 5000  # spread over the file, not the head
+    assert tables["wide"].num_rows == 3000
