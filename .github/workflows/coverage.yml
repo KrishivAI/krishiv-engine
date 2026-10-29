@@ -7,6 +7,15 @@ name: Coverage
 # stays informational (codecov.yml). The full line+branch run is the nightly
 # `coverage` job in nightly.yml.
 #
+# The Rust run tests only the packages the PR touches plus the packages that
+# depend on them (`cargo xtask coverage-scope`, from the changed paths and the
+# dependency graph of `cargo metadata`): the added lines live in the touched
+# packages, and their dependents' tests cover them too. Paths outside every
+# package (manifests, the lock file, protos, shared test data) add no executable
+# line, so they select nothing. A change to this workflow selects the whole
+# workspace, and a PR that changes only docs, CI, agent config or bench skips
+# the Rust run and passes.
+#
 # Python is gated by the same rule, counting executable lines as coverage.py
 # defines them: bench/src here (its pytest run is pure Python), python/krishiv
 # in the `wheels` job of ci.yml (it needs the built extension and reuses that
@@ -68,7 +77,10 @@ jobs:
           bench=false
           while IFS= read -r p; do
             case "$p" in
-              .github/*|.claude/*|.githooks/*) rust=true ;;
+              # This workflow runs the gate, so changing it is tested; other CI and
+              # agent configuration compiles nothing (xtask `coverage-scope` agrees).
+              .github/workflows/coverage.yml) rust=true ;;
+              .github/*|.claude/*|.githooks/*) ;;
               bench/src/*|bench/tests/*|bench/pyproject.toml|bench/uv.lock) bench=true ;;
               docs/*|bench/*|.superpowers/*) ;;
               crates/*|xtask/*) rust=true ;;
@@ -91,6 +103,14 @@ jobs:
         if: steps.changes.outputs.cargo == 'true'
       - uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038 # v1
         if: steps.changes.outputs.cargo == 'true'
+      # Which packages to test: see the comment at the top of this file.
+      - name: Coverage scope (touched packages and their dependents)
+        id: scope
+        if: steps.changes.outputs.rust == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: cargo xtask coverage-scope --base "$BASE_SHA" --head "$HEAD_SHA"
       # The benchmark harness tests need no built extension: plain pytest under
       # coverage.py, writing an lcov tracefile with paths relative to bench/.
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
@@ -103,15 +123,22 @@ jobs:
           uv sync --frozen
           uv run --frozen --no-sync pytest -q --cov=src/krishiv_bench --cov-report="lcov:$RUNNER_TEMP/bench.lcov"
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
-        if: steps.changes.outputs.rust == 'true'
+        if: steps.scope.outputs.rust == 'true'
         with:
           tool: cargo-llvm-cov,cargo-nextest
       # Line coverage on the pinned stable toolchain (branch coverage needs
       # nightly and runs in the nightly job).
-      - if: steps.changes.outputs.rust == 'true'
-        run: cargo xtask coverage --no-branch
+      - name: Coverage run
+        if: steps.scope.outputs.rust == 'true'
+        env:
+          PACKAGES: ${{ steps.scope.outputs.packages }}
+        run: |
+          # `PACKAGES` is `-p a -p b`, or empty for the whole workspace; the
+          # word splitting is intended.
+          # shellcheck disable=SC2086
+          cargo xtask coverage --no-branch $PACKAGES
       - name: Diff coverage (gate at 90% of added lines)
-        if: steps.changes.outputs.rust == 'true'
+        if: steps.scope.outputs.rust == 'true'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -127,7 +154,8 @@ jobs:
             || { echo "::error::bench.lcov has no src/krishiv_bench paths"; exit 1; }
           cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA" --lcov "$RUNNER_TEMP/bench.lcov:bench" --fail-under 90
       - name: Upload to Codecov (informational)
-        if: steps.changes.outputs.rust == 'true' && !cancelled()
+        # Only a whole-workspace run uploads: a partial run would replace the carried-forward flag.
+        if: steps.scope.outputs.workspace == 'true' && !cancelled()
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: target/coverage/lcov.info
