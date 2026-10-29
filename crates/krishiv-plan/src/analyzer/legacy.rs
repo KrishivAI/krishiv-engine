@@ -206,6 +206,10 @@ fn traverse_once(
     depth: usize,
     memo: &mut Memo,
 ) -> Result<(Arc<LogicalPlan>, bool), KrishivError> {
+    // A node met again in this pass was counted when first rewritten.
+    if let Some(hit) = memo.plan(plan) {
+        return Ok((hit, false));
+    }
     if depth > crate::MAX_DEPTH {
         return Err(FailedToParseTooComplex {}.into());
     }
@@ -221,9 +225,11 @@ fn traverse_once(
             }
             let out = substitute(&input, &defs, cs, depth + 1, &mut Memo::default())?;
             crate::check_depth(&out)?;
+            memo.put_plan(plan, &out);
             Ok((out, true))
         }
         _ => {
+            let original = Arc::clone(plan);
             let mut changed = false;
             let mut err: Option<KrishivError> = None;
             let plan = sure(Arc::clone(plan).map_children(|c| {
@@ -241,6 +247,7 @@ fn traverse_once(
             if let Some(e) = err {
                 return Err(e);
             }
+            memo.put_plan(&original, &plan);
             Ok((plan, changed))
         }
     }
