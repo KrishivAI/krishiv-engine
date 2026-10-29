@@ -20,13 +20,18 @@ from krishiv_bench.adapters.krishiv import KrishivEngine
     [
         (["krishiv_exec::window::frame::advance"], "window"),
         (["memcpy", "krishiv_exec::operators::sort::merge"], "sort/top-N"),
-        (["krishiv_exec::operators::join::build::insert"], "join build"),
-        (["krishiv_exec::operators::join::grace::spill"], "join build"),
-        (["krishiv_exec::operators::join::probe::lookup"], "join probe"),
+        (["krishiv_exec::join::build::insert"], "join build"),
+        (["krishiv_exec::join::grace::spill"], "join build"),
+        (["krishiv_exec::join::probe::lookup"], "join probe"),
         (["x", "krishiv_exec::aggregate::hash::update"], "aggregate"),
         (["krishiv_shuffle::exchange::send"], "exchange/repartition"),
         (["krishiv_io::parquet::row_filter::eval"], "scan/decode"),
         (["krishiv_exec::operators::filter::apply"], "filter/project"),
+        (["krishiv_exec::join::table::insert_row", "tokio::task::poll"], "join probe"),
+        (["krishiv_exec::join::table::lookup", "krishiv_exec::join::build::run"], "join build"),
+        (["krishiv_exec::driver::runqueue_wait"], "other"),
+        (["krishiv_exec::operators::runtime_filter::check"], "filter/project"),
+        (["snap::raw::decompress"], "scan/decode"),
         (["krishiv_functions::string::upper"], "filter/project"),
         (["zstd_decompress", "parquet::arrow::read"], "scan/decode"),
         (["object_store::get_range"], "scan/decode"),
@@ -45,14 +50,14 @@ def test_leaf_most_matching_frame_decides():
 
 
 PERF = """\
- 1000.010000:
-\t    55d4c8a0 krishiv_exec::operators::join::build::insert+0x10 (/bin/runner)
+4242 1000.010000:
+\t    55d4c8a0 krishiv_exec::join::build::insert+0x10 (/bin/runner)
 \t    55d4c8b0 start_thread+0x4 (/lib/libc.so)
 
- 1000.030000:
+4243 1000.030000:
 \t    55d4c8c0 krishiv_exec::aggregate::hash::update+0x8 (/bin/runner)
 
- 1000.035000:
+4242 1000.035000:
 \t    ffffffff [unknown] ([unknown])
 """
 
@@ -60,7 +65,7 @@ PERF = """\
 def test_parse_perf_script():
     s = ledger.parse_perf_script(PERF)
     assert [round(t, 3) for t, _ in s] == [1000.01, 1000.03, 1000.035]
-    assert s[0][1] == ["krishiv_exec::operators::join::build::insert", "start_thread"]
+    assert s[0][1] == ["krishiv_exec::join::build::insert", "start_thread"]
     assert s[2][1] == ["[unknown]"]
     # No trailing blank line: the last sample is kept.
     assert len(ledger.parse_perf_script(PERF.rstrip("\n"))) == 3
@@ -85,9 +90,10 @@ def test_wall_split_shares_each_bin_and_scales_to_the_wall():
     assert ledger.wall_split(samples, 1000.0, 1000.04, 0.0) == {}
 
 
-def test_wall_split_last_bin_is_clipped():
+def test_wall_split_last_bin_is_clipped_and_idle_bins_count_as_other():
     out = ledger.wall_split([(10.025, ["krishiv_exec::aggregate::x"])], 10.0, 10.03, wall_s=0.03)
-    assert math.isclose(out["aggregate"], 0.01 * 1.0)  # only 10 ms of the last bin lie inside the window
+    assert math.isclose(out["aggregate"], 0.01)  # only 10 ms of the last bin lie inside the window
+    assert math.isclose(out["other"], 0.02)  # the first bin has no sample: nothing was on CPU
 
 
 def _op(typ, timing, rows, children=()):
@@ -123,7 +129,7 @@ def test_duckdb_buckets_other_aggregate_sort_window_and_degenerate_inputs():
     assert math.isclose(out["window"], 1.0)
     assert math.isclose(out["other"], 1.0)
     assert math.isclose(out["join probe"], 1.5 + 0.5 * 1.0 / 1.0 * 1.0 + 0.0) or out["join probe"] > 0
-    assert ledger.duckdb_buckets({"operator": []}, 1.0) == {}
+    assert ledger.duckdb_buckets({"operator": []}, 1.0) == {"scan/decode": 1.0}  # answered from metadata
     assert ledger.duckdb_buckets({"children": [_op("FILTER", 1, 1)]}, 1.0) == {"filter/project": 1.0}
     assert ledger.duckdb_buckets({"operator": ops}, 0.0) == {}
     legacy = {"operator_type": "TABLE_SCAN", "operator_timing": 2.0, "operator_cardinality": 3}
@@ -252,7 +258,7 @@ def test_perf_script_runs_perf(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(ledger.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or R())
     assert ledger.perf_script(tmp_path / "p.data") == PERF
     assert calls[0][:2] == ["perf", "script"]
-    assert "time,ip,sym" in calls[0]
+    assert "tid,time,ip,sym" in calls[0]
 
 
 class _Fake:
@@ -408,7 +414,7 @@ def test_measure_krishiv_takes_the_second_plain_run_and_splits_the_perf_run(monk
 
 
 def test_perf_script_without_blank_separators_and_the_monotonic_clock():
-    text = " 5.000000:\n\t    aa krishiv_exec::aggregate::x+0x1\n 5.010000:\n\t    bb start_thread+0x2\n"
+    text = " 5.000000:\n\t    aa krishiv_exec::aggregate::x+0x1\n7 5.010000:\n\t    bb start_thread+0x2\n"
     assert [f for _, f in ledger.parse_perf_script(text)] == [["krishiv_exec::aggregate::x"], ["start_thread"]]
     a = ledger._mono()
     assert ledger._mono() >= a

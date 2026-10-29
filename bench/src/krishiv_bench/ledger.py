@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import re
 import shutil
 import statistics
@@ -63,30 +64,46 @@ BIN_S = 0.02
 PERF_FREQ = 499
 SCAN_FILTER = "scan-filter"  # in-scan predicates; merged into scan/decode (DuckDB evaluates them in its scan)
 
-# Leaf-up, first frame matching any rule decides; rules are tried in order within a frame.
-BUCKET_RULES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(p), b)
-    for p, b in (
-        (r"window::", "window"),
-        (r"operators::(sort|limit|topn|top_n)|::TopN|::top_n", "sort/top-N"),
-        (r"join::(build|grace)|JoinTable::build", "join build"),
-        (r"join::(probe|nested)", "join probe"),
-        (r"aggregate::", "aggregate"),
-        (r"(?i)exchange|repartition|shuffle", "exchange/repartition"),
-        (r"krishiv_io.*(row_?filter|runtime_?filter)", SCAN_FILTER),
-        (r"operators::(filter|project|expr)|planner::eval|krishiv_functions", "filter/project"),
-        (r"krishiv_io|parquet::|zstd|snappy|lz4|deflate|inflate|object_store", "scan/decode"),
+# Leaf-up, first frame matching any rule decides; rules are tried in order within a frame. The rules are the
+# ones of the 2026-10-24 gap ledger (and of the perf attribution scripts that produced it).
+BUCKET_RULES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (b, re.compile(p))
+    for b, p in (
+        ("window", r"krishiv_exec::window::"),
+        ("sort/top-N", r"krishiv_exec::operators::sort|krishiv_exec::operators::limit|TopN|krishiv_exec::.*::sort::"),
+        ("join build", r"krishiv_exec::join::build|krishiv_exec::join::grace|HashJoinBuild|NestedLoopJoinBuild"),
+        ("join probe", r"krishiv_exec::join::probe|krishiv_exec::join::nested|HashJoinProbe"),
+        ("aggregate", r"krishiv_exec::aggregate::"),
+        ("exchange/repartition", r"[Ee]xchange|[Rr]epartition|krishiv_exec::operators::replicate|krishiv_shuffle::"),
+        (SCAN_FILTER, r"krishiv_io::.*(row_filter|RowFilter|predicate|runtime_filter)|ArrowPredicate|RowFilter"),
+        (
+            "filter/project",
+            r"krishiv_exec::operators::(filter|project|expr|runtime_filter)|krishiv_exec::planner::eval"
+            r"|krishiv_functions::",
+        ),
+        (
+            "scan/decode",
+            r"krishiv_io::|krishiv_exec::operators::(file_scan|scan)|^parquet::|<parquet::|ZSTD_|snap::|lz4"
+            r"|object_store::|GetResult",
+        ),
+        ("other", r"krishiv_exec::driver::runqueue_wait"),
     )
 )
+# join::table / keys / rows are shared by build and probe; with no outer frame to say which, they count as probe.
+SHARED_JOIN = re.compile(r"krishiv_exec::join::(table|keys)|krishiv_exec::rows::")
 
 # DuckDB operator type -> bucket (joins are split by ``duckdb_buckets``).
 DUCKDB_BUCKETS = {
     "TABLE_SCAN": "scan/decode",
+    "READ_PARQUET": "scan/decode",
     "FILTER": "filter/project",
     "PROJECTION": "filter/project",
     "HASH_GROUP_BY": "aggregate",
     "PERFECT_HASH_GROUP_BY": "aggregate",
     "UNGROUPED_AGGREGATE": "aggregate",
+    "SIMPLE_AGGREGATE": "aggregate",
+    "STREAMING_AGGREGATE": "aggregate",
+    "PARTITIONED_AGGREGATE": "aggregate",
     "ORDER_BY": "sort/top-N",
     "TOP_N": "sort/top-N",
     "WINDOW": "window",
@@ -94,6 +111,8 @@ DUCKDB_BUCKETS = {
 }
 DUCKDB_JOINS = {
     "HASH_JOIN",
+    "LEFT_DELIM_JOIN",
+    "RIGHT_DELIM_JOIN",
     "PIECEWISE_MERGE_JOIN",
     "NESTED_LOOP_JOIN",
     "BLOCKWISE_NL_JOIN",
@@ -108,14 +127,17 @@ DUCKDB_JOINS = {
 # ---------------------------------------------------------------------------------------------------- Krishiv side
 def classify_frames(frames: Iterable[str]) -> str:
     """Bucket of a call chain given leaf first: the first frame matching a rule decides, else ``other``."""
+    frames = list(frames)
     for frame in frames:
-        for pattern, bucket in BUCKET_RULES:
+        for bucket, pattern in BUCKET_RULES:
             if pattern.search(frame):
                 return "scan/decode" if bucket == SCAN_FILTER else bucket
+    if any(SHARED_JOIN.search(f) for f in frames):
+        return "join probe"
     return "other"
 
 
-_HEADER = re.compile(r"^\s*(\d+\.\d+):")
+_HEADER = re.compile(r"^\s*(?:\d+\s+)?(\d+\.\d+):")  # `[tid] time:`
 _FRAME = re.compile(r"^\s+[0-9a-fA-F]+\s+(.*?)(?:\+0x[0-9a-fA-F]+)?(?:\s+\(.*\))?$")
 
 
@@ -154,8 +176,12 @@ def wall_split(
         if t0 <= ts < t1:
             bins.setdefault(int((ts - t0) / bin_s), Counter())[classify_frames(frames)] += 1
     out: defaultdict[str, float] = defaultdict(float)
-    for idx, counts in bins.items():
+    for idx in range(max(1, math.ceil((t1 - t0) / bin_s - 1e-9))):
         width = min(bin_s, t1 - (t0 + idx * bin_s))
+        counts = bins.get(idx)
+        if not counts:
+            out["other"] += width  # no thread on CPU: idle time is booked to `other`
+            continue
         total = sum(counts.values())
         for bucket, n in counts.items():
             out[bucket] += width * n / total
@@ -201,8 +227,11 @@ def duckdb_buckets(profile: dict[str, Any], wall_s: float) -> dict[str, float]:
             else:
                 seconds[DUCKDB_BUCKETS.get(typ, "other")] += t
     total = sum(seconds.values())
-    if total <= 0 or wall_s <= 0:
+    if wall_s <= 0:
         return {}
+    if total <= 0:
+        # DuckDB writes no profile for a query it answers from metadata (COUNT(*) over Parquet): book it as scan.
+        return {"scan/decode": wall_s} if not roots else {}
     return {b: s / total * wall_s for b, s in seconds.items()}
 
 
@@ -339,7 +368,10 @@ def perf_launcher(data: Path) -> list[str]:
 
 def perf_script(data: Path) -> str:
     out = subprocess.run(
-        ["perf", "script", "-i", str(data), "-F", "time,ip,sym"], capture_output=True, text=True, check=True
+        ["perf", "script", "-i", str(data), "-F", "tid,time,ip,sym", "--no-inline"],
+        capture_output=True,
+        text=True,
+        check=True,
     )
     return out.stdout
 
