@@ -13,6 +13,14 @@
         "sketch"
       ],
       "order": 420
+    },
+    {
+      "detail": "max_by and min_by|Max of Struct|Min of Struct",
+      "order": 550
+    },
+    {
+      "file": "^postgreSQL/aggregates_part1$",
+      "order": 670
     }
   ],
   "summary": "aggregate and sketch functions beyond P2a, WITHIN GROUP",

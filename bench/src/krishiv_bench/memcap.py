@@ -51,21 +51,25 @@ class Observation:
     spill_peak_bytes: int | None
     wall_s: float
     rss_peak_bytes: int = 0  # highest sampled resident set of the tree (anon + mapped file + shmem; no page cache)
+    limit_hits: int = 0  # highest `memory.events` `max` count seen: how often the scope hit its cap
 
 
 def classify(obs: Observation, cap_bytes: int, got_result: bool) -> str:
     """``finished`` | ``killed`` | ``timeout`` | ``failed``.
 
     ``killed`` is the memory cap's doing: the scope's ``oom_kill`` counter moved, or the process died of SIGKILL
-    (return code -9 or 137) with the scope's peak within 5% of the cap (the cgroup is removed with its last
-    process, so the counter can be gone before the last poll). A run that exits 0 without its result line is
-    ``failed``, like any other non-zero exit.
+    (return code -9 or 137; this harness only sends one on a timeout, handled first) and the scope either hit its
+    limit (the ``max`` event count moved) or peaked within 5% of the cap. The cgroup is removed with its last
+    process, so the ``oom_kill`` counter can be gone before the last poll, and a kill that lands between two
+    10 ms polls can leave the sampled peak below the cap; the ``max`` count is cumulative, so any earlier sample
+    that saw it keeps the evidence. A run that exits 0 without its result line is ``failed``, like any other
+    non-zero exit.
     """
     if obs.timed_out:
         return "timeout"
     if obs.oom_kills > 0:
         return "killed"
-    if obs.returncode in (-9, 137) and obs.peak_bytes >= KILL_PEAK_FRACTION * cap_bytes:
+    if obs.returncode in (-9, 137) and (obs.limit_hits > 0 or obs.peak_bytes >= KILL_PEAK_FRACTION * cap_bytes):
         return "killed"
     if obs.returncode == 0 and got_result:
         return "finished"
@@ -109,6 +113,17 @@ class Cgroup:
             return None
         return None
 
+    def limit_hits(self) -> int | None:
+        """How many times the scope hit its memory limit (``memory.events`` ``max``), cumulative."""
+        try:
+            for line in (self.path / "memory.events").read_text().splitlines():
+                key, _, value = line.partition(" ")
+                if key == "max":
+                    return int(value)
+        except (OSError, ValueError):
+            return None
+        return None
+
     def kill_all(self) -> None:
         """SIGKILLs every process in the scope (the engine's JVM and helper children included)."""
         with contextlib.suppress(OSError):
@@ -139,7 +154,7 @@ def monitor(
     whole scope is killed. ``cgroup`` is ``None`` when the scope could not be located (peak is then 0).
     """
     t0 = clock()
-    peak = oom = rss_peak = tick = 0
+    peak = oom = rss_peak = tick = hits = 0
     spill: int | None = None
     timed_out = False
     while True:
@@ -148,6 +163,7 @@ def monitor(
             p, o = cgroup.peak(), cgroup.oom_kills()
             peak = max(peak, p or 0)
             oom = max(oom, o or 0)
+            hits = max(hits, cgroup.limit_hits() or 0)
             rss_peak = max(rss_peak, cgroup.rss() or 0)
         if scratch is not None and tick % SPILL_EVERY == 0:
             spill = max(spill or 0, dir_size(scratch))
@@ -166,7 +182,7 @@ def monitor(
     wall = clock() - t0
     if cgroup is not None:
         cgroup.kill_all()  # stragglers (a JVM that outlived its parent) must not leak into the next run
-    return Observation(rc, timed_out, peak, oom, spill, wall, rss_peak)
+    return Observation(rc, timed_out, peak, oom, spill, wall, rss_peak, hits)
 
 
 def scope_command(cap_bytes: int, argv: list[str]) -> list[str]:
