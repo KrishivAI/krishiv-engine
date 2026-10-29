@@ -224,3 +224,37 @@ fn table_valued_from_forms_stay_unsupported() -> R {
     }
     Ok(())
 }
+
+/// Select-list shapes around a generator, against a table: an alias renames
+/// the one output column (and several outputs under one name are Spark's
+/// `UDTF_ALIAS_NUMBER_MISMATCH`), the name is case-insensitive, and the
+/// shapes the one-struct rewrite cannot express stay unsupported (Spark 4.2
+/// runs several generators as a cross product, and fails the aggregate
+/// shapes with its own classes).
+#[test]
+fn select_list_shapes_around_a_generator() -> R {
+    let s = session()?;
+    let schema = Arc::new(Schema::new(vec![Field::new("j", DataType::Utf8, true)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(vec![Some("{\"a\":1,\"b\":2}")])) as ArrayRef],
+    )?;
+    s.register_batches("v", schema, vec![batch])?;
+    let (names, rows) = query(&s, "SELECT json_tuple(j, 'a') AS x FROM v")?;
+    assert_eq!((names, rows), (vec!["x".to_owned()], vec!["1".to_owned()]));
+    let (names, rows) = query(&s, "SELECT JSON_TUPLE(j, 'a', 'b') FROM v")?;
+    assert_eq!(names, ["c0", "c1"]);
+    assert_eq!(rows, ["1|2"]);
+    let (class, params) = error(&s, "SELECT json_tuple(j, 'a', 'b') AS x FROM v")?;
+    assert_eq!(class, "UDTF_ALIAS_NUMBER_MISMATCH");
+    assert_eq!(param(&params, "aliasesSize"), Some("2"));
+    for sql in [
+        "SELECT json_tuple(j, 'a'), json_tuple(j, 'b') FROM v",
+        "SELECT json_tuple(j, 'a'), count(*) FROM v",
+        "SELECT j AS jj, json_tuple(jj, 'a') FROM v",
+    ] {
+        let (class, _) = error(&s, sql)?;
+        assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    }
+    Ok(())
+}

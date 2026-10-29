@@ -172,16 +172,15 @@ fn single_alias_on_several_outputs_is_udtf_alias_number_mismatch() {
     );
 }
 
+/// Spark 4.2 runs two `json_tuple` generators in one plain select list (a
+/// cross product); the engine does not, and says so with its own class
+/// rather than a Spark one Spark would not raise.
 #[test]
-fn two_generators_raise_multi_generator() {
+fn two_generators_are_unsupported() {
     let r = analyze(vec![call(vec![c("j"), s("a")]), call(vec![c("j"), s("b")])]);
     let (class, params) = class_and_params(&r);
-    assert_eq!(class, "UNSUPPORTED_GENERATOR.MULTI_GENERATOR");
-    let num = params.iter().find(|(k, _)| k == "num").unwrap();
-    assert_eq!(num.1, "2");
-    let generators = params.iter().find(|(k, _)| k == "generators").unwrap();
-    assert!(generators.1.contains("json_tuple"), "{generators:?}");
-    assert_eq!(generators.1.matches("json_tuple").count(), 2);
+    assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(params[0].1, "several generators in one SELECT list");
 }
 
 #[test]

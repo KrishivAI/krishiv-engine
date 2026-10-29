@@ -14,8 +14,7 @@ use krishiv_common::error::{
     StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UdtfAliasNumberMismatch,
     UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin,
     UnsupportedFeatureLateralColumnAliasInAggregateFunc,
-    UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorMultiGenerator,
-    UnsupportedGeneratorNestedInExpressions,
+    UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorNestedInExpressions,
 };
 
 use super::analytics::Analytics;
@@ -309,19 +308,11 @@ impl Resolver<'_> {
                 ));
             }
         }
+        // Spark 4.2 accepts several generators in one plain select list (a
+        // cross product; `MULTI_GENERATOR` is raised only beside
+        // aggregates), which the one-struct rewrite below cannot express.
         if top.len() > 1 {
-            let generators = top
-                .iter()
-                .map(|(_, sql)| format!("\"{sql}\""))
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(AnalysisError::new(
-                UnsupportedGeneratorMultiGenerator {
-                    num: top.len().to_string(),
-                    generators,
-                },
-                origin,
-            ));
+            return Err(unsupported("several generators in one SELECT list", origin));
         }
         let Some((index, _)) = top.first() else {
             return Err(unsupported("a generator", origin));
