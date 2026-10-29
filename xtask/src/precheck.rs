@@ -1200,11 +1200,11 @@ pub fn run_step(root: &Path, step: &Step, cap: Option<&str>, log_dir: &Path) -> 
     }
 }
 
-/// Reads the workspace packages and the changed paths of `root` against `base`.
+/// Reads the workspace packages of `root` (`cargo metadata --no-deps`).
 ///
 /// # Errors
-/// Returns the cargo or git failure.
-pub fn collect_changes(root: &Path, base: &str) -> Result<Changes, String> {
+/// Returns the cargo failure.
+pub fn workspace_packages(root: &Path) -> Result<Vec<Pkg>, String> {
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let meta = Command::new(cargo)
         .args([
@@ -1224,7 +1224,15 @@ pub fn collect_changes(root: &Path, base: &str) -> Result<Changes, String> {
             String::from_utf8_lossy(&meta.stderr)
         ));
     }
-    let pkgs = parse_packages(&String::from_utf8_lossy(&meta.stdout), root)?;
+    parse_packages(&String::from_utf8_lossy(&meta.stdout), root)
+}
+
+/// Reads the workspace packages and the changed paths of `root` against `base`.
+///
+/// # Errors
+/// Returns the cargo or git failure.
+pub fn collect_changes(root: &Path, base: &str) -> Result<Changes, String> {
+    let pkgs = workspace_packages(root)?;
     Ok(Changes::detect(&changed_paths(root, base)?, &pkgs))
 }
 

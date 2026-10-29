@@ -295,6 +295,110 @@ fn pr_size_and_changes_on_a_real_repo() {
 }
 
 #[test]
+fn coverage_scope_selects_the_touched_packages_and_their_dependents() {
+    let dir = tmp("scope");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["config", "commit.gpgsign", "false"]);
+    write(
+        &dir,
+        "Cargo.toml",
+        "[workspace]\nresolver = \"2\"\nmembers = [\"crates/a\", \"crates/b\", \"crates/c\"]\n",
+    );
+    for (name, deps) in [("a", ""), ("b", "a = { path = \"../a\" }\n"), ("c", "")] {
+        write(
+            &dir,
+            &format!("crates/{name}/Cargo.toml"),
+            &format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\n{deps}"
+            ),
+        );
+        write(
+            &dir,
+            &format!("crates/{name}/src/lib.rs"),
+            "pub fn f() {}\n",
+        );
+    }
+    write(&dir, "crates/c/src/old.rs", "pub fn g() {}\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    git(&dir, &["switch", "-q", "-c", "feature"]);
+    let repo = dir.to_str().unwrap();
+    let scope = |out_name: &str| {
+        let out = dir.join(out_name);
+        let o = Command::new(env!("CARGO_BIN_EXE_xtask"))
+            .args(["coverage-scope", "--repo", repo, "--base", "main"])
+            .env("GITHUB_OUTPUT", &out)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{o:?}");
+        std::fs::read_to_string(out).unwrap()
+    };
+
+    // Docs and CI only: no Rust coverage run.
+    write(&dir, "docs/a.md", "doc\n");
+    write(&dir, ".github/workflows/x.yml", "name: x\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "docs"]);
+    assert_eq!(scope("o1"), "rust=false\npackages=\nworkspace=false\n");
+
+    // A lock file and a shared fixture add no executable line.
+    write(&dir, "Cargo.lock", "# lock\n");
+    write(&dir, "tests/fixtures/x.json", "{}\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "data"]);
+    assert_eq!(scope("o2"), "rust=false\npackages=\nworkspace=false\n");
+
+    // A source change: the package and the package that depends on it.
+    write(
+        &dir,
+        "crates/a/src/lib.rs",
+        "pub fn f() {}\npub fn g() {}\n",
+    );
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "a"]);
+    assert_eq!(
+        scope("o3"),
+        "rust=true\npackages=-p a -p b\nworkspace=false\n"
+    );
+    // A relative `--repo` selects the same packages (cargo reports absolute manifest paths).
+    let relative = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(dir.parent().unwrap())
+        .args([
+            "coverage-scope",
+            "--repo",
+            dir.file_name().unwrap().to_str().unwrap(),
+            "--base",
+            "main",
+        ])
+        .output()
+        .unwrap();
+    assert!(relative.status.success(), "{relative:?}");
+    assert!(
+        String::from_utf8_lossy(&relative.stdout).contains("packages=-p a -p b"),
+        "{relative:?}"
+    );
+
+    // A rename lists the old and the new path; a non-ASCII path stays verbatim.
+    git(
+        &dir,
+        &["mv", "crates/c/src/old.rs", "crates/c/src/\u{e9}.rs"],
+    );
+    git(&dir, &["commit", "-q", "-am", "rename"]);
+    assert_eq!(
+        scope("o3b"),
+        "rust=true\npackages=-p a -p b -p c\nworkspace=false\n"
+    );
+
+    // The gate's own workflow: every package.
+    write(&dir, ".github/workflows/coverage.yml", "name: Coverage\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "gate"]);
+    assert_eq!(scope("o4"), "rust=true\npackages=\nworkspace=true\n");
+
+    assert!(!xtask(&["coverage-scope", "--repo", repo]).status.success());
+}
+
+#[test]
 fn big_fixture_diff_does_not_count() {
     let dir = init_repo("fixture");
     let repo = dir.to_str().unwrap();
