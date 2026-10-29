@@ -41,7 +41,8 @@ pub fn totals(run: &RunResult) -> (Tally, Tally, Tally) {
     (p, n, r)
 }
 
-/// A parse-phase class passes the negative gate when this share of its statements match.
+/// A parse-phase class counts as met when this share of its statements match. The report prints the
+/// result against this target; no check fails on it.
 pub const CLASS_GATE_PERCENT: u64 = 95;
 
 /// The negative number per expected Spark error class, summed over the files.
@@ -191,12 +192,12 @@ pub fn summary(run: &RunResult) -> String {
     let (syntax, met, parse_classes) = parse_phase_gates(&classes);
     let _ = writeln!(
         s,
-        "  PARSE_SYNTAX_ERROR      {} / {}  (gate: all)",
+        "  PARSE_SYNTAX_ERROR      {} / {}  (target: all; reported, not enforced)",
         syntax.passed, syntax.total
     );
     let _ = writeln!(
         s,
-        "  parse-phase classes     {met} / {parse_classes} at >= {CLASS_GATE_PERCENT}%  (gate: >= {CLASS_GATE_PERCENT}% of the classes)"
+        "  parse-phase classes     {met} / {parse_classes} at >= {CLASS_GATE_PERCENT}%  (target: >= {CLASS_GATE_PERCENT}% of the classes; reported, not enforced)"
     );
     let mut worst: Vec<(&String, &ClassTally)> = classes
         .iter()

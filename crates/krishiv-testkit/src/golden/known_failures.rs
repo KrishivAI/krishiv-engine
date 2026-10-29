@@ -64,6 +64,18 @@ pub const CATEGORIES_DIR_NAME: &str = "known-failures-categories";
 /// The ADR a known divergence must cite.
 pub const DIVERGENCE_ADR: &str = "0023";
 
+impl CategoryKind {
+    /// The kind's name in the baseline file.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Unsupported { .. } => "unsupported",
+            Self::Divergence { .. } => "divergence",
+            Self::Bug { .. } => "bug",
+        }
+    }
+}
+
 /// What a category is, with its mandatory reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CategoryKind {
@@ -135,6 +147,9 @@ pub struct Update {
     pub unclassified: Vec<Drift>,
     /// With `reclassify`: listed statements whose category changed, with the old and the new one.
     pub moved: Vec<(Drift, String, String)>,
+    /// The moves that also change the kind of category (`unsupported`, `divergence`, `bug`), as
+    /// `(old category, new category)`: a bug re-homed as a divergence deserves a look.
+    pub crossed_kinds: BTreeSet<(String, String)>,
 }
 
 impl Update {
@@ -782,6 +797,19 @@ impl KnownFailures {
         reclassify: Option<&str>,
     ) -> Result<String, String> {
         let mut known = Self::load(path).map_err(|e| e.to_string())?;
+        if let Some(category) = reclassify
+            && !known.categories.contains_key(category)
+        {
+            return Err(format!(
+                "--reclassify: unknown category `{category}` (known: {})",
+                known
+                    .categories
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
         let up = known.update_with_set(run, set, reclassify)?;
         if !up.unclassified.is_empty() {
             let mut msg = format!(
@@ -830,6 +858,11 @@ impl KnownFailures {
                 up.moved.len(),
                 up.moved_summary()
             ));
+            for (old, new) in &up.crossed_kinds {
+                msg.push_str(&format!(
+                    "NOTE: moves from `{old}` to `{new}` change the kind of category; check them\n"
+                ));
+            }
         }
         Ok(msg)
     }
@@ -893,6 +926,10 @@ impl KnownFailures {
                 match (classify(&self.rules, &failure, families), old) {
                     (Some(k), Some(was)) => {
                         if k != was {
+                            let kind = |c: &str| self.categories.get(c).map(|c| c.kind.label());
+                            if kind(k) != kind(was) {
+                                up.crossed_kinds.insert((was.clone(), k.to_owned()));
+                            }
                             up.moved.push((drift(), was.clone(), k.to_owned()));
                         }
                         kept.insert(c.index, k.to_owned());
@@ -1291,6 +1328,15 @@ mod tests {
         assert_eq!(up.moved[0].2, "sum");
         assert!(up.added.is_empty());
         assert_eq!(up.moved_summary(), "      1  ddl -> sum\n");
+        // `ddl` is unsupported and `sum` a bug: the move crosses kinds and is flagged.
+        assert_eq!(
+            up.crossed_kinds.iter().collect::<Vec<_>>(),
+            [&("ddl".to_owned(), "sum".to_owned())]
+        );
+        let fresh = KnownFailures::parse(DOC)?;
+        assert_eq!(fresh.categories["ddl"].kind.label(), "unsupported");
+        assert_eq!(fresh.categories["sum"].kind.label(), "bug");
+        assert_eq!(fresh.categories["text"].kind.label(), "divergence");
         // A statement no rule classifies blocks the rewrite, as for a new failure.
         let mut blocked = KnownFailures::parse(DOC)?;
         let run2 = RunResult {
@@ -1637,6 +1683,9 @@ mod tests {
             ],
             ..RunResult::default()
         };
+        let unknown = KnownFailures::update_file(&path, &fewer, &set, Some("nope")).unwrap_err();
+        assert!(unknown.contains("unknown category `nope`"), "{unknown}");
+        assert!(unknown.contains("ddl"), "{unknown}");
         KnownFailures::update_file(&path, &fewer, &set, None)?;
         // The header holds no cases, categories or rules; each category and each listed file
         // has its own file.

@@ -7,7 +7,8 @@
     {
       "detail": "^rows differ",
       "file": "^explain",
-      "order": 45
+      "order": 45,
+      "query": "(?i)^\\s*explain\\b"
     }
   ],
   "summary": "EXPLAIN output: Krishiv prints its own plan text, Spark prints its Catalyst plans (ADR 0023)"
