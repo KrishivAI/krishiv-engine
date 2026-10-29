@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import tempfile
 from pathlib import Path
 
 import duckdb
@@ -25,6 +26,9 @@ from krishiv_bench.adapters.krishiv import KrishivEngine
         (["krishiv_exec::join::probe::lookup"], "join probe"),
         (["x", "krishiv_exec::aggregate::hash::update"], "aggregate"),
         (["krishiv_shuffle::exchange::send"], "exchange/repartition"),
+        (["krishiv_exec::operators::exchange::route"], "exchange/repartition"),
+        (["core::sync::atomic::atomic_compare_exchange_weak", "std::sync::mpmc::send"], "other"),
+        (["compare_exchange", "krishiv_exec::aggregate::hash::update"], "aggregate"),
         (["krishiv_io::parquet::row_filter::eval"], "scan/decode"),
         (["krishiv_exec::operators::filter::apply"], "filter/project"),
         (["krishiv_exec::join::table::insert_row", "tokio::task::poll"], "join probe"),
@@ -418,3 +422,45 @@ def test_perf_script_without_blank_separators_and_the_monotonic_clock():
     assert [f for _, f in ledger.parse_perf_script(text)] == [["krishiv_exec::aggregate::x"], ["start_thread"]]
     a = ledger._mono()
     assert ledger._mono() >= a
+
+
+def test_a_launched_runner_gets_its_own_process_group_and_is_killed_with_it(tmp_path: Path):
+    import os
+    import stat
+
+    from test_abba import FAKE_RUNNER
+
+    from krishiv_bench.adapters.base import Dataset
+
+    binary = tmp_path / "runner"
+    binary.write_text(FAKE_RUNNER)
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    eng = KrishivEngine(threads=1, memory_limit="1g", binary=binary, launcher=["env"])
+    eng.timeout_s = 30
+    eng.setup(Dataset("t", 0, tmp_path, ["t"]))
+    proc = eng._proc
+    assert proc is not None
+    assert os.getsid(proc.pid) == proc.pid  # a session (and group) of its own
+    eng.cancel()
+    assert proc.poll() is not None
+    plain = KrishivEngine(threads=1, memory_limit="1g", binary=binary)
+    plain.setup(Dataset("t", 0, tmp_path, ["t"]))
+    assert plain._proc is not None
+    assert os.getsid(plain._proc.pid) == os.getsid(0)  # no launcher: the caller's session
+    plain.teardown()
+
+
+def test_measure_krishiv_cleans_up_when_the_engine_cannot_be_built(monkeypatch: pytest.MonkeyPatch):
+    def boom(**kw):
+        raise OSError("no such runner")
+
+    monkeypatch.setattr(ledger, "KrishivEngine", boom)
+
+    class Plain:
+        def profile(self, query):
+            return {"seconds": 1.0}
+
+    before = set(Path(tempfile.gettempdir()).glob("ledger-perf-*"))
+    with pytest.raises(OSError, match="no such runner"):
+        ledger.measure_krishiv(None, None, Query("q", "select 1", "t"), 1, "1g", 0, Plain())  # ty: ignore[invalid-argument-type]
+    assert set(Path(tempfile.gettempdir()).glob("ledger-perf-*")) == before

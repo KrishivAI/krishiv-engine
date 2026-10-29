@@ -24,6 +24,7 @@ import json
 import os
 import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import urllib.parse
@@ -146,7 +147,15 @@ class KrishivEngine(Engine):
         self._stderr_log = self._tmp / f"runner-{self._starts}.stderr"
         with self._stderr_log.open("wb") as err:
             self._proc = subprocess.Popen(
-                cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, text=True, bufsize=1
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=err,
+                text=True,
+                bufsize=1,
+                # A launcher (perf) is the direct child and the runner its child: own process group, so a
+                # kill reaches both and never orphans the runner.
+                start_new_session=bool(self.launcher),
             )
         ready = self._readline(120)
         parts = ready.split(" ", 2)
@@ -207,6 +216,9 @@ class KrishivEngine(Engine):
     def _kill(self) -> None:
         proc, self._proc = self._proc, None
         if proc is not None:
+            if self.launcher:
+                with contextlib.suppress(OSError):
+                    os.killpg(proc.pid, signal.SIGKILL)
             proc.kill()
             proc.wait()
             for f in (proc.stdin, proc.stdout):

@@ -74,7 +74,12 @@ BUCKET_RULES: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
         ("join build", r"krishiv_exec::join::build|krishiv_exec::join::grace|HashJoinBuild|NestedLoopJoinBuild"),
         ("join probe", r"krishiv_exec::join::probe|krishiv_exec::join::nested|HashJoinProbe"),
         ("aggregate", r"krishiv_exec::aggregate::"),
-        ("exchange/repartition", r"[Ee]xchange|[Rr]epartition|krishiv_exec::operators::replicate|krishiv_shuffle::"),
+        (
+            "exchange/repartition",
+            # Anchored: a bare `[Ee]xchange` also matches `compare_exchange`, the leaf of every atomic.
+            r"krishiv_(exec|shuffle)::.*([Ee]xchange|[Rr]epartition)|krishiv_exec::operators::replicate"
+            r"|krishiv_shuffle::",
+        ),
         (SCAN_FILTER, r"krishiv_io::.*(row_filter|RowFilter|predicate|runtime_filter)|ArrowPredicate|RowFilter"),
         (
             "filter/project",
@@ -167,7 +172,8 @@ def wall_split(
 ) -> dict[str, float]:
     """Wall seconds per bucket: each bin's wall is shared by its samples' buckets, scaled to ``wall_s``.
 
-    Samples outside ``[t0, t1)`` are ignored; a bin without samples is idle and counts for no bucket.
+    Samples outside ``[t0, t1)`` are ignored; a bin without samples is idle (no thread on CPU) and its wall is
+    booked to ``other``.
     """
     if t1 <= t0 or wall_s <= 0:
         return {}
@@ -400,9 +406,10 @@ def measure_krishiv(
     wall = walls[1]
     tmp = Path(tempfile.mkdtemp(prefix="ledger-perf-"))
     data = tmp / "perf.data"
-    eng = KrishivEngine(threads=threads, memory_limit=memory_limit, binary=runner, launcher=perf_launcher(data))
-    eng.timeout_s = timeout_s or None
+    eng: KrishivEngine | None = None
     try:
+        eng = KrishivEngine(threads=threads, memory_limit=memory_limit, binary=runner, launcher=perf_launcher(data))
+        eng.timeout_s = timeout_s or None
         eng.setup(ds)
         eng.profile(query)
         t0 = _mono()
@@ -411,7 +418,8 @@ def measure_krishiv(
         eng.teardown()  # QUIT lets perf finalise its file
         buckets = wall_split(parse_perf_script(perf_script(data)), t0, t1, wall)
     finally:
-        eng.cancel()
+        if eng is not None:
+            eng.cancel()
         shutil.rmtree(tmp, ignore_errors=True)
     return {"seconds": wall, "runs": walls, "buckets": buckets}
 
