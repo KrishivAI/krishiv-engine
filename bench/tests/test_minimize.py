@@ -9,6 +9,7 @@ import pyarrow as pa
 import pytest
 
 from krishiv_bench import minimize as mz
+from krishiv_bench.adapters.base import Query
 from krishiv_bench.adapters.krishiv import RunnerCrashed, RunnerError
 
 
@@ -294,3 +295,24 @@ def test_run_minimize_without_a_dataset(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("krishiv_bench.paths.dataset_dir", lambda name, sf: tmp_path / "none")
     with pytest.raises(SystemExit, match="no dataset"):
         mz.run_minimize("tpch", "q1", 1)
+
+
+def test_krishiv_engine_can_be_set_up_again_after_teardown(tmp_path: Path):
+    import stat
+
+    from test_abba import FAKE_RUNNER
+
+    from krishiv_bench.adapters.base import Dataset
+    from krishiv_bench.adapters.krishiv import KrishivEngine
+
+    binary = tmp_path / "runner"
+    binary.write_text(FAKE_RUNNER)
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    eng = KrishivEngine(threads=1, memory_limit="1g", binary=binary)
+    eng.timeout_s = 30
+    ds = Dataset("t", 0, tmp_path, ["t"])
+    eng.setup(ds)
+    eng.teardown()
+    eng.setup(ds)
+    assert eng.timed_run(Query("q", "select 1", "t"))[0] == 2
+    eng.teardown()
