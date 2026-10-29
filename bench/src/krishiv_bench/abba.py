@@ -4,7 +4,8 @@ Protocol per query:
   1. Correctness first: both engines run the query once (this also warms the OS page cache and each engine's
      own caches); Krishiv's rows must equal DuckDB's (``compare.rows_match``: type-aware, ordered when the query
      has a top-level ORDER BY). A mismatch, an engine error or a timeout marks the query ``failed`` and it is
-     never timed or counted in the ratios.
+     never timed or counted in the ratios. DuckDB runs its own text of each query (``load_queries(suite,
+     "duckdb")``) and sorts NULLs as Spark does (first ascending, last descending), Krishiv's semantics.
   2. Timing: ``reps`` blocks of A B B A (A = Krishiv, B = DuckDB), i.e. ``2 * reps`` samples per engine, so
      drift (thermal, page cache, neighbours) hits both engines alike. Each timed run executes the query to
      completion and materialises every result row; seconds are measured inside the engine process (Krishiv: the
@@ -32,7 +33,7 @@ from typing import Any
 
 from . import compare
 from .adapters import Dataset, Engine
-from .adapters.duckdb_engine import DuckDBEngine
+from .adapters.duckdb_engine import SPARK_NULL_ORDER, DuckDBEngine
 from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .errors import describe_error
 from .paths import data_root, dataset_dir, fmt_sf, results_dir
@@ -156,6 +157,9 @@ def run_abba(
     if not tables:
         raise SystemExit(f"no dataset at {root}")
     queries = load_queries(suite, "krishiv", only)
+    # DuckDB runs its own text of each query (ClickBench q29 is written per dialect; `<suite>/duckdb/` overrides).
+    duck_sql = {q.id: q for q in load_queries(suite, "duckdb", only)}
+    queries = [(q, duck_sql.get(q.id, q)) for q in queries]
     ds = Dataset(dataset, sf, root, tables)
     with bench_lock() as waited:
         wait_idle()
@@ -164,7 +168,8 @@ def run_abba(
 
 def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s, suite, runner=None) -> Path:
     krishiv = KrishivEngine(threads=threads, memory_limit=memory_limit.lower(), binary=runner)
-    duck = DuckDBEngine(threads=threads, memory_limit=memory_limit.upper())
+    # Krishiv sorts NULLs as Spark does; the reference must too, or an ORDER BY over a nullable key differs.
+    duck = DuckDBEngine(threads=threads, memory_limit=memory_limit.upper(), null_order=SPARK_NULL_ORDER)
     krishiv.timeout_s = timeout_s or None  # 0 disables the timeout
     started = dt.datetime.now(dt.UTC)
     load_start = loadavg()
@@ -193,8 +198,8 @@ def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s
     krishiv.setup(ds)
     record["engines"]["krishiv"] = {"version": krishiv.version(), "config": krishiv.config()}
     try:
-        for q in queries:
-            record["queries"][q.id] = _one_query(q, krishiv, duck, reps, timeout_s)
+        for q, dq in queries:
+            record["queries"][q.id] = _one_query(q, krishiv, duck, reps, timeout_s, dq)
     finally:
         krishiv.teardown()
         duck.teardown()
@@ -209,12 +214,14 @@ def _run_locked(ds, queries, reps, threads, memory_limit, timeout_s, lock_wait_s
     return f
 
 
-def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: float) -> dict:
+def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: float, duck_q=None) -> dict:
+    """Correctness, then ABBA timing of ``q``; DuckDB runs ``duck_q`` (its own text of the query), ``q`` if None."""
+    duck_q = duck_q or q
     entry: dict = {}
     load_before = loadavg()
     try:
         with _Interrupt(duck, timeout_s):
-            drows = duck.run(q)
+            drows = duck.run(duck_q)
     except Exception as e:
         return {"status": "failed", "reason": f"duckdb {describe_error(e)}"}
     try:
@@ -240,7 +247,7 @@ def _one_query(q, krishiv: KrishivEngine, duck: Engine, reps: int, timeout_s: fl
                     return {**entry, "status": "failed", "reason": f"krishiv timed run: {describe_error(e)}"}
             else:
                 try:  # a DuckDB failure (interrupt, out of memory) fails this query, not the whole run
-                    secs = _duck_timed(duck, q, timeout_s)
+                    secs = _duck_timed(duck, duck_q, timeout_s)
                 except Exception as e:
                     return {
                         **entry,
