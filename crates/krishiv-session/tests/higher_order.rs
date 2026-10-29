@@ -1156,3 +1156,88 @@ fn map_builds_maps() {
     let e = error_at_runtime(&s, "SELECT map(CAST(NULL AS INT), 1)");
     assert_eq!(e.error_class(), ErrorClass::NullMapKey);
 }
+
+/// `transform_values` over a map with NULL values rebuilds the input with
+/// the input's value nullability (Spark: `{1 -> 0, 2 -> 22}`).
+#[test]
+fn transform_values_over_nullable_values() {
+    let s = session();
+    assert_eq!(
+        strings(
+            &s,
+            "transform_values(map(1, CAST(NULL AS INT), 2, 20), (k, v) -> coalesce(v, -1) + k)",
+            ""
+        ),
+        [Some("{1 -> 0, 2 -> 22}".to_owned())]
+    );
+}
+
+/// Lambda variables carry the analyzer's nullability, so nested bodies
+/// over map entries bind (`array(v)` over a non-null value).
+#[test]
+fn map_lambda_bodies_may_nest() {
+    let s = session();
+    assert_eq!(
+        strings(&s, "transform_values(map(1, 'a'), (k, v) -> array(v))", ""),
+        [Some("{1 -> [a]}".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "transform_keys(map(1, 'a'), (k, v) -> array(k))", ""),
+        [Some("{[1] -> a}".to_owned())]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "transform_values(map(1, array(1, 2)), (k, v) -> transform(v, x -> x + k))",
+            ""
+        ),
+        [Some("{1 -> [2, 3]}".to_owned())]
+    );
+}
+
+/// A fold over rows of different lengths steps all rows together.
+#[test]
+fn folds_step_rows_together() {
+    let s = session();
+    assert_eq!(
+        strings(&s, "aggregate(ys, 0, (acc, y) -> acc + y)", "FROM t").len(),
+        5
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "aggregate(array(1, 2, 3), 0, (a, x) -> a + x, a -> a * 10)",
+            ""
+        ),
+        [Some("60".to_owned())]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "reduce(CAST(NULL AS ARRAY<INT>), 0, (a, x) -> a + x)",
+            ""
+        ),
+        [None]
+    );
+    assert_eq!(
+        strings(&s, "array_sort(array(3, 1, 2), (l, r) -> r - l)", ""),
+        [Some("[3, 2, 1]".to_owned())]
+    );
+}
+
+/// Nested keys (arrays and structs of strings) build maps and deduplicate.
+#[test]
+fn nested_map_keys_deduplicate() {
+    let s = session();
+    assert_eq!(
+        strings(&s, "map(array('a'), 1, array('b'), 2)", ""),
+        [Some("{[a] -> 1, [b] -> 2}".to_owned())]
+    );
+    let e = error_at_runtime(&s, "SELECT map(array('a'), 1, array('a'), 2)");
+    assert_eq!(e.error_class(), ErrorClass::DuplicatedMapKey);
+    let e = error_at_runtime(
+        &s,
+        "SELECT transform_keys(map(1, 1, 2, 2), (k, v) -> array('x'))",
+    );
+    assert_eq!(e.error_class(), ErrorClass::DuplicatedMapKey);
+}

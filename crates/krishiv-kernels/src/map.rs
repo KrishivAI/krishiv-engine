@@ -666,7 +666,7 @@ fn hash_all(arrays: &[&dyn Array], counts: &[usize]) -> Result<Vec<i32>, KernelE
         if *n == 0 {
             continue;
         }
-        let plain = hashable(*a);
+        let plain = hashable(*a)?;
         let h = hash::hash(&[plain.as_ref()], *n)?;
         out.extend(h.values().iter().copied());
     }
@@ -1097,33 +1097,59 @@ pub fn build_map(
 
 /// `array` with view string and binary carriers read as the plain ones the
 /// hash kernel takes (the same bytes hash the same).
-fn hashable(array: &dyn Array) -> ArrayRef {
-    match array.data_type() {
+fn hashable(array: &dyn Array) -> Result<ArrayRef, KernelError> {
+    Ok(match array.data_type() {
         DataType::Utf8View => Arc::new(arrow_array::StringArray::from_iter(
             array.as_string_view().iter(),
         )),
         DataType::BinaryView => Arc::new(arrow_array::BinaryArray::from_iter(
             array.as_binary_view().iter(),
         )),
+        DataType::List(field) if has_view(field.data_type()) => {
+            let list = array.as_list::<i32>();
+            let values = hashable(list.values().as_ref())?;
+            let field = Arc::new(arrow_schema::Field::new(
+                field.name(),
+                values.data_type().clone(),
+                field.is_nullable(),
+            ));
+            Arc::new(
+                ListArray::try_new(field, list.offsets().clone(), values, list.nulls().cloned())
+                    .map_err(internal)?,
+            )
+        }
+        DataType::Struct(fields) if fields.iter().any(|f| has_view(f.data_type())) => {
+            let s = array.as_struct();
+            let columns = s
+                .columns()
+                .iter()
+                .map(|c| hashable(c.as_ref()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let fields: Vec<_> = fields
+                .iter()
+                .zip(&columns)
+                .map(|(f, c)| {
+                    arrow_schema::Field::new(f.name(), c.data_type().clone(), f.is_nullable())
+                })
+                .collect();
+            Arc::new(
+                StructArray::try_new(fields.into(), columns, s.nulls().cloned())
+                    .map_err(internal)?,
+            )
+        }
         _ => arrow_array::make_array(array.to_data()),
-    }
+    })
 }
 
-/// The Murmur3 hashes of the first `len` keys (empty for none).
-fn hash_keys(keys: &dyn Array, len: usize) -> Result<Vec<i32>, KernelError> {
-    if keys.len() < len {
-        return Err(internal(format!(
-            "{len} keys over an array of {}",
-            keys.len()
-        )));
+/// Whether `t` holds a view string or binary at any depth the hash kernel
+/// would meet.
+fn has_view(t: &DataType) -> bool {
+    match t {
+        DataType::Utf8View | DataType::BinaryView => true,
+        DataType::List(f) => has_view(f.data_type()),
+        DataType::Struct(fs) => fs.iter().any(|f| has_view(f.data_type())),
+        _ => false,
     }
-    if len == 0 {
-        return Ok(Vec::new());
-    }
-    // The hash kernel reads plain string and binary carriers; the view
-    // carriers (Spark's `STRING` here) hash as the same bytes.
-    let sliced = hashable(keys.slice(0, len).as_ref());
-    Ok(hash::hash(&[sliced.as_ref()], len)?.values().to_vec())
 }
 
 /// A row index as `u32`: a row that does not fit is an engine error, never
@@ -1132,48 +1158,106 @@ fn index32(n: usize) -> Result<u32, KernelError> {
     u32::try_from(n).map_err(|_| internal(format!("a map of {n} entries")))
 }
 
+/// Spark's key order over `keys[a]` and `other[b]`: the total order of
+/// [`crate::order::cmp_rows`] (NaN equals NaN, `-0.0` equals `0.0`, views
+/// and nested keys included), where equal means the same map key.
+fn key_order(
+    keys: &dyn Array,
+    a: usize,
+    other: &dyn Array,
+    b: usize,
+) -> Result<std::cmp::Ordering, KernelError> {
+    crate::order::cmp_rows(keys, a, other, b)
+}
+
 /// The deduplicated entries of one map's `len` keys (the first `len` of
 /// `keys`): the kept key indices and the value indices, which differ under
 /// `LAST_WIN` (the last value wins but the key keeps its first-seen
 /// position).
 ///
+/// Keys are grouped by sorting their indices once under [`key_order`], so
+/// nested and view keys need no hashing.
+///
 /// # Errors
 /// `NULL_MAP_KEY` for a null key, `DUPLICATED_MAP_KEY` for a repeat under
-/// `EXCEPTION`, or an engine error for a key type [`supports_key`] refuses.
+/// `EXCEPTION` (the earlier of the two failures in key order, as a scan
+/// would meet it), or an engine error for a key type [`supports_key`]
+/// refuses.
 pub fn dedup_entries(
     keys: &dyn Array,
     len: usize,
     last_win: bool,
 ) -> Result<(Vec<u32>, Vec<u32>), KernelError> {
-    let hash = hash_keys(keys, len)?;
-    let mut seen: HashMap<i32, Vec<usize>> = HashMap::with_capacity(len);
+    if keys.len() < len {
+        return Err(internal(format!(
+            "{len} keys over an array of {}",
+            keys.len()
+        )));
+    }
+    if let Some(null) = (0..len).find(|&e| keys.is_null(e)) {
+        // A scan stops at the first null unless a duplicate comes first.
+        let mut head = Vec::with_capacity(null);
+        head.extend(0..null);
+        if let Some(dup) = first_duplicate(keys, &head)?
+            && !last_win
+        {
+            return Err(KernelError::with_row(None, duplicate_key(keys, dup)?));
+        }
+        return Err(KernelError::with_row(None, NullMapKey {}.into()));
+    }
+    let mut order: Vec<usize> = (0..len).collect();
+    let mut failure = None;
+    order.sort_by(|&a, &b| match key_order(keys, a, keys, b) {
+        Ok(ord) => ord.then(a.cmp(&b)),
+        Err(e) => {
+            failure.get_or_insert(e);
+            std::cmp::Ordering::Equal
+        }
+    });
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    // Group boundaries: a key equal to its sorted predecessor repeats it.
+    let mut first_of: Vec<usize> = (0..len).collect();
+    let mut last_of: Vec<usize> = (0..len).collect();
+    let mut duplicate: Option<usize> = None;
+    let mut group_first = 0;
+    for pair in order.windows(2) {
+        let (prev, cur) = (pair[0], pair[1]);
+        if key_order(keys, prev, keys, cur)? == std::cmp::Ordering::Equal {
+            first_of[cur] = group_first;
+            last_of[group_first] = cur;
+            duplicate = Some(duplicate.map_or(cur, |d| d.min(cur)));
+        } else {
+            group_first = cur;
+        }
+    }
+    if let Some(dup) = duplicate
+        && !last_win
+    {
+        return Err(KernelError::with_row(None, duplicate_key(keys, dup)?));
+    }
     let mut kept: Vec<u32> = Vec::with_capacity(len);
     let mut values: Vec<u32> = Vec::with_capacity(len);
-    for (e, h) in hash.iter().enumerate() {
-        if keys.is_null(e) {
-            return Err(KernelError::with_row(None, NullMapKey {}.into()));
-        }
-        let mut found = None;
-        if let Some(same) = seen.get(h) {
-            for &p in same {
-                if keys_equal(keys, usize::try_from(kept[p]).map_err(internal)?, keys, e)? {
-                    found = Some(p);
-                    break;
-                }
-            }
-        }
-        let at = index32(e)?;
-        match found {
-            Some(p) if last_win => values[p] = at,
-            Some(_) => return Err(KernelError::with_row(None, duplicate_key(keys, e)?)),
-            None => {
-                seen.entry(*h).or_default().push(kept.len());
-                kept.push(at);
-                values.push(at);
-            }
+    for e in 0..len {
+        if first_of[e] == e {
+            kept.push(index32(e)?);
+            values.push(index32(last_of[e])?);
         }
     }
     Ok((kept, values))
+}
+
+/// The earliest index among `head` whose key repeats an earlier one.
+fn first_duplicate(keys: &dyn Array, head: &[usize]) -> Result<Option<usize>, KernelError> {
+    for (n, &e) in head.iter().enumerate() {
+        for &p in &head[..n] {
+            if key_order(keys, p, keys, e)? == std::cmp::Ordering::Equal {
+                return Ok(Some(e));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// One key of the union of two maps' key sets: the key's index into the
@@ -1196,65 +1280,65 @@ pub fn union_keys(
     keys2: &dyn Array,
     len2: usize,
 ) -> Result<Vec<UnionEntry>, KernelError> {
-    let h1 = hash_keys(keys1, len1)?;
-    let h2 = hash_keys(keys2, len2)?;
-    // Slot indices of `out` by hash; the owner of a slot's key is the first
-    // map when its key index is below `len1`.
-    let mut seen: HashMap<i32, Vec<usize>> = HashMap::with_capacity(len1.saturating_add(len2));
-    let mut out: Vec<UnionEntry> = Vec::with_capacity(len1.saturating_add(len2));
-    for (second, (keys, hashes)) in [(keys1, &h1), (keys2, &h2)].into_iter().enumerate() {
-        for (e, h) in hashes.iter().enumerate() {
-            if keys.is_null(e) {
-                return Err(KernelError::with_row(None, NullMapKey {}.into()));
+    if keys1.len() < len1 || keys2.len() < len2 {
+        return Err(internal(format!(
+            "zip over {len1} and {len2} keys of {} and {}",
+            keys1.len(),
+            keys2.len()
+        )));
+    }
+    if (0..len1).any(|e| keys1.is_null(e)) || (0..len2).any(|e| keys2.is_null(e)) {
+        return Err(KernelError::with_row(None, NullMapKey {}.into()));
+    }
+    // Entries as (map, index), grouped by key under [`key_order`]; within
+    // a group the first map's entries come first, each in key order.
+    let at = |w: usize| if w == 0 { keys1 } else { keys2 };
+    let mut entries: Vec<(usize, usize)> = (0..len1)
+        .map(|e| (0, e))
+        .chain((0..len2).map(|e| (1, e)))
+        .collect();
+    let mut failure = None;
+    entries.sort_by(|&(wa, a), &(wb, b)| match key_order(at(wa), a, at(wb), b) {
+        Ok(ord) => ord.then((wa, a).cmp(&(wb, b))),
+        Err(e) => {
+            failure.get_or_insert(e);
+            std::cmp::Ordering::Equal
+        }
+    });
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    let mut groups: Vec<(usize, UnionEntry)> = Vec::new();
+    let mut previous: Option<(usize, usize)> = None;
+    for &(w, e) in &entries {
+        let same = match previous {
+            Some((pw, pe)) => key_order(at(pw), pe, at(w), e)? == std::cmp::Ordering::Equal,
+            None => false,
+        };
+        previous = Some((w, e));
+        let value = Some(index32(e)?);
+        if same {
+            let (_, entry) = groups
+                .last_mut()
+                .ok_or_else(|| internal("a map key group without a first entry"))?;
+            let slot = if w == 0 { &mut entry.1 } else { &mut entry.2 };
+            if slot.is_none() {
+                *slot = value;
             }
-            let mut found = None;
-            if let Some(same) = seen.get(h) {
-                for &p in same {
-                    let (key, ..) = out[p];
-                    let key = usize::try_from(key).map_err(internal)?;
-                    let equal = if key < len1 {
-                        keys_equal(keys1, key, keys, e)?
-                    } else {
-                        keys_equal(keys2, key.saturating_sub(len1), keys, e)?
-                    };
-                    if equal {
-                        found = Some(p);
-                        break;
-                    }
-                }
-            }
-            let value = Some(index32(e)?);
-            match found {
-                Some(p) => {
-                    let slot = if second == 0 {
-                        &mut out[p].1
-                    } else {
-                        &mut out[p].2
-                    };
-                    if slot.is_none() {
-                        *slot = value;
-                    }
-                }
-                None => {
-                    let key = if second == 0 {
-                        index32(e)?
-                    } else {
-                        index32(
-                            len1.checked_add(e)
-                                .ok_or_else(|| internal("map keys overflow"))?,
-                        )?
-                    };
-                    seen.entry(*h).or_default().push(out.len());
-                    out.push(if second == 0 {
-                        (key, value, None)
-                    } else {
-                        (key, None, value)
-                    });
-                }
-            }
+        } else {
+            // First-seen position: the first map's keys, then the second's.
+            let seen = if w == 0 { e } else { len1.saturating_add(e) };
+            let key = index32(seen)?;
+            let entry = if w == 0 {
+                (key, value, None)
+            } else {
+                (key, None, value)
+            };
+            groups.push((seen, entry));
         }
     }
-    Ok(out)
+    groups.sort_by_key(|&(seen, _)| seen);
+    Ok(groups.into_iter().map(|(_, entry)| entry).collect())
 }
 
 #[cfg(test)]
@@ -2224,5 +2308,28 @@ mod tests {
         ]));
         let (kept, taken) = dedup_entries(bins.as_ref(), 2, true).unwrap();
         assert_eq!((kept, taken), (vec![0], vec![1]));
+    }
+
+    #[test]
+    fn nested_and_view_keys_group_by_value() {
+        use arrow_array::builder::{ListBuilder, StringViewBuilder};
+        let mut b = ListBuilder::new(StringViewBuilder::new());
+        for row in [["a"], ["b"], ["a"]] {
+            b.values().append_value(row[0]);
+            b.append(true);
+        }
+        let keys: ArrayRef = Arc::new(b.finish());
+        let err = KrishivError::from(dedup_entries(keys.as_ref(), 3, false).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::DuplicatedMapKey);
+        let (kept, taken) = dedup_entries(keys.as_ref(), 3, true).unwrap();
+        assert_eq!((kept, taken), (vec![0, 1], vec![2, 1]));
+        // A duplicate before a NULL key raises first, as a scan meets it.
+        let nulls: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), Some("a"), None]));
+        let err = KrishivError::from(dedup_entries(nulls.as_ref(), 3, false).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::DuplicatedMapKey);
+        let err = KrishivError::from(dedup_entries(nulls.as_ref(), 3, true).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::NullMapKey);
+        let hashed = hashable(keys.as_ref()).unwrap();
+        assert!(!has_view(hashed.data_type()));
     }
 }

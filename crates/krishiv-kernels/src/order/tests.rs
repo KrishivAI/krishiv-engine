@@ -200,7 +200,7 @@ fn byte_carriers_and_mismatches() {
 #[test]
 fn list_and_dictionary_carriers() {
     use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, FixedSizeListArray, LargeListArray, ListArray};
+    use arrow_array::{DictionaryArray, LargeListArray, ListArray};
     use arrow_buffer::{OffsetBuffer, ScalarBuffer};
     let field = Arc::new(Field::new("item", DataType::Int32, true));
     let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 1, 3, 1]));
@@ -232,17 +232,6 @@ fn list_and_dictionary_carriers() {
         Ordering::Less
     );
     assert_eq!(render_value(large.as_ref(), 1), "[1,3]");
-    let fixed: ArrayRef = Arc::new(FixedSizeListArray::new(
-        Arc::clone(&field),
-        2,
-        Arc::new(Int32Array::from(vec![1, 2, 1, 3])),
-        None,
-    ));
-    assert_eq!(
-        cmp_rows(fixed.as_ref(), 0, fixed.as_ref(), 1).unwrap(),
-        Ordering::Less
-    );
-    assert_eq!(render_value(fixed.as_ref(), 0), "[1,2]");
     let dict: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
         Int32Array::from(vec![1, 0]),
         Arc::new(StringArray::from(vec!["b", "a"])),

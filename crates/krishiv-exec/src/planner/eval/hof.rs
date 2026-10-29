@@ -609,46 +609,6 @@ fn flat_batch(
     flat_record(columns)
 }
 
-/// A one-row slice of every source column: the row `r` of each root
-/// column, the element `e` of each flattened value column, and the running
-/// accumulator.
-fn row_batch(
-    schema: &Arc<Schema>,
-    sources: &[Source],
-    batch: &RecordBatch,
-    r: usize,
-    elems: &[ArrayRef],
-    e: &[usize],
-    acc: Option<&ArrayRef>,
-) -> Result<RecordBatch> {
-    let mut columns: Vec<ArrayRef> = Vec::with_capacity(sources.len());
-    for source in sources {
-        columns.push(match source {
-            Source::Root(index) => batch.column(*index).slice(r, 1),
-            Source::Element(j) => {
-                let values = elems
-                    .get(*j)
-                    .ok_or_else(|| internal("a higher-order fold outside its fold"))?;
-                let at = e
-                    .get(*j)
-                    .copied()
-                    .ok_or_else(|| internal("a higher-order fold outside its fold"))?;
-                values.slice(at, 1)
-            }
-            Source::Index => {
-                return Err(internal("a higher-order fold outside its fold"));
-            }
-            Source::Acc => {
-                Arc::clone(acc.ok_or_else(|| internal("a higher-order fold outside its fold"))?)
-            }
-        });
-    }
-    if columns.is_empty() {
-        return empty_flat(1);
-    }
-    RecordBatch::try_new(Arc::clone(schema), columns).map_err(|e| internal(&e.to_string()))
-}
-
 /// A bound fold: `aggregate` or `reduce` (see the module doc). The merge
 /// body runs once per element, threading the one-row accumulator; the
 /// finish body runs once per row over the final accumulator (absent, the
@@ -721,6 +681,12 @@ fn compile_aggregate(
         if finish_params.len() != 1 {
             return Err(internal("a higher-order call without a lambda"));
         }
+        // The analyzer fills the three-argument form with an identity
+        // `finish`; it has nothing to run.
+        let identity = matches!(
+            &finish_body.node,
+            ExprNode::Resolved(ResolvedExpr::LambdaVar(c)) if c.id == finish_params[0].id
+        );
         let mut finish_refs = Refs::default();
         collect(
             finish_body,
@@ -739,16 +705,8 @@ fn compile_aggregate(
             Some((finish_params[0].id, zero.data_type().clone(), true)),
             false,
         )?;
-        (
-            Some(compile_body(
-                finish_body,
-                &finish_layout,
-                &finish_schema,
-                input,
-            )?),
-            finish_schema,
-            finish_sources,
-        )
+        let finish = compile_body(finish_body, &finish_layout, &finish_schema, input)?;
+        ((!identity).then_some(finish), finish_schema, finish_sources)
     } else {
         (None, Arc::new(Schema::empty()), Vec::new())
     };
@@ -765,6 +723,75 @@ fn compile_aggregate(
         out: f.data_type.to_arrow(),
         nullable: f.nullable,
     }))
+}
+
+impl Fold {
+    /// One evaluation of `body` over the rows `active` of the root batch:
+    /// the captured columns, the element at `elements` of `values` and the
+    /// running accumulator, each for the active rows only.
+    fn step(
+        &self,
+        stage: (&Arc<dyn PhysExpr>, &Arc<Schema>, &[Source]),
+        batch: &RecordBatch,
+        active: &[u32],
+        element: Option<(&ArrayRef, &[u32])>,
+        acc: &ArrayRef,
+        partition: u32,
+    ) -> Result<ArrayRef> {
+        let (body, schema, sources) = stage;
+        let rows = UInt32Array::from(active.to_vec());
+        let mut columns: Vec<ArrayRef> = Vec::with_capacity(sources.len());
+        for source in sources {
+            columns.push(match source {
+                Source::Root(index) => {
+                    arrow_select::take::take(batch.column(*index).as_ref(), &rows, None)
+                        .map_err(|e| internal(&e.to_string()))?
+                }
+                Source::Element(_) => {
+                    let (values, at) =
+                        element.ok_or_else(|| internal("a higher-order fold outside its fold"))?;
+                    arrow_select::take::take(values.as_ref(), &UInt32Array::from(at.to_vec()), None)
+                        .map_err(|e| internal(&e.to_string()))?
+                }
+                Source::Acc => take_rows(acc, active)?,
+                Source::Index => {
+                    return Err(internal("a higher-order fold outside its fold"));
+                }
+            });
+        }
+        let one = if columns.is_empty() {
+            empty_flat(active.len())?
+        } else {
+            RecordBatch::try_new(Arc::clone(schema), columns)
+                .map_err(|e| internal(&e.to_string()))?
+        };
+        body.eval(&one, partition)?.into_array(active.len())
+    }
+}
+
+/// The rows `at` of `array`.
+fn take_rows(array: &ArrayRef, at: &[u32]) -> Result<ArrayRef> {
+    arrow_select::take::take(array.as_ref(), &UInt32Array::from(at.to_vec()), None)
+        .map_err(|e| internal(&e.to_string()))
+}
+
+/// `base` with its rows `at` replaced by the rows of `update`, in order.
+fn scatter(base: &ArrayRef, at: &[u32], update: &ArrayRef) -> Result<ArrayRef> {
+    if at.len() == base.len() {
+        return Ok(Arc::clone(update));
+    }
+    if update.len() != at.len() {
+        return Err(internal("a higher-order fold step of the wrong row count"));
+    }
+    let mut picks: Vec<(usize, usize)> = (0..base.len()).map(|r| (0, r)).collect();
+    for (pos, &r) in at.iter().enumerate() {
+        let slot = picks
+            .get_mut(r as usize)
+            .ok_or_else(|| internal("a higher-order fold step past its rows"))?;
+        *slot = (1, pos);
+    }
+    arrow_select::interleave::interleave(&[base.as_ref(), update.as_ref()], &picks)
+        .map_err(|e| internal(&e.to_string()))
 }
 
 impl PhysExpr for Fold {
@@ -791,54 +818,78 @@ impl PhysExpr for Fold {
         if zero.len() != rows {
             return Err(internal("a higher-order zero of the wrong row count"));
         }
-        let mut out: Vec<ArrayRef> = Vec::with_capacity(rows);
+        // Every step is evaluated for all rows at once: step `i` threads the
+        // accumulators of the rows that still have an element `i` (a fold
+        // cannot vectorize along one row, since each step reads the last,
+        // but rows are independent), so the evaluations number the longest
+        // array, not the element count.
+        let mut starts: Vec<usize> = Vec::with_capacity(rows);
+        let mut lens: Vec<usize> = Vec::with_capacity(rows);
         for r in 0..rows {
-            if list.is_null(r) {
-                out.push(arrow_array::new_null_array(&self.out, 1));
-                continue;
-            }
             let (start, stop) = (
                 usize::try_from(offsets[r])
                     .map_err(|_| internal("a higher-order list with a negative offset"))?,
                 usize::try_from(offsets[r + 1])
                     .map_err(|_| internal("a higher-order list with a negative offset"))?,
             );
-            // The accumulator starts as the zero row; the merge threads it
-            // through the row's elements, one one-row evaluation each (a
-            // fold cannot vectorize: every step reads the last one).
-            let mut acc = zero.slice(r, 1);
-            for e in start..stop {
-                let one = row_batch(
-                    &self.merge_schema,
-                    &self.merge_sources,
-                    batch,
-                    r,
-                    std::slice::from_ref(list.values()),
-                    &[e],
-                    Some(&acc),
-                )?;
-                acc = self.merge.eval(&one, partition)?.into_array(1)?;
-            }
-            if let Some(finish) = &self.finish {
-                let one = row_batch(
-                    &self.finish_schema,
-                    &self.finish_sources,
-                    batch,
-                    r,
-                    &[],
-                    &[],
-                    Some(&acc),
-                )?;
-                acc = finish.eval(&one, partition)?.into_array(1)?;
-            }
-            out.push(acc);
+            starts.push(start);
+            lens.push(if list.is_null(r) {
+                0
+            } else {
+                stop.saturating_sub(start)
+            });
         }
-        let refs: Vec<&dyn Array> = out.iter().map(AsRef::as_ref).collect();
-        let out = if refs.is_empty() {
-            arrow_array::new_empty_array(&self.out)
-        } else {
-            arrow_select::concat::concat(&refs).map_err(|e| internal(&e.to_string()))?
-        };
+        let longest = lens.iter().copied().max().unwrap_or(0);
+        let mut acc: ArrayRef = zero;
+        for step in 0..longest {
+            let active: Vec<u32> = (0..rows)
+                .filter(|&r| lens[r] > step)
+                .map(|r| u32::try_from(r).map_err(|_| too_many(r)))
+                .collect::<Result<_>>()?;
+            let elements: Vec<u32> = active
+                .iter()
+                .map(|&r| {
+                    let at = starts[r as usize].saturating_add(step);
+                    u32::try_from(at).map_err(|_| too_many(at))
+                })
+                .collect::<Result<_>>()?;
+            let result = self.step(
+                (&self.merge, &self.merge_schema, &self.merge_sources),
+                batch,
+                &active,
+                Some((list.values(), &elements)),
+                &acc,
+                partition,
+            )?;
+            acc = scatter(&acc, &active, &result)?;
+        }
+        // The rows with a list (the others are NULL).
+        let valid: Vec<u32> = (0..rows)
+            .filter(|&r| list.is_valid(r))
+            .map(|r| u32::try_from(r).map_err(|_| too_many(r)))
+            .collect::<Result<_>>()?;
+        if let Some(finish) = &self.finish {
+            let result = self.step(
+                (finish, &self.finish_schema, &self.finish_sources),
+                batch,
+                &valid,
+                None,
+                &acc,
+                partition,
+            )?;
+            acc = scatter(
+                &arrow_array::new_null_array(&self.out, rows),
+                &valid,
+                &result,
+            )?;
+        } else if valid.len() != rows {
+            acc = scatter(
+                &arrow_array::new_null_array(acc.data_type(), rows),
+                &valid,
+                &take_rows(&acc, &valid)?,
+            )?;
+        }
+        let out = acc;
         if out.data_type() != &self.out {
             return Err(internal(&format!(
                 "{} returned {} where the analyzer typed {}",
@@ -1087,6 +1138,9 @@ struct MapUnary {
     nullable: bool,
     key_type: ArrowType,
     value_type: ArrowType,
+    /// Whether the input map's values may be null (the rebuilt input map
+    /// carries this, not the output's).
+    in_value_nullable: bool,
     value_nullable: bool,
     last_win: bool,
 }
@@ -1135,13 +1189,19 @@ fn compile_map_unary(
     );
     let in_key = key_type.clone();
     let in_value = value_type.clone();
+    let in_value_nullable = entries[1].is_nullable();
     let mut refs = Refs::default();
     collect(body, params, &mut Vec::new(), &mut refs, 0, None);
+    // The variables carry the analyzer's nullability (nested bodies bind
+    // on it).
     let (layout, schema, sources) = flat_parts(
         input,
         &refs,
         params,
-        &[(key_type, false), (value_type, true)],
+        &[
+            (key_type, params[0].nullable),
+            (value_type, params[1].nullable),
+        ],
         0,
         None,
         false,
@@ -1163,6 +1223,7 @@ fn compile_map_unary(
         nullable: f.nullable,
         key_type: in_key,
         value_type: in_value,
+        in_value_nullable,
         value_nullable,
         last_win: input.env.map_key_dedup_last_win,
     }))
@@ -1196,7 +1257,7 @@ impl PhysExpr for MapUnary {
             &values,
             OffsetBuffer::new(ScalarBuffer::from(map.value_offsets().to_vec())),
             map.nulls().cloned(),
-            self.value_nullable,
+            self.in_value_nullable,
         )?;
         let offsets = map.value_offsets();
         let total = usize::try_from(
@@ -1358,13 +1419,11 @@ impl PhysExpr for MapUnary {
                     let mut new_offsets = Vec::with_capacity(rows + 1);
                     new_offsets.push(0_i32);
                     for r in 0..rows {
-                        let len = if map.is_valid(r) {
-                            usize::try_from(offsets[r + 1] - offsets[r]).map_err(|_| {
-                                internal("a higher-order map with a negative offset")
-                            })?
-                        } else {
-                            0
-                        };
+                        // A NULL row keeps its entries (a null row may
+                        // hold some), so the offsets stay aligned with
+                        // the keys and values.
+                        let len = usize::try_from(offsets[r + 1] - offsets[r])
+                            .map_err(|_| internal("a higher-order map with a negative offset"))?;
                         new_offsets.push(
                             new_offsets
                                 .last()
@@ -1789,6 +1848,191 @@ fn stable_sort(
     Ok(())
 }
 
+/// Where a [`Machine`] is in the sort of one array (the sequential
+/// algorithm of [`stable_sort`], one comparison at a time).
+#[derive(Debug)]
+enum Phase {
+    /// Looking for the next run from `i`.
+    Start {
+        i: usize,
+    },
+    /// The first pair of a run at `i` is out for comparison.
+    First {
+        i: usize,
+    },
+    /// Extending the run `i..j`, strictly descending when `desc`; the pair
+    /// at `j` is out for comparison.
+    Extend {
+        i: usize,
+        j: usize,
+        desc: bool,
+    },
+    /// Merging the pair of runs at `pair`; the heads `i` and `j` are out.
+    Merge {
+        pair: usize,
+        i: usize,
+        j: usize,
+        k: usize,
+    },
+    Done,
+}
+
+/// One array's sort as a state machine, so every array's pending
+/// comparison can be evaluated in one batch per round: [`Machine::request`]
+/// names the elements to compare next and [`Machine::answer`] takes the
+/// result. The order of comparisons and the outcome are those of
+/// [`stable_sort`].
+#[derive(Debug)]
+struct Machine {
+    perm: Vec<usize>,
+    buf: Vec<usize>,
+    runs: Vec<(usize, usize)>,
+    next: Vec<(usize, usize)>,
+    phase: Phase,
+}
+
+impl Machine {
+    fn new(perm: Vec<usize>) -> Self {
+        let n = perm.len();
+        Self {
+            perm,
+            buf: vec![0; n],
+            runs: Vec::new(),
+            next: Vec::new(),
+            phase: Phase::Start { i: 0 },
+        }
+    }
+
+    /// The pair of elements to compare next, or `None` when sorted.
+    fn request(&mut self) -> Option<(usize, usize)> {
+        loop {
+            match self.phase {
+                Phase::Done => return None,
+                Phase::Start { i } => {
+                    if i >= self.perm.len() {
+                        self.begin_round();
+                        continue;
+                    }
+                    if i + 1 >= self.perm.len() {
+                        self.runs.push((i, i + 1));
+                        self.phase = Phase::Start { i: i + 1 };
+                        continue;
+                    }
+                    self.phase = Phase::First { i };
+                    return Some((self.perm[i + 1], self.perm[i]));
+                }
+                Phase::First { i } => return Some((self.perm[i + 1], self.perm[i])),
+                Phase::Extend { i, j, desc } => {
+                    if j >= self.perm.len() {
+                        self.finish_run(i, j, desc);
+                        continue;
+                    }
+                    return Some((self.perm[j], self.perm[j - 1]));
+                }
+                Phase::Merge { pair, i, j, k } => {
+                    let Some(&left) = self.runs.get(2 * pair) else {
+                        self.end_round();
+                        continue;
+                    };
+                    let Some(&right) = self.runs.get(2 * pair + 1) else {
+                        self.next.push(left);
+                        self.end_round();
+                        continue;
+                    };
+                    if i < left.1 && j < right.1 {
+                        return Some((self.perm[i], self.perm[j]));
+                    }
+                    let (mut i, mut j, mut k) = (i, j, k);
+                    while i < left.1 {
+                        self.buf[k] = self.perm[i];
+                        i += 1;
+                        k += 1;
+                    }
+                    while j < right.1 {
+                        self.buf[k] = self.perm[j];
+                        j += 1;
+                        k += 1;
+                    }
+                    self.perm[left.0..right.1].copy_from_slice(&self.buf[left.0..right.1]);
+                    self.next.push((left.0, right.1));
+                    self.start_pair(pair + 1);
+                }
+            }
+        }
+    }
+
+    /// Takes the result of the comparison [`Machine::request`] named.
+    fn answer(&mut self, ord: Ordering) {
+        match self.phase {
+            Phase::First { i } => {
+                self.phase = Phase::Extend {
+                    i,
+                    j: i + 2,
+                    desc: ord == Ordering::Less,
+                };
+            }
+            Phase::Extend { i, j, desc } => {
+                if (ord == Ordering::Less) == desc {
+                    self.phase = Phase::Extend { i, j: j + 1, desc };
+                } else {
+                    self.finish_run(i, j, desc);
+                }
+            }
+            Phase::Merge { pair, i, j, k } => {
+                if ord != Ordering::Greater {
+                    self.buf[k] = self.perm[i];
+                    self.phase = Phase::Merge {
+                        pair,
+                        i: i + 1,
+                        j,
+                        k: k + 1,
+                    };
+                } else {
+                    self.buf[k] = self.perm[j];
+                    self.phase = Phase::Merge {
+                        pair,
+                        i,
+                        j: j + 1,
+                        k: k + 1,
+                    };
+                }
+            }
+            Phase::Start { .. } | Phase::Done => {}
+        }
+    }
+
+    fn finish_run(&mut self, i: usize, j: usize, desc: bool) {
+        if desc {
+            self.perm[i..j].reverse();
+        }
+        self.runs.push((i, j));
+        self.phase = Phase::Start { i: j };
+    }
+
+    fn begin_round(&mut self) {
+        if self.runs.len() > 1 {
+            self.next.clear();
+            self.start_pair(0);
+        } else {
+            self.phase = Phase::Done;
+        }
+    }
+
+    fn end_round(&mut self) {
+        self.runs = std::mem::take(&mut self.next);
+        self.begin_round();
+    }
+
+    fn start_pair(&mut self, pair: usize) {
+        let (i, j) = match (self.runs.get(2 * pair), self.runs.get(2 * pair + 1)) {
+            (Some(l), Some(r)) => (l.0, r.0),
+            _ => (0, 0),
+        };
+        let k = i;
+        self.phase = Phase::Merge { pair, i, j, k };
+    }
+}
+
 impl PhysExpr for Sort {
     fn data_type(&self) -> &ArrowType {
         &self.out
@@ -1810,74 +2054,121 @@ impl PhysExpr for Sort {
         let list = rebase_list(list, rows)?;
         let offsets = list.value_offsets();
         let values = list.values();
-        // One permutation per row; every row keeps its length, so the
-        // offsets rebuild unchanged.
-        let mut taken: Vec<u32> = Vec::new();
+        // One permutation per row; every row keeps its length (a NULL row
+        // keeps its elements, unsorted), so the offsets rebuild unchanged.
+        let mut perms: Vec<Vec<usize>> = Vec::with_capacity(rows);
         for r in 0..rows {
-            if list.is_null(r) {
-                continue;
-            }
             let (start, stop) = (
                 usize::try_from(offsets[r])
                     .map_err(|_| internal("a higher-order list with a negative offset"))?,
                 usize::try_from(offsets[r + 1])
                     .map_err(|_| internal("a higher-order list with a negative offset"))?,
             );
-            let mut perm: Vec<usize> = (start..stop).collect();
-            if let Some(comparator) = &self.comparator {
-                // The comparator over one pair: the captured row with the
-                // two elements. A NULL result is Spark's
-                // `COMPARATOR_RETURNS_NULL` (both values render the left
-                // element, as Spark's call does).
-                let one = |a: usize, b: usize| -> Result<Ordering, KrishivError> {
-                    let pair = RecordBatch::try_new(
-                        Arc::clone(&self.schema),
-                        self.sources
-                            .iter()
-                            .map(|source| match source {
-                                Source::Root(index) => Ok(batch.column(*index).slice(r, 1)),
-                                Source::Element(0) => Ok(values.slice(a, 1)),
-                                Source::Element(_) => Ok(values.slice(b, 1)),
-                                Source::Index | Source::Acc => {
-                                    Err(internal("a higher-order fold outside its fold"))
-                                }
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    )
+            perms.push((start..stop).collect());
+        }
+        if let Some(comparator) = &self.comparator {
+            // The comparator over pairs: the captured row with the two
+            // elements. All arrays advance together, one comparison each
+            // per round, evaluated as one batch. A NULL result is Spark's
+            // `COMPARATOR_RETURNS_NULL` (both values render the left
+            // element, as Spark's call does).
+            let mut machines: Vec<(usize, Machine)> = Vec::new();
+            for (r, perm) in perms.iter_mut().enumerate() {
+                if list.is_valid(r) && perm.len() > 1 {
+                    machines.push((r, Machine::new(std::mem::take(perm))));
+                }
+            }
+            loop {
+                let mut asked: Vec<(usize, usize, usize)> = Vec::new();
+                let mut slots: Vec<usize> = Vec::new();
+                for (m, (r, machine)) in machines.iter_mut().enumerate() {
+                    if let Some((a, b)) = machine.request() {
+                        asked.push((*r, a, b));
+                        slots.push(m);
+                    }
+                }
+                if asked.is_empty() {
+                    break;
+                }
+                let to_u32 = |n: usize| u32::try_from(n).map_err(|_| too_many(n));
+                let roots = UInt32Array::from(
+                    asked
+                        .iter()
+                        .map(|&(r, ..)| to_u32(r))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+                let lefts = UInt32Array::from(
+                    asked
+                        .iter()
+                        .map(|&(_, a, _)| to_u32(a))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+                let rights = UInt32Array::from(
+                    asked
+                        .iter()
+                        .map(|&(_, _, b)| to_u32(b))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+                let take = |column: &ArrayRef, at: &UInt32Array| {
+                    arrow_select::take::take(column.as_ref(), at, None)
+                        .map_err(|e| internal(&e.to_string()))
+                };
+                let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.sources.len());
+                for source in &self.sources {
+                    columns.push(match source {
+                        Source::Root(index) => take(batch.column(*index), &roots)?,
+                        Source::Element(0) => take(values, &lefts)?,
+                        Source::Element(_) => take(values, &rights)?,
+                        Source::Index | Source::Acc => {
+                            return Err(internal("a higher-order fold outside its fold"));
+                        }
+                    });
+                }
+                let pairs = RecordBatch::try_new(Arc::clone(&self.schema), columns)
                     .map_err(|e| internal(&e.to_string()))?;
-                    let cmp = comparator.eval(&pair, partition)?.into_array(1)?;
-                    let order = cmp
-                        .as_primitive_opt::<arrow_array::types::Int32Type>()
-                        .and_then(|c| c.is_valid(0).then(|| c.value(0)));
-                    match order {
-                        Some(v) => Ok(v.cmp(&0)),
-                        None => Err(KrishivError::from(ComparatorReturnsNull {
+                let cmp = comparator
+                    .eval(&pairs, partition)?
+                    .into_array(asked.len())?;
+                let cmp = cmp
+                    .as_primitive_opt::<arrow_array::types::Int32Type>()
+                    .ok_or_else(|| internal("a comparator that is no INT"))?;
+                for (n, (&m, &(_, a, _))) in slots.iter().zip(&asked).enumerate() {
+                    if cmp.is_null(n) {
+                        return Err(KrishivError::from(ComparatorReturnsNull {
                             first_value: render_value(values.as_ref(), a),
                             second_value: render_value(values.as_ref(), a),
-                        })),
+                        }));
                     }
-                };
-                stable_sort(&mut perm, &one)?;
-            } else {
-                // Ascending with NULLs last (Spark's default comparator):
-                // NULL is greater than every value.
-                let one = |a: usize, b: usize| -> Result<Ordering, KrishivError> {
-                    match (values.is_null(a), values.is_null(b)) {
-                        (true, true) => Ok(Ordering::Equal),
-                        (true, false) => Ok(Ordering::Greater),
-                        (false, true) => Ok(Ordering::Less),
-                        (false, false) => {
-                            cmp_rows(values.as_ref(), a, values.as_ref(), b).map_err(Into::into)
-                        }
-                    }
-                };
-                stable_sort(&mut perm, &one)?;
+                    machines[m].1.answer(cmp.value(n).cmp(&0));
+                }
             }
-            taken.extend(
-                perm.iter()
-                    .map(|&e| u32::try_from(e).map_err(|_| too_many(e)))
-                    .collect::<Result<Vec<_>>>()?,
-            );
+            for (r, machine) in machines {
+                perms[r] = machine.perm;
+            }
+        } else {
+            // Ascending with NULLs last (Spark's default comparator): NULL
+            // is greater than every value.
+            let one = |a: usize, b: usize| -> Result<Ordering, KrishivError> {
+                match (values.is_null(a), values.is_null(b)) {
+                    (true, true) => Ok(Ordering::Equal),
+                    (true, false) => Ok(Ordering::Greater),
+                    (false, true) => Ok(Ordering::Less),
+                    (false, false) => {
+                        cmp_rows(values.as_ref(), a, values.as_ref(), b).map_err(Into::into)
+                    }
+                }
+            };
+            for (r, perm) in perms.iter_mut().enumerate() {
+                if list.is_valid(r) {
+                    stable_sort(perm, &one)?;
+                }
+            }
+        }
+        let mut taken: Vec<u32> = Vec::new();
+        for perm in &perms {
+            for &e in perm {
+                taken.push(u32::try_from(e).map_err(|_| too_many(e))?);
+            }
         }
         let sorted = arrow_select::take::take(values.as_ref(), &UInt32Array::from(taken), None)
             .map_err(|e| internal(&e.to_string()))?;
@@ -2200,5 +2491,72 @@ mod tests {
         let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
         assert!(super::super::hof::canonical(&ints, &ArrowType::Utf8View).is_err());
         assert!(super::super::hof::canonical(&ints, &ArrowType::Int32).is_ok());
+    }
+
+    /// A NULL row may hold elements: `array_sort` keeps them in place and
+    /// still sorts the others.
+    #[test]
+    fn array_sort_keeps_the_elements_of_null_rows() {
+        use arrow_array::Array as _;
+        use arrow_array::cast::AsArray;
+        use arrow_buffer::NullBuffer;
+        let field = Arc::new(Field::new("item", ArrowType::Int32, true));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::clone(&field),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4, 6])),
+            Arc::new(Int32Array::from(vec![2, 1, 9, 8, 4, 3])),
+            Some(NullBuffer::from(vec![true, false, true])),
+        ));
+        let out = ArrowType::List(Arc::clone(&field));
+        let array = Arc::new(Const {
+            data_type: out.clone(),
+            nullable: true,
+            array: list,
+        });
+        let sort = super::Sort {
+            array,
+            comparator: None,
+            schema: Arc::new(Schema::empty()),
+            sources: Vec::new(),
+            out,
+            nullable: true,
+        };
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &arrow_array::RecordBatchOptions::new().with_row_count(Some(3)),
+        )
+        .unwrap();
+        let got = sort.eval(&batch, 0).unwrap().into_array(3).unwrap();
+        let got = got.as_list::<i32>();
+        assert!(got.is_null(1));
+        let values = got.values().as_primitive::<arrow_array::types::Int32Type>();
+        assert_eq!(values.values().as_ref(), [1, 2, 9, 8, 3, 4]);
+    }
+
+    /// The state machine sorts like the sequential algorithm for every
+    /// input shape: ascending, descending and mixed runs, ties, singles.
+    #[test]
+    fn the_sort_machine_matches_the_sequential_sort() {
+        let cases: Vec<Vec<i32>> = vec![
+            vec![],
+            vec![1],
+            vec![2, 1],
+            vec![1, 2, 3],
+            vec![3, 2, 1],
+            vec![1, 3, 2, 4, 0, 5, 5, 1],
+            vec![5, 5, 5, 4, 4, 9, 1],
+            (0..40).map(|i| (i * 7919) % 31).collect(),
+        ];
+        for case in cases {
+            let cmp = |a: usize, b: usize| Ok(case[a].cmp(&case[b]));
+            let mut expected: Vec<usize> = (0..case.len()).collect();
+            super::stable_sort(&mut expected, &cmp).unwrap();
+            let mut machine = super::Machine::new((0..case.len()).collect());
+            while let Some((a, b)) = machine.request() {
+                machine.answer(case[a].cmp(&case[b]));
+            }
+            assert_eq!(machine.perm, expected, "{case:?}");
+        }
     }
 }

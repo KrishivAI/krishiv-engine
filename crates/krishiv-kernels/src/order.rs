@@ -28,11 +28,6 @@ use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use super::error::KernelError;
 use super::text::{java_double_string, java_float_string32};
 
-/// What does not fit a 32-bit offset or index.
-fn too_big(n: usize) -> KernelError {
-    KernelError::internal(format!("a map key encoding of {n} rows"))
-}
-
 /// The child values, start and length of the list at `idx`.
 fn list_slice(array: &dyn Array, idx: usize) -> Result<(ArrayRef, usize, usize), KernelError> {
     // Every arm reads `offsets[idx]` and `offsets[idx + 1]`; the row count
@@ -55,35 +50,6 @@ fn list_slice(array: &dyn Array, idx: usize) -> Result<(ArrayRef, usize, usize),
             .checked_sub(start)
             .ok_or_else(|| KernelError::internal("a map key list with decreasing offsets"))?;
         return Ok((Arc::clone(list.values()), start, len));
-    }
-    if let Some(view) = array.as_any().downcast_ref::<arrow_array::ListViewArray>() {
-        let (start, len) = (
-            view.value_offset(idx).as_usize(),
-            view.value_size(idx).as_usize(),
-        );
-        return Ok((Arc::clone(view.values()), start, len));
-    }
-    if let Some(view) = array
-        .as_any()
-        .downcast_ref::<arrow_array::LargeListViewArray>()
-    {
-        let (start, len) = (
-            view.value_offset(idx).as_usize(),
-            view.value_size(idx).as_usize(),
-        );
-        return Ok((Arc::clone(view.values()), start, len));
-    }
-    if let Some(list) = array
-        .as_any()
-        .downcast_ref::<arrow_array::FixedSizeListArray>()
-    {
-        let len = usize::try_from(list.value_length())
-            .map_err(|_| KernelError::internal("a map key list with a negative length"))?;
-        return Ok((
-            Arc::clone(list.values()),
-            idx.checked_mul(len).ok_or_else(|| too_big(idx))?,
-            len,
-        ));
     }
     Err(KernelError::internal(format!(
         "a map key comparison of {}",
@@ -241,20 +207,20 @@ pub fn cmp_rows(
                     }
                     ord
                 }
-                DataType::List(_)
-                | DataType::LargeList(_)
-                | DataType::FixedSizeList(_, _)
-                | DataType::ListView(_)
-                | DataType::LargeListView(_) => {
+                DataType::List(_) | DataType::LargeList(_) => {
                     let (lv, ls, ll) = list_slice(l, li)?;
                     let (rv, rs, rl) = list_slice(r, ri)?;
                     let mut ord = Ordering::Equal;
                     for e in 0..ll.min(rl) {
                         ord = cmp_rows(
                             lv.as_ref(),
-                            ls.checked_add(e).ok_or_else(|| too_big(e))?,
+                            ls.checked_add(e).ok_or_else(|| {
+                                KernelError::internal("a list position past usize")
+                            })?,
                             rv.as_ref(),
-                            rs.checked_add(e).ok_or_else(|| too_big(e))?,
+                            rs.checked_add(e).ok_or_else(|| {
+                                KernelError::internal("a list position past usize")
+                            })?,
                         )?;
                         if ord != Ordering::Equal {
                             break;
@@ -386,11 +352,7 @@ pub fn render_value(array: &dyn Array, idx: usize) -> String {
                 .collect();
             format!("[{}]", parts.join(","))
         }
-        DataType::List(_)
-        | DataType::LargeList(_)
-        | DataType::FixedSizeList(_, _)
-        | DataType::ListView(_)
-        | DataType::LargeListView(_) => match list_slice(array, idx) {
+        DataType::List(_) | DataType::LargeList(_) => match list_slice(array, idx) {
             Ok((values, start, len)) => {
                 // `start + len` stays inside the values; the fallback keeps
                 // the total rendering on the impossible overflow.
