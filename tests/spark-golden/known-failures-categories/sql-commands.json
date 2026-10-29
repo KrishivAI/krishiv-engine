@@ -1,0 +1,17 @@
+{
+  "category": "sql-commands",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "command": true,
+      "order": 10
+    },
+    {
+      "order": 80,
+      "query": "(?i)^\\s*explain\\s+(extended\\s+|formatted\\s+)?(desc|describe|show|create|insert|set)\\b"
+    }
+  ],
+  "summary": "SQL commands (DDL, DML, SET/RESET, DESCRIBE/SHOW, session variables, EXECUTE IMMEDIATE, SQL functions): not parsed or executed by the session yet",
+  "task": "P2-T179"
+}

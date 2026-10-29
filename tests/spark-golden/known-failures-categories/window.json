@@ -1,0 +1,13 @@
+{
+  "category": "window",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature (window functions|WINDOW clauses)",
+      "order": 300
+    }
+  ],
+  "summary": "window functions and WINDOW clauses",
+  "task": "P2-T055"
+}

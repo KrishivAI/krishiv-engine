@@ -1,0 +1,18 @@
+{
+  "category": "fn-misc",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "family": [
+        "misc",
+        "vector",
+        "hash",
+        "conditional"
+      ],
+      "order": 460
+    }
+  ],
+  "summary": "misc functions (typeof, uuid, rand, raise_error, vector, current_*)",
+  "task": "P2-T035"
+}

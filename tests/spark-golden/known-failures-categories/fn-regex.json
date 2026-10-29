@@ -1,0 +1,17 @@
+{
+  "category": "fn-regex",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature the operator rlike",
+      "order": 190
+    },
+    {
+      "detail": "(The feature function |Cannot resolve routine `)(?i)(regexp\\w*|rlike|split)\\b",
+      "order": 380
+    }
+  ],
+  "summary": "regular-expression functions and operators",
+  "task": "P2-T024"
+}

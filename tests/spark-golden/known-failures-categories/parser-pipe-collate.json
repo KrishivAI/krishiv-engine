@@ -1,0 +1,17 @@
+{
+  "category": "parser-pipe-collate",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "order": 150,
+      "query": "(?i)\\|>|\\bcollat(e|ion)\\b|\\|\\s*(select|where|aggregate|extend|set|drop|as|join|union|order|limit|pivot)\\b"
+    },
+    {
+      "file": "^(pipe-operators|collations)",
+      "order": 160
+    }
+  ],
+  "summary": "pipe syntax |> and COLLATE / collations",
+  "task": "P2-T075b"
+}

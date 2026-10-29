@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The Spark golden-file ratchet: the whole vendored Spark 4.2 `SQLQueryTestSuite` runs through
 //! `krishiv-session`, and the statements that do not pass must be exactly those of the frozen
-//! baseline `tests/spark-golden/known-failures.json`. A statement that newly fails is a
+//! baseline `tests/spark-golden/known-failures.json` (with its per-category and per-file
+//! directories). A statement that newly fails is a
 //! regression; a listed statement that passes must leave the list (it only shrinks). Refresh
 //! the list with `cargo run -p krishiv-testkit --bin golden-report -- --engine session
 //! --ratchet update`.

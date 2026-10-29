@@ -1,0 +1,15 @@
+{
+  "category": "fn-json",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "family": [
+        "json"
+      ],
+      "order": 440
+    }
+  ],
+  "summary": "JSON functions",
+  "task": "P2-T031"
+}

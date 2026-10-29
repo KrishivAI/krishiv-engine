@@ -1,0 +1,19 @@
+{
+  "category": "cast-matrix",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature (functions of timestamps in a session time zone|casts that read a session time zone|CAST from )",
+      "order": 280
+    },
+    {
+      "family": [
+        "conversion"
+      ],
+      "order": 410
+    }
+  ],
+  "summary": "the full cast matrix: casts not in P2a, cast-named functions, region time zones",
+  "task": "P2-T021b"
+}
