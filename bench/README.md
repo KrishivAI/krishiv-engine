@@ -132,6 +132,20 @@ printf 'PROFILE <query.sql>\nDUMP <query.sql> <out-dir>\nQUIT\n' | systemd-run -
 result must equal the same `DUMP` from a runner with `--memory-limit 32g` (no spill). The CI form of the same check,
 on generated TPC-H-shaped data, is `crates/krishiv-bench-runner/tests/spill_operators.rs`.
 
+## Gap ledger: where Krishiv spends more than DuckDB (`krishiv-bench ledger`)
+```bash
+RUSTFLAGS='-C target-cpu=x86-64-v3 -C force-frame-pointers=yes' CARGO_PROFILE_DIST_STRIP=none \
+  CARGO_PROFILE_DIST_DEBUG=line-tables-only cargo build --profile dist -p krishiv-bench-runner
+uv run krishiv-bench ledger --suite tpch --sf 10 --dataset tpch-duckdb --runner ../target/dist/krishiv-bench-runner
+uv run krishiv-bench ledger --suite clickbench --queries q01,q02 --previous <earlier ledger>.json
+```
+Needs `perf` (frame-pointer call graphs). Per query: Krishiv on a plain process (3 `PROFILE` runs, the 2nd is the wall
+time) and on a perf process (2 runs, only the 2nd attributed; samples are classified into operator buckets by the first
+matching frame from the leaf up and shared per 20 ms bin); DuckDB warm median plus one JSON operator profile (joins split
+build/probe by child rows). Output `$KRISHIV_DATA/results/<ts>_ledger_<suite>_sf<N>.json` and `.md`: the per-query and
+per-bucket tables with a "geomean if this bucket's positive gap were zero" column and the delta against the previous
+ledger of the same suite. `other` has no DuckDB counterpart, so its gap is an upper bound. Runs hold the bench lock.
+
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
 RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner
