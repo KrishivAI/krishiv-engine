@@ -3,12 +3,22 @@
 //! becomes a fresh instance of the definition, so filters, column pruning
 //! and join ordering see through it, per reference.
 //!
-//! A definition is inlined when it is deterministic or referenced once,
-//! which is Spark's rule. A nondeterministic definition with several
-//! references stays a [`PlanNode::CteRef`]. The physical planner already
-//! plans every reference as its own copy of the definition, so inlining
-//! changes what the rules can do, not how often the definition runs. (A
-//! CTE computed once and shared is P2-T198.)
+//! A definition is inlined when it is deterministic or referenced once. A
+//! nondeterministic definition with several references stays a
+//! [`PlanNode::CteRef`], kept for P2-T198 (a CTE computed once and shared).
+//! Spark 4.2 inlines it too, with one shared seed per nondeterministic call
+//! (`WITH t AS (SELECT rand() r FROM range(3)) SELECT count(*) FROM t a JOIN
+//! t b ON a.r = b.r` is 3); the physical planner plans each reference as its
+//! own copy, drawing its own values, so Krishiv returns 0 there today: a
+//! known divergence that P2-T198 closes. For every other definition the
+//! physical planner already planned one copy per reference, so inlining
+//! changes what the rules can do, not how often the definition runs.
+//!
+//! Determinism is that of the definition's own expressions, before its own
+//! references are inlined: a deterministic definition that reads a
+//! nondeterministic one is inlined, and the nondeterministic reference
+//! inside each instance stays a reference (Spark's observed result is the
+//! same).
 //!
 //! An instance is `Project[source + offset AS output]` over
 //! `Shift { definition, offset }`: the shift gives the copy attribute ids no

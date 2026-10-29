@@ -316,13 +316,17 @@ fn run(
 }
 
 /// Whether `a` and `b` are the same plan: the same relation, or equal
-/// structurally (a rewrite may rebuild a relation it does not change).
+/// structurally (a rewrite may rebuild a relation it does not change). A
+/// plan the IR does not accept (too deep) counts as the same: the loop
+/// stops, and the caller falls back to the unoptimised plan anyway.
 fn same_plan(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
-    Arc::ptr_eq(a, b)
-        || matches!(
-            (Plan::try_new(Arc::clone(a)), Plan::try_new(Arc::clone(b))),
-            (Ok(x), Ok(y)) if x.structurally_eq(&y)
-        )
+    if Arc::ptr_eq(a, b) {
+        return true;
+    }
+    match (Plan::try_new(Arc::clone(a)), Plan::try_new(Arc::clone(b))) {
+        (Ok(x), Ok(y)) => x.structurally_eq(&y),
+        _ => true,
+    }
 }
 
 /// The UDF folding context of one optimization: the session's library and

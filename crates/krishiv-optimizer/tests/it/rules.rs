@@ -151,6 +151,22 @@ const CASES: &[(&str, &str)] = &[
         "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x WHERE a > (SELECT max(a) FROM u)",
     ),
     (
+        "push_union_renamed_branch_columns",
+        "SELECT * FROM (SELECT 1 AS p, 's' AS q UNION ALL SELECT 2 AS k, 's' AS z) x WHERE q = 's'",
+    ),
+    (
+        "push_union_three_inputs",
+        "SELECT * FROM (SELECT a, 'x' AS k FROM t UNION ALL SELECT a, 'y' AS k FROM u UNION ALL SELECT a, 'z' AS k FROM t WHERE c > 0) w WHERE k <> 'y' AND a > 1",
+    ),
+    (
+        "push_union_outer_reference_stays",
+        "SELECT a FROM u WHERE EXISTS (SELECT 1 FROM (SELECT a FROM t UNION ALL SELECT a FROM t) x WHERE x.a = u.a AND x.a > 2)",
+    ),
+    (
+        "push_union_widened_branch",
+        "SELECT * FROM (SELECT a FROM t UNION ALL SELECT c FROM t) x WHERE a > 1",
+    ),
+    (
         "push_constant_through_aggregate",
         "SELECT * FROM (SELECT a, 'g' AS k, count(*) AS n FROM t GROUP BY a) x WHERE k = 'h'",
     ),

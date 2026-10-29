@@ -343,6 +343,11 @@ impl Interp<'_> {
                         .collect(),
                 }
             }
+            // `SELECT` without `FROM`: one row of no columns.
+            PlanNode::OneRowRelation => Rel {
+                cols: Vec::new(),
+                rows: vec![Vec::new()],
+            },
             // `UNION ALL`: every input's rows, positionally, under the first
             // input's columns.
             PlanNode::Union { inputs, .. } => {
