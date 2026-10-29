@@ -11,6 +11,10 @@
         "protobuf"
       ],
       "order": 480
+    },
+    {
+      "detail": "function (from|to)_avro",
+      "order": 525
     }
   ],
   "summary": "URL, XML, CSV and protobuf functions",

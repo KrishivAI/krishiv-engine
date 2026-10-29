@@ -12,6 +12,10 @@
         "lambda"
       ],
       "order": 470
+    },
+    {
+      "detail": "hashing a value of type Utf8View",
+      "order": 590
     }
   ],
   "summary": "lambda functions and higher-order functions",

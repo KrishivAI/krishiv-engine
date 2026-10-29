@@ -10,6 +10,10 @@
     {
       "order": 80,
       "query": "(?i)^\\s*explain\\s+(extended\\s+|formatted\\s+)?(desc|describe|show|create|insert|set)\\b"
+    },
+    {
+      "detail": "^parse failed.*Syntax error at or near '(INSERT|INTO|insert|into)'",
+      "order": 600
     }
   ],
   "summary": "SQL commands (DDL, DML, SET/RESET, DESCRIBE/SHOW, session variables, EXECUTE IMMEDIATE, SQL functions): not parsed or executed by the session yet",

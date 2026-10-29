@@ -5,13 +5,19 @@
   "rules": [
     {
       "depends": true,
+      "detail": "TABLE_OR_VIEW_NOT_FOUND|UNRESOLVED_ROUTINE|UNRESOLVED_COLUMN|UNRESOLVABLE_TABLE_VALUED_FUNCTION|VARIABLE_NOT_FOUND|UNBOUND_SQL_PARAMETER",
       "order": 50
+    },
+    {
+      "depends": true,
+      "detail": "^rows differ|^schema|^no error",
+      "order": 55
     },
     {
       "detail": "TABLE_OR_VIEW_NOT_FOUND.*`(tab_renamed)`",
       "order": 90
     }
   ],
-  "summary": "queries that read a table, view, function or variable an earlier command of the file creates (the command failed, so the query fails or reads the shared fixture of the same name)",
+  "summary": "queries that fail on a missing object: a table, view, function, column or variable that an earlier command of the file creates (the command failed, so the object is missing)",
   "task": "P2-T179"
 }

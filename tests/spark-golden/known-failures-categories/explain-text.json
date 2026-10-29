@@ -1,0 +1,14 @@
+{
+  "adr": "0023",
+  "category": "explain-text",
+  "format_version": 1,
+  "kind": "divergence",
+  "rules": [
+    {
+      "detail": "^rows differ",
+      "file": "^explain",
+      "order": 45
+    }
+  ],
+  "summary": "EXPLAIN output: Krishiv prints its own plan text, Spark prints its Catalyst plans (ADR 0023)"
+}

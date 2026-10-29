@@ -1,10 +1,12 @@
 {
   "cases": {
     "depends-on-command": [
-      1,
-      2,
       3,
       4
+    ],
+    "test-udfs": [
+      1,
+      2
     ]
   },
   "file": "udf/udf-count",

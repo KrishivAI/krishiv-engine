@@ -10,6 +10,22 @@
     {
       "detail": "UNRESOLVED_COLUMN.*`ALL`",
       "order": 210
+    },
+    {
+      "detail": "IDENTIFIER\\(\\)|NEAREST BY|FULL OUTER JOIN|multi-column PIVOT|NON_LITERAL_PIVOT_VALUES|CANNOT_RESOLVE_STAR_EXPAND|ORDER_BY_POS_OUT_OF_RANGE|in physical plans|is not an input column|INVALID_INLINE_TABLE",
+      "order": 560
+    },
+    {
+      "file": "^(natural-join|using-join|having|pivot|cte|group-by-alias|alias-resolution|order-by|group-by)",
+      "order": 610
+    },
+    {
+      "detail": "TABLESAMPLE|PIVOT_VALUE_DATA_TYPE|Min of List",
+      "order": 640
+    },
+    {
+      "detail": "comparison of List",
+      "order": 690
     }
   ],
   "summary": "query features the analyzer or planner lacks: inline VALUES, table-valued functions, NATURAL and USING joins, recursive CTEs, LATERAL, PIVOT/UNPIVOT, OFFSET, GROUP BY ALL, SELECT * EXCEPT, QUALIFY, named and qualified function names, LIKE ANY/ALL",
