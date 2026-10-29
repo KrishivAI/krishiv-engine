@@ -14,8 +14,8 @@
 //! `(fan-in member, ordinal)`. The driver holding the smallest such key
 //! sends straight to the channel; the others hold their batches back, in
 //! memory reserved through their consumer (taken, never awaited) and at
-//! most [`ORDER_BATCHES`] each, and wait once over either limit (memory
-//! is the one that binds). When the
+//! most [`ORDER_BATCHES`] each ([`SHORT_BATCHES`] once a reservation is
+//! refused), and wait once over the limit. When the
 //! smallest key moves on (a driver reports a new morsel, or ends), the
 //! batches it passed are sent in key order. The driver with the smallest
 //! key is never held back, so the order cannot deadlock.
@@ -183,6 +183,11 @@ impl Channel {
 /// and waits once it does not.
 pub(crate) const ORDER_BATCHES: usize = 4096;
 
+/// Most batches a driver holds back once its memory ran short: it keeps
+/// running ahead a little (waiting at the first refusal serialised large
+/// scans) and then waits for its turn.
+pub(crate) const SHORT_BATCHES: usize = 256;
+
 /// A held-back batch: the driver holding it, the batch and the bytes it
 /// reserved.
 type Held = (u32, Batch, usize);
@@ -206,7 +211,8 @@ struct Track {
     /// Batches it holds back, and the memory they hold.
     held: usize,
     memory: Option<Reservation>,
-    /// Its memory ran short: it waits until nothing it holds is left.
+    /// Its memory ran short: it holds at most [`SHORT_BATCHES`] until
+    /// nothing it holds is left.
     short: bool,
     waker: Option<Waker>,
 }
@@ -219,7 +225,7 @@ impl Track {
 
     /// Whether it must wait before sinking more.
     fn over(&self) -> bool {
-        self.held >= ORDER_BATCHES || (self.short && self.held > 0)
+        self.held >= ORDER_BATCHES || (self.short && self.held >= SHORT_BATCHES)
     }
 }
 
@@ -653,8 +659,9 @@ mod tests {
         ok(sink.combine(l1, &g));
     }
 
-    /// Without memory for a held batch the driver waits until its batches
-    /// are sent; a dropped receiver ends every wait.
+    /// Without memory for its held batches a driver holds at most
+    /// `SHORT_BATCHES`, then waits until they are sent; a dropped receiver
+    /// ends every wait.
     #[test]
     fn short_memory_and_a_dropped_receiver() {
         let (sink, g, ctx) = setup(Some(1), 2);
@@ -663,6 +670,10 @@ mod tests {
         let mut l1 = ok(sink.local_state(&ctx[1], &g));
         sink.position(&mut l0, &g, 0);
         sink.position(&mut l1, &g, 1);
+        for i in 0..SHORT_BATCHES - 1 {
+            let s = ok(sink.sink(batch(100 + i as i64), &mut l1, &g));
+            assert_eq!(status(&s), "more");
+        }
         let SinkStatus::Blocked(mut turn) = ok(sink.sink(batch(2), &mut l1, &g)) else {
             unreachable!("not blocked");
         };
