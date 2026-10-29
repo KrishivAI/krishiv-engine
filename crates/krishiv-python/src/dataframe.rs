@@ -238,6 +238,46 @@ impl PyDataFrame {
         ))
     }
 
+    /// Caches this frame's rows in memory (PySpark's `cache`): the next
+    /// action materializes the plan into the session's relation cache.
+    fn cache(&self) -> Self {
+        self.derive(self.inner.cache())
+    }
+
+    /// Caches this frame's rows at the level (PySpark's `persist`): every
+    /// level maps to memory for now (disk levels spill there later).
+    fn persist(
+        &self,
+        use_disk: bool,
+        use_memory: bool,
+        use_offheap: bool,
+        deserialized: bool,
+        replication: i32,
+    ) -> Self {
+        self.derive(self.inner.persist(krishiv_session::StorageLevel {
+            use_disk,
+            use_memory,
+            use_off_heap: use_offheap,
+            deserialized,
+            replication,
+        }))
+    }
+
+    /// Drops this frame's cached snapshot, if any (PySpark's `unpersist`).
+    #[pyo3(signature = (blocking=false))]
+    fn unpersist(&self, py: Python<'_>, blocking: bool) -> PyResult<Self> {
+        let _ = blocking;
+        let df = self.inner.clone();
+        let inner = block_on(py, async move { df.unpersist().await })?;
+        Ok(self.derive(inner))
+    }
+
+    /// Whether this frame's plan is cached now.
+    fn is_cached(&self, py: Python<'_>) -> PyResult<bool> {
+        let df = self.inner.clone();
+        block_on(py, async move { df.is_cached().await })
+    }
+
     fn alias(&self, alias: &str) -> Self {
         self.derive(self.inner.alias(alias))
     }

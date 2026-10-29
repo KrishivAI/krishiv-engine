@@ -1,8 +1,10 @@
 {
   "cases": {
-    "depends-on-command": [
+    "cast-matrix": [
       8,
-      9,
+      9
+    ],
+    "datetime": [
       15,
       16,
       17,
@@ -10,7 +12,9 @@
       19,
       20,
       21,
-      22,
+      22
+    ],
+    "fn-json": [
       30
     ]
   },

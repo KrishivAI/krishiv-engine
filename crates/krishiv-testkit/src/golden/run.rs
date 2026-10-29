@@ -17,7 +17,7 @@
 //! are never parsed or run; a file that cannot be read or parsed is recorded in
 //! [`RunResult::failed_files`] and the run continues.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use krishiv_common::error::ErrorClass;
@@ -129,6 +129,15 @@ impl Tally {
     }
 }
 
+/// The negative score of one expected error class.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ClassTally {
+    /// Statements of the class whose error the engine matched, and all of them.
+    pub tally: Tally,
+    /// Spark raises the class while parsing (a `ParseException`), so no query was planned.
+    pub parse_phase: bool,
+}
+
 /// Results of one golden file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FileResult {
@@ -146,6 +155,8 @@ pub struct FileResult {
     pub result: Tally,
     /// Spark errors without an error class (outside the negative denominator).
     pub unclassified_errors: u64,
+    /// Number 2 per expected Spark error class.
+    pub classes: BTreeMap<String, ClassTally>,
     /// Per-statement outcomes, in file order (the counted statements only).
     pub cases: Vec<Case>,
     /// Statements that timed out, kept out of the baseline comparison and
@@ -339,6 +350,8 @@ struct Outcome {
     negative: Option<bool>,
     result: Option<bool>,
     unclassified: bool,
+    /// The expected error class and whether Spark raises it while parsing, for a counted negative.
+    class: Option<(String, bool)>,
     detail: String,
     timeout: bool,
 }
@@ -355,6 +368,7 @@ impl Outcome {
             negative: both(self.negative, other.negative),
             result: both(self.result, other.result),
             unclassified: self.unclassified,
+            class: self.class.or(other.class),
             detail: if self.detail.is_empty() {
                 other.detail
             } else {
@@ -430,6 +444,13 @@ pub fn run_file_with(
             }
         }
         file.unclassified_errors += u64::from(o.unclassified);
+        if let (Some(v), Some((class, parse_phase))) = (o.negative, o.class.clone()) {
+            let entry = file.classes.entry(class).or_default();
+            // A class raised in both phases is a parse-phase class whatever the
+            // statement order (the gate would otherwise depend on it).
+            entry.parse_phase |= parse_phase;
+            entry.tally.record(v);
+        }
         let mut case = case;
         if case.passed() {
             case.detail.clear();
@@ -526,6 +547,10 @@ fn outcome(
             Outcome {
                 parse: counts_parse.then_some(parsed),
                 negative,
+                class: e
+                    .error_class
+                    .clone()
+                    .map(|class| (class, e.is_parse_error())),
                 unclassified: e.error_class.is_none(),
                 detail: if parse_failed {
                     format!("{}{why}", parse_detail())

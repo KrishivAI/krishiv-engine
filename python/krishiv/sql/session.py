@@ -11,11 +11,18 @@ from decimal import Decimal
 from typing import Any
 
 from krishiv import _native
-from krishiv.errors import PySparkValueError, not_expected_type, not_implemented, unsupported_feature
+from krishiv.errors import (
+    AnalysisException,
+    PySparkValueError,
+    not_expected_type,
+    not_implemented,
+    unsupported_feature,
+)
 from krishiv.sql.conf import RuntimeConfig
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
 from krishiv.sql.types import DataType, StructType
+from krishiv.storagelevel import StorageLevel
 
 #: The Spark version this engine is compatible with.
 SPARK_VERSION = "4.2.0"
@@ -573,3 +580,47 @@ class Catalog:
         if not isinstance(viewName, str):
             raise not_expected_type("viewName", "str", viewName)
         return self._session._native.drop_temp_view(viewName)
+
+    def clearCache(self) -> None:
+        """Drops every cached relation: later actions run uncached."""
+        self._session._native.clear_cache()
+
+    def uncacheTable(self, tableName: str) -> None:
+        """Drops the cached relations reading ``tableName``."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        self._session._native.uncache_table(tableName)
+
+    def refreshTable(self, tableName: str) -> DataFrame:
+        """Drops the cached relations reading ``tableName``, so the next action reads the
+        table again, and returns the table."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        self._session._native.refresh_table(tableName)
+        return self._session.table(tableName)
+
+    def refreshByPath(self, path: str) -> None:
+        """Drops the cached relations reading files by path, so the next action lists the
+        files again."""
+        if not isinstance(path, str):
+            raise not_expected_type("path", "str", path)
+        self._session._native.refresh_files()
+
+    def isCached(self, tableName: str) -> bool:
+        """Whether the table ``tableName`` is cached now."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        try:
+            return self._session.table(tableName).is_cached
+        except AnalysisException:
+            return False
+
+    def cacheTable(self, tableName: str, storageLevel: StorageLevel | None = None) -> None:
+        """Caches ``tableName`` at ``storageLevel`` (default ``MEMORY_AND_DISK``), eagerly:
+        the table is read now."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        level = storageLevel if storageLevel is not None else StorageLevel.MEMORY_AND_DISK
+        if not isinstance(level, StorageLevel):
+            raise not_expected_type("storageLevel", "StorageLevel", storageLevel)
+        self._session.table(tableName).persist(level).count()

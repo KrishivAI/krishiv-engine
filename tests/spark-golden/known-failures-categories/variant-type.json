@@ -6,6 +6,10 @@
     {
       "detail": "The feature the variant data type",
       "order": 250
+    },
+    {
+      "detail": "variant paths|function (parse_json|to_variant_object|variant_get|try_variant_get|schema_of_variant)",
+      "order": 520
     }
   ],
   "summary": "the VARIANT type",
