@@ -655,12 +655,13 @@ mod tests {
         // `sql_keywords()` lists exactly the fixture's listed keywords
         // (Spark's 423; the alternatives `REGEXP` and `TEMP` lex as
         // keywords but are not listed).
-        let listed: Vec<&str> = keywords
+        let mut listed: Vec<&str> = keywords
             .iter()
             .filter(|k| k["listed"].as_bool().unwrap())
             .map(|k| k["text"].as_str().unwrap())
             .collect();
         assert_eq!(listed.len(), 423);
+        listed.sort_unstable();
         assert_eq!(
             SQL_KEYWORDS.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             listed
