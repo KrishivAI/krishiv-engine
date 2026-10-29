@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, Int32Array, ListArray, RecordBatch};
+use arrow_array::{Array, ArrayRef, Int32Array, ListArray, MapArray, RecordBatch, StructArray};
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use futures::executor::block_on;
@@ -80,6 +80,15 @@ fn error(s: &Session, sql: &str) -> KrishivError {
     match block_on(s.sql(sql)) {
         Ok(_) => panic!("{sql} resolved"),
         Err(e) => e,
+    }
+}
+
+/// The runtime error of `sql` (analysis succeeds; execution raises).
+fn error_at_runtime(s: &Session, sql: &str) -> KrishivError {
+    let df = block_on(s.sql(sql)).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    match block_on(df.collect()) {
+        Err(e) => e,
+        Ok(_) => panic!("{sql} ran"),
     }
 }
 
@@ -509,7 +518,7 @@ fn higher_order_output_names_and_types() {
     let batches = block_on(df.collect()).unwrap();
     assert_eq!(
         batches[0].schema().field(0).name(),
-        "transform(ys, lambdafunction((y + 1), y))"
+        "transform(ys, lambdafunction((namedlambdavariable() + 1), namedlambdavariable()))"
     );
 }
 
@@ -594,4 +603,562 @@ fn large_lists_are_rejected() {
         err.to_string().contains("no list") || err.to_string().contains("non-list"),
         "{err}"
     );
+}
+
+/// The golden `nested` view of `higher-order-functions.sql`: the array half.
+fn nested_arrays() -> Session {
+    let s = Session::new().unwrap();
+    let element = Field::new("element", ArrowType::Int32, false);
+    let mut ys = arrow_array::builder::ListBuilder::new(arrow_array::builder::Int32Builder::new())
+        .with_field(Arc::new(element.clone()));
+    ys.append_value([Some(32), Some(97)]);
+    ys.append_value([Some(77), Some(-76)]);
+    ys.append_value([Some(12)]);
+    let inner = ListArray::new(
+        Arc::new(element),
+        OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4, 5, 8, 10, 11])),
+        Arc::new(Int32Array::from(vec![
+            12, 99, 123, 42, 1, 6, 96, 65, -1, -2, 17,
+        ])),
+        None,
+    );
+    let zs = ListArray::new(
+        Arc::new(Field::new(
+            "element",
+            ArrowType::List(Arc::new(Field::new("element", ArrowType::Int32, false))),
+            true,
+        )),
+        OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 5, 6])),
+        Arc::new(inner),
+        None,
+    );
+    let x: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let ys: ArrayRef = Arc::new(ys.finish());
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x", ArrowType::Int32, false),
+        Field::new("ys", ys.data_type().clone(), true),
+        Field::new("zs", zs.data_type().clone(), true),
+    ]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![x, ys, Arc::new(zs)]).unwrap();
+    s.register_batches("nested", schema, vec![batch]).unwrap();
+    s
+}
+
+/// The golden `nested` view of `higher-order-functions.sql`: the map half.
+fn nested_maps() -> Session {
+    let s = Session::new().unwrap();
+    let entries = || {
+        Arc::new(StructArray::new(
+            vec![
+                Arc::new(Field::new("key", ArrowType::Int32, false)),
+                Arc::new(Field::new("value", ArrowType::Int32, true)),
+            ]
+            .into(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef,
+            ],
+            None,
+        ))
+    };
+    let field = Arc::new(Field::new(
+        "entries",
+        ArrowType::Struct(
+            vec![
+                Field::new("key", ArrowType::Int32, false),
+                Field::new("value", ArrowType::Int32, true),
+            ]
+            .into(),
+        ),
+        false,
+    ));
+    let maps = MapArray::new(
+        Arc::clone(&field),
+        OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6])),
+        entries().slice(0, 6),
+        None,
+        false,
+    );
+    let x: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x", ArrowType::Int32, false),
+        Field::new("ys", maps.data_type().clone(), true),
+    ]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![x, Arc::new(maps)]).unwrap();
+    s.register_batches("nested", schema, vec![batch]).unwrap();
+    s
+}
+
+#[test]
+fn aggregate_folds_per_row() {
+    let s = nested_arrays();
+    // The golden rows of `aggregate(ys, 0, (y, a) -> y + a + x)`.
+    assert_eq!(
+        strings(&s, "aggregate(ys, 0, (y, a) -> y + a + x)", "FROM nested"),
+        [
+            Some("131".to_owned()),
+            Some("5".to_owned()),
+            Some("15".to_owned()),
+        ]
+    );
+    // A NULL array is NULL without running the merge; an empty array keeps
+    // the zero, converted by the finish.
+    assert_eq!(
+        strings(
+            &s,
+            "aggregate(CAST(NULL AS ARRAY<INT>), 0, (a, y) -> a + y + 1, a -> a + 2)",
+            ""
+        ),
+        [None]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "aggregate(array(), 10, (a, y) -> a + y, a -> a * 2)",
+            ""
+        ),
+        [Some("20".to_owned())]
+    );
+    // A constant merge repeats its body; without `finish` the accumulator
+    // is the result.
+    assert_eq!(
+        strings(&s, "aggregate(array(1, 2, 3), 0, 100)", ""),
+        [Some("100".to_owned())]
+    );
+    // Nested folds see the enclosing element and the outer query.
+    assert_eq!(
+        strings(
+            &s,
+            "transform(zs, z -> aggregate(z, 1, (acc, val) -> acc * val * size(z)))",
+            "FROM nested"
+        ),
+        [
+            Some("[4752, 20664, 1]".to_owned()),
+            Some("[1010880, 8]".to_owned()),
+            Some("[17]".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn reduce_is_aggregates_alias() {
+    let s = nested_arrays();
+    assert_eq!(
+        strings(&s, "reduce(ys, 0, (y, a) -> y + a + x)", "FROM nested"),
+        [
+            Some("131".to_owned()),
+            Some("5".to_owned()),
+            Some("15".to_owned()),
+        ]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "reduce(CAST(NULL AS ARRAY<INT>), 0, (a, y) -> a + y + 1, a -> a + 2)",
+            ""
+        ),
+        [None]
+    );
+}
+
+#[test]
+fn zip_with_pads_the_shorter_side() {
+    let s = nested_arrays();
+    // The golden rows of `zip_with(ys, zs, (a, b) -> a + size(b))`: the
+    // shorter side reads NULL.
+    assert_eq!(
+        strings(&s, "zip_with(ys, zs, (a, b) -> a + size(b))", "FROM nested"),
+        [
+            Some("[34, 99, null]".to_owned()),
+            Some("[80, -74]".to_owned()),
+            Some("[13]".to_owned()),
+        ]
+    );
+    // A NULL on either side is a NULL row.
+    assert_eq!(
+        strings(
+            &s,
+            "zip_with(ys, CAST(NULL AS ARRAY<INT>), (a, b) -> a)",
+            "FROM nested"
+        ),
+        [None, None, None]
+    );
+    // Unequal lengths pad with NULLs, as Spark does.
+    assert_eq!(
+        strings(
+            &s,
+            "zip_with(array(1), array('d', null, 'f'), (x, y) -> coalesce(y, 'z'))",
+            ""
+        ),
+        [Some("[d, z, f]".to_owned())]
+    );
+}
+
+#[test]
+fn map_filter_keeps_matching_entries() {
+    let s = nested_maps();
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(map_filter(ys, (k, v) -> v > 1) AS STRING)",
+            "FROM nested"
+        ),
+        [
+            Some("{2 -> 2, 3 -> 3}".to_owned()),
+            Some("{4 -> 4, 5 -> 5, 6 -> 6}".to_owned()),
+        ]
+    );
+    // A NULL mark drops its entry; a NULL map is NULL.
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(map_filter(map('a', 1, 'b', 2), (k, v) -> v > 1) AS STRING)",
+            ""
+        ),
+        [Some("{b -> 2}".to_owned())]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "map_filter(CAST(NULL AS MAP<STRING, INT>), (k, v) -> TRUE)",
+            ""
+        ),
+        [None]
+    );
+    // Captured columns and nesting work through the flattened entries.
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(map_filter(ys, (k, v) -> k + v > x * 2) AS STRING)",
+            "FROM nested"
+        ),
+        [
+            Some("{2 -> 2, 3 -> 3}".to_owned()),
+            Some("{4 -> 4, 5 -> 5, 6 -> 6}".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn transform_keys_rebuilds_keys() {
+    let s = nested_maps();
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(transform_keys(ys, (k, v) -> k + 1) AS STRING)",
+            "FROM nested"
+        ),
+        [
+            Some("{2 -> 1, 3 -> 2, 4 -> 3}".to_owned()),
+            Some("{5 -> 4, 6 -> 5, 7 -> 6}".to_owned()),
+        ]
+    );
+    // Duplicate keys raise, quoting the policy and the key.
+    let e = error_at_runtime(&s, "SELECT transform_keys(map('a', 1, 'b', 2), 42)");
+    assert_eq!(e.error_class(), ErrorClass::DuplicatedMapKey, "{e:?}");
+    assert_eq!(e.sql_state(), Some("23505"));
+    assert!(
+        e.to_string().contains("Duplicate map key 42 was found"),
+        "{e}"
+    );
+    assert!(
+        e.to_string().contains("\"spark.sql.mapKeyDedupPolicy\""),
+        "{e}"
+    );
+    // `LAST_WIN` keeps the last value instead.
+    s.conf()
+        .set("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
+        .unwrap();
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(transform_keys(map('a', 1, 'b', 2), 42) AS STRING)",
+            ""
+        ),
+        [Some("{42 -> 2}".to_owned())]
+    );
+    s.conf().unset("spark.sql.mapKeyDedupPolicy").unwrap();
+    // NULL keys raise, whatever the policy.
+    let e = error_at_runtime(
+        &s,
+        "SELECT transform_keys(map('a', 1), (k, v) -> CAST(NULL AS INT))",
+    );
+    assert_eq!(e.error_class(), ErrorClass::NullMapKey);
+}
+
+#[test]
+fn transform_values_rebuilds_values() {
+    let s = nested_maps();
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(transform_values(ys, (k, v) -> k + v) AS STRING)",
+            "FROM nested"
+        ),
+        [
+            Some("{1 -> 2, 2 -> 4, 3 -> 6}".to_owned()),
+            Some("{4 -> 8, 5 -> 10, 6 -> 12}".to_owned()),
+        ]
+    );
+    assert_eq!(
+        strings(&s, "CAST(transform_values(ys, 0) AS STRING)", "FROM nested"),
+        [
+            Some("{1 -> 0, 2 -> 0, 3 -> 0}".to_owned()),
+            Some("{4 -> 0, 5 -> 0, 6 -> 0}".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn map_zip_with_merges_key_sets() {
+    let s = nested_maps();
+    // First-seen order, missing values NULL.
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(map_zip_with(map('a', 1, 'b', 2), map('b', 3, 'c', 4), (k, v1, v2) -> concat(coalesce(CAST(v1 AS STRING), '?'), coalesce(CAST(v2 AS STRING), '?'))) AS STRING)",
+            ""
+        ),
+        [Some("{a -> 1?, b -> 23, c -> ?4}".to_owned())]
+    );
+    // Duplicate keys in one map read the first entry (a duplicated-key
+    // map built through the Rust API, as `map()` itself dedups).
+    let field = Arc::new(Field::new(
+        "entries",
+        ArrowType::Struct(
+            vec![
+                Field::new("key", ArrowType::Utf8View, false),
+                Field::new("value", ArrowType::Int32, true),
+            ]
+            .into(),
+        ),
+        false,
+    ));
+    let entries = Arc::new(StructArray::new(
+        vec![
+            Arc::new(Field::new("key", ArrowType::Utf8View, false)),
+            Arc::new(Field::new("value", ArrowType::Int32, true)),
+        ]
+        .into(),
+        vec![
+            Arc::new(arrow_array::StringViewArray::from(vec!["a", "a"])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+        ],
+        None,
+    ));
+    let maps = MapArray::new(
+        field,
+        OffsetBuffer::new(ScalarBuffer::from(vec![0, 2])),
+        entries.as_ref().clone(),
+        None,
+        false,
+    );
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "m",
+        maps.data_type().clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(maps)]).unwrap();
+    s.register_batches("dups", schema, vec![batch]).unwrap();
+    assert_eq!(
+        strings(
+            &s,
+            "CAST(map_zip_with(m, map('a', 10), (k, v1, v2) -> v1 + v2) AS STRING)",
+            "FROM dups"
+        ),
+        [Some("{a -> 11}".to_owned())]
+    );
+    // A NULL on either side is a NULL map.
+    assert_eq!(
+        strings(
+            &s,
+            "map_zip_with(ys, CAST(NULL AS MAP<INT, INT>), (k, v1, v2) -> v1)",
+            "FROM nested"
+        ),
+        [None, None]
+    );
+}
+
+#[test]
+fn array_sort_orders_elements() {
+    let s = session();
+    // Ascending with NULLs last, without a comparator.
+    assert_eq!(
+        strings(&s, "array_sort(array(3, 1, 2))", ""),
+        [Some("[1, 2, 3]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "array_sort(array('b', 'd', null, 'c', 'a'))", ""),
+        [Some("[a, b, c, d, null]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "array_sort(CAST(NULL AS ARRAY<INT>))", ""),
+        [None]
+    );
+    // A comparator decides the order: descending here.
+    assert_eq!(
+        strings(
+            &s,
+            "array_sort(array(5, 6, 1), (l, r) -> CASE WHEN l < r THEN 1 WHEN l > r THEN -1 ELSE 0 END)",
+            ""
+        ),
+        [Some("[6, 5, 1]".to_owned())]
+    );
+    // A constant comparator leaves every array in place, as Spark's sort
+    // does for a run it reads as ordered.
+    assert_eq!(
+        strings(&s, "array_sort(array(3, 1, 2), 1)", ""),
+        [Some("[3, 1, 2]".to_owned())]
+    );
+    // A NULL comparison result raises Spark's error.
+    let e = error_at_runtime(
+        &s,
+        "SELECT array_sort(array(1, 2), (l, r) -> CAST(NULL AS INT))",
+    );
+    assert_eq!(e.error_class(), ErrorClass::ComparatorReturnsNull);
+    assert_eq!(e.sql_state(), Some("22004"));
+}
+
+#[test]
+fn depends_on_command_matches_the_golden_rows() {
+    // The golden `nested` views, registered through the Rust API: the
+    // statements the golden runner classifies `depends-on-command` assert
+    // the golden's rows here instead.
+    let s = nested_arrays();
+    assert_eq!(
+        strings(&s, "aggregate(ys, 0, (y, a) -> y + a + x)", "FROM nested"),
+        [
+            Some("131".to_owned()),
+            Some("5".to_owned()),
+            Some("15".to_owned())
+        ]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "transform(zs, z -> aggregate(z, 1, (acc, val) -> acc * val * size(z)))",
+            "FROM nested"
+        ),
+        [
+            Some("[4752, 20664, 1]".to_owned()),
+            Some("[1010880, 8]".to_owned()),
+            Some("[17]".to_owned()),
+        ]
+    );
+    assert_eq!(
+        strings(&s, "reduce(ys, 0, (y, a) -> y + a + x)", "FROM nested"),
+        [
+            Some("131".to_owned()),
+            Some("5".to_owned()),
+            Some("15".to_owned())
+        ]
+    );
+    assert_eq!(
+        strings(
+            &s,
+            "transform(zs, z -> reduce(z, 1, (acc, val) -> acc * val * size(z)))",
+            "FROM nested"
+        ),
+        [
+            Some("[4752, 20664, 1]".to_owned()),
+            Some("[1010880, 8]".to_owned()),
+            Some("[17]".to_owned()),
+        ]
+    );
+    assert_eq!(
+        strings(&s, "zip_with(ys, zs, (a, b) -> a + size(b))", "FROM nested"),
+        [
+            Some("[34, 99, null]".to_owned()),
+            Some("[80, -74]".to_owned()),
+            Some("[13]".to_owned()),
+        ]
+    );
+    let s = nested_maps();
+    for (sql, rows) in [
+        (
+            "transform_keys(ys, (k, v) -> k)",
+            ["{1 -> 1, 2 -> 2, 3 -> 3}", "{4 -> 4, 5 -> 5, 6 -> 6}"],
+        ),
+        (
+            "transform_keys(ys, (k, v) -> k + 1)",
+            ["{2 -> 1, 3 -> 2, 4 -> 3}", "{5 -> 4, 6 -> 5, 7 -> 6}"],
+        ),
+        (
+            "transform_values(ys, (k, v) -> v)",
+            ["{1 -> 1, 2 -> 2, 3 -> 3}", "{4 -> 4, 5 -> 5, 6 -> 6}"],
+        ),
+        (
+            "transform_values(ys, (k, v) -> v + 1)",
+            ["{1 -> 2, 2 -> 3, 3 -> 4}", "{4 -> 5, 5 -> 6, 6 -> 7}"],
+        ),
+    ] {
+        assert_eq!(
+            strings(&s, &format!("CAST({sql} AS STRING)"), "FROM nested"),
+            rows.map(|r| Some(r.to_owned())),
+            "{sql}"
+        );
+    }
+}
+
+#[test]
+fn size_counts_arrays_and_maps() {
+    let s = nested_arrays();
+    assert_eq!(
+        strings(&s, "size(ys)", "FROM nested"),
+        [
+            Some("2".to_owned()),
+            Some("2".to_owned()),
+            Some("1".to_owned()),
+        ]
+    );
+    // NULL is NULL with ANSI on and -1 with ANSI off.
+    assert_eq!(strings(&s, "size(CAST(NULL AS ARRAY<INT>))", ""), [None]);
+    // Maps count their entries.
+    assert_eq!(
+        strings(&nested_maps(), "size(ys)", "FROM nested"),
+        [Some("3".to_owned()), Some("3".to_owned())]
+    );
+}
+
+#[test]
+fn split_cuts_strings() {
+    let s = session();
+    assert_eq!(
+        strings(&s, "split('abcdefgh', '')", ""),
+        [Some("[a, b, c, d, e, f, g, h]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "split('oneAtwoBthreeC', '[ABC]', -1)", ""),
+        [Some("[one, two, three, ]".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "split('oneAtwoBthreeC', '[ABC]', 2)", ""),
+        [Some("[one, twoBthreeC]".to_owned())]
+    );
+    assert_eq!(strings(&s, "split(CAST(NULL AS STRING), ',')", ""), [None]);
+}
+
+#[test]
+fn map_builds_maps() {
+    let s = session();
+    assert_eq!(
+        strings(&s, "CAST(map('a', 1, 'b', 2) AS STRING)", ""),
+        [Some("{a -> 1, b -> 2}".to_owned())]
+    );
+    assert_eq!(
+        strings(&s, "CAST(map() AS STRING)", ""),
+        [Some("{}".to_owned())]
+    );
+    // An odd count is the wrong arity.
+    let e = error(&s, "SELECT map('a', 1, 'b')");
+    assert_eq!(e.error_class(), ErrorClass::WrongNumArgsWithoutSuggestion);
+    // Keys and values each share a type.
+    let e = error(&s, "SELECT map(1, 'a', 'b', 'c')");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::DatatypeMismatchCreateMapKeyDiffTypes
+    );
+    // NULL keys raise at run time.
+    let e = error_at_runtime(&s, "SELECT map(CAST(NULL AS INT), 1)");
+    assert_eq!(e.error_class(), ErrorClass::NullMapKey);
 }

@@ -1044,6 +1044,202 @@ pub fn from_pairs(
     )
 }
 
+/// The `entries` field of a map of `key_type` to `value_type` (non-null
+/// keys, values nullable as `value_nullable`).
+fn entries_field_of(key_type: &DataType, value_type: &DataType, value_nullable: bool) -> FieldRef {
+    Arc::new(arrow_schema::Field::new(
+        "entries",
+        DataType::Struct(
+            vec![
+                arrow_schema::Field::new("key", key_type.clone(), false),
+                arrow_schema::Field::new("value", value_type.clone(), value_nullable),
+            ]
+            .into(),
+        ),
+        false,
+    ))
+}
+
+/// A map over `keys` and `values` with `offsets` (one entry per element)
+/// and the row `nulls`, for the map higher-order functions that rebuild a
+/// map from flattened entries.
+///
+/// # Errors
+/// An engine error when the key and value counts disagree or the offsets
+/// do not fit the entries.
+pub fn build_map(
+    keys: &ArrayRef,
+    values: &ArrayRef,
+    offsets: OffsetBuffer<i32>,
+    nulls: Option<NullBuffer>,
+    value_nullable: bool,
+) -> Result<MapArray, KernelError> {
+    if keys.len() != values.len() {
+        return Err(internal(format!(
+            "a map over {} keys and {} values",
+            keys.len(),
+            values.len()
+        )));
+    }
+    let entries = entries_field_of(keys.data_type(), values.data_type(), value_nullable);
+    let DataType::Struct(fields) = entries.data_type() else {
+        return Err(internal("map entries that are no struct"));
+    };
+    let body = StructArray::try_new(
+        fields.clone(),
+        vec![Arc::clone(keys), Arc::clone(values)],
+        None,
+    )
+    .map_err(internal)?;
+    MapArray::try_new(entries, offsets, body, nulls, false).map_err(internal)
+}
+
+/// The Murmur3 hashes of the first `len` keys (empty for none).
+fn hash_keys(keys: &dyn Array, len: usize) -> Result<Vec<i32>, KernelError> {
+    if keys.len() < len {
+        return Err(internal(format!(
+            "{len} keys over an array of {}",
+            keys.len()
+        )));
+    }
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let sliced = keys.slice(0, len);
+    Ok(hash::hash(&[sliced.as_ref()], len)?.values().to_vec())
+}
+
+/// A row index as `u32`: a row that does not fit is an engine error, never
+/// a wrap.
+fn index32(n: usize) -> Result<u32, KernelError> {
+    u32::try_from(n).map_err(|_| internal(format!("a map of {n} entries")))
+}
+
+/// The deduplicated entries of one map's `len` keys (the first `len` of
+/// `keys`): the kept key indices and the value indices, which differ under
+/// `LAST_WIN` (the last value wins but the key keeps its first-seen
+/// position).
+///
+/// # Errors
+/// `NULL_MAP_KEY` for a null key, `DUPLICATED_MAP_KEY` for a repeat under
+/// `EXCEPTION`, or an engine error for a key type [`supports_key`] refuses.
+pub fn dedup_entries(
+    keys: &dyn Array,
+    len: usize,
+    last_win: bool,
+) -> Result<(Vec<u32>, Vec<u32>), KernelError> {
+    let hash = hash_keys(keys, len)?;
+    let mut seen: HashMap<i32, Vec<usize>> = HashMap::with_capacity(len);
+    let mut kept: Vec<u32> = Vec::with_capacity(len);
+    let mut values: Vec<u32> = Vec::with_capacity(len);
+    for (e, h) in hash.iter().enumerate() {
+        if keys.is_null(e) {
+            return Err(KernelError::with_row(None, NullMapKey {}.into()));
+        }
+        let mut found = None;
+        if let Some(same) = seen.get(h) {
+            for &p in same {
+                if keys_equal(keys, usize::try_from(kept[p]).map_err(internal)?, keys, e)? {
+                    found = Some(p);
+                    break;
+                }
+            }
+        }
+        let at = index32(e)?;
+        match found {
+            Some(p) if last_win => values[p] = at,
+            Some(_) => return Err(KernelError::with_row(None, duplicate_key(keys, e)?)),
+            None => {
+                seen.entry(*h).or_default().push(kept.len());
+                kept.push(at);
+                values.push(at);
+            }
+        }
+    }
+    Ok((kept, values))
+}
+
+/// One key of the union of two maps' key sets: the key's index into the
+/// concatenated keys, and each map's value index (`None` for a key the map
+/// does not hold). A map holding a key twice contributes its first entry
+/// (Spark's `MapZipWith`).
+pub type UnionEntry = (u32, Option<u32>, Option<u32>);
+
+/// The union of two maps' key sets, in first-seen order (see
+/// [`UnionEntry`]); `keys1` and `keys2` hold each map's keys in order. The
+/// second map's key index counts past the first map's `len1` keys, while
+/// each value index counts within its own map.
+///
+/// # Errors
+/// `NULL_MAP_KEY` for a null key, or an engine error for a key type
+/// [`supports_key`] refuses.
+pub fn union_keys(
+    keys1: &dyn Array,
+    len1: usize,
+    keys2: &dyn Array,
+    len2: usize,
+) -> Result<Vec<UnionEntry>, KernelError> {
+    let h1 = hash_keys(keys1, len1)?;
+    let h2 = hash_keys(keys2, len2)?;
+    // Slot indices of `out` by hash; the owner of a slot's key is the first
+    // map when its key index is below `len1`.
+    let mut seen: HashMap<i32, Vec<usize>> = HashMap::with_capacity(len1.saturating_add(len2));
+    let mut out: Vec<UnionEntry> = Vec::with_capacity(len1.saturating_add(len2));
+    for (second, (keys, hashes)) in [(keys1, &h1), (keys2, &h2)].into_iter().enumerate() {
+        for (e, h) in hashes.iter().enumerate() {
+            if keys.is_null(e) {
+                return Err(KernelError::with_row(None, NullMapKey {}.into()));
+            }
+            let mut found = None;
+            if let Some(same) = seen.get(h) {
+                for &p in same {
+                    let (key, ..) = out[p];
+                    let key = usize::try_from(key).map_err(internal)?;
+                    let equal = if key < len1 {
+                        keys_equal(keys1, key, keys, e)?
+                    } else {
+                        keys_equal(keys2, key.saturating_sub(len1), keys, e)?
+                    };
+                    if equal {
+                        found = Some(p);
+                        break;
+                    }
+                }
+            }
+            let value = Some(index32(e)?);
+            match found {
+                Some(p) => {
+                    let slot = if second == 0 {
+                        &mut out[p].1
+                    } else {
+                        &mut out[p].2
+                    };
+                    if slot.is_none() {
+                        *slot = value;
+                    }
+                }
+                None => {
+                    let key = if second == 0 {
+                        index32(e)?
+                    } else {
+                        index32(
+                            len1.checked_add(e)
+                                .ok_or_else(|| internal("map keys overflow"))?,
+                        )?
+                    };
+                    seen.entry(*h).or_default().push(out.len());
+                    out.push(if second == 0 {
+                        (key, value, None)
+                    } else {
+                        (key, None, value)
+                    });
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1940,5 +2136,63 @@ mod tests {
             ),
         ]));
         assert!(keys_equal(s1.as_ref(), 0, renamed.as_ref(), 0).unwrap());
+    }
+
+    fn strs(values: Vec<&str>) -> ArrayRef {
+        Arc::new(StringArray::from(values))
+    }
+
+    #[test]
+    fn dedup_raises_on_duplicates_and_keeps_last_under_last_win() {
+        let keys = strs(vec!["b", "a", "b"]);
+        let err = KrishivError::from(dedup_entries(keys.as_ref(), 3, false).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::DuplicatedMapKey);
+        assert!(err.to_string().contains("b"), "{err}");
+        let (kept, taken) = dedup_entries(keys.as_ref(), 3, true).unwrap();
+        assert_eq!((kept, taken), (vec![0, 1], vec![2, 1]));
+    }
+
+    #[test]
+    fn dedup_rejects_null_keys_and_short_arrays() {
+        let nulls: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None]));
+        let err = KrishivError::from(dedup_entries(nulls.as_ref(), 2, true).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::NullMapKey);
+        assert!(dedup_entries(nulls.as_ref(), 3, true).is_err());
+        assert_eq!(
+            dedup_entries(nulls.as_ref(), 0, true).unwrap(),
+            (vec![], vec![])
+        );
+    }
+
+    #[test]
+    fn union_merges_in_first_seen_order() {
+        let (k1, k2) = (strs(vec!["a", "b", "b"]), strs(vec!["b", "c", "c"]));
+        let m = union_keys(k1.as_ref(), 3, k2.as_ref(), 3).unwrap();
+        // `a` only left, `b` both (first entries), `c` only right.
+        assert_eq!(
+            m,
+            vec![
+                (0, Some(0), None),
+                (1, Some(1), Some(0)),
+                (4, None, Some(1)),
+            ]
+        );
+        let nulls: ArrayRef = Arc::new(StringArray::from(vec![None::<&str>]));
+        let err = KrishivError::from(union_keys(k1.as_ref(), 1, nulls.as_ref(), 1).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::NullMapKey);
+        let err = KrishivError::from(union_keys(nulls.as_ref(), 1, k1.as_ref(), 1).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::NullMapKey);
+        assert!(union_keys(k1.as_ref(), 9, k2.as_ref(), 1).is_err());
+    }
+
+    #[test]
+    fn build_map_checks_its_lengths() {
+        let keys = strs(vec!["a", "b"]);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let offsets = OffsetBuffer::new(vec![0_i32, 2].into());
+        let m = build_map(&keys, &values, offsets.clone(), None, false).unwrap();
+        assert_eq!(m.len(), 1);
+        let short: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        assert!(build_map(&keys, &short, offsets, None, false).is_err());
     }
 }
