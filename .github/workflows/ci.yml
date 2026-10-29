@@ -12,6 +12,13 @@ on:
   # merge queue, so it is skipped on a push.
   push:
     branches: [main]
+  # The merge queue runs the build, the workspace tests, clippy and the cheap
+  # lints only (about 12 minutes). The long checks that the pull request already
+  # ran (`miri-kernels`, `fuzz-build`, the `wheels` matrix) run on the pull
+  # request, and again on main here every night, so a break that only appears
+  # when several pull requests combine is caught within a day.
+  schedule:
+    - cron: "20 3 * * *"
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -355,7 +362,8 @@ jobs:
   # committed fuzz/Cargo.lock pins the graph.
   fuzz-build:
     needs: changes
-    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'
+    # Not in the merge queue (it ran on the pull request; the nightly run covers main).
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -459,9 +467,11 @@ jobs:
   # check; the path gate is inside: it only does work when the PR touches what
   # Miri compiles: those crates, their path dependency krishiv-common, the
   # root Cargo.toml/Cargo.lock, rust-toolchain.toml or this workflow (and
-  # always in the merge queue).
+  # always on the nightly run of main).
   miri-kernels:
-    if: github.event_name != 'push'
+    # Not in the merge queue (about 33 minutes; it ran on the pull request, and the nightly
+    # run covers main). The check still reports there: a skipped job satisfies it.
+    if: github.event_name != 'push' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -560,7 +570,8 @@ jobs:
   # requires `wheels-ok` below, not the matrix legs.
   wheels:
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    # Not in the merge queue (it ran on the pull request): `wheels-ok` passes when it is skipped.
+    if: needs.changes.outputs.rust == 'true' && github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     # `id-token: write` lets the coverage leg upload to Codecov via OIDC (no secret).
     permissions:
