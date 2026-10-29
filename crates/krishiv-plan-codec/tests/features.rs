@@ -656,6 +656,50 @@ fn nested_types_need_their_feature() {
 }
 
 #[test]
+fn time_and_spatial_types_need_their_features() {
+    use krishiv_types::{DataType, Srid};
+    assert_eq!(message("time_project").features, ["time_type"]);
+    assert_eq!(message("geo_scan").features, ["geo_types"]);
+    assert_eq!(message("geo_join_residual").features, ["geo_types"]);
+    let geography = DataType::Geography { srid: Srid::Any };
+    assert_eq!(
+        feature_of(Construct::Type(&geography)),
+        Some(Feature::GeoTypes)
+    );
+    assert_eq!(
+        feature_of(Construct::Type(&DataType::Time { precision: 6 })),
+        Some(Feature::TimeType)
+    );
+    assert_eq!(feature_of(Construct::Type(&DataType::TimestampNtz)), None);
+    for f in [Feature::TimeType, Feature::GeoTypes] {
+        assert_eq!(f.kind(), FeatureKind::Semantic);
+        assert_eq!(f.legacy_level(), 6);
+    }
+    // A reader without the feature refuses the plan before reading a node.
+    let bytes = message("time_project").encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::TimeType),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["time_type".to_owned()]
+        }
+    );
+    // A header that hides the type is corrupt.
+    let mut m = message("geo_scan");
+    m.features.clear();
+    m.min_reader_version = 2;
+    corrupt(
+        &m,
+        "the feature header does not match the plan's constructs",
+    );
+}
+
+#[test]
 fn a_malformed_nested_type_is_corrupt() {
     let m = message("nested_types");
     let nested = pb::data_type::Kind::Nested as i32;
@@ -835,6 +879,91 @@ fn subquery_in_values_with_a_udf_need_rust_udf() {
         subqueries: Vec::new(),
     });
     assert!(plan_features(&plan).contains(&Feature::RustUdf));
+}
+
+#[test]
+fn type_parameters_are_checked_on_decode() {
+    use pb::data_type::Kind;
+    // `geo_scan`'s first output column is `geometry(any)`.
+    let edit = |f: &dyn Fn(&mut pb::DataType)| {
+        let mut m = message("geo_scan");
+        let Some(pb::node::Kind::Scan(scan)) = m.nodes[0].kind.as_mut() else {
+            panic!("not a scan");
+        };
+        f(scan.output[0].data_type.as_mut().unwrap());
+        m
+    };
+    let srid = |kind: Kind, srid: i32| {
+        edit(&move |t: &mut pb::DataType| {
+            t.kind = kind as i32;
+            t.srid = srid;
+        })
+    };
+    assert!(decode(&srid(Kind::Geometry, 3857).encode_to_vec()).is_ok());
+    corrupt(&srid(Kind::Geometry, 9999), "an invalid geometry type");
+    corrupt(&srid(Kind::Geography, 3857), "an invalid geography type");
+    let time = |precision: u32, scale: u32| {
+        let mut m = edit(&move |t: &mut pb::DataType| {
+            t.kind = Kind::Time as i32;
+            t.srid = 0;
+            t.precision = precision;
+            t.scale = scale;
+        });
+        m.features = vec!["geo_types".to_owned(), "time_type".to_owned()];
+        m
+    };
+    corrupt(&time(7, 0), "an invalid time type");
+    corrupt(&time(3, 1), "a type parameter on a type that has none");
+    let srid_on_int = edit(&|t: &mut pb::DataType| {
+        t.kind = Kind::Integer as i32;
+        t.srid = 4326;
+    });
+    corrupt(&srid_on_int, "a type parameter on a type that has none");
+}
+
+/// A time inside an array is a time plan: the header names `time_type`
+/// (beside `nested_types`), so a reader without it refuses the plan as
+/// unsupported rather than misreading the nested type as corrupt.
+#[test]
+fn a_time_inside_a_nested_type_needs_time_type() {
+    use krishiv_plan::{Expr, ExprNode, Literal};
+    use krishiv_types::{ArrayType, DataType, MapType, StructField, StructType};
+    let time = DataType::Time { precision: 3 };
+    for nested in [
+        DataType::Array(ArrayType::new(time.clone(), true).into()),
+        DataType::Map(MapType::new(DataType::String, time.clone(), true).into()),
+        DataType::Struct(StructType::new([StructField::new("t", time, true)])),
+    ] {
+        let plan = plan_of(PhysNode::Project {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            items: vec![krishiv_exec::physical::ProjectItemPlan::Expr {
+                name: "x".to_owned(),
+                expr: std::sync::Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(
+                    nested.clone(),
+                ))))),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        });
+        let features = plan_features(&plan);
+        assert!(features.contains(&Feature::TimeType), "{nested:?}");
+        let bytes = encode(&plan).unwrap();
+        let older = ReaderFeatures::only(
+            Feature::ALL
+                .iter()
+                .copied()
+                .filter(|f| *f != Feature::TimeType),
+        );
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["time_type".to_owned()]
+            },
+            "{nested:?}"
+        );
+        assert_eq!(decode(&bytes).unwrap(), plan);
+    }
 }
 
 /// A `Range` node of a decoded plan is external input: a zero step (which

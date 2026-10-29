@@ -82,6 +82,7 @@ mod suggest;
 pub mod table_functions;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod unexecutable;
 mod unpivot;
 mod variables;
 mod windows;
@@ -531,6 +532,7 @@ impl Analyzer for DefaultAnalyzer {
             let metadata = started.elapsed();
             let resolving = std::time::Instant::now();
             let (root, output, securables, warnings) = resolve::resolve(plan, ctx, &bindings)?;
+            unexecutable::check(&root)?;
             let resolved =
                 Plan::try_new(root).map_err(|e| AnalysisError::new(e, plan.root().origin))?;
             let bind::Bindings {

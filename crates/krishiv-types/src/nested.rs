@@ -265,6 +265,19 @@ impl DataType {
         deepest
     }
 
+    /// Whether this type or any type nested in it (array elements, map keys
+    /// and values, struct fields) satisfies `pred`. Nesting is bounded by
+    /// [`Self::MAX_NESTING_DEPTH`], so the recursion is too.
+    pub fn any_type(&self, pred: &impl Fn(&Self) -> bool) -> bool {
+        pred(self)
+            || match self {
+                Self::Array(a) => a.element_type().any_type(pred),
+                Self::Map(m) => m.key_type().any_type(pred) || m.value_type().any_type(pred),
+                Self::Struct(s) => s.fields().iter().any(|f| f.data_type().any_type(pred)),
+                _ => false,
+            }
+    }
+
     /// Whether this is an array, map or struct type.
     pub fn is_nested(&self) -> bool {
         matches!(self, Self::Array(_) | Self::Map(_) | Self::Struct(_))

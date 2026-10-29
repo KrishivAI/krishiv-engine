@@ -28,7 +28,7 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DecimalType, Srid};
 
 use crate::arrow::{schema_from, type_from};
 use crate::error::{CodecError, Result, corrupt};
@@ -1053,9 +1053,20 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         Timestamp => DataType::Timestamp,
         TimestampNtz => DataType::TimestampNtz,
         Nested => nested(t)?,
+        Time => DataType::time(t.precision).map_err(|_| corrupt("an invalid time type"))?,
+        Geometry => DataType::geometry(Srid::from_i32(t.srid))
+            .map_err(|_| corrupt("an invalid geometry type"))?,
+        Geography => DataType::geography(Srid::from_i32(t.srid))
+            .map_err(|_| corrupt("an invalid geography type"))?,
     })?;
-    if !matches!(data_type, DataType::Decimal(_)) && (t.precision != 0 || t.scale != 0) {
-        return Err(corrupt("a precision or scale on a type that has none"));
+    let (precision, scale, srid) = match data_type {
+        DataType::Decimal(_) => (true, true, false),
+        DataType::Time { .. } => (true, false, false),
+        DataType::Geometry { .. } | DataType::Geography { .. } => (false, false, true),
+        _ => (false, false, false),
+    };
+    if (!precision && t.precision != 0) || (!scale && t.scale != 0) || (!srid && t.srid != 0) {
+        return Err(corrupt("a type parameter on a type that has none"));
     }
     if !data_type.is_nested() && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));

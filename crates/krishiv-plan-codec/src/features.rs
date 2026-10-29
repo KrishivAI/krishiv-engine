@@ -120,6 +120,7 @@ registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
@@ -131,6 +132,7 @@ registry! {
     (range, Range, POST_MIGRATION_READER_VERSION, Semantic, "The `Range` node (`range(start, end, step, numSlices)`)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
+    (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -187,6 +189,61 @@ pub enum Construct<'a> {
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
+}
+
+/// The feature a type needs on its own. The walk reports a type inside an
+/// array, map or struct as a construct of its own ([`visit_type`]), so
+/// `array<time(3)>` needs `nested_types` (the array) and `time_type` (its
+/// element). `DataType` is non-exhaustive, so this cannot list every type: a
+/// type added later fails to encode (`encode::spark_type`) until it is
+/// mapped there, and classified here.
+fn type_feature(t: &DataType) -> Option<Feature> {
+    match t {
+        DataType::Time { .. } => Some(Feature::TimeType),
+        DataType::Geometry { .. } | DataType::Geography { .. } => Some(Feature::GeoTypes),
+        _ => t.is_nested().then_some(Feature::NestedTypes),
+    }
+}
+
+/// `t` and every type inside it (array elements, map keys and values, struct
+/// fields) as constructs.
+fn visit_type<'a>(t: &'a DataType, f: &mut impl FnMut(Construct<'a>)) {
+    f(Construct::Type(t));
+    match t {
+        DataType::Array(a) => visit_type(a.element_type(), f),
+        DataType::Map(m) => {
+            visit_type(m.key_type(), f);
+            visit_type(m.value_type(), f);
+        }
+        DataType::Struct(s) => s.fields().iter().for_each(|x| visit_type(x.data_type(), f)),
+        _ => {}
+    }
+}
+
+/// `t` and every Arrow type inside it as constructs.
+fn visit_arrow<'a>(t: &'a arrow_schema::DataType, f: &mut impl FnMut(Construct<'a>)) {
+    use arrow_schema::DataType as A;
+    f(Construct::ArrowType(t));
+    match t {
+        A::List(x)
+        | A::LargeList(x)
+        | A::FixedSizeList(x, _)
+        | A::ListView(x)
+        | A::LargeListView(x)
+        | A::Map(x, _) => visit_arrow(x.data_type(), f),
+        A::Struct(fields) => fields.iter().for_each(|x| visit_arrow(x.data_type(), f)),
+        A::Dictionary(_, v) => visit_arrow(v, f),
+        A::RunEndEncoded(_, v) => visit_arrow(v.data_type(), f),
+        _ => {}
+    }
+}
+
+/// Whether an Arrow type is a time-of-day column, `TIME`'s carrier.
+fn arrow_time(t: &arrow_schema::DataType) -> bool {
+    matches!(
+        t,
+        arrow_schema::DataType::Time32(_) | arrow_schema::DataType::Time64(_)
+    )
 }
 
 /// Whether an Arrow type is or contains an array, map or struct.
@@ -286,8 +343,14 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // (variant, char/varchar, intervals) must look through them: its
         // arm walks the element, key, value and field types, so that
         // `array<variant>` needs it too.
-        Construct::Type(t) => t.is_nested().then_some(Feature::NestedTypes),
-        Construct::ArrowType(t) => arrow_nested(t).then_some(Feature::NestedTypes),
+        Construct::Type(t) => type_feature(t),
+        Construct::ArrowType(t) => {
+            if arrow_time(t) {
+                Some(Feature::TimeType)
+            } else {
+                arrow_nested(t).then_some(Feature::NestedTypes)
+            }
+        }
         Construct::Expr(e) => match &e.node {
             ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),
             _ => None,
@@ -384,10 +447,10 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
         | PhysNode::WriteFiles { .. } => {}
     }
     for t in types_of(node) {
-        f(Construct::Type(t));
+        visit_type(t, f);
     }
     for t in arrow_types_of(node) {
-        f(Construct::ArrowType(t));
+        visit_arrow(t, f);
     }
     for e in exprs_of(node) {
         if matches!(
@@ -552,7 +615,7 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
         stack.extend(node.children());
     }
     for field in plan.schema().fields() {
-        out.extend(feature_of(Construct::ArrowType(field.data_type())));
+        visit_arrow(field.data_type(), &mut |c| out.extend(feature_of(c)));
     }
     if has_moment && plan.env().legacy_statistical_aggregate {
         out.insert(Feature::LegacyStatisticalAggregate);

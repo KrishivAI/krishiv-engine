@@ -1,0 +1,1706 @@
+{
+ "format_version": 1,
+ "spark_version": "4.2.0",
+ "generator": "tests/scripts/gen_wkb_goldens.py",
+ "notes": "Each case is evaluated as ST_AsBinary(ST_GeomFromWKB(wkb)) and ST_GeogFromWKB, in NDR and XDR; errors carry Spark's condition and message parameters.",
+ "cases": [
+  {
+   "name": "empty",
+   "wkb": "",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "WKB data is empty or null",
+     "pos": "0"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "WKB data is empty or null",
+     "pos": "0"
+    }
+   }
+  },
+  {
+   "name": "one_byte",
+   "wkb": "01",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "0"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "0"
+    }
+   }
+  },
+  {
+   "name": "four_bytes",
+   "wkb": "01010000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "0"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "0"
+    }
+   }
+  },
+  {
+   "name": "byte_order_2",
+   "wkb": "0201000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid byte order 2",
+     "pos": "0"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid byte order 2",
+     "pos": "0"
+    }
+   }
+  },
+  {
+   "name": "byte_order_6f",
+   "wkb": "6F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "0"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "0"
+    }
+   }
+  },
+  {
+   "name": "point",
+   "wkb": "0101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "ndr": "0101000000000000000000F03F0000000000000040",
+    "xdr": "00000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0101000000000000000000F03F0000000000000040",
+    "xdr": "00000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "point_xdr",
+   "wkb": "00000000013FF00000000000004000000000000000",
+   "geometry": {
+    "ndr": "0101000000000000000000F03F0000000000000040",
+    "xdr": "00000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0101000000000000000000F03F0000000000000040",
+    "xdr": "00000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "point_trailing_byte",
+   "wkb": "0101000000000000000000F03F000000000000004000",
+   "geometry": {
+    "ndr": "0101000000000000000000F03F0000000000000040",
+    "xdr": "00000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0101000000000000000000F03F0000000000000040",
+    "xdr": "00000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "point_truncated_x",
+   "wkb": "0101000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "point_truncated_y",
+   "wkb": "0101000000000000000000F03F00000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "13"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "13"
+    }
+   }
+  },
+  {
+   "name": "type_0",
+   "wkb": "0100000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 0",
+     "pos": "1"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 0",
+     "pos": "1"
+    }
+   }
+  },
+  {
+   "name": "type_8",
+   "wkb": "0108000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 8",
+     "pos": "1"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 8",
+     "pos": "1"
+    }
+   }
+  },
+  {
+   "name": "type_17",
+   "wkb": "0111000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 17",
+     "pos": "1"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 17",
+     "pos": "1"
+    }
+   }
+  },
+  {
+   "name": "type_4001",
+   "wkb": "01A10F0000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 4001",
+     "pos": "1"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 4001",
+     "pos": "1"
+    }
+   }
+  },
+  {
+   "name": "ewkb_z_flag",
+   "wkb": "0101000080000000000000F03F00000000000000400000000000000840",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type -2147483647",
+     "pos": "1"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type -2147483647",
+     "pos": "1"
+    }
+   }
+  },
+  {
+   "name": "ewkb_srid_flag",
+   "wkb": "0101000020E6100000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 536870913",
+     "pos": "1"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 536870913",
+     "pos": "1"
+    }
+   }
+  },
+  {
+   "name": "ewkb_z_flag_xdr",
+   "wkb": "00800000013FF00000000000004000000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type -2147483647",
+     "pos": "1"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type -2147483647",
+     "pos": "1"
+    }
+   }
+  },
+  {
+   "name": "point_z",
+   "wkb": "01E9030000000000000000F03F00000000000000400000000000000840",
+   "geometry": {
+    "ndr": "01E9030000000000000000F03F00000000000000400000000000000840",
+    "xdr": "00000003E93FF000000000000040000000000000004008000000000000"
+   },
+   "geography": {
+    "ndr": "01E9030000000000000000F03F00000000000000400000000000000840",
+    "xdr": "00000003E93FF000000000000040000000000000004008000000000000"
+   }
+  },
+  {
+   "name": "point_m",
+   "wkb": "01D1070000000000000000F03F00000000000000400000000000000840",
+   "geometry": {
+    "ndr": "01D1070000000000000000F03F00000000000000400000000000000840",
+    "xdr": "00000007D13FF000000000000040000000000000004008000000000000"
+   },
+   "geography": {
+    "ndr": "01D1070000000000000000F03F00000000000000400000000000000840",
+    "xdr": "00000007D13FF000000000000040000000000000004008000000000000"
+   }
+  },
+  {
+   "name": "point_zm",
+   "wkb": "01B90B0000000000000000F03F000000000000004000000000000008400000000000001040",
+   "geometry": {
+    "ndr": "01B90B0000000000000000F03F000000000000004000000000000008400000000000001040",
+    "xdr": "0000000BB93FF0000000000000400000000000000040080000000000004010000000000000"
+   },
+   "geography": {
+    "ndr": "01B90B0000000000000000F03F000000000000004000000000000008400000000000001040",
+    "xdr": "0000000BB93FF0000000000000400000000000000040080000000000004010000000000000"
+   }
+  },
+  {
+   "name": "point_z_xdr",
+   "wkb": "00000003E93FF000000000000040000000000000004008000000000000",
+   "geometry": {
+    "ndr": "01E9030000000000000000F03F00000000000000400000000000000840",
+    "xdr": "00000003E93FF000000000000040000000000000004008000000000000"
+   },
+   "geography": {
+    "ndr": "01E9030000000000000000F03F00000000000000400000000000000840",
+    "xdr": "00000003E93FF000000000000040000000000000004008000000000000"
+   }
+  },
+  {
+   "name": "point_empty",
+   "wkb": "0101000000000000000000F87F000000000000F87F",
+   "geometry": {
+    "ndr": "0101000000000000000000F87F000000000000F87F",
+    "xdr": "00000000017FF80000000000007FF8000000000000"
+   },
+   "geography": {
+    "ndr": "0101000000000000000000F87F000000000000F87F",
+    "xdr": "00000000017FF80000000000007FF8000000000000"
+   }
+  },
+  {
+   "name": "point_nan_y",
+   "wkb": "0101000000000000000000F03F000000000000F87F",
+   "geometry": {
+    "ndr": "0101000000000000000000F03F000000000000F87F",
+    "xdr": "00000000013FF00000000000007FF8000000000000"
+   },
+   "geography": {
+    "ndr": "0101000000000000000000F03F000000000000F87F",
+    "xdr": "00000000013FF00000000000007FF8000000000000"
+   }
+  },
+  {
+   "name": "point_nan_payload",
+   "wkb": "0101000000010000000000F07F000000000000F8FF",
+   "geometry": {
+    "ndr": "0101000000010000000000F07F000000000000F8FF",
+    "xdr": "00000000017FF0000000000001FFF8000000000000"
+   },
+   "geography": {
+    "ndr": "0101000000010000000000F07F000000000000F8FF",
+    "xdr": "00000000017FF0000000000001FFF8000000000000"
+   }
+  },
+  {
+   "name": "point_inf_x",
+   "wkb": "0101000000000000000000F07F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "point_inf_y",
+   "wkb": "0101000000000000000000F03F000000000000F07F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "13"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "13"
+    }
+   }
+  },
+  {
+   "name": "point_ninf_y",
+   "wkb": "0101000000000000000000F03F000000000000F0FF",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "13"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "13"
+    }
+   }
+  },
+  {
+   "name": "point_z_inf",
+   "wkb": "01E9030000000000000000F03F0000000000000040000000000000F07F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "21"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "21"
+    }
+   }
+  },
+  {
+   "name": "point_m_nan",
+   "wkb": "01D1070000000000000000F03F0000000000000040000000000000F87F",
+   "geometry": {
+    "ndr": "01D1070000000000000000F03F0000000000000040000000000000F87F",
+    "xdr": "00000007D13FF000000000000040000000000000007FF8000000000000"
+   },
+   "geography": {
+    "ndr": "01D1070000000000000000F03F0000000000000040000000000000F87F",
+    "xdr": "00000007D13FF000000000000040000000000000007FF8000000000000"
+   }
+  },
+  {
+   "name": "point_z_empty_xy",
+   "wkb": "01E9030000000000000000F87F000000000000F87F000000000000F03F",
+   "geometry": {
+    "ndr": "01E9030000000000000000F87F000000000000F87F000000000000F03F",
+    "xdr": "00000003E97FF80000000000007FF80000000000003FF0000000000000"
+   },
+   "geography": {
+    "ndr": "01E9030000000000000000F87F000000000000F87F000000000000F03F",
+    "xdr": "00000003E97FF80000000000007FF80000000000003FF0000000000000"
+   }
+  },
+  {
+   "name": "line_empty",
+   "wkb": "010200000000000000",
+   "geometry": {
+    "ndr": "010200000000000000",
+    "xdr": "000000000200000000"
+   },
+   "geography": {
+    "ndr": "010200000000000000",
+    "xdr": "000000000200000000"
+   }
+  },
+  {
+   "name": "line_one_point",
+   "wkb": "010200000001000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in linestring",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in linestring",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "line",
+   "wkb": "010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
+   "geometry": {
+    "ndr": "010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
+    "xdr": "0000000002000000023FF0000000000000400000000000000040080000000000004010000000000000"
+   },
+   "geography": {
+    "ndr": "010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
+    "xdr": "0000000002000000023FF0000000000000400000000000000040080000000000004010000000000000"
+   }
+  },
+  {
+   "name": "line_count_minus_1",
+   "wkb": "0102000000FFFFFFFF000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: -1",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: -1",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "line_count_min",
+   "wkb": "010200000000000080",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: -2147483648",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: -2147483648",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "line_count_exceeds",
+   "wkb": "010200000002000000000000000000F03F00000000000000400000000000000840",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "line_count_exceeds_one",
+   "wkb": "010200000001000000000000000000F03F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "line_no_count",
+   "wkb": "0102000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "line_short_count",
+   "wkb": "01020000000200",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "line_nan_point",
+   "wkb": "010200000002000000000000000000F87F000000000000F87F000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "9"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "9"
+    }
+   }
+  },
+  {
+   "name": "line_nan_y",
+   "wkb": "010200000002000000000000000000F03F000000000000F87F000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "17"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "17"
+    }
+   }
+  },
+  {
+   "name": "line_one_nan_point",
+   "wkb": "010200000001000000000000000000F87F000000000000F87F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in linestring",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in linestring",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "line_z_nan_z",
+   "wkb": "01EA03000002000000000000000000F03F0000000000000040000000000000F87F000000000000084000000000000010400000000000001440",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "25"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "25"
+    }
+   }
+  },
+  {
+   "name": "line_m_nan_m",
+   "wkb": "01D207000002000000000000000000F03F0000000000000040000000000000F87F000000000000084000000000000010400000000000001440",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "25"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "25"
+    }
+   }
+  },
+  {
+   "name": "polygon_empty",
+   "wkb": "010300000000000000",
+   "geometry": {
+    "ndr": "010300000000000000",
+    "xdr": "000000000300000000"
+   },
+   "geography": {
+    "ndr": "010300000000000000",
+    "xdr": "000000000300000000"
+   }
+  },
+  {
+   "name": "polygon",
+   "wkb": "0103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000000000000000000000",
+   "geometry": {
+    "ndr": "0103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000000000000000000000",
+    "xdr": "00000000030000000100000004000000000000000000000000000000003FF000000000000000000000000000003FF00000000000003FF000000000000000000000000000000000000000000000"
+   },
+   "geography": {
+    "ndr": "0103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000000000000000000000",
+    "xdr": "00000000030000000100000004000000000000000000000000000000003FF000000000000000000000000000003FF00000000000003FF000000000000000000000000000000000000000000000"
+   }
+  },
+  {
+   "name": "polygon_no_count",
+   "wkb": "0103000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "polygon_rings_minus_1",
+   "wkb": "0103000000FFFFFFFF",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for polygon rings: -1",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for polygon rings: -1",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "polygon_rings_exceed",
+   "wkb": "010300000002000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for polygon rings: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for polygon rings: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "polygon_ring_exceeds_one",
+   "wkb": "010300000001000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for polygon rings: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for polygon rings: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "polygon_ring_points_exceed",
+   "wkb": "01030000000100000004000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for ring points: exceeds remaining bytes",
+     "pos": "9"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for ring points: exceeds remaining bytes",
+     "pos": "9"
+    }
+   }
+  },
+  {
+   "name": "polygon_ring_points_minus_1",
+   "wkb": "010300000001000000FFFFFFFF",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for ring points: -1",
+     "pos": "9"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for ring points: -1",
+     "pos": "9"
+    }
+   }
+  },
+  {
+   "name": "polygon_ring_points_short",
+   "wkb": "01030000000100000003000000000000000000F03F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for ring points: exceeds remaining bytes",
+     "pos": "9"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for ring points: exceeds remaining bytes",
+     "pos": "9"
+    }
+   }
+  },
+  {
+   "name": "polygon_second_ring_missing",
+   "wkb": "0103000000020000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000000000000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "77"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "77"
+    }
+   }
+  },
+  {
+   "name": "ring_empty",
+   "wkb": "01030000000100000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in ring",
+     "pos": "9"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in ring",
+     "pos": "9"
+    }
+   }
+  },
+  {
+   "name": "ring_two_points",
+   "wkb": "010300000001000000020000000000000000000000000000000000000000000000000000000000000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in ring",
+     "pos": "9"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in ring",
+     "pos": "9"
+    }
+   }
+  },
+  {
+   "name": "ring_three_points",
+   "wkb": "0103000000010000000300000000000000000000000000000000000000000000000000F03F000000000000000000000000000000000000000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in ring",
+     "pos": "9"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in ring",
+     "pos": "9"
+    }
+   }
+  },
+  {
+   "name": "ring_open",
+   "wkb": "0103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F0000000000000000000000000000F03F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Ring is not closed",
+     "pos": "9"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Ring is not closed",
+     "pos": "9"
+    }
+   }
+  },
+  {
+   "name": "ring_nan",
+   "wkb": "01030000000100000004000000000000000000F87F000000000000F87F000000000000F03F0000000000000000000000000000F03F000000000000F03F000000000000F87F000000000000F87F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "13"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "13"
+    }
+   }
+  },
+  {
+   "name": "ring_negative_zero",
+   "wkb": "0103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000800000000000000000",
+   "geometry": {
+    "ndr": "0103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000800000000000000000",
+    "xdr": "00000000030000000100000004000000000000000000000000000000003FF000000000000000000000000000003FF00000000000003FF000000000000080000000000000000000000000000000"
+   },
+   "geography": {
+    "ndr": "0103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000800000000000000000",
+    "xdr": "00000000030000000100000004000000000000000000000000000000003FF000000000000000000000000000003FF00000000000003FF000000000000080000000000000000000000000000000"
+   }
+  },
+  {
+   "name": "ring_z_open_in_z",
+   "wkb": "01EB0300000100000004000000000000000000000000000000000000000000000000000000000000000000F03F00000000000000000000000000000000000000000000F03F000000000000F03F0000000000000000000000000000000000000000000000000000000000001440",
+   "geometry": {
+    "ndr": "01EB0300000100000004000000000000000000000000000000000000000000000000000000000000000000F03F00000000000000000000000000000000000000000000F03F000000000000F03F0000000000000000000000000000000000000000000000000000000000001440",
+    "xdr": "00000003EB00000001000000040000000000000000000000000000000000000000000000003FF0000000000000000000000000000000000000000000003FF00000000000003FF00000000000000000000000000000000000000000000000000000000000004014000000000000"
+   },
+   "geography": {
+    "ndr": "01EB0300000100000004000000000000000000000000000000000000000000000000000000000000000000F03F00000000000000000000000000000000000000000000F03F000000000000F03F0000000000000000000000000000000000000000000000000000000000001440",
+    "xdr": "00000003EB00000001000000040000000000000000000000000000000000000000000000003FF0000000000000000000000000000000000000000000003FF00000000000003FF00000000000000000000000000000000000000000000000000000000000004014000000000000"
+   }
+  },
+  {
+   "name": "ring_m_open_in_m",
+   "wkb": "01D30700000100000004000000000000000000000000000000000000000000000000000000000000000000F03F00000000000000000000000000000000000000000000F03F000000000000F03F0000000000000000000000000000000000000000000000000000000000001440",
+   "geometry": {
+    "ndr": "01D30700000100000004000000000000000000000000000000000000000000000000000000000000000000F03F00000000000000000000000000000000000000000000F03F000000000000F03F0000000000000000000000000000000000000000000000000000000000001440",
+    "xdr": "00000007D300000001000000040000000000000000000000000000000000000000000000003FF0000000000000000000000000000000000000000000003FF00000000000003FF00000000000000000000000000000000000000000000000000000000000004014000000000000"
+   },
+   "geography": {
+    "ndr": "01D30700000100000004000000000000000000000000000000000000000000000000000000000000000000F03F00000000000000000000000000000000000000000000F03F000000000000F03F0000000000000000000000000000000000000000000000000000000000001440",
+    "xdr": "00000007D300000001000000040000000000000000000000000000000000000000000000003FF0000000000000000000000000000000000000000000003FF00000000000003FF00000000000000000000000000000000000000000000000000000000000004014000000000000"
+   }
+  },
+  {
+   "name": "polygon_second_ring_short",
+   "wkb": "0103000000020000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F000000000000000000000000000000000300000000000000000000000000000000000000000000000000F03F000000000000000000000000000000000000000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in ring",
+     "pos": "77"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in ring",
+     "pos": "77"
+    }
+   }
+  },
+  {
+   "name": "multipoint_empty",
+   "wkb": "010400000000000000",
+   "geometry": {
+    "ndr": "010400000000000000",
+    "xdr": "000000000400000000"
+   },
+   "geography": {
+    "ndr": "010400000000000000",
+    "xdr": "000000000400000000"
+   }
+  },
+  {
+   "name": "multipoint",
+   "wkb": "0104000000010000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "ndr": "0104000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000040000000100000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0104000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000040000000100000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "multipoint_xdr_child",
+   "wkb": "01040000000100000000000000013FF00000000000004000000000000000",
+   "geometry": {
+    "ndr": "0104000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000040000000100000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0104000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000040000000100000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "multipoint_empty_point",
+   "wkb": "0104000000010000000101000000000000000000F87F000000000000F87F",
+   "geometry": {
+    "ndr": "0104000000010000000101000000000000000000F87F000000000000F87F",
+    "xdr": "00000000040000000100000000017FF80000000000007FF8000000000000"
+   },
+   "geography": {
+    "ndr": "0104000000010000000101000000000000000000F87F000000000000F87F",
+    "xdr": "00000000040000000100000000017FF80000000000007FF8000000000000"
+   }
+  },
+  {
+   "name": "multipoint_line_child",
+   "wkb": "010400000001000000010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Expected Point in MultiPoint",
+     "pos": "50"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Expected Point in MultiPoint",
+     "pos": "50"
+    }
+   }
+  },
+  {
+   "name": "multipoint_z_2d_child",
+   "wkb": "01EC030000010000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 1",
+     "pos": "10"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 1",
+     "pos": "10"
+    }
+   }
+  },
+  {
+   "name": "multipoint_z",
+   "wkb": "01EC0300000100000001E9030000000000000000F03F00000000000000400000000000000840",
+   "geometry": {
+    "ndr": "01EC0300000100000001E9030000000000000000F03F00000000000000400000000000000840",
+    "xdr": "00000003EC0000000100000003E93FF000000000000040000000000000004008000000000000"
+   },
+   "geography": {
+    "ndr": "01EC0300000100000001E9030000000000000000F03F00000000000000400000000000000840",
+    "xdr": "00000003EC0000000100000003E93FF000000000000040000000000000004008000000000000"
+   }
+  },
+  {
+   "name": "multipoint_count_minus_1",
+   "wkb": "0104000000FFFFFFFF",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for MultiPoint points: -1",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for MultiPoint points: -1",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "multipoint_count_2_of_1",
+   "wkb": "0104000000020000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "30"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "30"
+    }
+   }
+  },
+  {
+   "name": "multipoint_count_4_of_1",
+   "wkb": "0104000000040000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "30"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "30"
+    }
+   }
+  },
+  {
+   "name": "multipoint_count_5_of_1",
+   "wkb": "0104000000050000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for MultiPoint points: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for MultiPoint points: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "multipoint_child_trailing",
+   "wkb": "0104000000010000000101000000000000000000F03F00000000000000400000",
+   "geometry": {
+    "ndr": "0104000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000040000000100000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0104000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000040000000100000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "multiline",
+   "wkb": "010500000001000000010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
+   "geometry": {
+    "ndr": "010500000001000000010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
+    "xdr": "0000000005000000010000000002000000023FF0000000000000400000000000000040080000000000004010000000000000"
+   },
+   "geography": {
+    "ndr": "010500000001000000010200000002000000000000000000F03F000000000000004000000000000008400000000000001040",
+    "xdr": "0000000005000000010000000002000000023FF0000000000000400000000000000040080000000000004010000000000000"
+   }
+  },
+  {
+   "name": "multiline_point_child",
+   "wkb": "0105000000010000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Expected LineString in MultiLineString",
+     "pos": "30"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Expected LineString in MultiLineString",
+     "pos": "30"
+    }
+   }
+  },
+  {
+   "name": "multiline_count_2_of_1",
+   "wkb": "010500000002000000010200000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for MultiLineString line strings: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for MultiLineString line strings: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "multipolygon",
+   "wkb": "0106000000010000000103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000000000000000000000",
+   "geometry": {
+    "ndr": "0106000000010000000103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000000000000000000000",
+    "xdr": "00000000060000000100000000030000000100000004000000000000000000000000000000003FF000000000000000000000000000003FF00000000000003FF000000000000000000000000000000000000000000000"
+   },
+   "geography": {
+    "ndr": "0106000000010000000103000000010000000400000000000000000000000000000000000000000000000000F03F0000000000000000000000000000F03F000000000000F03F00000000000000000000000000000000",
+    "xdr": "00000000060000000100000000030000000100000004000000000000000000000000000000003FF000000000000000000000000000003FF00000000000003FF000000000000000000000000000000000000000000000"
+   }
+  },
+  {
+   "name": "multipolygon_point_child",
+   "wkb": "0106000000010000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Expected Polygon in MultiPolygon",
+     "pos": "30"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Expected Polygon in MultiPolygon",
+     "pos": "30"
+    }
+   }
+  },
+  {
+   "name": "multipolygon_count_2_of_1",
+   "wkb": "010600000002000000010300000000000000",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for MultiPolygon polygons: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for MultiPolygon polygons: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "collection_empty",
+   "wkb": "010700000000000000",
+   "geometry": {
+    "ndr": "010700000000000000",
+    "xdr": "000000000700000000"
+   },
+   "geography": {
+    "ndr": "010700000000000000",
+    "xdr": "000000000700000000"
+   }
+  },
+  {
+   "name": "collection",
+   "wkb": "0107000000010000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "ndr": "0107000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000070000000100000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0107000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000070000000100000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "collection_nested",
+   "wkb": "0107000000010000000107000000010000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "ndr": "0107000000010000000107000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000070000000100000000070000000100000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0107000000010000000107000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000070000000100000000070000000100000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "collection_count_2_of_1",
+   "wkb": "0107000000020000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "30"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "30"
+    }
+   }
+  },
+  {
+   "name": "collection_count_4_of_1",
+   "wkb": "0107000000040000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "30"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Unexpected end of WKB buffer",
+     "pos": "30"
+    }
+   }
+  },
+  {
+   "name": "collection_count_5_of_1",
+   "wkb": "0107000000050000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for GeometryCollection geometries: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for GeometryCollection geometries: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "collection_count_minus_1",
+   "wkb": "0107000000FFFFFFFF",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for GeometryCollection geometries: -1",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for GeometryCollection geometries: -1",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "collection_bad_child",
+   "wkb": "01070000000100000005",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for GeometryCollection geometries: exceeds remaining bytes",
+     "pos": "5"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for GeometryCollection geometries: exceeds remaining bytes",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "collection_bad_nested_type",
+   "wkb": "0107000000010000000107000000010000000109000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 9",
+     "pos": "19"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 9",
+     "pos": "19"
+    }
+   }
+  },
+  {
+   "name": "collection_short_line",
+   "wkb": "010700000001000000010200000001000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in linestring",
+     "pos": "14"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Too few points in linestring",
+     "pos": "14"
+    }
+   }
+  },
+  {
+   "name": "collection_truncated_line",
+   "wkb": "010700000001000000010200000002000000000000000000F03F00000000000000400000000000000840",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: exceeds remaining bytes",
+     "pos": "14"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid count for LineString points: exceeds remaining bytes",
+     "pos": "14"
+    }
+   }
+  },
+  {
+   "name": "collection_z_2d_child",
+   "wkb": "01EF030000010000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 1",
+     "pos": "10"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 1",
+     "pos": "10"
+    }
+   }
+  },
+  {
+   "name": "collection_zm_child",
+   "wkb": "01070000000100000001B90B0000000000000000F03F000000000000004000000000000008400000000000001040",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 3001",
+     "pos": "10"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid or unsupported type 3001",
+     "pos": "10"
+    }
+   }
+  },
+  {
+   "name": "collection_nested_200",
+   "wkb": "0107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000101000000000000000000F03F0000000000000040",
+   "geometry": {
+    "ndr": "0107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000013FF00000000000004000000000000000"
+   },
+   "geography": {
+    "ndr": "0107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000107000000010000000101000000000000000000F03F0000000000000040",
+    "xdr": "00000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000070000000100000000013FF00000000000004000000000000000"
+   }
+  },
+  {
+   "name": "lon_200_lat_100",
+   "wkb": "010100000000000000000069400000000000005940",
+   "geometry": {
+    "ndr": "010100000000000000000069400000000000005940",
+    "xdr": "000000000140690000000000004059000000000000"
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "lat_95",
+   "wkb": "010100000000000000000024400000000000C05740",
+   "geometry": {
+    "ndr": "010100000000000000000024400000000000C05740",
+    "xdr": "000000000140240000000000004057C00000000000"
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "lon_180_lat_90",
+   "wkb": "010100000000000000008066400000000000805640",
+   "geometry": {
+    "ndr": "010100000000000000008066400000000000805640",
+    "xdr": "000000000140668000000000004056800000000000"
+   },
+   "geography": {
+    "ndr": "010100000000000000008066400000000000805640",
+    "xdr": "000000000140668000000000004056800000000000"
+   }
+  },
+  {
+   "name": "lon_minus_180_lat_minus_90",
+   "wkb": "010100000000000000008066C000000000008056C0",
+   "geometry": {
+    "ndr": "010100000000000000008066C000000000008056C0",
+    "xdr": "0000000001C066800000000000C056800000000000"
+   },
+   "geography": {
+    "ndr": "010100000000000000008066C000000000008056C0",
+    "xdr": "0000000001C066800000000000C056800000000000"
+   }
+  },
+  {
+   "name": "lon_just_over_180",
+   "wkb": "0101000000E5AF3500008066400000000000000000",
+   "geometry": {
+    "ndr": "0101000000E5AF3500008066400000000000000000",
+    "xdr": "0000000001406680000035AFE50000000000000000"
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "lat_minus_90_5",
+   "wkb": "010100000000000000000000000000000000A056C0",
+   "geometry": {
+    "ndr": "010100000000000000000000000000000000A056C0",
+    "xdr": "00000000010000000000000000C056A00000000000"
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "5"
+    }
+   }
+  },
+  {
+   "name": "lon_nan_lat_1",
+   "wkb": "0101000000000000000000F87F000000000000F03F",
+   "geometry": {
+    "ndr": "0101000000000000000000F87F000000000000F03F",
+    "xdr": "00000000017FF80000000000003FF0000000000000"
+   },
+   "geography": {
+    "ndr": "0101000000000000000000F87F000000000000F03F",
+    "xdr": "00000000017FF80000000000003FF0000000000000"
+   }
+  },
+  {
+   "name": "z_1e300",
+   "wkb": "01E9030000000000000000F03F00000000000000409C7500883CE4377E",
+   "geometry": {
+    "ndr": "01E9030000000000000000F03F00000000000000409C7500883CE4377E",
+    "xdr": "00000003E93FF000000000000040000000000000007E37E43C8800759C"
+   },
+   "geography": {
+    "ndr": "01E9030000000000000000F03F00000000000000409C7500883CE4377E",
+    "xdr": "00000003E93FF000000000000040000000000000007E37E43C8800759C"
+   }
+  },
+  {
+   "name": "m_inf",
+   "wkb": "01D1070000000000000000F03F0000000000000040000000000000F07F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "21"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "21"
+    }
+   }
+  },
+  {
+   "name": "lon_out_and_m_inf",
+   "wkb": "01D107000000000000000069400000000000000000000000000000F07F",
+   "geometry": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "21"
+    }
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "21"
+    }
+   }
+  },
+  {
+   "name": "line_second_lon_out",
+   "wkb": "010200000002000000000000000000F03F000000000000004000000000000069400000000000001040",
+   "geometry": {
+    "ndr": "010200000002000000000000000000F03F000000000000004000000000000069400000000000001040",
+    "xdr": "0000000002000000023FF0000000000000400000000000000040690000000000004010000000000000"
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "25"
+    }
+   }
+  },
+  {
+   "name": "line_second_lat_out",
+   "wkb": "010200000002000000000000000000F03F000000000000004000000000000008400000000000005940",
+   "geometry": {
+    "ndr": "010200000002000000000000000000F03F000000000000004000000000000008400000000000005940",
+    "xdr": "0000000002000000023FF0000000000000400000000000000040080000000000004059000000000000"
+   },
+   "geography": {
+    "error_class": "WKB_PARSE_ERROR",
+    "message_parameters": {
+     "parseError": "Invalid coordinate value found",
+     "pos": "25"
+    }
+   }
+  }
+ ]
+}
