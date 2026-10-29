@@ -760,7 +760,14 @@ pub fn plan(ch: &Changes, o: &Opts, has: &dyn Fn(&str) -> bool, xtask: &str) -> 
     } else if !(ch.manifests || o.full) {
         skip("budgets", "no Cargo.toml/Cargo.lock change (use --full)")
     } else {
-        run("budgets", vec![x(&["budgets"]).heavy()])
+        // Like CI, this gates the delta against a measurement of the
+        // merge-base with `base`, never the absolute sizes in budgets.json
+        // (stale relative to main and to the local toolchain). Without a
+        // cached main measurement the step skips; CI checks the delta.
+        run(
+            "budgets",
+            vec![x(&["budgets", "--precheck", "--base", base]).heavy()],
+        )
     });
     steps
 }

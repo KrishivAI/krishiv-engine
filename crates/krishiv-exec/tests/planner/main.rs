@@ -22,6 +22,7 @@ mod runtime_filters;
 mod scan_row_drop;
 mod semantics;
 mod splits;
+mod string_encoding;
 mod sum_rewrite;
 mod tpch;
 mod union;

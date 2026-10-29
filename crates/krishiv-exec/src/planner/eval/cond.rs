@@ -20,29 +20,273 @@ use krishiv_kernels::KernelCtx;
 use krishiv_kernels::compare::CompareKind;
 use krishiv_plan::{Builtin, CastMode, ResolvedFunction};
 
-use super::cast::{CastParts, apply, parts};
-use super::logic::{and_or, cmp, compare, is_null};
+use super::cast::{CastParts, apply, canonical_carrier, parts};
+use super::logic::{cmp, compare, is_null};
 use super::{EvalEnv, Input, PhysExpr, Value};
 use crate::error::Result;
 use crate::planner::build::internal;
 
-/// `v IN (a, b, ...)` as `v = a OR v = b OR ...`: true on a match, NULL when
-/// `v` is NULL or nothing matched and an element is NULL, else false.
+/// `v IN (a, b, ...)` with `v` evaluated once: true on a match, NULL
+/// when `v` is NULL or nothing matched and an element is NULL, else
+/// false. Operands of one Spark `STRING`/`BINARY` in different Arrow
+/// encodings meet in the canonical carrier (each side cast once at plan
+/// time); every other mismatch fails here exactly as `=` does, through
+/// [`compare`](super::logic::compare) validation.
 pub(super) fn in_list(
     mut args: Vec<Arc<dyn PhysExpr>>,
     env: &EvalEnv,
 ) -> Result<Arc<dyn PhysExpr>> {
     let list = args.split_off(1);
-    let v = args.pop().ok_or_else(|| internal("IN arity"))?;
-    let mut out: Option<Arc<dyn PhysExpr>> = None;
-    for item in list {
-        let eq = compare(Builtin::Eq, Arc::clone(&v), item, env)?;
-        out = Some(match out {
-            None => eq,
-            Some(prev) => and_or(false, prev, eq),
-        });
+    let mut v = args.pop().ok_or_else(|| internal("IN arity"))?;
+    if list.is_empty() {
+        return Err(internal("IN without a list"));
     }
-    out.ok_or_else(|| internal("IN without a list"))
+    let mut items = list;
+    if let Some(target) =
+        string_target(std::iter::once(v.data_type()).chain(items.iter().map(|e| e.data_type())))
+    {
+        if v.data_type() != &target && *v.data_type() != ArrowType::Null {
+            v = super::cast::coerce_to(v, &target, env)?;
+        }
+        for item in &mut items {
+            if item.data_type() != &target && *item.data_type() != ArrowType::Null {
+                *item = super::cast::coerce_to(Arc::clone(item), &target, env)?;
+            }
+        }
+    }
+    // The same gate `=` applies, for the same error on other mismatches.
+    for item in &items {
+        compare(Builtin::Eq, Arc::clone(&v), Arc::clone(item), env)?;
+    }
+    Ok(Arc::new(InList {
+        v,
+        items,
+        kernels: env.kernels,
+    }))
+}
+
+/// The canonical carrier when every non-`NULL` type is one Spark
+/// `STRING`/`BINARY` in some Arrow encoding: `None` otherwise (including
+/// all-`NULL`, for which no cast is needed).
+fn string_target<'a>(types: impl IntoIterator<Item = &'a ArrowType>) -> Option<ArrowType> {
+    let mut out: Option<ArrowType> = None;
+    for t in types {
+        if *t == ArrowType::Null {
+            continue;
+        }
+        let c = canonical_carrier(t)?;
+        match &out {
+            None => out = Some(c),
+            Some(a) if *a == c => {}
+            _ => return None,
+        }
+    }
+    out
+}
+
+/// `IN (list)` over one evaluation of `v`: each list element is evaluated
+/// at most once, and only until every row has matched (further elements
+/// cannot change a `true`). This reuses the evaluated canonical `Value`
+/// of `v` across the elements instead of converting it once per element.
+#[derive(Debug)]
+struct InList {
+    v: Arc<dyn PhysExpr>,
+    items: Vec<Arc<dyn PhysExpr>>,
+    kernels: KernelCtx,
+}
+
+impl PhysExpr for InList {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Boolean
+    }
+
+    fn nullable(&self) -> bool {
+        self.v.nullable() || self.items.iter().any(|e| e.nullable())
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.v.eval(batch, partition)?;
+        let rows = batch.num_rows();
+        if rows == 0 {
+            return Ok(Value::Array(Arc::new(BooleanArray::new(
+                BooleanBuffer::new_unset(0),
+                None,
+            ))));
+        }
+        let mut matched = vec![false; rows];
+        let mut saw_null = vec![false; rows];
+        let mut saw_array = !v.is_scalar();
+        for item in &self.items {
+            if matched.iter().all(|m| *m) {
+                break;
+            }
+            let other = item.eval(batch, partition)?;
+            saw_array = saw_array || !other.is_scalar();
+            let eq = cmp(CompareKind::Equal, &v, &other, &self.kernels)?;
+            // `eq` is one row for scalar-vs-scalar, else `rows`.
+            let scalar_eq = eq.len() == 1 && rows != 1;
+            for i in 0..rows {
+                if matched[i] {
+                    continue;
+                }
+                let at = if scalar_eq { 0 } else { i };
+                if !eq.is_valid(at) {
+                    saw_null[i] = true;
+                } else if eq.value(at) {
+                    matched[i] = true;
+                }
+            }
+        }
+        if !saw_array {
+            let m = matched.first().copied().unwrap_or(false);
+            let s = saw_null.first().copied().unwrap_or(false);
+            let out: ArrayRef = Arc::new(BooleanArray::new(
+                BooleanBuffer::from(vec![m]),
+                (!m && s).then(|| arrow_buffer::NullBuffer::new(BooleanBuffer::from(vec![false]))),
+            ));
+            return Ok(Value::Scalar(out));
+        }
+        let mut values = vec![false; rows];
+        let mut valid = vec![true; rows];
+        for i in 0..rows {
+            if matched[i] {
+                values[i] = true;
+            } else if saw_null[i] {
+                valid[i] = false;
+            }
+        }
+        Ok(Value::Array(Arc::new(BooleanArray::new(
+            BooleanBuffer::from(values),
+            Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valid))),
+        ))))
+    }
+}
+
+/// `v BETWEEN lo AND hi` with `v` evaluated once: `v >= lo AND v <= hi`
+/// under Kleene logic. Operands of one Spark `STRING`/`BINARY` in
+/// different encodings meet in the canonical carrier; every other
+/// mismatch fails here exactly as the two comparisons do.
+pub(super) fn between(
+    v: Arc<dyn PhysExpr>,
+    lo: Arc<dyn PhysExpr>,
+    hi: Arc<dyn PhysExpr>,
+    env: &EvalEnv,
+) -> Result<Arc<dyn PhysExpr>> {
+    let (mut v, mut lo, mut hi) = (v, lo, hi);
+    if let Some(target) = string_target([v.data_type(), lo.data_type(), hi.data_type()]) {
+        for e in [&mut v, &mut lo, &mut hi] {
+            if e.data_type() != &target && *e.data_type() != ArrowType::Null {
+                *e = super::cast::coerce_to(Arc::clone(e), &target, env)?;
+            }
+        }
+    }
+    compare(Builtin::GtEq, Arc::clone(&v), Arc::clone(&lo), env)?;
+    compare(Builtin::LtEq, Arc::clone(&v), Arc::clone(&hi), env)?;
+    Ok(Arc::new(Between {
+        v,
+        lo,
+        hi,
+        kernels: env.kernels,
+    }))
+}
+
+/// `BETWEEN` over one evaluation of `v`: both bounds reuse the evaluated
+/// canonical `Value` instead of converting it once per bound. `hi` is
+/// evaluated only where `v >= lo` did not already decide `false`, as the
+/// `AND` it lowers to would.
+#[derive(Debug)]
+struct Between {
+    v: Arc<dyn PhysExpr>,
+    lo: Arc<dyn PhysExpr>,
+    hi: Arc<dyn PhysExpr>,
+    kernels: KernelCtx,
+}
+
+impl PhysExpr for Between {
+    fn data_type(&self) -> &ArrowType {
+        &ArrowType::Boolean
+    }
+
+    fn nullable(&self) -> bool {
+        self.v.nullable() || self.lo.nullable() || self.hi.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        let v = self.v.eval(batch, partition)?;
+        let lo = self.lo.eval(batch, partition)?;
+        let rows = batch.num_rows();
+        if rows == 0 {
+            return Ok(Value::Array(Arc::new(BooleanArray::new(
+                BooleanBuffer::new_unset(0),
+                None,
+            ))));
+        }
+        let ge = cmp(CompareKind::GreaterEq, &v, &lo, &self.kernels)?;
+        let scalar_ge = ge.len() == 1 && rows != 1;
+        // `false AND _` is `false`: skip `hi` where every row decided.
+        let all_false = (0..ge.len()).all(|i| ge.is_valid(i) && !ge.value(i));
+        if all_false {
+            if ge.len() == 1 && v.is_scalar() && lo.is_scalar() {
+                let out: ArrayRef =
+                    Arc::new(BooleanArray::new(BooleanBuffer::from(vec![false]), None));
+                return Ok(Value::Scalar(out));
+            }
+            let out: ArrayRef = if scalar_ge {
+                Arc::new(BooleanArray::new(
+                    BooleanBuffer::from(vec![false; rows]),
+                    None,
+                ))
+            } else {
+                Arc::new(BooleanArray::new(
+                    BooleanBuffer::from(vec![false; ge.len()]),
+                    None,
+                ))
+            };
+            return Ok(Value::Array(out));
+        }
+        let hi = self.hi.eval(batch, partition)?;
+        let all_scalar = v.is_scalar() && lo.is_scalar() && hi.is_scalar();
+        let le = cmp(CompareKind::LessEq, &v, &hi, &self.kernels)?;
+        let n = if all_scalar { 1 } else { rows };
+        let mut values = Vec::with_capacity(n);
+        let mut valids = Vec::with_capacity(n);
+        for i in 0..n {
+            let gi = if ge.len() == 1 { 0 } else { i };
+            let li = if le.len() == 1 { 0 } else { i };
+            let (g_valid, l_valid) = (ge.is_valid(gi), le.is_valid(li));
+            let (g, l) = (g_valid && ge.value(gi), l_valid && le.value(li));
+            if (g_valid && !g) || (l_valid && !l) {
+                values.push(false);
+                valids.push(true);
+            } else if g_valid && l_valid {
+                values.push(true);
+                valids.push(true);
+            } else {
+                values.push(false);
+                valids.push(false);
+            }
+        }
+        let out: ArrayRef = Arc::new(BooleanArray::new(
+            BooleanBuffer::from(values),
+            Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valids))),
+        ));
+        if all_scalar {
+            return Ok(Value::Scalar(out));
+        }
+        if out.len() == 1 && rows != 1 {
+            let mut values = Vec::with_capacity(rows);
+            let mut valids = Vec::with_capacity(rows);
+            for _ in 0..rows {
+                values.push(out.as_boolean().value(0));
+                valids.push(out.is_valid(0));
+            }
+            return Ok(Value::Array(Arc::new(BooleanArray::new(
+                BooleanBuffer::from(values),
+                Some(arrow_buffer::NullBuffer::new(BooleanBuffer::from(valids))),
+            ))));
+        }
+        Ok(Value::Array(out))
+    }
 }
 
 /// `CASE WHEN c1 THEN v1 ... [ELSE e] END`, lazily: each condition sees only
@@ -54,8 +298,12 @@ struct When {
     out: ArrowType,
 }
 
-pub(super) fn when(mut args: Vec<Arc<dyn PhysExpr>>, out: ArrowType) -> Result<Arc<dyn PhysExpr>> {
-    let otherwise = if args.len() % 2 == 1 {
+pub(super) fn when(
+    mut args: Vec<Arc<dyn PhysExpr>>,
+    out: ArrowType,
+    env: &EvalEnv,
+) -> Result<Arc<dyn PhysExpr>> {
+    let mut otherwise = if args.len() % 2 == 1 {
         args.pop()
     } else {
         None
@@ -68,19 +316,32 @@ pub(super) fn when(mut args: Vec<Arc<dyn PhysExpr>>, out: ArrowType) -> Result<A
         }
         branches.push((c, v));
     }
-    for v in branches.iter().map(|(_, v)| v).chain(&otherwise) {
-        if v.data_type() != &out && v.data_type() != &ArrowType::Null {
-            return Err(internal(&format!(
-                "a CASE value of type {} in a CASE of type {out}",
-                v.data_type()
-            )));
-        }
+    for v in branches.iter_mut().map(|(_, v)| v).chain(&mut otherwise) {
+        coerce_branch(v, &out, env)?;
     }
     Ok(Arc::new(When {
         branches,
         otherwise,
         out,
     }))
+}
+
+/// `v` as a value of the `CASE` result type `out`: branches of one Spark
+/// `STRING`/`BINARY` in different Arrow encodings meet in the canonical
+/// carrier; an untyped `NULL` stays one. Anything else is an engine bug:
+/// the analyzer has cast every branch to the common type.
+fn coerce_branch(v: &mut Arc<dyn PhysExpr>, out: &ArrowType, env: &EvalEnv) -> Result<()> {
+    let t = v.data_type().clone();
+    if &t == out || t == ArrowType::Null {
+        return Ok(());
+    }
+    if canonical_carrier(&t) == Some(out.clone()) {
+        *v = super::cast::coerce_to(Arc::clone(v), out, env)?;
+        return Ok(());
+    }
+    Err(internal(&format!(
+        "a CASE value of type {t} in a CASE of type {out}"
+    )))
 }
 
 impl PhysExpr for When {
@@ -189,6 +450,7 @@ fn cast_null(a: ArrayRef, out: &ArrowType) -> ArrayRef {
 pub(super) fn coalesce(
     f: &ResolvedFunction,
     args: Vec<Arc<dyn PhysExpr>>,
+    env: &EvalEnv,
 ) -> Result<Arc<dyn PhysExpr>> {
     let out = f.data_type.to_arrow();
     // The first non-null argument: each condition sees only the rows no
@@ -199,7 +461,7 @@ pub(super) fn coalesce(
             None => a,
             Some(taken) => {
                 let cond = is_null(false, Arc::clone(&a));
-                when(vec![cond, a, taken], out.clone())?
+                when(vec![cond, a, taken], out.clone(), env)?
             }
         });
     }
@@ -208,15 +470,23 @@ pub(super) fn coalesce(
 
 /// `nullif(a, b)` / `nullifzero(x)`: NULL where `a = b`, else `a`, with `a`
 /// evaluated once. The analyzer has cast `b` to the type `=` compares at
-/// (`other`'s type); `a` is cast to it here, for the comparison only, and
-/// the result keeps `a`'s own values and type.
+/// (`other`'s type); operands of one Spark `STRING`/`BINARY` in different
+/// encodings meet in the canonical carrier instead. The casts are for the
+/// comparison only; the result keeps `a`'s values at the result's carrier.
 #[derive(Debug)]
 pub(super) struct NullIf {
     value: Arc<dyn PhysExpr>,
     other: Arc<dyn PhysExpr>,
-    /// `value` to `other`'s type, for the comparison only; `None` when the
-    /// types already match (no copy).
-    cast: Option<CastParts>,
+    /// Each side to the comparison type, for the comparison only; `None`
+    /// when already there (no copy).
+    value_cast: Option<CastParts>,
+    other_cast: Option<CastParts>,
+    /// `value` to the result type: the analyzer types the result at the
+    /// value's Spark type, whose canonical carrier may differ from the
+    /// value's own (a `Utf8` column in a `Utf8View` result). `None` when
+    /// already there; a different Spark type is left for `zip` to reject
+    /// as before.
+    result_cast: Option<CastParts>,
     kernels: KernelCtx,
     out: ArrowType,
 }
@@ -237,24 +507,45 @@ pub(super) fn null_if(
     } else {
         CastMode::Legacy
     };
-    // Same-typed comparisons need no cast: `apply` would copy the column
-    // (twice for `Utf8View`).
-    let cast = if value.data_type() == other.data_type() {
+    // Same-typed comparisons need no cast: `apply` would copy the column.
+    let (value_ty, other_ty) = (value.data_type().clone(), other.data_type().clone());
+    let out = f.data_type.to_arrow();
+    let (value_cast, other_cast) =
+        match (canonical_carrier(&value_ty), canonical_carrier(&other_ty)) {
+            // One Spark `STRING`/`BINARY` in different encodings: compare in
+            // the canonical carrier, keeping the side already there.
+            (Some(a), Some(b)) if a == b && value_ty != other_ty => {
+                let at = |t: &ArrowType| {
+                    if t == &a {
+                        Ok(None)
+                    } else {
+                        parts(t, a.clone(), mode, input.env).map(Some)
+                    }
+                };
+                (at(&value_ty)?, at(&other_ty)?)
+            }
+            _ if value_ty == other_ty => (None, None),
+            _ => (
+                Some(parts(&value_ty, other_ty.clone(), mode, input.env)?),
+                None,
+            ),
+        };
+    // The result keeps the value's Spark type at the result's carrier.
+    let result_cast = if value_ty == out {
         None
+    } else if canonical_carrier(&value_ty) == Some(out.clone()) {
+        Some(parts(&value_ty, out.clone(), mode, input.env)?)
     } else {
-        Some(parts(
-            value.data_type(),
-            other.data_type().clone(),
-            mode,
-            input.env,
-        )?)
+        None
     };
     Ok(Arc::new(NullIf {
         value,
         other,
-        cast,
+        value_cast,
+        other_cast,
+        result_cast,
         kernels: input.env.kernels,
-        out: f.data_type.to_arrow(),
+        out,
     }))
 }
 
@@ -278,15 +569,22 @@ impl PhysExpr for NullIf {
         let a_full = a.into_array(n)?;
         let b_full = b.into_array(n)?;
         // An untyped NULL never equals (the kernels cannot cast a `Null`
-        // array either); otherwise `value` meets `other` for the comparison.
+        // array either); otherwise each side meets the comparison type.
         let null_side =
             a_full.data_type() == &ArrowType::Null || b_full.data_type() == &ArrowType::Null;
         let ab = if null_side {
             Arc::clone(&a_full)
-        } else if let Some(cast) = &self.cast {
+        } else if let Some(cast) = &self.value_cast {
             apply(cast, &a_full)?
         } else {
             Arc::clone(&a_full)
+        };
+        let bb = if null_side {
+            Arc::clone(&b_full)
+        } else if let Some(cast) = &self.other_cast {
+            apply(cast, &b_full)?
+        } else {
+            Arc::clone(&b_full)
         };
         let eq = if null_side {
             BooleanArray::new_null(n)
@@ -294,7 +592,7 @@ impl PhysExpr for NullIf {
             cmp(
                 CompareKind::Equal,
                 &Value::Array(ab),
-                &Value::Array(b_full),
+                &Value::Array(bb),
                 &self.kernels,
             )?
         };
@@ -304,7 +602,11 @@ impl PhysExpr for NullIf {
             .map(|ns| ns.inner().clone())
             .unwrap_or_else(|| BooleanBuffer::new_set(n));
         let mask = BooleanArray::new(eq.values() & &valid, None);
-        let out = zip(&mask, &new_null_array(&self.out, n), &a_full)
+        let kept = match &self.result_cast {
+            Some(cast) => apply(cast, &a_full)?,
+            None => Arc::clone(&a_full),
+        };
+        let out = zip(&mask, &new_null_array(&self.out, n), &kept)
             .map_err(|e| internal(&e.to_string()))?;
         Ok(if scalar {
             Value::Scalar(out)
@@ -387,7 +689,8 @@ mod tests {
 
     use arrow_array::types::{Decimal128Type, Float32Type, Float64Type, Int32Type, Int64Type};
     use arrow_array::{
-        Decimal128Array, Float64Array, Int32Array, Int64Array, NullArray, StringViewArray,
+        Decimal128Array, Float64Array, Int32Array, Int64Array, NullArray, StringArray,
+        StringViewArray,
     };
     use arrow_schema::{Field, Schema};
     use krishiv_common::config::Config;
@@ -499,12 +802,14 @@ mod tests {
         )
         .unwrap();
         let f = resolved("coalesce", DataType::Integer);
+        let env = env(true);
         let e = coalesce(
             &f,
             vec![
                 column(0, ArrowType::Int32, true),
                 column(1, ArrowType::Int32, true),
             ],
+            &env,
         )
         .unwrap();
         assert_eq!(
@@ -512,13 +817,13 @@ mod tests {
             &Int32Array::from(vec![Some(1), Some(3), None, None]),
         );
         // A single argument is itself.
-        let one = coalesce(&f, vec![column(0, ArrowType::Int32, true)]).unwrap();
+        let one = coalesce(&f, vec![column(0, ArrowType::Int32, true)], &env).unwrap();
         assert_eq!(
             values(&one, &batch).as_primitive::<Int32Type>(),
             &Int32Array::from(vec![Some(1), None, None, None]),
         );
         // No arguments is an engine bug: the analyzer always has some.
-        assert!(coalesce(&f, Vec::new()).is_err());
+        assert!(coalesce(&f, Vec::new(), &env).is_err());
     }
 
     /// `coalesce(1, 1 / 0)` answers without raising; `coalesce(1 / 0, 1)`
@@ -529,13 +834,23 @@ mod tests {
             let env = env(ansi);
             let batch = rows_batch(2);
             let f = resolved("coalesce", DataType::Double);
-            let e = coalesce(&f, vec![lit(&Literal::Double(1.0)), one_over_zero(&env)]).unwrap();
+            let e = coalesce(
+                &f,
+                vec![lit(&Literal::Double(1.0)), one_over_zero(&env)],
+                &env,
+            )
+            .unwrap();
             assert_eq!(
                 values(&e, &batch).as_primitive::<Float64Type>(),
                 &Float64Array::from(vec![Some(1.0), Some(1.0)]),
                 "ansi = {ansi}"
             );
-            let e = coalesce(&f, vec![one_over_zero(&env), lit(&Literal::Double(1.0))]).unwrap();
+            let e = coalesce(
+                &f,
+                vec![one_over_zero(&env), lit(&Literal::Double(1.0))],
+                &env,
+            )
+            .unwrap();
             if ansi {
                 let err = e.eval(&batch, 0).unwrap_err();
                 assert_eq!(err.error_class(), ErrorClass::DivideByZero);
@@ -882,5 +1197,679 @@ mod tests {
                 assert!(values(&e, &batch).as_primitive::<Float64Type>().is_null(0));
             }
         }
+    }
+
+    /// `coalesce` of one Spark `STRING` in `Utf8` and `Utf8View` carriers:
+    /// every branch meets the `CASE` type, keeping its values.
+    #[test]
+    fn coalesce_unifies_string_encodings() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("v", ArrowType::Utf8View, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::StringArray::from(vec![None, Some("b")])) as ArrayRef,
+                Arc::new(StringViewArray::from(vec![Some("v"), Some("w")])),
+            ],
+        )
+        .unwrap();
+        let f = resolved("coalesce", DataType::String);
+        for (args, want) in [
+            (
+                vec![
+                    column(0, ArrowType::Utf8, true),
+                    column(1, ArrowType::Utf8View, true),
+                ],
+                [Some("v"), Some("b")],
+            ),
+            (
+                vec![
+                    column(1, ArrowType::Utf8View, true),
+                    column(0, ArrowType::Utf8, true),
+                ],
+                [Some("v"), Some("w")],
+            ),
+        ] {
+            let e = coalesce(&f, args, &env).unwrap();
+            assert_eq!(e.data_type(), &ArrowType::Utf8View);
+            assert_eq!(
+                values(&e, &batch)
+                    .as_string_view()
+                    .iter()
+                    .collect::<Vec<_>>(),
+                want
+            );
+        }
+    }
+
+    /// `CASE WHEN` with `Utf8` branches in a `STRING` (`Utf8View`) case:
+    /// the branches are cast; an `INT` branch still fails.
+    #[test]
+    fn when_unifies_string_encodings() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("i", ArrowType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::StringArray::from(vec![Some("a"), None])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+            ],
+        )
+        .unwrap();
+        let e = when(
+            vec![
+                lit(&Literal::Boolean(true)),
+                column(0, ArrowType::Utf8, true),
+                lit(&Literal::String("d".to_owned())),
+            ],
+            ArrowType::Utf8View,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Utf8View);
+        assert_eq!(
+            values(&e, &batch)
+                .as_string_view()
+                .iter()
+                .collect::<Vec<_>>(),
+            [Some("a"), None]
+        );
+        // A branch of another Spark type still fails as before.
+        let err = when(
+            vec![
+                lit(&Literal::Boolean(true)),
+                column(1, ArrowType::Int32, true),
+            ],
+            ArrowType::Utf8View,
+            &env,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("a CASE value of type Int32 in a CASE of type Utf8View"),
+            "{err}"
+        );
+    }
+
+    /// `nullif` of `Utf8` and `Utf8View` operands compares in the view and
+    /// returns the `STRING` carrier with the value's contents.
+    #[test]
+    fn nullif_unifies_string_encodings() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("v", ArrowType::Utf8View, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::StringArray::from(vec![
+                    Some("x"),
+                    Some("y"),
+                    None,
+                ])) as ArrayRef,
+                Arc::new(StringViewArray::from(vec![Some("x"), Some("z"), Some("q")])),
+            ],
+        )
+        .unwrap();
+        let layout = [AttrId(0), AttrId(1)];
+        let input = input(&env, &layout, &schema);
+        // A `Utf8` value against a `Utf8View` literal: the result is the
+        // `STRING` carrier with the value's contents.
+        let f = resolved("nullif", DataType::String);
+        let e = null_if(
+            &f,
+            vec![
+                column(0, ArrowType::Utf8, true),
+                lit(&Literal::String("x".to_owned())),
+            ],
+            input,
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Utf8View);
+        assert_eq!(
+            values(&e, &batch)
+                .as_string_view()
+                .iter()
+                .collect::<Vec<_>>(),
+            [None, Some("y"), None]
+        );
+        // A `Utf8View` value against a `Utf8` other: the comparison stays in
+        // the view, the result keeps the view.
+        let e = null_if(
+            &f,
+            vec![
+                column(1, ArrowType::Utf8View, true),
+                column(0, ArrowType::Utf8, true),
+            ],
+            input,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch)
+                .as_string_view()
+                .iter()
+                .collect::<Vec<_>>(),
+            [None, Some("z"), Some("q")]
+        );
+    }
+
+    /// A two-column batch of one Spark `STRING` in both carriers.
+    fn strings_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("u", ArrowType::Utf8, true),
+            Field::new("v", ArrowType::Utf8View, true),
+        ]));
+        RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from(vec![Some("b"), None])) as ArrayRef,
+                Arc::new(StringViewArray::from(vec![Some("b"), Some("c")])),
+            ],
+        )
+        .unwrap()
+    }
+
+    /// `IN` over a `Utf8` value with `Utf8View` elements (and the reverse):
+    /// each side meets the canonical carrier once, keeping its values.
+    #[test]
+    fn in_list_meets_mixed_encodings_in_the_view() {
+        let env = env(true);
+        let batch = strings_batch();
+        let e = in_list(
+            vec![
+                column(0, ArrowType::Utf8, true),
+                lit(&Literal::String("b".to_owned())),
+                lit(&Literal::String("c".to_owned())),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Boolean);
+        assert!(e.nullable());
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        // A `Utf8View` value against a `Utf8` element: the element is cast.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("v", ArrowType::Utf8View, true),
+            Field::new("u", ArrowType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringViewArray::from(vec![Some("b"), Some("c")])),
+                Arc::new(StringArray::from(vec![Some("b"), Some("b")])),
+            ],
+        )
+        .unwrap();
+        let e = in_list(
+            vec![
+                column(0, ArrowType::Utf8View, true),
+                column(1, ArrowType::Utf8, true),
+                lit(&Literal::String("x".to_owned())),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(false)]
+        );
+    }
+
+    /// `IN` without a list is an engine bug; operands of different Spark
+    /// types fail here exactly as `=` does.
+    #[test]
+    fn in_list_rejects_an_empty_list_and_other_spark_types() {
+        let env = env(true);
+        let err = in_list(vec![column(0, ArrowType::Int32, true)], &env).unwrap_err();
+        assert!(err.to_string().contains("IN without a list"), "{err}");
+        let err = in_list(
+            vec![
+                column(0, ArrowType::Int32, true),
+                lit(&Literal::String("x".to_owned())),
+            ],
+            &env,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("comparison of Int32 with Utf8View"),
+            "{err}"
+        );
+    }
+
+    /// An `IN` list of untyped `NULL`s never matches, and a `NULL` value
+    /// never matches either: every row is NULL.
+    #[test]
+    fn in_list_with_only_untyped_nulls_never_matches() {
+        let env = env(true);
+        let batch = strings_batch();
+        let e = in_list(
+            vec![
+                column(0, ArrowType::Utf8, true),
+                lit(&Literal::Null(None)),
+                lit(&Literal::Null(None)),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [None, None]
+        );
+        let e = in_list(
+            vec![
+                lit(&Literal::Null(None)),
+                lit(&Literal::String("b".to_owned())),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &rows_batch(2))
+                .as_boolean()
+                .iter()
+                .collect::<Vec<_>>(),
+            [None, None]
+        );
+    }
+
+    /// `IN` over a batch without rows answers an empty column.
+    #[test]
+    fn in_list_on_an_empty_batch_answers_empty() {
+        let env = env(true);
+        let batch = rows_batch(0);
+        let e = in_list(
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Integer(2))],
+            &env,
+        )
+        .unwrap();
+        let got = e.eval(&batch, 0).unwrap().into_array(0).unwrap();
+        assert_eq!(got.len(), 0);
+    }
+
+    /// `IN` of scalars is one scalar: a match, or NULL when nothing
+    /// matched and an element is NULL.
+    #[test]
+    fn in_list_of_scalars_is_a_scalar() {
+        let env = env(true);
+        let batch = rows_batch(2);
+        let e = in_list(
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Integer(1))],
+            &env,
+        )
+        .unwrap();
+        match e.eval(&batch, 0).unwrap() {
+            Value::Scalar(a) => assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [Some(true)]),
+            v => panic!("not a scalar: {v:?}"),
+        }
+        let e = in_list(
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Integer(2))],
+            &env,
+        )
+        .unwrap();
+        match e.eval(&batch, 0).unwrap() {
+            Value::Scalar(a) => {
+                assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [Some(false)]);
+            }
+            v => panic!("not a scalar: {v:?}"),
+        }
+        let e = in_list(
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Null(None))],
+            &env,
+        )
+        .unwrap();
+        match e.eval(&batch, 0).unwrap() {
+            Value::Scalar(a) => {
+                assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [None]);
+            }
+            v => panic!("not a scalar: {v:?}"),
+        }
+    }
+
+    /// The `IN` value is evaluated once per batch, however many elements
+    /// the list holds.
+    #[test]
+    fn in_list_evaluates_its_value_once() {
+        let env = env(true);
+        let batch = rows_batch(3);
+        let n = Arc::new(AtomicUsize::new(0));
+        let value: Arc<dyn PhysExpr> = Arc::new(Count {
+            inner: lit(&Literal::Long(1)),
+            n: Arc::clone(&n),
+        });
+        let e = in_list(
+            vec![value, lit(&Literal::Long(1)), lit(&Literal::Long(2))],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(true), Some(true)]
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    /// Elements past the point where every row matched are never
+    /// evaluated: a later element cannot change a `true`.
+    #[test]
+    fn in_list_skips_elements_after_every_row_matched() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+        )
+        .unwrap();
+        let counted = |l: &Literal, n: &Arc<AtomicUsize>| -> Arc<dyn PhysExpr> {
+            Arc::new(Count {
+                inner: lit(l),
+                n: Arc::clone(n),
+            })
+        };
+        let (n0, n1, n2) = (
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let e = in_list(
+            vec![
+                column(0, ArrowType::Int32, true),
+                counted(&Literal::Integer(1), &n0),
+                counted(&Literal::Integer(2), &n1),
+                counted(&Literal::Integer(3), &n2),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(true)]
+        );
+        assert_eq!(n0.load(Ordering::SeqCst), 1);
+        assert_eq!(n1.load(Ordering::SeqCst), 1);
+        assert_eq!(n2.load(Ordering::SeqCst), 0);
+    }
+
+    /// `BETWEEN` over a `Utf8` value with `Utf8View` bounds (and a
+    /// `Utf8View` value with a `Utf8` bound).
+    #[test]
+    fn between_meets_mixed_encodings_in_the_view() {
+        let env = env(true);
+        let batch = strings_batch();
+        let e = between(
+            column(0, ArrowType::Utf8, true),
+            lit(&Literal::String("a".to_owned())),
+            lit(&Literal::String("c".to_owned())),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Boolean);
+        assert!(e.nullable());
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("w", ArrowType::Utf8View, true),
+            Field::new("u", ArrowType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringViewArray::from(vec![Some("b"), Some("c")])),
+                Arc::new(StringArray::from(vec![Some("a"), Some("b")])),
+            ],
+        )
+        .unwrap();
+        let e = between(
+            column(0, ArrowType::Utf8View, true),
+            column(1, ArrowType::Utf8, true),
+            lit(&Literal::String("c".to_owned())),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), Some(true)]
+        );
+    }
+
+    /// `BETWEEN` over operands of different Spark types fails here exactly
+    /// as its two comparisons do.
+    #[test]
+    fn between_with_other_spark_types_fails_like_its_comparisons() {
+        let env = env(true);
+        let err = between(
+            column(0, ArrowType::Int32, true),
+            lit(&Literal::String("a".to_owned())),
+            lit(&Literal::String("c".to_owned())),
+            &env,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("comparison of Int32 with Utf8View"),
+            "{err}"
+        );
+    }
+
+    /// `LargeUtf8` is one more encoding of `STRING`: `IN` and `BETWEEN`
+    /// meet it in the canonical carrier like `Utf8`; a dictionary-encoded
+    /// string is no encoding of it and fails as `=` does.
+    #[test]
+    fn large_utf8_meets_the_view_and_dictionaries_do_not() {
+        let env = env(true);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("l", ArrowType::LargeUtf8, true),
+            Field::new(
+                "d",
+                ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8)),
+                true,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow_array::LargeStringArray::from(vec![Some("b"), None])) as ArrayRef,
+                Arc::new(
+                    arrow_array::DictionaryArray::<arrow_array::types::Int32Type>::from_iter([
+                        Some("b"),
+                        None,
+                    ]),
+                ),
+            ],
+        )
+        .unwrap();
+        let lit_s = |t: &str| lit(&Literal::String(t.to_owned()));
+        let e = in_list(
+            vec![
+                column(0, ArrowType::LargeUtf8, true),
+                lit_s("b"),
+                lit_s("c"),
+            ],
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        let e = between(
+            column(0, ArrowType::LargeUtf8, true),
+            lit_s("a"),
+            lit_s("c"),
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true), None]
+        );
+        let dictionary =
+            ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
+        assert!(in_list(vec![column(1, dictionary.clone(), true), lit_s("b")], &env).is_err());
+        assert!(between(column(1, dictionary, true), lit_s("a"), lit_s("c"), &env).is_err());
+    }
+
+    /// `BETWEEN` over a batch without rows answers an empty column.
+    #[test]
+    fn between_on_an_empty_batch_answers_empty() {
+        let env = env(true);
+        let batch = rows_batch(0);
+        let e = between(
+            lit(&Literal::Integer(1)),
+            lit(&Literal::Integer(0)),
+            lit(&Literal::Integer(2)),
+            &env,
+        )
+        .unwrap();
+        let got = e.eval(&batch, 0).unwrap().into_array(0).unwrap();
+        assert_eq!(got.len(), 0);
+    }
+
+    /// `false AND _` is `false`: where `v >= lo` already decided every
+    /// row, the upper bound is never evaluated.
+    #[test]
+    fn between_skips_the_upper_bound_where_the_lower_decided_false() {
+        let env = env(true);
+        let n = Arc::new(AtomicUsize::new(0));
+        let hi: Arc<dyn PhysExpr> = Arc::new(Count {
+            inner: lit(&Literal::Long(3)),
+            n: Arc::clone(&n),
+        });
+        let e = between(lit(&Literal::Long(1)), lit(&Literal::Long(5)), hi, &env).unwrap();
+        match e.eval(&rows_batch(2), 0).unwrap() {
+            Value::Scalar(a) => {
+                assert_eq!(a.as_boolean().iter().collect::<Vec<_>>(), [Some(false)]);
+            }
+            v => panic!("not a scalar: {v:?}"),
+        }
+        assert_eq!(n.load(Ordering::SeqCst), 0);
+        // One decided row does not skip the bound for the rest.
+        let schema = Arc::new(Schema::new(vec![Field::new("a", ArrowType::Int32, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 7])) as ArrayRef],
+        )
+        .unwrap();
+        let n = Arc::new(AtomicUsize::new(0));
+        let hi: Arc<dyn PhysExpr> = Arc::new(Count {
+            inner: lit(&Literal::Integer(6)),
+            n: Arc::clone(&n),
+        });
+        let e = between(
+            column(0, ArrowType::Int32, true),
+            lit(&Literal::Integer(5)),
+            hi,
+            &env,
+        )
+        .unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(false), Some(false)]
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    /// `BETWEEN` is `v >= lo AND v <= hi` under Kleene logic: NULL in,
+    /// NULL out, unless one side already decided `false`.
+    #[test]
+    fn between_follows_kleene_logic_for_nulls() {
+        let env = env(true);
+        let batch = rows_batch(1);
+        for (v, lo, hi, want) in [
+            (
+                Literal::Long(2),
+                Literal::Long(1),
+                Literal::Null(None),
+                None,
+            ),
+            (
+                Literal::Long(2),
+                Literal::Null(None),
+                Literal::Long(3),
+                None,
+            ),
+            (
+                Literal::Null(None),
+                Literal::Long(1),
+                Literal::Long(3),
+                None,
+            ),
+            (
+                Literal::Long(5),
+                Literal::Long(1),
+                Literal::Long(3),
+                Some(false),
+            ),
+            // `false AND NULL` is `false`: the lower bound already decided.
+            (
+                Literal::Long(0),
+                Literal::Long(1),
+                Literal::Null(None),
+                Some(false),
+            ),
+            (
+                Literal::Long(2),
+                Literal::Long(1),
+                Literal::Long(3),
+                Some(true),
+            ),
+        ] {
+            let e = between(lit(&v), lit(&lo), lit(&hi), &env).unwrap();
+            assert_eq!(
+                values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+                [want],
+                "{v:?} BETWEEN {lo:?} AND {hi:?}"
+            );
+        }
+    }
+
+    /// The `BETWEEN` value is evaluated once per batch, for both bounds
+    /// alike.
+    #[test]
+    fn between_evaluates_its_value_once() {
+        let env = env(true);
+        let batch = rows_batch(1);
+        let n = Arc::new(AtomicUsize::new(0));
+        let value: Arc<dyn PhysExpr> = Arc::new(Count {
+            inner: lit(&Literal::Long(1)),
+            n: Arc::clone(&n),
+        });
+        let e = between(value, lit(&Literal::Long(0)), lit(&Literal::Long(2)), &env).unwrap();
+        assert_eq!(
+            values(&e, &batch).as_boolean().iter().collect::<Vec<_>>(),
+            [Some(true)]
+        );
+        assert_eq!(n.load(Ordering::SeqCst), 1);
+    }
+
+    /// A `nullif` value of another Spark type than the result keeps no
+    /// result cast: the mix fails at evaluation, as the analyzer never
+    /// produces it.
+    #[test]
+    fn nullif_with_a_value_outside_the_result_type_fails_evaluation() {
+        let env = env(true);
+        let batch = rows_batch(1);
+        let schema = Arc::new(Schema::empty());
+        let f = resolved("nullif", DataType::String);
+        let e = null_if(
+            &f,
+            vec![lit(&Literal::Integer(1)), lit(&Literal::Integer(1))],
+            input(&env, &[], &schema),
+        )
+        .unwrap();
+        assert_eq!(e.data_type(), &ArrowType::Utf8View);
+        assert!(e.eval(&batch, 0).is_err());
     }
 }
