@@ -30,7 +30,30 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The merge queue skips Miri, the fuzz-target build and the wheel matrix; the nightly CI run of
+  # main runs them. Publishing needs that run green on this commit (or a later main commit).
+  nightly-green:
+    if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Latest scheduled CI run is green on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/require-green-nightly.sh
+
   wheels:
+    needs: nightly-green
     if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     permissions:
       contents: read
@@ -38,7 +61,7 @@ jobs:
     uses: $/.github/workflows/wheels.yml
 
   publish:
-    needs: wheels
+    needs: [nightly-green, wheels]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment:

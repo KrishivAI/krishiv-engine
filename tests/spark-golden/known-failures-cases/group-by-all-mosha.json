@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      4
-    ]
-  },
-  "file": "group-by-all-mosha",
-  "format_version": 1
-}
