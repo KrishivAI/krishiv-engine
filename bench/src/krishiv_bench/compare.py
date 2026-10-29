@@ -335,6 +335,26 @@ def _norm(expr: str) -> str:
     return re.sub(r"\s+", "", expr).lower().replace('"', "")
 
 
+# Words that can end a select expression and so are never an implicit alias (``x IS NULL``, ``CASE ... END``).
+_NOT_ALIAS = frozenset(
+    {"all", "and", "asc", "between", "desc", "distinct", "else", "end", "false", "from", "in", "is", "like", "not"}
+    | {"null", "or", "then", "true", "when"}
+)
+
+
+def _implicit_alias(item: str) -> tuple[str, str] | None:
+    """(alias, normalised expression) of ``expr alias`` (an alias without ``AS``), None when the item has none.
+
+    The expression must end in a word character, ``)``, ``]`` or a quote, and not in a number (``INTERVAL 1 DAY``):
+    a doubtful item gets no alias, so an ORDER BY key naming it is not derived and the comparison falls back to whole
+    rows rather than trusting a wrong key.
+    """
+    m = re.fullmatch(r"(.*[\w)\]\"'])\s+(\"[^\"]+\"|[A-Za-z_]\w*)\s*", item, re.S)
+    if not m or m.group(2).lower() in _NOT_ALIAS or re.search(r"(?:^|[^\w.])[\d.]+$", m.group(1)):
+        return None
+    return _norm(m.group(2)), _norm(m.group(1))
+
+
 def _select_names(sql: str, masked: str) -> list[tuple[str | None, str]] | None:
     """(output name, normalised expression) per column of the first top-level SELECT; None if not derivable."""
     m = re.search(r"\bselect\b(?:\s+(?:distinct|all)\b)?", masked, re.I)
@@ -350,6 +370,10 @@ def _select_names(sql: str, masked: str) -> list[tuple[str | None, str]] | None:
         alias = re.search(r"\bas\s+(\"[^\"]+\"|[A-Za-z_]\w*)\s*$", item, re.I)
         if alias:
             out.append((_norm(alias.group(1)), _norm(item[: alias.start()])))
+            continue
+        implicit = _implicit_alias(item)
+        if implicit:
+            out.append(implicit)
             continue
         col = re.fullmatch(r"(?:\w+\.)*(\w+)", item)
         out.append((col.group(1).lower() if col else None, _norm(item)))
@@ -379,6 +403,7 @@ def derive_sort_keys(sql: str) -> list[int] | None:
     stop = ob.end() + tail_end.start() if tail_end else len(masked)
     keys: list[int] = []
     for item in _split_commas(sql[ob.end() : stop], masked[ob.end() : stop]):
+        item = item.strip().removesuffix(";")  # the statement's terminator ends the last key
         item = re.sub(r"(?:\s+(?:asc|desc))?(?:\s+nulls\s+(?:first|last))?\s*$", "", item, flags=re.I).strip()
         if not item:
             return None

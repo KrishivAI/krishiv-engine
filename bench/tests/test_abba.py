@@ -268,7 +268,8 @@ def test_duckdb_failure_in_timed_run_fails_only_that_query(engine: KrishivEngine
 def test_zero_timeout_disables_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     seen = {}
 
-    def fake_one(q, krishiv, duck, reps, timeout_s):
+    def fake_one(q, krishiv, duck, reps, timeout_s, duck_q=None):
+        del duck_q
         seen["krishiv"] = krishiv.timeout_s
         seen["arg"] = timeout_s
         return {"status": "failed", "reason": "stub"}
@@ -311,3 +312,74 @@ def test_partitioned_dataset_registers_one_table(tmp_path):
     rel = duckdb.sql(f"select count(*) from read_parquet('{table_source(tmp_path, 'hits')}')")
     assert rel is not None
     assert rel.fetchall() == [(6,)]
+
+
+def test_one_query_runs_duckdb_on_its_own_text(engine: KrishivEngine):
+    seen: list[str] = []
+
+    class Recording(_Duck):
+        def run(self, query):
+            seen.append(query.sql)
+            return self.rows
+
+    duck = Recording([(1, "x"), (2, "y")])
+    done = abba._one_query(q("select 1"), engine, duck, 1, 5, q("select 1 -- duckdb text"))
+    assert done["status"] == "ok"
+    assert seen  # the correctness run and every timed run
+    assert set(seen) == {"select 1 -- duckdb text"}
+
+
+def test_run_abba_pairs_duckdb_texts_and_spark_null_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    data = tmp_path / "data"
+    ds = data / "tpch-duckdb" / "sf1"
+    ds.mkdir(parents=True)
+    pq.write_table(pa.table({"a": [1]}), ds / "t.parquet")
+    binary = tmp_path / "runner"
+    binary.write_text(FAKE_RUNNER)
+    binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("KRISHIV_DATA", str(data))
+    monkeypatch.setenv("KRISHIV_BENCH_RUNNER", str(binary))
+    monkeypatch.setattr(abba, "wait_idle", lambda: None)
+
+    def load(suite, engine, only):
+        del suite, only
+        extra = [Query("q02", "x", "tpch")] if engine == "krishiv" else []
+        return [Query("q01", f"select 1 -- {engine}", "tpch"), *extra]
+
+    seen: dict = {}
+
+    def fake_one(q, krishiv, duck, reps, timeout_s, duck_q=None):
+        del krishiv, reps, timeout_s
+        seen[q.id] = (q.sql, duck_q.sql if duck_q else None, duck.null_order)
+        return {"status": "failed", "reason": "stub"}
+
+    monkeypatch.setattr(abba, "load_queries", load)
+    monkeypatch.setattr(abba, "_one_query", fake_one)
+    abba.run_abba(1, timeout_s=0)
+    assert seen["q01"] == ("select 1 -- krishiv", "select 1 -- duckdb", "nulls_first_on_asc_last_on_desc")
+    assert seen["q02"] == ("x", "x", "nulls_first_on_asc_last_on_desc")  # no DuckDB text: the shared one
+
+
+def test_duckdb_null_order_matches_spark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.adapters.duckdb_engine import SPARK_NULL_ORDER, DuckDBEngine
+
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    pq.write_table(pa.table({"x": [2, None, 1]}), tmp_path / "t.parquet")
+    ds = Dataset("d", 1, tmp_path, ["t"])
+    duck = DuckDBEngine(threads=1, memory_limit=None, null_order=SPARK_NULL_ORDER)
+    duck.setup(ds)
+    try:
+        assert duck.run(Query("a", "select x from t order by x", "s")) == [(None,), (1,), (2,)]
+        assert duck.run(Query("d", "select x from t order by x desc", "s")) == [(2,), (1,), (None,)]
+    finally:
+        duck.teardown()
+    assert duck.config()["default_null_order"] == SPARK_NULL_ORDER
+    assert "default_null_order" not in DuckDBEngine(threads=1).config()
+    with pytest.raises(ValueError, match="null_order"):
+        DuckDBEngine(null_order="sideways")

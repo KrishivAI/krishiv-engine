@@ -10,6 +10,12 @@ from ..paths import data_root
 from .base import Dataset, Engine, Measure, Query
 from .proc_mem import LocalProc
 
+# DuckDB's `default_null_order` values; Spark sorts NULLs first ascending and last descending.
+NULL_ORDERS = frozenset(
+    {"nulls_first", "nulls_last", "nulls_first_on_asc_last_on_desc", "nulls_last_on_asc_first_on_desc"}
+)
+SPARK_NULL_ORDER = "nulls_first_on_asc_last_on_desc"
+
 
 class DuckDBEngine(Engine):
     """In-process DuckDB. Tables are views over Parquet (no load step), matching Spark's behaviour.
@@ -17,13 +23,20 @@ class DuckDBEngine(Engine):
     memory_limit defaults to 12GB to match the Spark container cap (recorded in the result JSON).
     Resource probes use /proc/self (VmHWM reset via clear_refs) outside the timed region: the number is
     the whole harness process (Python + pyarrow baseline recorded separately). Spill: null (not exposed).
+
+    ``null_order`` sets DuckDB's ``default_null_order`` (None keeps DuckDB's own, NULLS LAST): a reference for a
+    Spark-dialect engine uses ``SPARK_NULL_ORDER``, Spark's NULLS FIRST ascending and NULLS LAST descending, so an
+    ``ORDER BY`` without an explicit null order sorts the same way in both.
     """
 
     name = "duckdb"
 
-    def __init__(self, threads: int | None = None, memory_limit: str | None = "12GB"):
+    def __init__(self, threads: int | None = None, memory_limit: str | None = "12GB", null_order: str | None = None):
+        if null_order is not None and null_order not in NULL_ORDERS:
+            raise ValueError(f"null_order must be one of {sorted(NULL_ORDERS)}, got {null_order!r}")
         self.threads = threads or os.cpu_count()
         self.memory_limit = memory_limit
+        self.null_order = null_order
         self.con: duckdb.DuckDBPyConnection | None = None
         self._p = LocalProc("self")
 
@@ -31,7 +44,10 @@ class DuckDBEngine(Engine):
         return duckdb.__version__
 
     def config(self) -> dict:
-        return {"threads": self.threads, "memory_limit": self.memory_limit}
+        cfg: dict = {"threads": self.threads, "memory_limit": self.memory_limit}
+        if self.null_order:
+            cfg["default_null_order"] = self.null_order
+        return cfg
 
     def setup(self, dataset: Dataset) -> None:
         self._p.check()
@@ -46,6 +62,8 @@ class DuckDBEngine(Engine):
             con.execute(f"SET temp_directory='{quoted}'")
             if self.memory_limit:
                 con.execute(f"SET memory_limit='{self.memory_limit}'")
+            if self.null_order:
+                con.execute(f"SET default_null_order='{self.null_order}'")
             for t in dataset.tables:
                 con.execute(f"CREATE VIEW {t} AS SELECT * FROM read_parquet('{table_source(dataset.root, t)}')")
         except BaseException:

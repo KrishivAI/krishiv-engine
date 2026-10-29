@@ -218,3 +218,40 @@ def _pop(outcomes: list):
     if isinstance(o, Exception):
         raise o
     return o
+
+
+Q29 = (
+    "SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '\\1') AS k, AVG(STRLEN(Referer)) AS l, "
+    "COUNT(*) AS c, MIN(Referer) FROM hits WHERE Referer <> '' GROUP BY k HAVING COUNT(*) > 100000 "
+    "ORDER BY l DESC LIMIT 25;"
+)
+
+
+def test_q29_regex_is_written_in_each_engine_dialect():
+    # Spark SQL reads '\1' as the string "1" and '\.' as "."; its group reference is $1 (Spark 4.2.0 oracle).
+    spark = cq.adapt(Q29, "q29", engine="krishiv")
+    assert spark.startswith(r"SELECT REGEXP_REPLACE(Referer, '(?s)^https?://(?:www\\.)?([^/]+)/.*$', '$1') AS k")
+    assert cq.adapt(Q29, "q29", engine="sail") == spark
+    re2 = cq.adapt(Q29, "q29", engine="duckdb")
+    assert re2.startswith(r"SELECT REGEXP_REPLACE(Referer, '(?s)^https?://(?:www\.)?([^/]+)/.*$', '\1') AS k")
+    assert cq.adapt(Q29, "q29", engine="polars") == re2
+    assert "AVG(length(Referer))" in spark  # the generic rules still apply
+    assert "AVG(length(Referer))" in re2
+    # ClickHouse's upstream q29 is its own dialect: untouched; any other query is untouched too.
+    ch = "SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '\\1') AS k FROM hits;"
+    assert cq.adapt(ch, "q29", engine="clickhouse") == ch
+    assert cq.adapt(Q29, "q28", engine="krishiv") == cq.adapt(Q29, "q28")
+
+
+def test_q29_rewrite_refuses_a_changed_upstream_text():
+    with pytest.raises(ValueError, match="update REGEX_Q29"):
+        cq.adapt("SELECT REGEXP_REPLACE(Referer, 'x', 'y') FROM hits;", "q29", engine="krishiv")
+
+
+def test_load_passes_the_engine_to_the_q29_rewrite(data_dir):
+    lines = ["SELECT 1 FROM t LIMIT 1;"] * 28 + [Q29] + ["SELECT 1 FROM t LIMIT 1;"] * 14
+    data, pins = _file(lines)
+    k = cq.load("krishiv", lambda url: data, pins, COMMIT)
+    d = cq.load("duckdb", lambda url: data, pins, COMMIT)
+    assert "'$1'" in k["q29"]
+    assert "'\\1'" in d["q29"]
