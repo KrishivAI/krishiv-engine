@@ -26,6 +26,7 @@ import json
 import re
 import shutil
 import tempfile
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,7 @@ from .paths import data_root
 
 DEFAULT_SEED_ROWS = 2000
 DEFAULT_MAX_RUNS = 1500
+DEFAULT_MAX_SECONDS = 1200.0
 DEFAULT_WHOLE_ROWS = 250_000  # tables up to this size stay whole in the first slice
 ESCALATION = (1, 10, 100)  # the first slice's row count is seed_rows times each, until the difference reproduces
 
@@ -311,15 +313,26 @@ def shrink_rows(tables: dict[str, pa.Table], interesting: Callable[[dict[str, pa
 class Oracle:
     """Runs the reference and Krishiv on ``(sql, tables)``; counts runs; True when they still disagree."""
 
-    def __init__(self, reference: Any, krishiv: Any, workdir: Path, max_runs: int = DEFAULT_MAX_RUNS):
+    def __init__(
+        self,
+        reference: Any,
+        krishiv: Any,
+        workdir: Path,
+        max_runs: int = DEFAULT_MAX_RUNS,
+        max_seconds: float = DEFAULT_MAX_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ):
         self.reference, self.krishiv, self.workdir = reference, krishiv, workdir
         self.runs = 0
         self.max_runs = max_runs
+        self.clock = clock
+        self.deadline = clock() + max_seconds
         self._data_key: tuple | None = None
         self._sig: str | None = None
 
     def within_budget(self) -> bool:
-        return self.runs < self.max_runs
+        """False once the run count or the time is used up: the shrink stops and keeps the best case so far."""
+        return self.runs < self.max_runs and self.clock() < self.deadline
 
     def _setup(self, ds: Dataset) -> None:
         for eng in (self.reference, self.krishiv):
@@ -414,15 +427,24 @@ def minimize(
     used = {n: tables[n] for n in referenced_tables(sql, list(tables))}
     if not full_data:
         used = _first_slice(sql, used, oracle, seed_rows, whole_rows, big)
+        _progress("first slice", oracle, used)
     elif not oracle.differs(sql, used):
         raise ValueError("the query does not differ on the full data")
-    if not full_data:
-        used = shrink_rows(used, lambda t: oracle.within_budget() and oracle.differs(sql, t))
+    # The query first: with the data unchanged the engines are not restarted, so a step is cheap, and a smaller
+    # query needs fewer rows to keep the difference, which is what makes the row shrink fast.
     sql = shrink_query(sql, lambda s: oracle.within_budget() and oracle.differs(s, used), oracle.within_budget)
+    _progress("query shrunk", oracle, used, sql)
     used = {n: used[n] for n in referenced_tables(sql, list(used))}
     if not full_data:
         used = shrink_rows(used, lambda t: oracle.within_budget() and oracle.differs(sql, t))
+        _progress("rows shrunk", oracle, used)
+        sql = shrink_query(sql, lambda s: oracle.within_budget() and oracle.differs(s, used), oracle.within_budget)
     return sql, used
+
+
+def _progress(stage: str, oracle: Oracle, tables: dict[str, pa.Table], sql: str = "") -> None:
+    rows = ", ".join(f"{n} {t.num_rows}" for n, t in sorted(tables.items()))
+    print(f"minimize: {stage} after {oracle.runs} runs: {rows} {sql[:100]}", flush=True)
 
 
 def _first_slice(
@@ -545,6 +567,7 @@ def run_minimize(
     out_dir: str | None = None,
     whole_rows: int = DEFAULT_WHOLE_ROWS,
     pin: bool = True,
+    max_seconds: float = DEFAULT_MAX_SECONDS,
     threads: int = 2,
     spark_remote: str = "sc://127.0.0.1:15012",
 ) -> Path:
@@ -568,7 +591,7 @@ def run_minimize(
     krishiv.timeout_s = 600
     work = Path(tempfile.mkdtemp(prefix="minimize-"))
     try:
-        oracle = Oracle(ref, krishiv, work / "data", max_runs)
+        oracle = Oracle(ref, krishiv, work / "data", max_runs, max_seconds)
         try:
             if pin:
                 oracle.pin(Dataset(name, sf, root, names), q.sql)
@@ -582,7 +605,8 @@ def run_minimize(
         shutil.rmtree(work, ignore_errors=True)
     out = Path(out_dir) if out_dir else data_root() / "minimized" / f"{suite}_{query}"
     note = (
-        f"Minimised from {suite} {query} against {reference} in {oracle.runs} runs; "
+        f"Minimised from {suite} {query} against {reference} in {oracle.runs} runs"
+        f"{' (budget exhausted: not fully minimal)' if not oracle.within_budget() else ''}; "
         f"tables: {', '.join(f'{n} ({t.num_rows} rows)' for n, t in sorted(small.items()))}."
     )
     write_case(out, sql, small, outcome, note)

@@ -395,3 +395,17 @@ def test_a_pure_reordering_has_the_order_signature(tmp_path: Path):
     assert mz.signature(out) == "order"
     unordered = o.outcome("select k from t", {"t": _table(3)})
     assert unordered["differs"] is False
+
+
+def test_the_time_budget_stops_the_shrink_and_keeps_the_best_case(tmp_path: Path):
+    now = [0.0]
+
+    def clock() -> float:
+        now[0] += 1.0  # every look at the clock costs a second
+        return now[0]
+
+    o = mz.Oracle(FakeEngine(), FakeEngine(bug=True), tmp_path / "t", max_runs=10_000, max_seconds=12, clock=clock)
+    sql, small = mz.minimize("select count(*) from t where k > 1 and k < 100", {"t": _table(5000)}, o, seed_rows=50)
+    assert not o.within_budget()
+    assert small["t"].num_rows > 1  # the best so far, not minimal
+    assert "select count(*) from t" in sql

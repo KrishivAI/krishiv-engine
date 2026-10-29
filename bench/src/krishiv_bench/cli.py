@@ -168,6 +168,7 @@ def main(argv=None) -> None:
     mn.add_argument("--spark-remote", default="sc://127.0.0.1:15012", help="Spark Connect server (the oracle)")
     mn.add_argument("--seed-rows", type=int, default=2000, help="rows per table in the first slice")
     mn.add_argument("--max-runs", type=int, default=400, help="engine comparisons before the shrink stops")
+    mn.add_argument("--max-seconds", type=float, default=1200, help="time budget; the best case so far is written")
     mn.add_argument("--no-pin", action="store_true", help="accept any difference, not just the original kind")
     mn.add_argument("--full-data", action="store_true", help="shrink the query only, on the full data")
     mn.add_argument("--out", help="case directory (default $KRISHIV_DATA/minimized/<suite>_<query>)")
@@ -189,6 +190,7 @@ def main(argv=None) -> None:
             a.full_data,
             a.out,
             pin=not a.no_pin,
+            max_seconds=a.max_seconds,
             spark_remote=a.spark_remote,
         )
         return
