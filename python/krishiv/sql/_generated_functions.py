@@ -224,9 +224,11 @@ __all__ = [
     "signum",
     "sin",
     "sinh",
+    "size",
     "skewness",
     "soundex",
     "spark_partition_id",
+    "split",
     "split_part",
     "sqrt",
     "startswith",
@@ -1299,6 +1301,11 @@ def sinh(col: ColumnOrName) -> Column:
     return _call("sinh", _named(col, "col"))
 
 
+def size(col: ColumnOrName) -> Column:
+    """Calls the registry function ``size``."""
+    return _call("size", _named(col, "col"))
+
+
 def skewness(col: ColumnOrName) -> Column:
     """Calls the registry function ``skewness``."""
     return _call("skewness", _named(col, "col"))
@@ -1312,6 +1319,11 @@ def soundex(col: ColumnOrName) -> Column:
 def spark_partition_id() -> Column:
     """Calls the registry function ``spark_partition_id``."""
     return _call("spark_partition_id")
+
+
+def split(str: ColumnOrName, pattern: str | Column, limit: int | Column = -1) -> Column:
+    """Calls the registry function ``split``."""
+    return _call("split", _named(str, "str"), _lit(pattern, "pattern"), _lit(limit, "limit"))
 
 
 def split_part(src: ColumnOrName, delimiter: ColumnOrName, partNum: ColumnOrName) -> Column:

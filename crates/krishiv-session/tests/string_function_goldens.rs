@@ -64,7 +64,62 @@ fn type_name(t: &ArrowType) -> String {
         ArrowType::Utf8 | ArrowType::LargeUtf8 | ArrowType::Utf8View => "string".to_owned(),
         ArrowType::Binary | ArrowType::LargeBinary | ArrowType::BinaryView => "binary".to_owned(),
         ArrowType::Decimal128(p, s) => format!("decimal({p},{s})"),
+        ArrowType::List(field) => format!("array<{}>", type_name(field.data_type())),
         t => panic!("unnamed type {t}"),
+    }
+}
+
+/// One array cell as Spark prints it: `["a","b"]`, `null` for a NULL
+/// element.
+fn array_cell(col: &arrow_array::ListArray, i: usize) -> String {
+    if col.is_null(i) {
+        return "NULL".to_owned();
+    }
+    let values = col.value(i);
+    let mut parts = Vec::with_capacity(values.len());
+    for j in 0..values.len() {
+        if values.is_null(j) {
+            parts.push("null".to_owned());
+            continue;
+        }
+        parts.push(match values.data_type() {
+            ArrowType::Utf8 => format!("\"{}\"", values.as_string::<i32>().value(j)),
+            ArrowType::LargeUtf8 => format!("\"{}\"", values.as_string::<i64>().value(j)),
+            ArrowType::Utf8View => format!("\"{}\"", values.as_string_view().value(j)),
+            _ => scalar_cell(&values, j),
+        });
+    }
+    format!("[{}]", parts.join(","))
+}
+
+/// One scalar cell as Spark prints it.
+fn scalar_cell(col: &dyn Array, i: usize) -> String {
+    match col.data_type() {
+        ArrowType::Int32 => col
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(i)
+            .to_string(),
+        ArrowType::Int64 => col
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(i)
+            .to_string(),
+        ArrowType::Boolean => col.as_boolean().value(i).to_string(),
+        ArrowType::Utf8 => col.as_string::<i32>().value(i).to_owned(),
+        ArrowType::LargeUtf8 => col.as_string::<i64>().value(i).to_owned(),
+        ArrowType::Utf8View => col.as_string_view().value(i).to_owned(),
+        ArrowType::Binary => String::from_utf8_lossy(col.as_binary::<i32>().value(i)).into_owned(),
+        ArrowType::LargeBinary => {
+            String::from_utf8_lossy(col.as_binary::<i64>().value(i)).into_owned()
+        }
+        ArrowType::BinaryView => {
+            String::from_utf8_lossy(col.as_binary_view().value(i)).into_owned()
+        }
+        ArrowType::Decimal128(_, scale) => decimal(
+            col.as_primitive::<arrow_array::types::Decimal128Type>()
+                .value(i),
+            *scale,
+        ),
+        t => panic!("unrendered {t}"),
     }
 }
 
@@ -81,33 +136,8 @@ fn rows_of(batches: &[RecordBatch]) -> Vec<String> {
                         return "NULL".to_owned();
                     }
                     match col.data_type() {
-                        ArrowType::Int32 => col
-                            .as_primitive::<arrow_array::types::Int32Type>()
-                            .value(i)
-                            .to_string(),
-                        ArrowType::Int64 => col
-                            .as_primitive::<arrow_array::types::Int64Type>()
-                            .value(i)
-                            .to_string(),
-                        ArrowType::Boolean => col.as_boolean().value(i).to_string(),
-                        ArrowType::Utf8 => col.as_string::<i32>().value(i).to_owned(),
-                        ArrowType::LargeUtf8 => col.as_string::<i64>().value(i).to_owned(),
-                        ArrowType::Utf8View => col.as_string_view().value(i).to_owned(),
-                        ArrowType::Binary => {
-                            String::from_utf8_lossy(col.as_binary::<i32>().value(i)).into_owned()
-                        }
-                        ArrowType::LargeBinary => {
-                            String::from_utf8_lossy(col.as_binary::<i64>().value(i)).into_owned()
-                        }
-                        ArrowType::BinaryView => {
-                            String::from_utf8_lossy(col.as_binary_view().value(i)).into_owned()
-                        }
-                        ArrowType::Decimal128(_, scale) => decimal(
-                            col.as_primitive::<arrow_array::types::Decimal128Type>()
-                                .value(i),
-                            *scale,
-                        ),
-                        t => panic!("unrendered {t}"),
+                        ArrowType::List(_) => array_cell(col.as_list::<i32>(), i),
+                        _ => scalar_cell(col.as_ref(), i),
                     }
                 })
                 .collect();
@@ -300,7 +330,7 @@ fn check(file: &str, passed: usize, skipped: usize) {
 
 #[test]
 fn string_functions_match_spark() {
-    check("string-functions.sql.out", 213, 30);
+    check("string-functions.sql.out", 227, 16);
 }
 
 #[test]

@@ -29,11 +29,13 @@ use krishiv_common::redact::RedactedSql;
 use krishiv_plan::analyzer::{TableColumn, variable_name};
 use krishiv_plan::{Literal, LogicalPlan, PlanNode, SourceId};
 use krishiv_sql::ast::{
-    CreateView, DataTypeSpec, DeclareVariable, DropVariable, DropView, Expr, ExprKind, ObjectName,
-    Reset, Set, SetKind, SetVariable, SetVariableKind, Span, TimeZone,
+    Cache, CacheKind, CreateView, DataTypeSpec, DdlName, DeclareVariable, DropVariable, DropView,
+    Expr, ExprKind, ObjectName, Refresh, RefreshKind, Reset, Set, SetKind, SetVariable,
+    SetVariableKind, Span, TimeZone,
 };
 use krishiv_types::{DataType, DecimalType};
 
+use crate::cache::is_cache_name;
 use crate::catalog::{CATALOG, NAMESPACE, TempTable};
 use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
@@ -220,10 +222,11 @@ impl Session {
     ///
     /// # Errors
     /// `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with the
-    /// reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any letter
-    /// case), which queries cannot spell either.
+    /// reserved snapshot prefix `` `__krishiv_snapshot_` `` or the cache
+    /// prefix `` `__krishiv_cache_` `` (in any letter case), which queries
+    /// cannot spell either.
     pub(crate) async fn exec_create_view(&self, v: &CreateView) -> Result<DataFrame, KrishivError> {
-        if is_hidden_name(&v.name.value) {
+        if is_hidden_name(&v.name.value) || is_cache_name(&v.name.value) {
             return Err(reserved_temp_view_name(&v.name.value));
         }
         if v.or_replace && v.if_not_exists {
@@ -312,6 +315,7 @@ impl Session {
                 pins: Vec::new(),
             },
         );
+        self.state.cache.invalidate_table(&v.name.value);
         self.empty_frame().await
     }
 
@@ -325,12 +329,98 @@ impl Session {
             .exists(&v.name.value, env.analysis.conf.case_sensitive)
         {
             self.state.catalog.drop_table(&v.name.value);
+            self.state.cache.invalidate_table(&v.name.value);
         } else if !v.if_exists {
             return Err(TableOrViewNotFound {
                 relation_name: quote(&v.name.value),
                 search_path: search_path(),
             }
             .into());
+        }
+        self.empty_frame().await
+    }
+
+    /// Whether the table or view `parts` names exists: temporary tables and
+    /// views have single-part names, so a qualified name never matches.
+    fn cache_target_exists(&self, parts: &[String]) -> bool {
+        let env = self.query_env();
+        matches!(parts, [only] if self
+            .state
+            .catalog
+            .exists(only, env.analysis.conf.case_sensitive))
+    }
+
+    /// Runs `CLEAR CACHE` and `UNCACHE TABLE [IF EXISTS] name`: both drop
+    /// cached relations and return an empty frame, as in Spark. `CACHE
+    /// TABLE ...` stays `KRISHIV_UNSUPPORTED_FEATURE`: caching through SQL
+    /// is not supported, only `DataFrame.cache` and `persist`.
+    ///
+    /// # Errors
+    /// `TABLE_OR_VIEW_NOT_FOUND` for `UNCACHE TABLE` of a missing table
+    /// without `IF EXISTS`; `KRISHIV_UNSUPPORTED_FEATURE` for `CACHE TABLE`.
+    pub(crate) async fn exec_cache(&self, c: &Cache) -> Result<DataFrame, KrishivError> {
+        match &c.kind {
+            CacheKind::Clear => {
+                self.clear_cache();
+            }
+            CacheKind::Uncache {
+                if_exists, name, ..
+            } => {
+                let Some(parts) = ddl_table_parts(name) else {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: "UNCACHE TABLE with a dynamic table name".to_owned(),
+                    }
+                    .into());
+                };
+                if self.cache_target_exists(&parts) {
+                    self.uncache_table(&parts[0]);
+                } else if !if_exists {
+                    return Err(table_not_found(&parts));
+                }
+            }
+            CacheKind::Cache { .. } => {
+                return Err(KrishivUnsupportedFeature {
+                    feature: "CACHE TABLE in sessions".to_owned(),
+                }
+                .into());
+            }
+            _ => {
+                return Err(crate::session::internal("unknown CACHE form".to_owned()));
+            }
+        }
+        self.empty_frame().await
+    }
+
+    /// Runs `REFRESH TABLE name`, `REFRESH FUNCTION name` and `REFRESH
+    /// path`: all drop the cached relations they cover and return an empty
+    /// frame. Refreshing a function is a no-op (functions hold no cache),
+    /// and unlike Spark it does not check that the function exists;
+    /// refreshing a path never fails for a missing one.
+    ///
+    /// # Errors
+    /// `TABLE_OR_VIEW_NOT_FOUND` for `REFRESH TABLE` of a missing table;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a dynamic `IDENTIFIER(...)` name.
+    pub(crate) async fn exec_refresh(&self, r: &Refresh) -> Result<DataFrame, KrishivError> {
+        match &r.kind {
+            RefreshKind::Table { name, .. } => {
+                let Some(parts) = ddl_table_parts(name) else {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: "REFRESH TABLE with a dynamic table name".to_owned(),
+                    }
+                    .into());
+                };
+                if !self.cache_target_exists(&parts) {
+                    return Err(table_not_found(&parts));
+                }
+                self.refresh_table(&parts[0]);
+            }
+            RefreshKind::Function { .. } => {}
+            RefreshKind::Path { .. } => {
+                self.refresh_files();
+            }
+            _ => {
+                return Err(crate::session::internal("unknown REFRESH form".to_owned()));
+            }
         }
         self.empty_frame().await
     }
@@ -705,6 +795,26 @@ impl Session {
 /// A name as Spark quotes it in errors: `` `name` ``.
 fn quote(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
+}
+
+/// Every part of a table name as written; `None` for a dynamic
+/// `IDENTIFIER(...)` name or an empty one.
+fn ddl_table_parts(name: &DdlName) -> Option<Vec<String>> {
+    match name {
+        DdlName::Parts(parts) if !parts.parts.is_empty() => {
+            Some(parts.parts.iter().map(|p| p.value.clone()).collect())
+        }
+        _ => None,
+    }
+}
+
+/// `TABLE_OR_VIEW_NOT_FOUND` quoting the whole multipart name, as Spark does.
+fn table_not_found(parts: &[String]) -> KrishivError {
+    TableOrViewNotFound {
+        relation_name: parts.iter().map(|p| quote(p)).collect::<Vec<_>>().join("."),
+        search_path: search_path(),
+    }
+    .into()
 }
 
 /// Column names as Spark lists them in errors: `` `a`, `b` ``.

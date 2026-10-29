@@ -132,6 +132,34 @@ printf 'PROFILE <query.sql>\nDUMP <query.sql> <out-dir>\nQUIT\n' | systemd-run -
 result must equal the same `DUMP` from a runner with `--memory-limit 32g` (no spill). The CI form of the same check,
 on generated TPC-H-shaped data, is `crates/krishiv-bench-runner/tests/spill_operators.rs`.
 
+## Gap ledger: where Krishiv spends more than DuckDB (`krishiv-bench ledger`)
+```bash
+RUSTFLAGS='-C target-cpu=x86-64-v3 -C force-frame-pointers=yes' CARGO_PROFILE_DIST_STRIP=none \
+  CARGO_PROFILE_DIST_DEBUG=line-tables-only cargo build --profile dist -p krishiv-bench-runner
+uv run krishiv-bench ledger --suite tpch --sf 10 --dataset tpch-duckdb --runner ../target/dist/krishiv-bench-runner
+uv run krishiv-bench ledger --suite clickbench --queries q01,q02 --previous <earlier ledger>.json
+```
+Needs `perf` and permission to use it: `perf record -g --call-graph fp -k CLOCK_MONOTONIC` requires `kernel.perf_event_paranoid` of 1 or lower (some distributions default to 3 or 4) or `CAP_PERFMON`/root. Without it the runner never prints `READY` and each query is reported as a Krishiv failure. Per query: Krishiv on a plain process (3 `PROFILE` runs, the 2nd is the wall
+time) and on a perf process (2 runs, only the 2nd attributed; samples are classified into operator buckets by the first
+matching frame from the leaf up and shared per 20 ms bin); DuckDB warm median plus one JSON operator profile (joins split
+build/probe by child rows). Output `$KRISHIV_DATA/results/<ts>_ledger_<suite>_sf<N>.json` and `.md`: the per-query and
+per-bucket tables with a "geomean if this bucket's positive gap were zero" column and the delta against the previous
+ledger of the same suite. `other` has no DuckDB counterpart, so its gap is an upper bound. Runs hold the bench lock.
+
+## Minimise a differing query (`krishiv-bench minimize`)
+```bash
+uv run krishiv-bench minimize --suite tpch --query q07 --sf 1                 # against DuckDB
+uv run krishiv-bench minimize --suite tpcds --query q14 --sf 1 --reference spark-connect --spark-remote sc://127.0.0.1:15002
+uv run krishiv-bench minimize --suite tpch --query q18 --sf 10 --full-data    # query reduction only
+```
+Shrinks a query whose rows differ from the reference (or that Krishiv fails where the reference answers) to the smallest
+query and data slice that still differ. Data: each referenced table is cut to a slice (`--seed-rows` rows, from the start or
+strided), then `ddmin` removes row ranges. Query: text-level reductions to a fixpoint (drop `ORDER BY`, `LIMIT`, `HAVING`,
+`WHERE`, `GROUP BY`, `DISTINCT`, select items, `AND` conjuncts, `JOIN` segments, `FROM` items, set-operation branches,
+subqueries). `--max-runs` bounds the engine comparisons. Output `$KRISHIV_DATA/minimized/<suite>_<query>/`: `query.sql`,
+`setup.sql` (`CREATE TEMPORARY VIEW ... VALUES`, for the golden runner), `expected.json`, `actual.json`, `data/*.parquet`.
+A difference that needs rows outside the slice is reported as not reproducing; use `--full-data` then.
+
 ## Krishiv vs DuckDB, interleaved ABBA (P2-T142)
 ```bash
 RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner

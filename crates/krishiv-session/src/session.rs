@@ -49,6 +49,7 @@ use krishiv_udf_sdk::{UdfLibrary, guard_call};
 use object_store::ObjectStore;
 use object_store::local::LocalFileSystem;
 
+use crate::cache::{RelationCache, is_cache_name};
 use crate::catalog::{FileScans, QueryCatalog, QueryCatalogs, SessionCatalog, TempTable};
 use crate::catalog::{is_hidden_name, reserved_temp_view_name};
 use crate::column::Column;
@@ -101,6 +102,7 @@ impl fmt::Debug for Session {
 pub(crate) struct SessionState {
     pub(crate) conf: Arc<ConfStore>,
     pub(crate) catalog: Arc<SessionCatalog>,
+    pub(crate) cache: Arc<RelationCache>,
     pub(crate) variables: Arc<SessionVariables>,
     profile: SparkProfile,
     /// Fixed for the session's life: caches and fingerprints never mix
@@ -269,6 +271,7 @@ impl SessionBuilder {
             None => TokioExecutor::new(&ExecutorConfig::default().with_config(&config))?,
         };
         let memory: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::from_config(&config));
+        let cache = Arc::new(RelationCache::new(&memory));
         let io =
             IoScheduler::with_runtime(IoConfig::from_config(&config), executor.io_handle().clone());
         io.attach_memory(&memory);
@@ -290,6 +293,7 @@ impl SessionBuilder {
             state: Arc::new(SessionState {
                 conf: Arc::new(ConfStore::new(config)),
                 catalog: Arc::new(SessionCatalog::default()),
+                cache,
                 variables: Arc::new(SessionVariables::default()),
                 profile: self.profile,
                 principal: Arc::new(self.principal.unwrap_or_else(Principal::local_user)),
@@ -421,6 +425,8 @@ impl Session {
             Statement::Reset(r) => self.exec_reset(&r).await,
             Statement::CreateView(v) => self.exec_create_view(&v).await,
             Statement::DropView(v) => self.exec_drop_view(&v).await,
+            Statement::Cache(c) => self.exec_cache(&c).await,
+            Statement::Refresh(r) => self.exec_refresh(&r).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
@@ -581,15 +587,16 @@ impl Session {
     /// `UNABLE_TO_ACQUIRE_MEMORY` when the relation store cannot hold the
     /// batches' bytes (its pool is unbounded, so only a shut-down pool
     /// refuses); `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name` starts with
-    /// with the reserved snapshot prefix `` `__krishiv_snapshot_` `` (in any
-    /// letter case), which queries cannot spell either.
+    /// the reserved snapshot prefix `` `__krishiv_snapshot_` `` or the cache
+    /// prefix `` `__krishiv_cache_` `` (in any letter case), which queries
+    /// cannot spell either.
     pub fn register_batches(
         &self,
         name: &str,
         schema: SchemaRef,
         batches: Vec<RecordBatch>,
     ) -> Result<(), KrishivError> {
-        if is_hidden_name(name) {
+        if is_hidden_name(name) || is_cache_name(name) {
             return Err(reserved_temp_view_name(name));
         }
         let columns = schema
@@ -625,6 +632,9 @@ impl Session {
                 table: Arc::new(table),
             },
         );
+        // Replacing a table drops what was cached from the old one, as
+        // replacing a temporary view does in Spark.
+        self.state.cache.invalidate_table(name);
         Ok(())
     }
 
@@ -716,7 +726,76 @@ impl Session {
     /// ```
     #[must_use = "whether the view existed"]
     pub fn drop_temp_view(&self, name: &str) -> bool {
-        self.state.catalog.drop_table(name)
+        let dropped = self.state.catalog.drop_table(name);
+        self.state.cache.invalidate_table(name);
+        dropped
+    }
+
+    /// Drops every cached relation (Spark's `CLEAR CACHE` and
+    /// `spark.catalog.clearCache`): later actions run uncached, and the
+    /// `relation_cache` pool returns to baseline.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// session.clear_cache();
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn clear_cache(&self) {
+        self.state.cache.clear();
+    }
+
+    /// Drops the cached relations reading the table `name` (Spark's
+    /// `UNCACHE TABLE`): later actions over it run uncached.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// session.uncache_table("t");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn uncache_table(&self, name: &str) {
+        self.state.cache.invalidate_table(name);
+    }
+
+    /// Drops the cached relations reading the table `name` (Spark's
+    /// `REFRESH TABLE`): the next action reads the table again. Unlike
+    /// `CLEAR CACHE`, other tables' entries survive.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// session.refresh_table("t");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn refresh_table(&self, name: &str) {
+        self.state.cache.invalidate_table(name);
+    }
+
+    /// Drops the cached relations reading files by path (Spark's
+    /// `REFRESH path`): the next action lists the files again. The engine
+    /// also calls this after its own file writes (`df.write ...`), whose
+    /// target may be a cached path; an external change to a cached path is
+    /// deliberately invisible and drops nothing.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// session.refresh_files();
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn refresh_files(&self) {
+        self.state.cache.invalidate_files();
+    }
+
+    /// Bytes the relation cache holds now (the `relation_cache` pool's
+    /// reservation): what `unpersist` and the invalidation calls above
+    /// return to baseline.
+    ///
+    /// ```
+    /// # let session = krishiv_session::Session::new()?;
+    /// assert_eq!(session.cache_reserved(), 0);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn cache_reserved(&self) -> usize {
+        self.state.cache.reserved()
     }
 
     /// A DataFrame of the logical plan `plan` (the Python facade, Spark
@@ -766,6 +845,9 @@ impl Session {
 
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
+        // Before any analysis loads a table: a fill is refused if an
+        // invalidation ran after this point (it may hold the replaced rows).
+        let cache_generation = self.state.cache.generation();
         let (config, conf_version) = self.state.conf.versioned_snapshot();
         // Cloud stores are built from this snapshot, lazily per query:
         // plans carry only path strings, and the worker resolves the store
@@ -790,6 +872,7 @@ impl Session {
         };
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
+            Arc::clone(&self.state.cache),
             Arc::clone(&files),
             scans,
         ));
@@ -798,6 +881,8 @@ impl Session {
             ResolutionConf::from_conf(|k| values.get(k).map(String::as_str))
         };
         let parser = parser_options(&config);
+        // The cache cap is the query's own configuration snapshot.
+        let cache_cap = RelationCache::cap_of(&config);
         // One snapshot of the variables per query, like the configuration
         // snapshot: every reference in the query reads the same values.
         let variables = self.state.variables.snapshot();
@@ -824,6 +909,8 @@ impl Session {
             conf_version,
             catalog_epoch,
             variables_version: variables.version,
+            cache_generation,
+            cache_cap,
         }
     }
 
@@ -1134,6 +1221,10 @@ impl Session {
         write
             .commit(&io, format.as_ref(), schema, &parsed, files)
             .await?;
+        // The engine's own write may have replaced a cached path: entries
+        // reading files are dropped, so the next action lists them again.
+        // (An external change drops nothing and stays invisible.)
+        self.refresh_files();
         Ok(())
     }
 }
@@ -1450,6 +1541,10 @@ pub(crate) struct QueryEnv {
     /// The variable version the query's snapshot was taken at: a cached
     /// resolved plan is reused only while it is unchanged.
     pub(crate) variables_version: u64,
+    /// The cache's invalidation generation before the query was analyzed.
+    pub(crate) cache_generation: u64,
+    /// `krishiv.cache.maxBytes` of the query's configuration snapshot.
+    pub(crate) cache_cap: usize,
 }
 
 /// A batch query's result rows: insert-only, so a weight other than 1 is a

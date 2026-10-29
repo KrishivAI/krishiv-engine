@@ -15,6 +15,7 @@
 
 mod bitwise;
 mod catalog;
+mod collection;
 mod conditional;
 mod csv;
 mod defs;
@@ -56,9 +57,12 @@ pub enum Execution {
     /// `rank`, ...); never called without `OVER`.
     Window,
     /// By the executor's higher-order compiler, which evaluates the lambda
-    /// bodies: `transform`, `filter`, `exists`, `forall`
-    /// (`krishiv_exec::planner::eval::hof`, over `krishiv_kernels::list`).
-    /// A lambda is no Arrow value, so these never bind a kernel here.
+    /// bodies: `transform`, `filter`, `exists`, `forall`, `aggregate`,
+    /// `reduce`, `zip_with`, `map_filter`, `map_zip_with`, `transform_keys`,
+    /// `transform_values` and `array_sort`
+    /// (`krishiv_exec::planner::eval::hof`, over `krishiv_kernels::list` and
+    /// `krishiv_kernels::map`). A lambda is no Arrow value, so these never
+    /// bind a kernel here.
     HigherOrder,
     /// Rewritten to a `CAST` during analysis (the cast-named functions:
     /// `float(x)`, `int(x)`, ...); the plan only ever holds the `Cast`

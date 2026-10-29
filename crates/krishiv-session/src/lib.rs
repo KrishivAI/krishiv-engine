@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 mod access;
+mod cache;
 mod catalog;
 mod column;
 mod command;
@@ -62,7 +63,7 @@ pub use access::{PathPrefixPolicy, StatementInfo};
 pub use column::Column;
 pub use conf::RuntimeConf;
 pub use dataframe::{
-    DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType,
+    DataFrame, DataFrameReader, DataFrameWriter, ExplainMode, GroupedData, JoinType, StorageLevel,
 };
 pub use explain_graph::{
     GraphFormat, dot_of_plan, dot_of_profile, mermaid_of_plan, mermaid_of_profile,
