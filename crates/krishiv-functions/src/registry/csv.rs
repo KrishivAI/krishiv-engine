@@ -130,15 +130,11 @@ fn struct_of_ddl(ddl: &str) -> Result<DataType, KrishivError> {
             // A table schema (`a INT, b DOUBLE`) becomes `STRUCT` of its columns.
             let wrapped = format!("STRUCT<{ddl}>");
             let table: Result<DataType, KrishivError> = wrapped.parse();
+            // `STRUCT<...>` is a struct whenever it parses; when it does not,
+            // the error is the data type's (a bare `ARRAY` is
+            // `INCOMPLETE_TYPE_DEFINITION.ARRAY`, as Spark reports it).
             match table {
-                Ok(DataType::Struct(_)) => table,
-                Ok(parsed) => Err(InvalidSchemaNonStructType {
-                    input_schema: format!("\"{ddl}\""),
-                    data_type: format!("\"{}\"", parsed.sql()),
-                }
-                .into()),
-                // Neither parses: the error is the data type's (a bare `ARRAY`
-                // is `INCOMPLETE_TYPE_DEFINITION.ARRAY`, as Spark reports it).
+                Ok(t) => Ok(t),
                 Err(_) => Err(single_err),
             }
         }
@@ -169,12 +165,6 @@ fn from_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     match folded {
         Some(Constant::Error(e)) => Err(e.clone()),
         Some(Constant::String(s)) => {
-            if c.data_type(1) != Some(&DataType::String) {
-                return Err(InvalidSchemaNonStringLiteral {
-                    input_schema: format!("\"{}\"", sql(1)),
-                }
-                .into());
-            }
             let struct_type = struct_of_ddl(s)?;
             let nullable = c.args().first().is_some_and(|a| a.nullable);
             Ok(ArgType::new(struct_type, nullable))

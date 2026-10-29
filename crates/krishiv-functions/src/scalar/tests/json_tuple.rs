@@ -553,3 +553,63 @@ fn key_index_is_reused_across_rows_and_rebuilt_when_names_change() {
         ]]
     );
 }
+
+/// Strings inside returned objects and arrays are escaped as a JSON
+/// generator writes them, and the escapes of a top-level string decode
+/// (values from Spark 4.2.0).
+#[test]
+fn escapes_round_trip_through_compact_text_and_decoding() {
+    let doc = "{\"o\":{\"k\":\"q\\\"b\\\\\\n\\t\\f\\r\\b/ctl\\u0001\"},\
+               \"arr\":[true,false,null,\"\u{e9}\"],\"s\":\"\\/\\b\\f\\n\\r\\t\\'x\"}";
+    let json = strs(&[Some(doc)]);
+    let names = ["o", "arr", "s"];
+    let f = bind(&json, &fields(&names));
+    let out = run(&f, &json, &fields(&names), 1);
+    let row: Vec<Option<&str>> = out.iter().map(|c| c[0].as_deref()).collect();
+    assert_eq!(
+        row,
+        [
+            Some("{\"k\":\"q\\\"b\\\\\\n\\t\\f\\r\\b/ctl\\u0001\"}"),
+            Some("[true,false,null,\"\u{e9}\"]"),
+            Some("/\u{8}\u{c}\n\r\t'x"),
+        ]
+    );
+}
+
+/// A malformed value inside a requested object or array makes the document
+/// invalid.
+#[test]
+fn malformed_requested_values_are_all_null() {
+    for doc in [
+        r#"{"o":{"a" 1}}"#,
+        r#"{"o":{"a":1 "b":2}}"#,
+        r#"{"o":[1 2]}"#,
+        r#"{"o":[?]}"#,
+        r#"{"o":{"a":?}}"#,
+        r#"{"o":{1:2}}"#,
+        r#"{"o":[tru]}"#,
+        r#"{"o":-}"#,
+        r#"{"o":"\uZZZZ"}"#,
+        r#"{"o":[1,]}"#,
+        r#"{"o":{"a":1,}}"#,
+    ] {
+        let json = strs(&[Some(doc)]);
+        let f = bind(&json, &fields(&["o"]));
+        assert_eq!(
+            run(&f, &json, &fields(&["o"]), 1),
+            vec![vec![None]],
+            "{doc}"
+        );
+    }
+    // Nesting past the limit inside a requested value.
+    for (open, close) in [("[", "]"), ("{\"k\":", "}")] {
+        let doc = format!("{{\"o\":{}1{}}}", open.repeat(1_001), close.repeat(1_001));
+        let json = strs(&[Some(doc.as_str())]);
+        let f = bind(&json, &fields(&["o"]));
+        assert_eq!(
+            run(&f, &json, &fields(&["o"]), 1),
+            vec![vec![None]],
+            "{open}"
+        );
+    }
+}
