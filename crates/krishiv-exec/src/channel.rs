@@ -243,6 +243,22 @@ impl Order {
     }
 }
 
+/// The bytes a held-back batch is charged: its rows' bytes, not the whole
+/// buffers it shares (a scan's filtered batch shares its decoded pages; as
+/// the sort's run accounting does).
+fn held_bytes(batch: &Batch) -> usize {
+    batch
+        .data()
+        .columns()
+        .iter()
+        .map(|c| {
+            c.to_data()
+                .get_slice_memory_size()
+                .unwrap_or_else(|_| c.get_array_memory_size())
+        })
+        .sum()
+}
+
 /// The result sink's state: the ordered drivers.
 #[derive(Debug, Default)]
 struct ResultGlobal {
@@ -414,7 +430,7 @@ impl Sink for ResultSink {
         if self.channel.receiver_gone() {
             return Ok(SinkStatus::Finished);
         }
-        let bytes = input.data().get_array_memory_size();
+        let bytes = held_bytes(&input);
         let reserved = t.memory.as_mut().is_some_and(|m| m.try_grow(bytes).is_ok());
         t.short |= !reserved;
         t.held += 1;
