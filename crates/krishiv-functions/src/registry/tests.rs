@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use std::sync::Arc;
+
 use krishiv_common::error::{ErrorClass, InvalidOptionsNonMapFunction, KrishivError};
 use krishiv_types::{ArrayType, DataType, DecimalType};
 
@@ -2489,6 +2491,137 @@ fn csv_signatures() {
     ));
     let err = result("schema_of_csv", std::slice::from_ref(&s), &[Some(failed)]).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::CastInvalidInput);
+}
+
+/// `from_csv` and `to_csv`: Spark's checks (options map, schema shape, first
+/// argument types) with the golden's classes and parameters.
+#[test]
+fn from_to_csv_signatures() {
+    use krishiv_types::{MapType, StructField, StructType};
+    let s = ty(DataType::String);
+    let d = def("from_csv");
+    assert!(d.deterministic);
+    assert!(d.arity.accepts(2) && d.arity.accepts(3));
+    assert!(!d.arity.accepts(1) && !d.arity.accepts(4));
+    assert!(def("to_csv").arity.accepts(1) && def("to_csv").arity.accepts(2));
+    assert!(!def("to_csv").arity.accepts(0) && !def("to_csv").arity.accepts(3));
+    // `from_csv('1, 3.14', 'a INT, f FLOAT')` resolves to its struct.
+    let args = [s.clone(), s.clone()];
+    let consts = [
+        Some(Constant::String("1".to_owned())),
+        Some(Constant::String("a INT".to_owned())),
+    ];
+    let got = result("from_csv", &args, &consts).unwrap();
+    assert_eq!(
+        got.data_type,
+        Some(DataType::Struct(krishiv_types::StructType::new(vec![
+            StructField::new("a".to_owned(), DataType::Integer, true),
+        ])))
+    );
+    // A non-string schema is not a schema.
+    let err = result(
+        "from_csv",
+        &[s.clone(), ty(DataType::Integer)],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::Integral(1)),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidSchemaNonStringLiteral);
+    // A valid type that is not a struct.
+    let err = result(
+        "from_csv",
+        &[s.clone(), s.clone()],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::String("Array<int>".to_owned())),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidSchemaNonStructType);
+    assert!(err.to_string().contains("ARRAY<INT>"), "{err}");
+    // A malformed DDL.
+    let err = result(
+        "from_csv",
+        &[s.clone(), s.clone()],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::String("a InvalidType".to_owned())),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::ParseSyntaxError);
+    // A non-foldable, non-literal schema names `` `schema` ``.
+    let err = (def("from_csv").result)(
+        &CallTypes::new(
+            &[s.clone(), s.clone()],
+            &[Some(Constant::String("1".to_owned())), None],
+        )
+        .with_literals(&[true, false]),
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchNonFoldableInput
+    );
+    assert!(err.to_string().contains("`schema`"), "{err}");
+    // Options must be a map.
+    let err = result(
+        "from_csv",
+        &[s.clone(), s.clone(), ty(DataType::String)],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::String("a INT".to_owned())),
+            Some(Constant::String("x".to_owned())),
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidOptionsNonMapFunction);
+    // A map with non-string values names its type.
+    let map_ty = DataType::Map(Arc::new(MapType::new(
+        DataType::String,
+        DataType::Integer,
+        true,
+    )));
+    let err = result(
+        "from_csv",
+        &[s.clone(), s, ArgType::new(map_ty, true)],
+        &[
+            Some(Constant::String("1".to_owned())),
+            Some(Constant::String("a INT".to_owned())),
+            None,
+        ],
+    )
+    .unwrap_err();
+    assert_eq!(err.error_class(), ErrorClass::InvalidOptionsNonStringType);
+    assert!(err.to_string().contains("MAP<STRING, INT>"), "{err}");
+    // `to_csv` needs a struct.
+    let err = result(
+        "to_csv",
+        &[ty(DataType::Integer)],
+        &[Some(Constant::Integral(1))],
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        ErrorClass::DatatypeMismatchUnsupportedInputType
+    );
+    assert!(err.to_string().contains("`to_csv`"), "{err}");
+    let got = result(
+        "to_csv",
+        &[ArgType::new(
+            DataType::Struct(StructType::new(vec![StructField::new(
+                "a".to_owned(),
+                DataType::Integer,
+                true,
+            )])),
+            true,
+        )],
+        &[None],
+    )
+    .unwrap();
+    assert_eq!(got.data_type, Some(DataType::String));
 }
 
 /// `schema_of_csv` never executes: the analyzer replaces every

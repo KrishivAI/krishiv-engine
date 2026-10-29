@@ -1532,6 +1532,9 @@ impl Resolver<'_> {
                 // same name runs the UDF.
                 let is_schema_of_csv =
                     is_builtin_entry(&entry) && entry.id.name() == "schema_of_csv";
+                // `from_csv` and `to_csv` show only their first argument.
+                let is_csv =
+                    is_builtin_entry(&entry) && matches!(entry.id.name(), "from_csv" | "to_csv");
                 if is_builtin_entry(&entry) && entry.id.name() == "mask" {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
@@ -1584,6 +1587,19 @@ impl Resolver<'_> {
                 // literal, shown as the call.
                 if is_schema_of_csv {
                     self.resolve_schema_of_csv(e, &kids[..n], &mut bound)?;
+                }
+                // `from_csv` and `to_csv` show only their first argument
+                // (Spark's `toPrettySQL` drops the schema and options).
+                if is_csv
+                    && let Some(first) = kids.first()
+                    && let ExprNode::Resolved(ResolvedExpr::Function(call)) = &bound.expr.node
+                {
+                    let mut new_call = call.clone();
+                    new_call.args = vec![first.shown()];
+                    bound.shown = Some(Arc::new(
+                        Expr::new(ExprNode::Resolved(ResolvedExpr::Function(new_call)))
+                            .with_origin(bound.expr.origin),
+                    ));
                 }
                 bound
             }

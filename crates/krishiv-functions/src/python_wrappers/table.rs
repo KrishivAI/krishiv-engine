@@ -34,6 +34,14 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "schema_of_csv",
         "PySpark's `options` map parameter has no wrapper support yet; SQL only",
     ),
+    (
+        "from_csv",
+        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
+    ),
+    (
+        "to_csv",
+        "PySpark's `options` map parameter has no wrapper support yet; SQL only",
+    ),
     ("space", "no PySpark function"),
     (
         "mean",

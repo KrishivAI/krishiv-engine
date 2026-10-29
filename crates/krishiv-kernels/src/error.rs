@@ -105,6 +105,20 @@ impl KernelError {
         }
     }
 
+    /// `MALFORMED_RECORD_IN_PARSING` for a `FAILFAST` malformed CSV record.
+    #[must_use]
+    pub fn malformed_record(bad_record: &str) -> Self {
+        use krishiv_common::error::MalformedRecordInParsingWithoutSuggestion;
+        Self {
+            row: None,
+            error: MalformedRecordInParsingWithoutSuggestion {
+                bad_record: bad_record.to_owned(),
+                fail_fast_mode: "FAILFAST".to_owned(),
+            }
+            .into(),
+        }
+    }
+
     /// `UNABLE_TO_ACQUIRE_MEMORY` for an output buffer of `bytes`.
     pub(crate) fn out_of_memory(bytes: usize) -> Self {
         Self {
