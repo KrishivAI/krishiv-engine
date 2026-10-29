@@ -644,7 +644,7 @@ def main():
                         fwork.append(
                             (
                                 (name, s, t, m, tz, extra),
-                                pool.submit(run_unit_flag, args.remote, m, tz, s, t, items, extra),
+                                pool.submit(run_unit, args.remote, m, tz, s, t, items, extra),
                             )
                         )
     for (name, s, t, m, tz, _extra), f in fwork:
