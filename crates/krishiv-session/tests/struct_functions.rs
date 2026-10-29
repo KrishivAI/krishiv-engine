@@ -12,7 +12,8 @@
 
 use futures::executor::block_on;
 use krishiv_common::error::ErrorClass;
-use krishiv_session::Session;
+use krishiv_session::functions::{call_function, col, count_star, lit};
+use krishiv_session::{Column, DataFrame, ExplainMode, Session};
 
 fn session() -> Session {
     Session::new().unwrap()
@@ -346,6 +347,303 @@ fn struct_of_a_star_and_of_an_aggregate() {
     );
 }
 
+/// `Column.getField`, `Column.withField` and `Column.dropFields` end to
+/// end: the PySpark 4.2 doc examples (checked against the documented
+/// outputs, not a live Spark run), case sensitivity, duplicate field names,
+/// nulls, nesting and every operator that takes a column (select, filter,
+/// group-by keys, withColumn). The analyzer rewrites updates to the
+/// `named_struct` the SQL path builds, so errors name the same classes the
+/// SQL path raises.
+fn collected(df: &DataFrame) -> Vec<String> {
+    let mut out = Vec::new();
+    for batch in block_on(df.collect()).unwrap() {
+        let column = batch.column(0);
+        for row in 0..batch.num_rows() {
+            out.push(cell(column, row));
+        }
+    }
+    out
+}
+
+fn column_error(df: &DataFrame, c: Column) -> ErrorClass {
+    match block_on(df.select([c]).collect()) {
+        Ok(_) => panic!("resolved"),
+        Err(e) => e.error_class(),
+    }
+}
+
+/// `getField`: the PySpark doc example, nulls, and the SQL path's errors.
+#[test]
+fn column_get_field_reads_by_name() {
+    let s = session();
+    let df = block_on(s.sql("SELECT named_struct('a', 1, 'b', 'x') AS r, 1 AS x")).unwrap();
+    assert_eq!(collected(&df.select([col("r").get_field("b")])), ["x"]);
+    assert_eq!(collected(&df.select([col("r").get_field("a")])), ["1"]);
+    // A null struct gives a null field; a null field stays null.
+    let nulls = block_on(s.sql(
+        "SELECT CAST(NULL AS STRUCT<a: INT>) AS r, named_struct('a', CAST(NULL AS INT)) AS z",
+    ))
+    .unwrap();
+    assert_eq!(
+        collected(&nulls.select([col("r").get_field("a")])),
+        ["NULL"]
+    );
+    assert_eq!(
+        collected(&nulls.select([col("z").get_field("a")])),
+        ["NULL"]
+    );
+    // Missing fields and non-structs fail as the SQL path fails.
+    assert_eq!(
+        column_error(&df, col("r").get_field("zzz")),
+        ErrorClass::UnresolvedColumnWithSuggestion
+    );
+    assert_eq!(
+        column_error(&df, col("x").get_field("a")),
+        ErrorClass::InvalidExtractBaseFieldType
+    );
+}
+
+/// `getField` follows `spark.sql.caseSensitive`, as `s.f` does.
+#[test]
+fn column_get_field_follows_case_sensitivity() {
+    let s = session();
+    let df = block_on(s.sql("SELECT named_struct('A', 1) AS r")).unwrap();
+    assert_eq!(collected(&df.select([col("r").get_field("a")])), ["1"]);
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        column_error(&df, col("r").get_field("a")),
+        ErrorClass::UnresolvedColumnWithSuggestion
+    );
+    assert_eq!(collected(&df.select([col("r").get_field("A")])), ["1"]);
+}
+
+/// `withField`: the PySpark doc examples (replace, then add).
+#[test]
+fn column_with_field_replaces_and_appends() {
+    let s = session();
+    let df = block_on(s.sql("SELECT named_struct('b', 1, 'c', 2) AS a")).unwrap();
+    assert_eq!(
+        collected(&df.select([col("a").with_field("b", lit(3))])),
+        ["{\"b\":3,\"c\":2}"]
+    );
+    assert_eq!(
+        collected(&df.select([col("a").with_field("d", lit(4))])),
+        ["{\"b\":1,\"c\":2,\"d\":4}"]
+    );
+    // A replacement may change the field's type; values are never cast.
+    assert_eq!(
+        collected(&df.select([col("a").with_field("b", lit("x"))])),
+        ["{\"b\":\"x\",\"c\":2}"]
+    );
+    let replaced = df.select([col("a").with_field("b", lit(3)).get_field("b")]);
+    assert_eq!(collected(&replaced), ["3"]);
+    let added = df.select([col("a").with_field("d", lit(4)).get_field("d")]);
+    assert_eq!(collected(&added), ["4"]);
+}
+
+/// `dropFields`: the PySpark doc examples (one field, then several).
+#[test]
+fn column_drop_fields_drops_one_and_several() {
+    let s = session();
+    let df = block_on(
+        s.sql("SELECT named_struct('b', 1, 'c', 2, 'd', 3, 'e', named_struct('f', 4, 'g', 5, 'h', 6)) AS a"),
+    )
+    .unwrap();
+    assert_eq!(
+        collected(&df.select([col("a").drop_fields(vec!["b".to_owned()])])),
+        ["{\"c\":2,\"d\":3,\"e\":{\"f\":4,\"g\":5,\"h\":6}}"]
+    );
+    assert_eq!(
+        collected(&df.select([col("a").drop_fields(vec!["b".to_owned(), "c".to_owned()])])),
+        ["{\"d\":3,\"e\":{\"f\":4,\"g\":5,\"h\":6}}"]
+    );
+    // Dropping a missing field is a no-op.
+    assert_eq!(
+        collected(&df.select([col("a").drop_fields(vec!["zzz".to_owned()])])),
+        ["{\"b\":1,\"c\":2,\"d\":3,\"e\":{\"f\":4,\"g\":5,\"h\":6}}"]
+    );
+}
+
+/// Dropping every field and updating a non-struct are errors.
+#[test]
+fn column_struct_updates_name_their_errors() {
+    let s = session();
+    let df = block_on(s.sql("SELECT named_struct('b', 1, 'c', 2) AS a, 1 AS x")).unwrap();
+    let error = |c: Column| match block_on(df.select([c]).collect()) {
+        Ok(_) => panic!("resolved"),
+        Err(e) => e.error_class(),
+    };
+    assert_eq!(
+        error(col("a").drop_fields(vec!["b".to_owned(), "c".to_owned()])),
+        ErrorClass::DatatypeMismatchCannotDropAllFields
+    );
+    assert_eq!(
+        error(col("x").with_field("b", lit(1))),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+    assert_eq!(
+        error(col("x").drop_fields(vec!["b".to_owned()])),
+        ErrorClass::DatatypeMismatchUnexpectedInputType
+    );
+}
+
+/// `withField`/`dropFields` replace and drop every match under a
+/// case-insensitive session, and only exact matches under a sensitive one.
+#[test]
+fn column_struct_updates_match_like_field_access() {
+    let s = session();
+    let df = block_on(s.sql("SELECT named_struct('A', 1, 'a', 2, 'b', 3) AS s")).unwrap();
+    // Case-insensitive (the default): every match is replaced or dropped.
+    assert_eq!(
+        collected(&df.select([col("s").with_field("a", lit(9))])),
+        ["{\"a\":9,\"a\":9,\"b\":3}"]
+    );
+    assert_eq!(
+        collected(&df.select([col("s").drop_fields(vec!["a".to_owned()])])),
+        ["{\"b\":3}"]
+    );
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        collected(&df.select([col("s").with_field("a", lit(9))])),
+        ["{\"A\":1,\"a\":9,\"b\":3}"]
+    );
+    assert_eq!(
+        collected(&df.select([col("s").drop_fields(vec!["a".to_owned()])])),
+        ["{\"A\":1,\"b\":3}"]
+    );
+}
+
+/// A null struct stays null, with the new struct's type.
+#[test]
+fn column_struct_updates_keep_a_null_struct_null() {
+    let s = session();
+    let df = block_on(s.sql("SELECT CAST(NULL AS STRUCT<b: INT, c: INT>) AS s")).unwrap();
+    assert_eq!(
+        collected(&df.select([col("s").with_field("b", lit(1))])),
+        ["NULL"]
+    );
+    assert_eq!(
+        collected(&df.select([col("s").drop_fields(vec!["b".to_owned()])])),
+        ["NULL"]
+    );
+    for (c, names) in [
+        (col("s").with_field("d", lit("x")), vec!["b", "c", "d"]),
+        (col("s").drop_fields(vec!["b".to_owned()]), vec!["c"]),
+    ] {
+        let batches = block_on(df.select([c]).collect()).unwrap();
+        let fields = match batches[0].schema().field(0).data_type() {
+            arrow_schema::DataType::Struct(fields) => fields.clone(),
+            other => panic!("not a struct: {other}"),
+        };
+        assert_eq!(
+            fields.iter().map(|f| f.name().as_str()).collect::<Vec<_>>(),
+            names
+        );
+    }
+}
+
+/// Nested updates: the inner update is the outer update's value.
+#[test]
+fn column_struct_updates_nest() {
+    let s = session();
+    let df = block_on(s.sql("SELECT named_struct('b', 1, 'e', named_struct('f', 4, 'g', 5)) AS a"))
+        .unwrap();
+    let inner = col("a").get_field("e").with_field("g", lit(9));
+    assert_eq!(
+        collected(&df.select([col("a").with_field("e", inner)])),
+        ["{\"b\":1,\"e\":{\"f\":4,\"g\":9}}"]
+    );
+}
+
+/// Updates work in `select`, `filter`, group-by keys and `withColumn`.
+#[test]
+fn column_struct_updates_run_in_every_clause() {
+    let s = session();
+    let df = block_on(
+        s.sql("SELECT named_struct('b', b, 'c', c) AS s FROM VALUES (1, 10), (2, 20) AS t(b, c)"),
+    )
+    .unwrap();
+    // `select` and `withColumn`.
+    assert_eq!(
+        collected(&df.select([col("s").with_field("d", lit(0))])),
+        ["{\"b\":1,\"c\":10,\"d\":0}", "{\"b\":2,\"c\":20,\"d\":0}"]
+    );
+    let widened = df.with_column("t", col("s").with_field("d", col("s").get_field("b")));
+    assert_eq!(
+        collected(&widened.select([col("t").get_field("d")])),
+        ["1", "2"]
+    );
+    // `filter` on an updated field.
+    let kept = df.filter(col("s").with_field("b", lit(7)).get_field("b").eq(lit(7)));
+    assert_eq!(
+        collected(&kept.select([col("s").get_field("c")])),
+        ["10", "20"]
+    );
+    // Group-by keys on a field.
+    let groups = df.group_by([col("s").get_field("b")]).agg([count_star()]);
+    let mut rows = Vec::new();
+    for batch in block_on(groups.collect()).unwrap() {
+        for row in 0..batch.num_rows() {
+            rows.push(cell(batch.column(0), row) + "|" + &cell(batch.column(1), row));
+        }
+    }
+    rows.sort();
+    assert_eq!(rows, ["1|1", "2|1"]);
+}
+
+/// The analyzed plan holds no `UpdateFields` node: the update is the
+/// `named_struct` rewrite, with the expected field order and types.
+#[test]
+fn column_struct_updates_resolve_to_named_struct() {
+    let s = session();
+    let df = block_on(s.sql("SELECT named_struct('b', 1, 'c', 'x') AS s")).unwrap();
+    let updated = df.select([col("s").with_field("a", lit(true)).alias("u")]);
+    let text = block_on(updated.explain(ExplainMode::Extended)).unwrap_or_else(|e| panic!("{e}"));
+    let (parsed, analyzed) = text
+        .split_once("== Analyzed Logical Plan ==")
+        .unwrap_or((text.as_str(), ""));
+    // The parsed plan still holds the update; analysis rewrote it.
+    assert!(parsed.contains("update_fields"), "{text}");
+    assert!(!analyzed.contains("update_fields"), "{text}");
+    assert!(!analyzed.contains("UpdateFields"), "{text}");
+    assert!(analyzed.contains("named_struct"), "{text}");
+    // The output names the new struct type in field order.
+    let batches = block_on(updated.collect()).unwrap();
+    let fields = match batches[0].schema().field(0).data_type() {
+        arrow_schema::DataType::Struct(fields) => fields.clone(),
+        other => panic!("not a struct: {other}"),
+    };
+    assert_eq!(
+        fields
+            .iter()
+            .map(|f| (f.name().as_str(), f.data_type().clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("b", arrow_schema::DataType::Int32),
+            ("c", arrow_schema::DataType::Utf8View),
+            ("a", arrow_schema::DataType::Boolean),
+        ]
+    );
+}
+
+/// A nondeterministic base is refused: the rewrite would evaluate it once
+/// per kept field, reading a different value each time.
+#[test]
+fn column_struct_update_of_a_nondeterministic_base_is_unsupported() {
+    let s = session();
+    let base = call_function("named_struct", [lit("b"), call_function("rand", [])]);
+    let df = block_on(s.sql("SELECT 1 AS x")).unwrap();
+    let Err(got) = block_on(df.select([base.with_field("c", lit(1))]).collect()) else {
+        panic!("resolved")
+    };
+    assert_eq!(got.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    // The same shape with a deterministic base resolves.
+    let steady = call_function("named_struct", [lit("b"), lit(1)]);
+    assert_eq!(
+        collected(&df.select([steady.with_field("c", lit(1))])),
+        ["{\"b\":1,\"c\":1}"]
+    );
+}
 /// `MIN`/`MAX` over structs (Spark 4.2: field-by-field ordering, NULL
 /// fields smallest and equal to one another, NaN the largest float; a NULL
 /// struct row is skipped like any NULL input, all-NULL gives NULL).

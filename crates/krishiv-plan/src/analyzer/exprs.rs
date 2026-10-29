@@ -8,14 +8,14 @@ use std::sync::Arc;
 use krishiv_common::error::{
     AmbiguousColumnReference, AmbiguousLateralColumnAlias, AmbiguousReference,
     CannotResolveDataframeColumn, CannotResolveStarExpand, DatatypeMismatchBinaryOpDiffTypes,
-    DatatypeMismatchBinaryOpWrongType, DatatypeMismatchCastWithConfSuggestion,
-    DatatypeMismatchCastWithFuncSuggestion, DatatypeMismatchCastWithoutSuggestion,
-    DatatypeMismatchCreateMapKeyDiffTypes, DatatypeMismatchCreateMapValueDiffTypes,
-    DatatypeMismatchDataDiffTypes, DatatypeMismatchInSubqueryDataTypeMismatch,
-    DatatypeMismatchInSubqueryLengthMismatch, DatatypeMismatchInputSizeNotOne,
-    DatatypeMismatchInvalidOrderingType, DatatypeMismatchMapConcatDiffTypes,
-    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
+    DatatypeMismatchBinaryOpWrongType, DatatypeMismatchCannotDropAllFields,
+    DatatypeMismatchCastWithConfSuggestion, DatatypeMismatchCastWithFuncSuggestion,
+    DatatypeMismatchCastWithoutSuggestion, DatatypeMismatchCreateMapKeyDiffTypes,
+    DatatypeMismatchCreateMapValueDiffTypes, DatatypeMismatchDataDiffTypes,
+    DatatypeMismatchInSubqueryDataTypeMismatch, DatatypeMismatchInSubqueryLengthMismatch,
+    DatatypeMismatchInputSizeNotOne, DatatypeMismatchInvalidOrderingType,
+    DatatypeMismatchMapConcatDiffTypes, DatatypeMismatchNonFoldableInput,
+    DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
     FailedToParseTooComplex, InternalError, InvalidAggregateFilterNotBoolean,
     InvalidExtractBaseFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
@@ -26,7 +26,7 @@ use krishiv_common::error::{
     UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{DataType, DecimalType, StructField, StructType};
 use twox_hash::XxHash3_128;
 
 use super::analytics::GroupingFn;
@@ -39,9 +39,9 @@ use super::resolve::{Attr, Env, RESOLVE_STEP, Rel, Resolver};
 use super::suggest::closest;
 use super::{AnalysisError, ArgType, CallTypes, Constant, FunctionEntry, FunctionLookup, Inputs};
 use crate::{
-    AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, FunctionId,
-    FunctionKind, Literal, LogicalPlan, Origin, QuantifiedLike, ResolvedExpr, ResolvedFunction,
-    Star, SubqueryKind, TypedLiteralKind,
+    AttrId, BoundColumn, Builtin, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FunctionCall,
+    FunctionId, FunctionKind, Literal, LogicalPlan, Origin, QuantifiedLike, ResolvedExpr,
+    ResolvedFunction, Star, SubqueryKind, TypedLiteralKind,
 };
 
 /// Where an operator's expressions resolve.
@@ -1416,6 +1416,9 @@ impl Resolver<'_> {
                     ty: ty.clone(),
                     ..keep(ty)
                 }
+            }
+            ExprNode::UpdateFields { ops, .. } => {
+                return self.update_fields(e, ops, kids, cx);
             }
             ExprNode::Function(f) => {
                 let n = f.args.len();
@@ -3664,6 +3667,163 @@ impl Resolver<'_> {
         ))
     }
 
+    /// `UpdateFields(base, ops)` (PySpark `withField`/`dropFields`): the
+    /// struct is rebuilt by `named_struct`, keeping every field the ops do
+    /// not touch, so the executor and the kernels get nothing new. A `With`
+    /// replaces every field matching its name (compared per
+    /// `spark.sql.caseSensitive`) in place, else appends the field last; a
+    /// `Drop` removes every matching field and ignores names that match
+    /// nothing. The rewrite is `CASE WHEN base IS NULL THEN CAST(NULL AS
+    /// <new type>) ELSE named_struct(...) END`, bound here, so its field
+    /// order, names, types and nullability are the rewritten
+    /// `named_struct`'s and no resolved plan holds the node. The base
+    /// appears several times in the rewrite: a nondeterministic base would
+    /// read a different value per use, and nothing below binds it once, so
+    /// that is `KRISHIV_UNSUPPORTED_FEATURE`.
+    fn update_fields(
+        &mut self,
+        e: &Arc<Expr>,
+        ops: &[FieldOp],
+        kids: &[Bound],
+        cx: &Cx<'_>,
+    ) -> Result<Bound, AnalysisError> {
+        let base = &kids[0];
+        let struct_type = match &base.ty.data_type {
+            Some(DataType::Struct(st)) => st.clone(),
+            _ => {
+                let shown = with_children(e, kids.iter().map(Bound::shown).collect());
+                return Err(AnalysisError::new(
+                    DatatypeMismatchUnexpectedInputType {
+                        sql_expr: format!("\"{}\"", pretty(&shown, self.ctx.conf.session_zone)),
+                        param_index: ordinal(0),
+                        required_type: "\"STRUCT\"".to_owned(),
+                        input_sql: format!(
+                            "\"{}\"",
+                            pretty(&base.shown(), self.ctx.conf.session_zone)
+                        ),
+                        input_type: quoted_type(base.ty.data_type.as_ref()),
+                    },
+                    e.origin,
+                ));
+            }
+        };
+        if !is_deterministic(&base.expr) {
+            return Err(unsupported(
+                "withField/dropFields of a nondeterministic expression",
+                e.origin,
+            ));
+        }
+        let cs = self.ctx.conf.case_sensitive;
+        // One output field per kept struct field (a field extraction of the
+        // resolved base, as the SQL path reads it), then the appended ones.
+        let mut out: Vec<(String, Arc<Expr>, DataType, bool)> = Vec::new();
+        for (ordinal, field) in struct_type.fields().iter().enumerate() {
+            let nullable = field.nullable() || base.ty.nullable;
+            let value = Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                    base: Arc::clone(&base.expr),
+                    ordinal,
+                    name: field.name().to_owned(),
+                    data_type: field.data_type().clone(),
+                    nullable,
+                }))
+                .with_origin(e.origin),
+            );
+            out.push((
+                field.name().to_owned(),
+                value,
+                field.data_type().clone(),
+                nullable,
+            ));
+        }
+        let mut values = kids[1..].iter();
+        for op in ops {
+            match op {
+                FieldOp::With { name, .. } => {
+                    let Some(v) = values.next() else {
+                        return Err(unsupported("a struct update without its value", e.origin));
+                    };
+                    let updated = (
+                        name.clone(),
+                        Arc::clone(&v.expr),
+                        v.ty.data_type.clone().unwrap_or(DataType::Null),
+                        v.ty.nullable,
+                    );
+                    let mut matched = false;
+                    for slot in out.iter_mut() {
+                        if same(&slot.0, name, cs) {
+                            *slot = updated.clone();
+                            matched = true;
+                        }
+                    }
+                    if !matched {
+                        out.push(updated);
+                    }
+                }
+                FieldOp::Drop { name } => {
+                    out.retain(|slot| !same(&slot.0, name, cs));
+                }
+            }
+        }
+        if out.is_empty() {
+            return Err(AnalysisError::new(
+                DatatypeMismatchCannotDropAllFields {
+                    sql_expr: format!(
+                        "\"{}\"",
+                        pretty(
+                            &with_children(e, kids.iter().map(Bound::shown).collect()),
+                            self.ctx.conf.session_zone
+                        )
+                    ),
+                },
+                e.origin,
+            ));
+        }
+        let new_type = DataType::Struct(StructType::new(
+            out.iter()
+                .map(|(name, _, t, n)| StructField::new(name.clone(), t.clone(), *n)),
+        ));
+        // `named_struct(name0, val0, ...)`: bound here, so the output field
+        // names, types and nullability are the analyzer's own.
+        let mut struct_args: Vec<Arc<Expr>> = Vec::with_capacity(2 * out.len());
+        for (name, value, _, _) in &out {
+            struct_args.push(Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(name.clone()))).with_origin(e.origin),
+            ));
+            struct_args.push(Arc::clone(value));
+        }
+        let struct_call = Arc::new(
+            Expr::new(ExprNode::Function(FunctionCall {
+                name: "named_struct".to_owned(),
+                qualifier: Vec::new(),
+                args: struct_args,
+                arg_names: Vec::new(),
+                distinct: false,
+                filter: None,
+            }))
+            .with_origin(e.origin),
+        );
+        let rebuilt = self.expr(&struct_call, cx)?;
+        let cond = self.operator_call(Builtin::IsNull, e.origin, std::slice::from_ref(base))?;
+        let null_branch = {
+            let null =
+                Arc::new(Expr::new(ExprNode::Literal(Literal::Null(None))).with_origin(e.origin));
+            let cast = Arc::new(
+                Expr::new(ExprNode::Cast {
+                    expr: null,
+                    to: new_type,
+                    mode: CastMode::Default,
+                })
+                .with_origin(e.origin),
+            );
+            self.expr(&cast, cx)?
+        };
+        let mut b = self.operator_call(Builtin::When, e.origin, &[cond, null_branch, rebuilt])?;
+        // Shown as written (`update_fields(...)`), not the rewrite.
+        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        Ok(b)
+    }
+
     /// The attribute `a` matched with `used` of `parts`: the column itself,
     /// or the struct fields the leftover parts name below it (Spark's
     /// `GetStructField` chain), resolved under `spark.sql.caseSensitive`.
@@ -3796,6 +3956,33 @@ fn fold_case(name: &str, case_sensitive: bool) -> String {
 /// Whether folded path `a` is a prefix of (or equal to) folded path `b`.
 fn is_prefix(a: &[String], b: &[String]) -> bool {
     a.len() <= b.len() && a.iter().zip(b).all(|(x, y)| x == y)
+}
+
+/// Whether `e` holds no nondeterministic call: a struct update repeats its
+/// base (in the null check, in every kept field and in the new struct), so a
+/// nondeterministic base would read a different value per use (the analyzer
+/// has no projection below that binds it once, as Spark's
+/// `PullOutNondeterministic` does). An unresolved call counts as
+/// nondeterministic: a bound expression never holds one.
+fn is_deterministic(e: &Expr) -> bool {
+    let mut nondeterministic = false;
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
+        if let crate::walk::Node::Expr(x) = n {
+            match &x.node {
+                ExprNode::Function(_) => {
+                    nondeterministic = true;
+                    return std::ops::ControlFlow::Break(());
+                }
+                ExprNode::Resolved(ResolvedExpr::Function(f)) if !f.deterministic => {
+                    nondeterministic = true;
+                    return std::ops::ControlFlow::Break(());
+                }
+                _ => {}
+            }
+        }
+        std::ops::ControlFlow::Continue(())
+    });
+    !nondeterministic
 }
 
 /// `UNRESOLVED_COLUMN` for a struct field `parts` names below a struct
@@ -4101,6 +4288,22 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
         ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
             format!("{}.{}", k[0], name)
+        }
+        // As written (`update_fields(base, ...)`): the `shown` form of an
+        // update, before the analyzer rewrites it.
+        ExprNode::UpdateFields { ops, .. } => {
+            let mut values = k[1..].iter();
+            let rendered: Vec<String> = ops
+                .iter()
+                .map(|op| match op {
+                    FieldOp::With { name, .. } => format!(
+                        "WithField({name}, {})",
+                        values.next().copied().unwrap_or("?")
+                    ),
+                    FieldOp::Drop { name } => format!("DropField({name})"),
+                })
+                .collect();
+            format!("update_fields({}, {})", k[0], rendered.join(", "))
         }
         ExprNode::Subquery { kind, plan } => {
             // Spark lists the outer references.

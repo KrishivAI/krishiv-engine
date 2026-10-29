@@ -3,9 +3,9 @@
 
 Every method builds the same engine expression the SQL path builds, resolved
 by the analyzer when the query runs. Nothing is evaluated in Python: where
-the engine has no equivalent yet (bitwise operators, ``isnan``, nested
-field access), the method builds the node the SQL equivalent builds, so it
-fails with the engine's own error, as the SQL does.
+the engine has no equivalent yet (bitwise operators, ``isnan``), the method
+builds the node the SQL equivalent builds, so it fails with the engine's own
+error, as the SQL does.
 """
 
 from __future__ import annotations
@@ -325,7 +325,7 @@ class Column:
         """The element at ``key`` of an array, or by key of a map, as
         ``pyspark.sql.Column.getItem``.
 
-        .. note:: The engine has no nested types yet: this always fails with
+        .. note:: The engine has no arrays or maps yet: this always fails with
             the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
 
         Examples
@@ -349,14 +349,21 @@ class Column:
     def getField(self, name: Any) -> Column:
         """The field ``name`` of a struct, as ``pyspark.sql.Column.getField``.
 
-        .. note:: Not supported yet: this always fails with
-            the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
-
         Examples
         --------
-        >>> df = spark.createDataFrame([((1, "b"),)], ["r"])
-        >>> df.select(df.r.getField("b")).collect()
-        [Row(value='b')]
+        >>> df = spark.sql("SELECT named_struct('a', 1, 'b', 'x') AS r")
+        >>> df.select(df.r.getField("b")).show()
+        +---+
+        |r.b|
+        +---+
+        |  x|
+        +---+
+        >>> df.select(df.r.a).show()
+        +---+
+        |r.a|
+        +---+
+        |  1|
+        +---+
         """
         if isinstance(name, Column):
             import warnings
@@ -368,32 +375,63 @@ class Column:
                 FutureWarning,
                 stacklevel=2,
             )
-        raise unsupported_feature("Column.getField")
+        if not isinstance(name, str):
+            raise not_expected_type("name", "str", name)
+        return Column(self._c.get_field(name))
 
     def withField(self, fieldName: str, col: Column) -> Column:
         """The struct with field ``fieldName`` added or replaced, as
-        ``pyspark.sql.Column.withField``.
+        ``pyspark.sql.Column.withField``: a matching field is replaced in
+        place, otherwise the field is appended last.
 
-        .. note:: Not supported yet: this always fails with
-            the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
+        Examples
+        --------
+        >>> from krishiv.sql.functions import lit
+        >>> df = spark.sql("SELECT named_struct('b', 1, 'c', 2) AS a")
+        >>> df.withColumn('a', df['a'].withField('b', lit(3))).select('a.b').show()
+        +---+
+        |a.b|
+        +---+
+        |  3|
+        +---+
+        >>> df.withColumn('a', df['a'].withField('d', lit(4))).select('a.d').show()
+        +---+
+        |a.d|
+        +---+
+        |  4|
+        +---+
         """
         if not isinstance(fieldName, str):
             raise not_expected_type("fieldName", "str", fieldName)
         if not isinstance(col, Column):
             raise not_expected_type("col", "Column", col)
-        raise unsupported_feature("Column.withField")
+        return Column(self._c.with_field(fieldName, col._c))
 
     def dropFields(self, *fieldNames: str) -> Column:
         """The struct without the named fields, as
-        ``pyspark.sql.Column.dropFields``.
+        ``pyspark.sql.Column.dropFields``: names that match nothing are a
+        no-op.
 
-        .. note:: Not supported yet: this always fails with
-            the engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error.
+        Examples
+        --------
+        >>> df = spark.sql("SELECT named_struct('b', 1, 'c', 2, 'd', 3) AS a")
+        >>> df.withColumn('a', df['a'].dropFields('b')).show()
+        +------+
+        |     a|
+        +------+
+        |{2, 3}|
+        +------+
+        >>> df.withColumn('a', df['a'].dropFields('b', 'c')).show()
+        +---+
+        |  a|
+        +---+
+        |{3}|
+        +---+
         """
         for name in fieldNames:
             if not isinstance(name, str):
                 raise not_expected_type("fieldNames", "str", name)
-        raise unsupported_feature("Column.dropFields")
+        return Column(self._c.drop_fields(list(fieldNames)))
 
     def isin(self, *cols: Any) -> Column:
         values = cols[0] if len(cols) == 1 and isinstance(cols[0], list | tuple | set) else cols

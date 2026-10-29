@@ -6,8 +6,8 @@ use std::ops;
 use std::sync::Arc;
 
 use krishiv_plan::{
-    Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, Literal, NullOrdering, PlanId,
-    SortDirection, SortOrder, Star,
+    Builtin, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FunctionCall, Literal, NullOrdering,
+    PlanId, SortDirection, SortOrder, Star,
 };
 use krishiv_types::DataType;
 
@@ -253,6 +253,60 @@ impl Column {
     #[must_use]
     pub fn between(self, low: impl Into<Self>, high: impl Into<Self>) -> Self {
         Self::call(Builtin::Between, vec![self, low.into(), high.into()])
+    }
+
+    /// The field `name` of this struct (`self.name` in SQL reads the same
+    /// node), as PySpark's `Column.getField`.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::col;
+    /// let c = col("s").get_field("a");
+    /// ```
+    #[must_use]
+    pub fn get_field(self, name: &str) -> Self {
+        Self::new(Expr::new(ExprNode::Field {
+            base: Arc::new(self.expr),
+            name: name.to_owned(),
+        }))
+    }
+
+    /// The struct with the field `name` added or replaced by `value`, as
+    /// PySpark's `Column.withField`: a match (per
+    /// `spark.sql.caseSensitive`) is replaced in place, else the field is
+    /// appended last. The name is plain, never a dotted path.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::{col, lit};
+    /// let c = col("s").with_field("a", lit(1));
+    /// ```
+    #[must_use]
+    pub fn with_field(self, name: &str, value: Self) -> Self {
+        Self::new(Expr::new(ExprNode::UpdateFields {
+            base: Arc::new(self.expr),
+            ops: vec![FieldOp::With {
+                name: name.to_owned(),
+                value: Arc::new(value.expr),
+            }],
+        }))
+    }
+
+    /// The struct without the named fields, as PySpark's
+    /// `Column.dropFields`: every match (per `spark.sql.caseSensitive`) is
+    /// removed, names that match nothing are ignored.
+    ///
+    /// ```
+    /// # use krishiv_session::functions::col;
+    /// let c = col("s").drop_fields(vec!["a".to_owned()]);
+    /// ```
+    #[must_use]
+    pub fn drop_fields(self, names: Vec<String>) -> Self {
+        Self::new(Expr::new(ExprNode::UpdateFields {
+            base: Arc::new(self.expr),
+            ops: names
+                .into_iter()
+                .map(|name| FieldOp::Drop { name })
+                .collect(),
+        }))
     }
 
     /// Ascending, nulls first (Spark's default), for `order_by`.

@@ -94,6 +94,7 @@
 //! | `ExprNode::Cast` | U, R | Q1, Q3-Q8, Q10, Q12, Q14, Q15, Q20 | `cast` |
 //! | `ExprNode::Alias` | U | Q1, Q3-Q17, Q19, Q21, Q22 | `col.alias` |
 //! | `ExprNode::Field` | U | - | - |
+//! | `ExprNode::UpdateFields` | U | - | - |
 //! | `ExprNode::Subquery` | U, R | Q2, Q4, Q11, Q15-Q18, Q20-Q22 | - |
 //! | `ExprNode::Window` | U, R | - | - |
 //! | `ExprNode::Lambda` | U, R | - | - |
@@ -130,9 +131,9 @@ mod walk;
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash};
 pub use encode::{ENCODING_VERSION, StructuralHash};
 pub use expr::{
-    AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall,
-    NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind,
-    TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
+    AttrId, BoundColumn, CastMode, ColumnRef, Expr, ExprNode, FieldOp, FrameBound, FrameUnits,
+    FunctionCall, NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star,
+    SubqueryKind, TypedLiteralKind, WindowExpr, WindowFrame, WindowSpec, WindowSpecRef,
 };
 pub use function::{Builtin, FunctionId, FunctionKind, QuantifiedLike};
 pub use literal::{DayTimeField, Literal, YearMonthField};
