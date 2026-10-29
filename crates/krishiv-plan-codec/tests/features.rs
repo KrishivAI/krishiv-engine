@@ -54,6 +54,7 @@ fn the_header_lists_exactly_the_features_in_use() {
         limit: 1,
     });
     assert!(plan_features(&zero).is_empty());
+    assert_eq!(message("aggregate_filter").features, ["aggregate_filter"]);
     // Every registered feature occurs in some inventory case, except
     // `legacy_statistical_aggregate`: it fires only around a moment
     // aggregate, and the encoder refuses every moment aggregate (pinned by
@@ -299,9 +300,28 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     );
     assert_eq!(
         feature_of(Construct::Aggregate(
-            krishiv_exec::aggregate::AggregateFunction::Sum
+            &krishiv_exec::aggregate::AggregateExpr::new(
+                krishiv_exec::aggregate::AggregateFunction::Sum,
+                0,
+                arrow_schema::DataType::Int64,
+                "s",
+            )
         )),
         None
+    );
+    assert_eq!(
+        feature_of(Construct::Aggregate(
+            &krishiv_exec::aggregate::AggregateExpr {
+                mask: Some(1),
+                ..krishiv_exec::aggregate::AggregateExpr::new(
+                    krishiv_exec::aggregate::AggregateFunction::Sum,
+                    0,
+                    arrow_schema::DataType::Int64,
+                    "s",
+                )
+            }
+        )),
+        Some(Feature::AggregateFilter)
     );
     // A frame needs a feature only for an offset bound: the `Window`
     // node's format carries the others, `CURRENT ROW` at both ends included.
@@ -403,6 +423,27 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         err,
         CodecError::UnsupportedFeatures {
             missing: vec!["lambda_functions".to_owned()]
+        }
+    );
+}
+
+#[test]
+fn a_reader_without_the_filter_feature_refuses_a_masked_aggregate() {
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "aggregate_filter")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let reader = ReaderFeatures::only([Feature::Window]);
+    assert!(!reader.contains(Feature::AggregateFilter));
+    let err = decode_with(&bytes, &Limits::default(), &reader).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["aggregate_filter".to_owned()]
         }
     );
 }

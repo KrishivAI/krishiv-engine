@@ -107,7 +107,7 @@
     },
     "query-features": {
       "kind": "unsupported",
-      "summary": "query features the analyzer or planner lacks: inline VALUES, table-valued functions, NATURAL and USING joins, recursive CTEs, LATERAL, PIVOT/UNPIVOT, OFFSET, GROUP BY ALL, SELECT * EXCEPT, QUALIFY, named and qualified function names, LIKE ANY/ALL, aggregate FILTER, multi-SELECT FROM",
+      "summary": "query features the analyzer or planner lacks: inline VALUES, table-valued functions, NATURAL and USING joins, recursive CTEs, LATERAL, PIVOT/UNPIVOT, OFFSET, GROUP BY ALL, SELECT * EXCEPT, QUALIFY, named and qualified function names, LIKE ANY/ALL",
       "task": "P2-T180"
     },
     "sql-commands": {

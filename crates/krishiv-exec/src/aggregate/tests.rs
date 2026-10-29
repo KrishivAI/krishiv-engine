@@ -586,6 +586,125 @@ async fn distinct_aggregates_and_union() {
     assert_eq!(run_rows(plan).await, ["1", "2", "3", "NULL"]);
 }
 
+fn masked(f: AggregateFunction, col: usize, mask: usize, s: &SchemaRef) -> AggregateExpr {
+    AggregateExpr {
+        mask: Some(mask),
+        ..agg(f, col, s)
+    }
+}
+
+fn bools(v: &[Option<bool>]) -> ArrayRef {
+    Arc::new(arrow_array::BooleanArray::from(v.to_vec()))
+}
+
+/// `FILTER (WHERE ...)`: a masked aggregate reads only the rows where the
+/// mask column is true; a NULL mask is not true. Expected values are
+/// Spark 4.2's (`group-by-filter.sql`: `count(x) FILTER (WHERE m)` counts
+/// the passing rows with non-NULL `x`, `count(*)` the passing rows, `sum`
+/// of no rows is NULL).
+#[tokio::test]
+async fn filter_mask_reads_only_passing_rows() {
+    let s = schema(vec![("x", DataType::Int64), ("m", DataType::Boolean)]);
+    // x: 1, 2, NULL, 4, 5; m: true, false, true, NULL, true.
+    let x = i64s(&[Some(1), Some(2), None, Some(4), Some(5)]);
+    let m = bools(&[Some(true), Some(false), Some(true), None, Some(true)]);
+    let input = || scan(&s, vec![vec![Arc::clone(&x), Arc::clone(&m)]]);
+    let aggs = || {
+        vec![
+            AggregateExpr::count_star("c"),
+            masked(Count, 0, 1, &s),
+            masked(Sum, 0, 1, &s),
+            masked(Avg, 0, 1, &s),
+            masked(Min, 0, 1, &s),
+            masked(Max, 0, 1, &s),
+        ]
+    };
+    // Unmasked counts beside masked calls: the counts read all rows,
+    // the other calls only the passing ones (rows 0, 2, 4).
+    let mut all = aggs();
+    all[0].mask = None;
+    all[1].mask = None;
+    assert_eq!(
+        run_rows(node(input(), spec(&s, vec![], all))).await,
+        ["5|4|6|3.0|1|5"]
+    );
+    let mut only_masked = aggs();
+    for a in &mut only_masked {
+        a.mask = Some(1);
+    }
+    // count(*): rows 0, 2, 4; count(x): rows 0, 4; sum: 1 + 5.
+    assert_eq!(
+        run_rows(node(input(), spec(&s, vec![], only_masked))).await,
+        ["3|2|6|3.0|1|5"]
+    );
+    // A mask that passes nothing: counts are 0, other values NULL.
+    let none = bools(&[Some(false), None, Some(false), Some(false), None]);
+    let input_none = || scan(&s, vec![vec![Arc::clone(&x), Arc::clone(&none)]]);
+    // The unmasked `count(*)` still reads all rows; the masked calls
+    // read none.
+    assert_eq!(
+        run_rows(node(input_none(), spec(&s, vec![], aggs()))).await,
+        ["5|0|NULL|NULL|NULL|NULL"]
+    );
+    let mut masked_none = aggs();
+    for a in &mut masked_none {
+        a.mask = Some(1);
+    }
+    assert_eq!(
+        run_rows(node(input_none(), spec(&s, vec![], masked_none))).await,
+        ["0|0|NULL|NULL|NULL|NULL"]
+    );
+    // Grouped: k holds 10 and 20 in group 1, 30 in group 2; the mask
+    // drops the 20.
+    let g = schema(vec![
+        ("k", DataType::Int64),
+        ("x", DataType::Int64),
+        ("m", DataType::Boolean),
+    ]);
+    let grouped = scan(
+        &g,
+        vec![vec![
+            i64s(&[Some(1), Some(1), Some(2)]),
+            i64s(&[Some(10), Some(20), Some(30)]),
+            bools(&[Some(true), Some(false), Some(true)]),
+        ]],
+    );
+    let gaggs = vec![
+        masked(Count, 1, 2, &g),
+        masked(Sum, 1, 2, &g),
+        masked(Min, 1, 2, &g),
+    ];
+    assert_eq!(
+        run_rows(node(grouped, spec(&g, vec![0], gaggs))).await,
+        ["1|1|10|10", "2|1|30|30"]
+    );
+}
+
+/// A masked `DISTINCT` never reaches the single-distinct plan: the
+/// analyzer rewrites every one (group formation itself must skip the
+/// rows the mask drops), so this plan rejects them instead of
+/// miscounting. `merging` drops the mask: states hold filtered rows.
+#[tokio::test]
+async fn filter_mask_with_distinct_is_rejected() {
+    let s = schema(vec![("x", DataType::Int64), ("m", DataType::Boolean)]);
+    // `count(distinct x) FILTER (WHERE m)`: groups would form from the
+    // rows the mask drops, so the count would include them.
+    let x = i64s(&[Some(1), Some(2)]);
+    let m = bools(&[Some(false), Some(true)]);
+    let input = || scan(&s, vec![vec![Arc::clone(&x), Arc::clone(&m)]]);
+    let e = distinct_plan(
+        input(),
+        spec(&s, vec![], vec![masked(Count, 0, 1, &s)]),
+        &[true],
+    )
+    .err();
+    assert_eq!(
+        e.map(|e| e.error_class()),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    assert!(masked(Count, 0, 1, &s).merging(0).mask.is_none());
+}
+
 /// Z-set weights: `count` and `sum` scale; `min`/`max` and `DISTINCT`
 /// reject weights other than 1 until IVM.
 #[tokio::test]
@@ -2626,6 +2745,7 @@ fn moment_aggs() -> Vec<AggregateExpr> {
             },
             input: AggInput::Raw,
             arg_type: DataType::Float64,
+            mask: None,
             name: format!("{f:?}"),
         })
         .collect()

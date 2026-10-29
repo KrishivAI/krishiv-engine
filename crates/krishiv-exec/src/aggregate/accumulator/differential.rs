@@ -345,6 +345,7 @@ fn moment_acc(f: AggregateFunction, groups: u32) -> Accumulator {
         args,
         input: AggInput::Raw,
         arg_type: DataType::Float64,
+        mask: None,
         name: "m".to_owned(),
     };
     // Without ANSI: `corr` of a constant column is NULL, not an error.

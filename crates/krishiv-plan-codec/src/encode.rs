@@ -787,6 +787,7 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
         } as i32,
         arg_type: arrow_bytes(&a.arg_type, nested),
         name: a.name.clone(),
+        mask: a.mask.map(|m| m as u64),
     })
 }
 

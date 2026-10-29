@@ -2,10 +2,13 @@
 //! `GROUP BY` and aggregates.
 //!
 //! An `Aggregate` relation becomes three steps, as in Spark's physical
-//! plan: a projection computing the grouping keys and the aggregates'
-//! arguments, the hash aggregate (two of them for `DISTINCT`), and a
-//! projection computing the output expressions from the keys and the
-//! aggregates' results (`sum(a) / count(b)`, a key under an alias).
+//! plan: a projection computing the grouping keys, the aggregates'
+//! arguments and their filters, the hash aggregate (two of them for
+//! `DISTINCT`), and a projection computing the output expressions from
+//! the keys and the aggregates' results (`sum(a) / count(b)`, a key
+//! under an alias). A call with a filter reads only the rows where its
+//! mask column is true (Spark's `FILTER (WHERE ...)`); other aggregates
+//! read all rows.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -47,7 +50,8 @@ impl Planner<'_> {
         for e in outputs {
             self.calls(e, &mut calls)?;
         }
-        // Step 1: keys, then each call's arguments.
+        // Step 1: keys, then each call's arguments, then each call's
+        // filter (a boolean mask column when the call filters).
         let mut wanted: Vec<Arc<Expr>> = keys.clone();
         let mut arg_at = Vec::with_capacity(calls.len());
         let mut lowered = Vec::with_capacity(calls.len());
@@ -58,16 +62,22 @@ impl Planner<'_> {
             wanted.extend(l.args.iter().cloned());
             lowered.push(l.function);
         }
+        let mut mask_at = Vec::with_capacity(calls.len());
+        for c in &calls {
+            mask_at.push(c.f.filter.as_ref().map(|f| {
+                let at = wanted.len();
+                wanted.push(Arc::clone(f));
+                at
+            }));
+        }
         let (input, columns) = self.with_columns(input, &wanted)?;
         let k = keys.len();
         let mut aggregates = Vec::with_capacity(calls.len());
         let mut distinct = Vec::with_capacity(calls.len());
-        for ((c, at), function) in calls.iter().zip(&arg_at).zip(lowered) {
-            if c.f.filter.is_some() {
-                return Err(unsupported("aggregate FILTER (WHERE ...) clauses"));
-            }
+        for (((c, at), function), mask) in calls.iter().zip(&arg_at).zip(lowered).zip(mask_at) {
             let args: Vec<usize> = columns[at.clone()].to_vec();
-            let agg = aggregate_expr(function, args, &input.schema, c.key.clone())?;
+            let mask = mask.map(|m| columns[m]);
+            let agg = aggregate_expr(function, args, mask, &input.schema, c.key.clone())?;
             let want = c.f.data_type.to_arrow();
             if agg.result_type()? != want {
                 return Err(internal(&format!(
@@ -304,12 +314,14 @@ fn null_if_false(c: &Arc<Expr>) -> Option<Arc<Expr>> {
     ))))
 }
 
-/// The executor's aggregate `function` over columns `args` of `schema`.
-/// Spark's STRING and BINARY are views here whatever carrier a registered
-/// table uses; the accumulators read any carrier.
+/// The executor's aggregate `function` over columns `args` with boolean
+/// mask column `mask` (`FILTER (WHERE ...)`; `None` reads all rows), of
+/// `schema`. Spark's STRING and BINARY are views here whatever carrier a
+/// registered table uses; the accumulators read any carrier.
 pub(super) fn aggregate_expr(
     function: AggregateFunction,
     args: Vec<usize>,
+    mask: Option<usize>,
     schema: &arrow_schema::Schema,
     name: String,
 ) -> Result<AggregateExpr> {
@@ -329,12 +341,10 @@ pub(super) fn aggregate_expr(
         let [value, key] = args[..] else {
             return Err(internal("max_by without a value and a key"));
         };
-        return Ok(AggregateExpr::by(
-            function,
-            (value, key),
-            (typed(&value), typed(&key)),
-            name,
-        ));
+        let mut expr =
+            AggregateExpr::by(function, (value, key), (typed(&value), typed(&key)), name);
+        expr.mask = mask;
+        return Ok(expr);
     }
     if function != AggregateFunction::Count && args.len() != arity(function) {
         return Err(internal("an aggregate with the wrong number of arguments"));
@@ -346,6 +356,7 @@ pub(super) fn aggregate_expr(
         input: crate::aggregate::AggInput::Raw,
         arg_type,
         name,
+        mask,
     })
 }
 

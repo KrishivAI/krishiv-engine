@@ -39,7 +39,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use krishiv_exec::JoinType;
-use krishiv_exec::aggregate::{AggregateFunction, is_moment};
+use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, is_moment};
 use krishiv_exec::physical::{HashScheme, Partitioning, PhysNode, PhysicalPlan, ProjectItemPlan};
 use krishiv_exec::window::{FrameBound, WindowFrame, WindowFunction};
 use krishiv_plan::{Expr, ExprNode, FunctionId, Literal, ResolvedExpr};
@@ -117,6 +117,7 @@ macro_rules! registry {
 // The registry: one line per feature, kept alphabetically sorted by id.
 // (id, variant, legacy level, kind, meaning)
 registry! {
+    (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
@@ -170,8 +171,9 @@ pub enum Construct<'a> {
     Window(&'a WindowFunction),
     /// A window function's frame.
     Frame(&'a WindowFrame),
-    /// An aggregate function (of an aggregate or a window).
-    Aggregate(AggregateFunction),
+    /// An aggregate expression (of an aggregate or a window): its
+    /// function, and whether it reads only the rows of a mask column.
+    Aggregate(&'a AggregateExpr),
     /// A resolved function call: only a session UDF needs a feature.
     Function(&'a FunctionId),
     /// A resolved expression (a struct field access needs its feature).
@@ -304,29 +306,34 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             };
             (newer(frame.lower) || newer(frame.upper)).then_some(Feature::WindowFrameOffsets)
         }
-        Construct::Aggregate(a) => match a {
-            AggregateFunction::Count
-            | AggregateFunction::Sum
-            | AggregateFunction::Avg
-            | AggregateFunction::Min
-            | AggregateFunction::Max
-            | AggregateFunction::First { .. }
-            | AggregateFunction::Last { .. }
-            // These are not encodable yet: the encoder refuses them, so
-            // none reaches a worker.
-            | AggregateFunction::StddevSamp
-            | AggregateFunction::StddevPop
-            | AggregateFunction::VarSamp
-            | AggregateFunction::VarPop
-            | AggregateFunction::Skewness
-            | AggregateFunction::Kurtosis
-            | AggregateFunction::Corr
-            | AggregateFunction::CovarSamp
-            | AggregateFunction::CovarPop
-            | AggregateFunction::AnyValue { .. }
-            | AggregateFunction::MaxBy
-            | AggregateFunction::MinBy => None,
-        },
+        Construct::Aggregate(a) => {
+            if a.mask.is_some() {
+                return Some(Feature::AggregateFilter);
+            }
+            match a.function {
+                AggregateFunction::Count
+                | AggregateFunction::Sum
+                | AggregateFunction::Avg
+                | AggregateFunction::Min
+                | AggregateFunction::Max
+                | AggregateFunction::First { .. }
+                | AggregateFunction::Last { .. }
+                // These are not encodable yet: the encoder refuses them, so
+                // none reaches a worker.
+                | AggregateFunction::StddevSamp
+                | AggregateFunction::StddevPop
+                | AggregateFunction::VarSamp
+                | AggregateFunction::VarPop
+                | AggregateFunction::Skewness
+                | AggregateFunction::Kurtosis
+                | AggregateFunction::Corr
+                | AggregateFunction::CovarSamp
+                | AggregateFunction::CovarPop
+                | AggregateFunction::AnyValue { .. }
+                | AggregateFunction::MaxBy
+                | AggregateFunction::MinBy => None,
+            }
+        }
         // Built-ins and registry functions travel by name; only a
         // session UDF (by name and version) needs a reader with it.
         Construct::Function(id) => match id {
@@ -353,14 +360,14 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 f(Construct::Window(&function.function));
                 f(Construct::Frame(&function.frame));
                 if let WindowFunction::Aggregate(a) = &function.function {
-                    f(Construct::Aggregate(a.function));
+                    f(Construct::Aggregate(a));
                 }
             }
         }
         PhysNode::Aggregate { aggregate, .. } => aggregate
             .aggregates
             .iter()
-            .for_each(|a| f(Construct::Aggregate(a.function))),
+            .for_each(|a| f(Construct::Aggregate(a))),
         PhysNode::HashJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Exchange(e) => f(Construct::Partitioning(&e.partitioning)),
@@ -537,7 +544,7 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     let mut stack = vec![plan.root()];
     while let Some(node) = stack.pop() {
         constructs_of(node, &mut |c| {
-            if matches!(c, Construct::Aggregate(function) if is_moment(function)) {
+            if matches!(c, Construct::Aggregate(a) if is_moment(a.function)) {
                 has_moment = true;
             }
             out.extend(feature_of(c));

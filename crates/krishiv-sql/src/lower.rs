@@ -34,11 +34,11 @@ use krishiv_plan::{
 use krishiv_types::DecimalType;
 
 use crate::ast::{
-    Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause, GroupBy,
-    GroupItem, GroupItemKind, GroupWith, GroupingSet, Ident, Join, JoinConstraint, JoinKind,
-    Literal, NamedWindow, NullTreatment, NumKind, Pivot, Query, Relation, RelationExt, Select,
-    SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableAlias,
-    TableFactor, TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
+    Alias, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind, FrameUnits, FromClause,
+    FromStatement, GroupBy, GroupItem, GroupItemKind, GroupWith, GroupingSet, Ident, Join,
+    JoinConstraint, JoinKind, Literal, NamedWindow, NullTreatment, NumKind, Pivot, Query, Relation,
+    RelationExt, Select, SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem,
+    Span, TableAlias, TableFactor, TableFactorKind, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};
@@ -393,6 +393,48 @@ impl Lowerer {
         Ok(plan)
     }
 
+    /// `FROM ... SELECT ... [SELECT ...]`: the shared `FROM` lowered
+    /// once, its plan shared across the bodies (as Spark's
+    /// `AstBuilder.visitFromStatement` shares its `from` plan), every
+    /// body reading it. One body reads as itself; several combine with
+    /// `UNION ALL` (the analyzer coerces the branches); none returns
+    /// the relation, as Spark does for a bare `FROM t`.
+    fn multi_select_from(&mut self, f: &FromStatement) -> R<LogicalPlan> {
+        let from = arc(self.from(&f.from)?);
+        let mut inputs = Vec::with_capacity(f.bodies.len());
+        for body in &f.bodies {
+            reject_organization(body)?;
+            let plan = match &body.body.kind {
+                SetExprKind::Select(s) => self.with_windows(&body.windows, |l| {
+                    let inner = l.select_over(s, (*from).clone())?;
+                    l.organize(inner, body)
+                })?,
+                _ => return Err(unsupported("FROM ... SELECT with a set body", f.span)),
+            };
+            inputs.push(arc(plan));
+        }
+        if inputs.is_empty() {
+            return Ok(match Arc::try_unwrap(from) {
+                Ok(plan) => plan,
+                Err(shared) => (*shared).clone(),
+            });
+        }
+        if inputs.len() == 1 {
+            return Ok(match Arc::try_unwrap(inputs.remove(0)) {
+                Ok(plan) => plan,
+                Err(shared) => (*shared).clone(),
+            });
+        }
+        Ok(self.node(
+            PlanNode::Union {
+                inputs,
+                by_name: false,
+                allow_missing_columns: false,
+            },
+            f.span,
+        ))
+    }
+
     /// A query body: a `SELECT`, a set operation, a table, ...
     fn body(&mut self, body: &SetExpr) -> R<LogicalPlan> {
         Ok(match &body.kind {
@@ -408,19 +450,7 @@ impl Lowerer {
                 }),
                 name.span,
             ),
-            SetExprKind::FromStatement(f) => match &f.bodies[..] {
-                [body] => match &body.body.kind {
-                    SetExprKind::Select(s) => {
-                        reject_organization(body)?;
-                        self.with_windows(&body.windows, |l| {
-                            let inner = l.select(s, Some(&f.from))?;
-                            l.organize(inner, body)
-                        })?
-                    }
-                    _ => return Err(unsupported("FROM ... SELECT with a set body", f.span)),
-                },
-                _ => return Err(unsupported("FROM with several SELECT bodies", f.span)),
-            },
+            SetExprKind::FromStatement(f) => self.multi_select_from(f)?,
             SetExprKind::SetOp {
                 op,
                 quantifier,
@@ -533,7 +563,27 @@ impl Lowerer {
     /// A `SELECT` with its `DISTINCT` and hints: as Spark's AstBuilder,
     /// the hints wrap the rest, the first one outermost.
     fn select(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
-        let mut plan = self.with_windows(&s.windows, |l| l.select_list(s, from))?;
+        let plan = self.with_windows(&s.windows, |l| {
+            let input = match from {
+                Some(from) => l.from(from)?,
+                None => l.node(PlanNode::OneRowRelation, s.span),
+            };
+            l.select_list(s, input)
+        })?;
+        self.select_wrap(s, plan)
+    }
+
+    /// A `SELECT` over an already-lowered input: the bodies of a
+    /// `FROM ... SELECT` statement share one. The input lowered before
+    /// the body's `WINDOW` clause is in scope, as Spark lowers the
+    /// shared `FROM` once outside the bodies.
+    fn select_over(&mut self, s: &Select, input: LogicalPlan) -> R<LogicalPlan> {
+        let plan = self.with_windows(&s.windows, |l| l.select_list(s, input))?;
+        self.select_wrap(s, plan)
+    }
+
+    /// A `SELECT`'s `DISTINCT` and hints around its lowered list.
+    fn select_wrap(&mut self, s: &Select, mut plan: LogicalPlan) -> R<LogicalPlan> {
         if s.quantifier == Some(SetQuantifier::Distinct) {
             plan = self.node(PlanNode::Distinct { input: arc(plan) }, s.span);
         }
@@ -570,14 +620,11 @@ impl Lowerer {
         }))
     }
 
-    fn select_list(&mut self, s: &Select, from: Option<&FromClause>) -> R<LogicalPlan> {
+    fn select_list(&mut self, s: &Select, input: LogicalPlan) -> R<LogicalPlan> {
         if !s.lateral_views.is_empty() {
             return Err(unsupported("LATERAL VIEW", s.span));
         }
-        let mut plan = match from {
-            Some(from) => self.from(from)?,
-            None => self.node(PlanNode::OneRowRelation, s.span),
-        };
+        let mut plan = input;
         if let Some(w) = &s.selection {
             let predicate = arc(self.expr(w)?);
             plan = self.node(

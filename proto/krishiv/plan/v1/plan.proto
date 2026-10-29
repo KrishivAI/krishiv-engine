@@ -378,6 +378,10 @@ message AggregateExpr {
   // Arrow IPC `Schema` flatbuffer of one field.
   bytes arg_type = 5;
   string name = 6;
+  // A boolean input column the aggregate is restricted to
+  // (`FILTER (WHERE ...)`); absent reads all rows.
+  // feature: aggregate_filter
+  optional uint64 mask = 7;
 }
 
 enum JoinType {

@@ -461,6 +461,11 @@ pub struct AggregateExpr {
     pub arg_type: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, tag = "6")]
     pub name: ::prost::alloc::string::String,
+    /// A boolean input column the aggregate is restricted to
+    /// (`FILTER (WHERE ...)`); absent reads all rows.
+    /// feature: aggregate_filter
+    #[prost(uint64, optional, tag = "7")]
+    pub mask: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Residual {

@@ -898,6 +898,7 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         })?,
         arg_type: type_from(&a.arg_type)?,
         name: a.name.clone(),
+        mask: a.mask.map(usize_of).transpose()?,
     })
 }
 
