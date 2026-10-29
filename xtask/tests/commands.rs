@@ -264,7 +264,18 @@ fn pr_size_and_changes_on_a_real_repo() {
     let changes = xtask(&["changes", "--repo", repo, "--base", "main"]);
     assert!(String::from_utf8_lossy(&changes.stdout).contains("rust=false"));
 
-    let big: String = (0..5100).map(|i| format!("line {i}\n")).collect();
+    // Under the 10,000-line cap (and over the old 5,000 one): accepted without approval.
+    let at_cap: String = (0..9_900).map(|i| format!("line {i}\n")).collect();
+    write(&dir, "crates/x/src/big.rs", &at_cap);
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-q", "-m", "at cap"]);
+    assert!(
+        xtask(&["pr-size", "--repo", repo, "--base", "main"])
+            .status
+            .success()
+    );
+    // One line over the cap: the size gate fails without approval.
+    let big: String = (0..10_001).map(|i| format!("line {i}\n")).collect();
     write(&dir, "crates/x/src/big.rs", &big);
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-q", "-m", "big"]);
