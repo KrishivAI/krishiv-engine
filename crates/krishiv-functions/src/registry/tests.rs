@@ -2552,7 +2552,8 @@ fn from_to_csv_signatures() {
     )
     .unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::ParseSyntaxError);
-    // A non-foldable, non-literal schema names `` `schema` ``.
+    // A non-foldable, non-literal schema is `INVALID_SCHEMA.NON_STRING_LITERAL`
+    // (Spark 4.2.0, checked against a live server).
     let err = (def("from_csv").result)(
         &CallTypes::new(
             &[s.clone(), s.clone()],
@@ -2561,11 +2562,7 @@ fn from_to_csv_signatures() {
         .with_literals(&[true, false]),
     )
     .unwrap_err();
-    assert_eq!(
-        err.error_class(),
-        ErrorClass::DatatypeMismatchNonFoldableInput
-    );
-    assert!(err.to_string().contains("`schema`"), "{err}");
+    assert_eq!(err.error_class(), ErrorClass::InvalidSchemaNonStringLiteral);
     // Options must be a map.
     let err = result(
         "from_csv",

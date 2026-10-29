@@ -137,22 +137,9 @@ fn struct_of_ddl(ddl: &str) -> Result<DataType, KrishivError> {
                     data_type: format!("\"{}\"", parsed.sql()),
                 }
                 .into()),
-                Err(_) => {
-                    // When neither parses, the error is the data type's,
-                    // except a bare `ARRAY`/`MAP`/`STRUCT` reports non-struct.
-                    match single_err.error_class() {
-                        krishiv_common::error::ErrorClass::IncompleteTypeDefinitionArray
-                        | krishiv_common::error::ErrorClass::IncompleteTypeDefinitionMap
-                        | krishiv_common::error::ErrorClass::IncompleteTypeDefinitionStruct => {
-                            Err(InvalidSchemaNonStructType {
-                                input_schema: format!("\"{ddl}\""),
-                                data_type: format!("\"{}\"", ddl.to_ascii_uppercase()),
-                            }
-                            .into())
-                        }
-                        _ => Err(single_err),
-                    }
-                }
+                // Neither parses: the error is the data type's (a bare `ARRAY`
+                // is `INCOMPLETE_TYPE_DEFINITION.ARRAY`, as Spark reports it).
+                Err(_) => Err(single_err),
             }
         }
     }
@@ -172,16 +159,10 @@ fn from_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     // The schema must be a foldable string literal.
     let folded = c.constant(1);
     if folded.is_none() && !c.is_plain_literal(1) {
-        let input_type = format!(
-            "\"{}\"",
-            c.data_type(1)
-                .map_or_else(|| "VOID".to_owned(), DataType::sql)
-        );
-        return Err(DatatypeMismatchNonFoldableInput {
-            sql_expr: format!("\"from_csv({}, {})\"", sql(0), sql(1)),
-            input_name: "`schema`".to_owned(),
-            input_type,
-            input_expr: format!("\"{}\"", sql(1)),
+        // Spark: a schema that is not a string literal (a column, say) is
+        // `INVALID_SCHEMA.NON_STRING_LITERAL`.
+        return Err(InvalidSchemaNonStringLiteral {
+            input_schema: format!("\"{}\"", sql(1)),
         }
         .into());
     }

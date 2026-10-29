@@ -254,3 +254,38 @@ fn to_csv_writes_every_scalar_type_and_option() {
         "1,2,4,1.5,2.5,7.25,2020-01-02,2020-01-02T03:04:05.000Z,2020-01-02T03:04:05.000,[61 62],false"
     );
 }
+
+/// Schema arguments that are not a struct schema, against Spark 4.2.0: a
+/// bare complex type is incomplete, a complete non-struct type and a
+/// non-literal schema have their own `INVALID_SCHEMA` classes.
+#[test]
+fn from_csv_schema_errors_match_spark() {
+    for (sql, class) in [
+        (
+            "SELECT from_csv('1', 'array')",
+            "INCOMPLETE_TYPE_DEFINITION.ARRAY",
+        ),
+        (
+            "SELECT from_csv('1', 'map')",
+            "INCOMPLETE_TYPE_DEFINITION.MAP",
+        ),
+        (
+            "SELECT from_csv('1', 'array<int>')",
+            "INVALID_SCHEMA.NON_STRUCT_TYPE",
+        ),
+        (
+            "SELECT from_csv('1', 'int')",
+            "INVALID_SCHEMA.NON_STRUCT_TYPE",
+        ),
+        (
+            "SELECT from_csv('1', 1)",
+            "INVALID_SCHEMA.NON_STRING_LITERAL",
+        ),
+        (
+            "SELECT from_csv('1', c) FROM (SELECT 'a INT' AS c)",
+            "INVALID_SCHEMA.NON_STRING_LITERAL",
+        ),
+    ] {
+        assert_eq!(one(sql), format!("ERR {class}"), "{sql}");
+    }
+}

@@ -407,6 +407,17 @@ fn the_registry_resolves_json_tuple_as_a_generator() {
     )
     .unwrap();
     assert_eq!(f.name(), "json_tuple");
+    // The signature stays total for a direct caller with too few arguments
+    // (the analyzer's arity check raises first): Spark's `> 1` arity error.
+    let one = [crate::signature::ArgType::new(
+        krishiv_types::DataType::String,
+        true,
+    )];
+    let err = (def.result)(&crate::signature::CallTypes::new(&one, &[])).unwrap_err();
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::WrongNumArgsWithoutSuggestion
+    );
 }
 
 /// Fields the query does not ask for are skipped whole, whatever their
