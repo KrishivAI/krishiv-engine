@@ -24,7 +24,19 @@
 //!   `"peak_heap_bytes"` is the live heap's peak during the query in a build with the `heap-stats`
 //!   feature (`null` otherwise; the resident set above it is what the allocator keeps), and
 //!   `"peak_untracked_bytes"` the most the live heap grew beyond what the memory pool reserved,
-//!   both counted from the query's start and sampled every millisecond: heap the pool does not see.
+//!   both counted from the query's start and sampled every millisecond: heap the pool does not see;
+//!   `"allocations"` the allocations (and reallocations) the process made during the query, in the
+//!   same builds (`null` otherwise).
+//!   Each operator also reports `"drivers"`, `"batches_in"`, `"batches_out"`, `"morsels"`,
+//!   `"max_driver_compute_seconds"` (the busiest driver: skew) and `"blocked_sink_seconds"`
+//!   (backpressure); `"pipelines":[{"id","drivers","threads","started_seconds","ended_seconds"}]`
+//!   gives each pipeline's drivers, the threads that ran them, and when its first driver started
+//!   and its last ended, after the query started. `"detailed"` says whether the costlier counters
+//!   of `PROFILE_DETAILED` were collected.
+//! * `PROFILE_DETAILED <query.sql>`: as `PROFILE`, also collecting the counters of a detailed
+//!   profile (`EXPLAIN ANALYZE`): hash-table probe lengths of joins and aggregates
+//!   (`"probe_lookups"`, `"probe_key_compares"`, `"max_probe_length"` in `"extra"`). Counting
+//!   slows the query: time with `PROFILE`, read these counters from a separate run.
 //! * `DUMP <query.sql> <out-dir>`: as `RUN`, then writes the result as Parquet to `out-dir`
 //!   (replacing it). The write is not in the reported seconds.
 //! * `QUIT`: exits.
@@ -315,20 +327,25 @@ impl Runner {
 
     /// Plans and runs `sql`, materialising every batch.
     fn execute(&self, sql: &str) -> Result<(Vec<RecordBatch>, f64, DataFrame), RunnerError> {
-        let (batches, timing, df, _) = self.execute_timed(sql, false)?;
+        let (batches, timing, df, _) = self.execute_timed(sql, Metered::No)?;
         Ok((batches, timing.total, df))
     }
 
     /// As [`Self::execute`], also timing the two phases.
-    fn execute_timed(&self, sql: &str, profile: bool) -> Result<Executed, RunnerError> {
+    fn execute_timed(&self, sql: &str, metered: Metered) -> Result<Executed, RunnerError> {
         let start = Instant::now();
         let df = futures::executor::block_on(self.session.sql(sql))?;
         let parse_analyze = start.elapsed().as_secs_f64();
-        let (batches, metrics) = if profile {
-            let (b, m) = futures::executor::block_on(df.collect_with_metrics())?;
-            (b, Some(m))
-        } else {
-            (futures::executor::block_on(df.collect())?, None)
+        let (batches, metrics) = match metered {
+            Metered::No => (futures::executor::block_on(df.collect())?, None),
+            Metered::Plain => {
+                let (b, m) = futures::executor::block_on(df.collect_with_metrics())?;
+                (b, Some(m))
+            }
+            Metered::Detailed => {
+                let (b, p) = futures::executor::block_on(df.collect_with_profile())?;
+                (b, Some(p.metrics))
+            }
         };
         let total = start.elapsed().as_secs_f64();
         let timing = Timing {
@@ -366,13 +383,18 @@ impl Runner {
                 let (batches, secs, _) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 Ok(format!("OK {} {secs:.6}", count_rows(&batches)))
             }
-            (Some("PROFILE"), Some(file), None, _) => {
+            (Some(cmd @ ("PROFILE" | "PROFILE_DETAILED")), Some(file), None, _) => {
+                let metered = if cmd == "PROFILE" {
+                    Metered::Plain
+                } else {
+                    Metered::Detailed
+                };
                 let sql = read_sql(&decode_path(file)?)?;
                 let before = rss().map(|(now, _)| now);
                 let reset = reset_peak_rss();
                 let heap = HeapWatch::start(&self.session);
-                let executed = self.execute_timed(&sql, true);
-                let (peak_heap, peak_untracked) = heap.stop();
+                let executed = self.execute_timed(&sql, metered);
+                let (peak_heap, peak_untracked, allocations) = heap.stop();
                 let (batches, t, _, metrics) = executed?;
                 let peak = rss().filter(|_| reset).map(|(_, hwm)| hwm);
                 let memory = Memory {
@@ -381,12 +403,13 @@ impl Runner {
                     peak_rss: peak,
                     peak_heap,
                     peak_untracked,
+                    allocations,
                 };
                 Ok(format!(
                     "OK {} {:.6} {}",
                     count_rows(&batches),
                     t.total,
-                    t.json(metrics.as_ref(), &memory)
+                    t.json(metrics.as_ref(), &memory, metered == Metered::Detailed)
                 ))
             }
             (Some("DUMP"), Some(file), Some(out), None) => {
@@ -415,6 +438,17 @@ impl Runner {
 
 type Executed = (Vec<RecordBatch>, Timing, DataFrame, Option<QueryMetrics>);
 
+/// Which metrics a run collects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Metered {
+    /// None (`RUN`, `DUMP`).
+    No,
+    /// The executor's metrics (`PROFILE`).
+    Plain,
+    /// Those and a detailed profile's counters (`PROFILE_DETAILED`).
+    Detailed,
+}
+
 /// What `PROFILE` reports about memory besides the metrics.
 #[derive(Debug, Clone, Copy)]
 struct Memory {
@@ -423,16 +457,20 @@ struct Memory {
     peak_rss: Option<u64>,
     peak_heap: Option<u64>,
     peak_untracked: Option<u64>,
+    allocations: Option<u64>,
 }
 
-/// Watches the live heap during a query (`heap-stats` builds; nothing otherwise): its peak, and the
-/// most it grew beyond the memory pool's reservations, sampled every millisecond.
+/// Watches the live heap during a query (`heap-stats` builds; nothing otherwise): its peak, the
+/// most it grew beyond the memory pool's reservations, sampled every millisecond, and the
+/// allocations made.
 struct HeapWatch {
     #[cfg(feature = "heap-stats")]
     sampler: Option<(
         std::sync::Arc<std::sync::atomic::AtomicBool>,
         std::thread::JoinHandle<u64>,
     )>,
+    #[cfg(feature = "heap-stats")]
+    allocations: usize,
 }
 
 impl HeapWatch {
@@ -460,6 +498,7 @@ impl HeapWatch {
         });
         Self {
             sampler: Some((stop, handle)),
+            allocations: krishiv_alloc::heap::allocations(),
         }
     }
 
@@ -468,14 +507,19 @@ impl HeapWatch {
         Self {}
     }
 
-    /// `(peak heap, peak untracked)`, `None` without `heap-stats`.
+    /// `(peak heap, peak untracked, allocations)`, `None` without `heap-stats`.
     #[cfg(feature = "heap-stats")]
-    fn stop(mut self) -> (Option<u64>, Option<u64>) {
+    fn stop(mut self) -> (Option<u64>, Option<u64>, Option<u64>) {
         let untracked = self.sampler.take().and_then(|(stop, handle)| {
             stop.store(true, std::sync::atomic::Ordering::Release);
             handle.join().ok()
         });
-        (Some(krishiv_alloc::heap::peak() as u64), untracked)
+        let allocations = krishiv_alloc::heap::allocations().saturating_sub(self.allocations);
+        (
+            Some(krishiv_alloc::heap::peak() as u64),
+            untracked,
+            Some(allocations as u64),
+        )
     }
 
     #[cfg(not(feature = "heap-stats"))]
@@ -483,8 +527,8 @@ impl HeapWatch {
         clippy::unused_self,
         reason = "the heap-stats build consumes the watch"
     )]
-    fn stop(self) -> (Option<u64>, Option<u64>) {
-        (None, None)
+    fn stop(self) -> (Option<u64>, Option<u64>, Option<u64>) {
+        (None, None, None)
     }
 }
 
@@ -502,7 +546,7 @@ struct Timing {
 }
 
 impl Timing {
-    fn json(&self, metrics: Option<&QueryMetrics>, memory: &Memory) -> String {
+    fn json(&self, metrics: Option<&QueryMetrics>, memory: &Memory, detailed: bool) -> String {
         let operators = metrics.map_or_else(String::new, |m| {
             let ops: Vec<String> = m
                 .operators
@@ -522,7 +566,7 @@ impl Timing {
                         })
                         .collect();
                     format!(
-                        "{{\"id\":{},\"name\":\"{}\",\"rows_in\":{},\"rows_out\":{},\"compute_seconds\":{:.6},\"blocked_io_seconds\":{:.6},\"peak_reserved_bytes\":{},\"spill_requests\":{},\"spill_files\":{},\"spill_bytes\":{},\"blocked_memory_seconds\":{:.6},\"extra\":{{{}}}}}",
+                        "{{\"id\":{},\"name\":\"{}\",\"rows_in\":{},\"rows_out\":{},\"compute_seconds\":{:.6},\"blocked_io_seconds\":{:.6},\"peak_reserved_bytes\":{},\"spill_requests\":{},\"spill_files\":{},\"spill_bytes\":{},\"blocked_memory_seconds\":{:.6},\"drivers\":{},\"batches_in\":{},\"batches_out\":{},\"morsels\":{},\"max_driver_compute_seconds\":{:.6},\"blocked_sink_seconds\":{:.6},\"extra\":{{{}}}}}",
                         id.0,
                         e.name.escape_default(),
                         m.rows_in,
@@ -534,17 +578,40 @@ impl Timing {
                         m.spill_files,
                         m.spill_write_bytes,
                         m.blocked_on_memory.as_secs_f64(),
+                        m.drivers,
+                        m.batches_in,
+                        m.batches_out,
+                        m.morsels,
+                        m.max_driver_compute_time.as_secs_f64(),
+                        m.blocked_on_sink.as_secs_f64(),
                         extra.join(",")
                     )
                 })
                 .collect();
-            format!(",\"operators\":[{}]", ops.join(","))
+            let pipelines: Vec<String> = m
+                .pipelines
+                .iter()
+                .map(|(id, p)| {
+                    format!(
+                        "{{\"id\":{id},\"drivers\":{},\"threads\":{},\"started_seconds\":{:.6},\"ended_seconds\":{:.6}}}",
+                        p.drivers,
+                        p.threads,
+                        p.started.as_secs_f64(),
+                        p.ended.as_secs_f64()
+                    )
+                })
+                .collect();
+            format!(
+                ",\"operators\":[{}],\"pipelines\":[{}]",
+                ops.join(","),
+                pipelines.join(",")
+            )
         });
         let ops = metrics.map(|m| m.operators.values().map(|e| &e.metrics));
         let spill_files = ops.clone().map(|o| o.map(|m| m.spill_files).sum::<u64>());
         let spill_bytes = ops.map(|o| o.map(|m| m.spill_write_bytes).sum::<u64>());
         let mem = format!(
-            ",\"memory\":{{\"limit_bytes\":{},\"peak_reserved_bytes\":{},\"spill_files\":{},\"spill_bytes\":{},\"rss_before_bytes\":{},\"peak_rss_bytes\":{},\"peak_heap_bytes\":{},\"peak_untracked_bytes\":{}}}",
+            ",\"memory\":{{\"limit_bytes\":{},\"peak_reserved_bytes\":{},\"spill_files\":{},\"spill_bytes\":{},\"rss_before_bytes\":{},\"peak_rss_bytes\":{},\"peak_heap_bytes\":{},\"peak_untracked_bytes\":{},\"allocations\":{}}}",
             json_opt(memory.limit),
             json_opt(metrics.map(|m| m.memory.peak_reserved)),
             json_opt(spill_files),
@@ -553,9 +620,10 @@ impl Timing {
             json_opt(memory.peak_rss),
             json_opt(memory.peak_heap),
             json_opt(memory.peak_untracked),
+            json_opt(memory.allocations),
         );
         format!(
-            "{{\"phases\":[{{\"name\":\"parse_analyze\",\"seconds\":{:.6}}},{{\"name\":\"plan_execute\",\"seconds\":{:.6}}}]{operators}{mem}}}",
+            "{{\"phases\":[{{\"name\":\"parse_analyze\",\"seconds\":{:.6}}},{{\"name\":\"plan_execute\",\"seconds\":{:.6}}}],\"detailed\":{detailed}{operators}{mem}}}",
             self.parse_analyze, self.plan_execute
         )
     }
