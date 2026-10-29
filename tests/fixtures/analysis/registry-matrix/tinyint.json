@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "tinyint#19306a31c952/ansi_on",
+      "reason": "SELECT tinyint(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "tinyint#19306a31c952/ansi_off",
+      "reason": "SELECT tinyint(INTERVAL '1 02:03:04' DAY TO SECOND) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "tinyint#a48c0a4a8c30/ansi_on",
+      "reason": "SELECT tinyint(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    },
+    {
+      "id": "tinyint#a48c0a4a8c30/ansi_off",
+      "reason": "SELECT tinyint(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals"
+    }
+  ],
+  "format_version": 1,
+  "function": "tinyint"
+}

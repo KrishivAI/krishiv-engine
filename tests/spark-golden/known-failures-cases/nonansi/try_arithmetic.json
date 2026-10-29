@@ -1,11 +1,5 @@
 {
   "cases": {
-    "cast-matrix": [
-      2,
-      32,
-      43,
-      58
-    ],
     "coercion": [
       3,
       33,

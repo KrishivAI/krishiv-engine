@@ -310,7 +310,6 @@ fn expected_not_run() -> BTreeMap<String, usize> {
         ("unsupported: CAST from STRING to BOOLEAN".to_owned(), 4),
         ("unsupported: INTERVAL literals".to_owned(), 144),
         ("unsupported: TIME literals".to_owned(), 6),
-        ("unsupported: function DATE".to_owned(), 4),
         (
             "unsupported: the function convert_timezone (it has no binding for these arguments: a region time zone)"
                 .to_owned(),

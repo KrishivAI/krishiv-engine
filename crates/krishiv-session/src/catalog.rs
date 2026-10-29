@@ -447,7 +447,14 @@ impl QueryCatalog {
         })?;
         // The streaming pipeline's scans, in id order: the assignment is
         // deterministic. Builds and subquery plans read whole.
-        let mut scans = streaming_scans(plan.root());
+        let (mut scans, streams_range) = streaming_leaves(plan.root());
+        // A `Range` source slices its rows over the task's own drivers and
+        // has no split assignment yet: several tasks would each emit the
+        // whole range. Until slices are assigned across tasks (a follow-up
+        // of the distributed scheduler), such a stage is a single task.
+        if streams_range && tasks > 1 {
+            return Err(unsupported("a range source across several tasks"));
+        }
         scans.sort_by_key(|s| s.id);
         let mut assigned: Vec<(ScanId, ScanSplitsKind)> = Vec::new();
         for scan in scans {
@@ -661,11 +668,17 @@ fn collect_scans<'a>(plan: &'a LogicalPlan, out: &mut Vec<&'a Scan>) {
 /// input; subquery plans and join builds read whole (no entry), so tasks
 /// join probe shares against full builds and evaluate subqueries over full
 /// inputs.
-fn streaming_scans(root: &PhysNode) -> Vec<&krishiv_exec::physical::ScanNode> {
-    fn go<'a>(node: &'a PhysNode, out: &mut Vec<&'a krishiv_exec::physical::ScanNode>) {
+fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>, bool) {
+    #[derive(Default)]
+    struct Leaves<'a> {
+        scans: Vec<&'a krishiv_exec::physical::ScanNode>,
+        range: bool,
+    }
+    fn go<'a>(node: &'a PhysNode, out: &mut Leaves<'a>) {
         match node {
-            PhysNode::Scan(scan) => out.push(scan),
+            PhysNode::Scan(scan) => out.scans.push(scan),
             PhysNode::OneRow => {}
+            PhysNode::Range(_) => out.range = true,
             PhysNode::Filter { input, .. }
             | PhysNode::Project { input, .. }
             | PhysNode::ReplicateRows { input, .. }
@@ -687,9 +700,9 @@ fn streaming_scans(root: &PhysNode) -> Vec<&krishiv_exec::physical::ScanNode> {
             }
         }
     }
-    let mut out = Vec::new();
+    let mut out = Leaves::default();
     go(root, &mut out);
-    out
+    (out.scans, out.range)
 }
 
 /// The table `name`: the one this query already loaded, so every spelling
@@ -1260,6 +1273,11 @@ pub(crate) fn reserved_temp_view_name(name: &str) -> KrishivError {
 
 #[cfg(test)]
 mod tests {
+    /// The scans of the streaming pipeline of `root`.
+    fn streaming_scans(root: &PhysNode) -> Vec<&krishiv_exec::physical::ScanNode> {
+        super::streaming_leaves(root).0
+    }
+
     use super::*;
     use arrow_array::Array as _;
     use arrow_array::{Int32Array, RecordBatch};
@@ -1710,6 +1728,37 @@ mod tests {
             union.sort_unstable();
             assert_eq!(union, whole, "{tasks} tasks");
         }
+    }
+
+    /// A streaming `Range` has no split assignment: one task is fine,
+    /// several would each emit the whole range, so they are refused.
+    #[test]
+    fn task_specs_refuse_a_range_across_several_tasks() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let session = Session::new().unwrap();
+        let df = session.range(0, 10, 1, None);
+        let analysis = rt.block_on(df.analysis()).unwrap();
+        let (_, physical) = rt
+            .block_on(session.physical(&analysis.analyzed, &analysis.env))
+            .unwrap();
+        assert_eq!(
+            analysis
+                .env
+                .catalog
+                .task_specs(&physical, 1, 1)
+                .unwrap()
+                .len(),
+            1
+        );
+        let e = analysis
+            .env
+            .catalog
+            .task_specs(&physical, 2, 2)
+            .unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     }
 
     #[test]

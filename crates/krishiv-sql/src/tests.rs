@@ -12,6 +12,7 @@ use super::lexer::{TokenKind, tokenize, unescape_string};
 use super::*;
 
 mod commands;
+mod golden_syntax;
 mod probe;
 mod tail;
 

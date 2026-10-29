@@ -441,8 +441,9 @@ fn aliases_run_as_their_aggregate() -> R {
 }
 
 /// `DISTINCT` on the new aggregates deduplicates the `(x, y)` pairs first
-/// (so it agrees with the plain form where there is no tie); `FILTER` is
-/// not supported.
+/// (so it agrees with the plain form where there is no tie); `FILTER`
+/// keeps the rows where the condition is true before `max_by`, `min_by`
+/// and `any_value` choose.
 #[test]
 fn distinct_and_filter_with_new_aggregates() -> R {
     let s = session()?;
@@ -468,17 +469,18 @@ fn distinct_and_filter_with_new_aggregates() -> R {
         rows(&s, "SELECT any_value(DISTINCT x) FROM t WHERE k = 3")?,
         ["q"]
     );
-    for sql in [
-        "SELECT max_by(x, y) FILTER (WHERE v) FROM t",
-        "SELECT min_by(x, y) FILTER (WHERE v) FROM t",
-        "SELECT any_value(x) FILTER (WHERE v) FROM t",
-    ] {
-        let (class, params) = error(&s, sql)?;
-        assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
-        assert!(
-            param(&params, "feature").is_some_and(|m| m.contains("aggregate FILTER")),
-            "{sql}: {params:?}"
-        );
-    }
+    // The passing rows are id 1 `(a, 3)` and id 4 `(d, 7)`.
+    assert_eq!(
+        rows(&s, "SELECT max_by(x, y) FILTER (WHERE v) FROM t")?,
+        ["d"]
+    );
+    assert_eq!(
+        rows(&s, "SELECT min_by(x, y) FILTER (WHERE v) FROM t")?,
+        ["a"]
+    );
+    assert_eq!(
+        rows(&s, "SELECT any_value(x) FILTER (WHERE v) FROM t")?,
+        ["a"]
+    );
     Ok(())
 }

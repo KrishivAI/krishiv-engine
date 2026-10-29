@@ -1493,3 +1493,27 @@ fn explain_variable_commands() {
         assert_eq!(value, plan, "{sql}");
     }
 }
+
+/// A decimal session variable is no decimal literal: comparing an integral
+/// column with it keeps the variable's name and the comparison as written
+/// (Spark's decimal-literal narrowing matches `DecimalLiteral` only).
+#[test]
+fn decimal_variable_comparisons_keep_the_variable() {
+    let s = Session::new().unwrap();
+    block_on(s.sql("DECLARE VARIABLE v DECIMAL(3,1) DEFAULT 1.5")).unwrap();
+    let df = block_on(s.sql("SELECT id > v FROM range(3)")).unwrap();
+    let schema = block_on(df.schema()).unwrap();
+    assert_eq!(schema.field(0).name(), "(id > v)");
+    let rows = block_on(df.collect()).unwrap();
+    let got: Vec<bool> = rows
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_boolean()
+                .iter()
+                .flatten()
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(got, [false, false, true]);
+}

@@ -863,6 +863,31 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 }
                 self.u8(u8::from(*include_nulls));
             }
+            PlanNode::TableFunction { name, args } => {
+                self.u8(28);
+                self.str(name);
+                self.exprs(args);
+            }
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                num_slices,
+                output,
+            } => {
+                self.u8(29);
+                self.i64(*start);
+                self.i64(*end);
+                self.i64(*step);
+                match num_slices {
+                    None => self.u8(0),
+                    Some(n) => {
+                        self.u8(1);
+                        self.put(&n.to_le_bytes());
+                    }
+                }
+                self.bound(output);
+            }
         }
     }
 

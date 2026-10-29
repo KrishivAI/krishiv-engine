@@ -392,6 +392,19 @@ impl Display for NodeLine<'_> {
                     rows.len()
                 )
             }
+            PlanNode::TableFunction { name, args } => {
+                write!(f, "TableFunction {name} [{}]", List(args))
+            }
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                num_slices,
+                ..
+            } => match num_slices {
+                Some(n) => write!(f, "Range [{start}, {end}, step {step}, slices {n}]"),
+                None => write!(f, "Range [{start}, {end}, step {step}]"),
+            },
         }
     }
 }

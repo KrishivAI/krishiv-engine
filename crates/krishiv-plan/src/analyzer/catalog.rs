@@ -219,6 +219,93 @@ pub trait FunctionRegistry: Send + Sync {
     fn version(&self) -> u64;
 }
 
+/// A table-valued function the analyzer knows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+/// What a table-function name resolves to.
+pub enum TableFunctionKind {
+    /// `range(start, end, step, numSlices)`.
+    Range,
+    /// `sql_keywords()`.
+    SqlKeywords,
+    /// A Spark generator TVF (`explode`, `inline`, `stack`, ...) the
+    /// engine does not implement yet: lowering used to reject it with
+    /// `KRISHIV_UNSUPPORTED_FEATURE` and the analyzer keeps doing so.
+    UnsupportedGenerator,
+}
+
+/// What a table-function lookup found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TableFunctionLookup {
+    /// A built-in table function.
+    Found(TableFunctionKind),
+    /// Not a table function Spark has in this profile.
+    NotFound,
+}
+
+/// The table-function registry: the built-in table-valued functions,
+/// looked up by lower-case name beside [`FunctionRegistry`]. No
+/// per-function logic lives in lowering; the analyzer resolves through
+/// this table.
+pub trait TableFunctionRegistry: Send + Sync {
+    /// The table function named `name` (as written; matched
+    /// case-insensitively) in `profile`.
+    fn lookup(&self, name: &str, profile: SparkProfile) -> TableFunctionLookup;
+    /// Changes whenever a lookup could answer differently; part of the
+    /// context fingerprint.
+    fn version(&self) -> u64;
+}
+
+/// The built-in table functions: `range` and `sql_keywords`, plus the
+/// Spark generator TVFs the engine rejects as unsupported (as lowering
+/// did before they lowered).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BuiltinTableFunctions;
+
+impl BuiltinTableFunctions {
+    /// A new registry.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+
+    /// Whether `name` (lower-case) is a generator TVF Spark has but the
+    /// engine does not implement yet.
+    fn is_generator(lower: &str) -> bool {
+        matches!(
+            lower,
+            "explode"
+                | "explode_outer"
+                | "inline"
+                | "inline_outer"
+                | "posexplode"
+                | "posexplode_outer"
+                | "json_tuple"
+                | "stack"
+        )
+    }
+}
+
+impl TableFunctionRegistry for BuiltinTableFunctions {
+    fn lookup(&self, name: &str, _profile: SparkProfile) -> TableFunctionLookup {
+        let mut lower = String::with_capacity(name.len());
+        lower.extend(name.chars().flat_map(char::to_lowercase));
+        match lower.as_str() {
+            "range" => TableFunctionLookup::Found(TableFunctionKind::Range),
+            "sql_keywords" => TableFunctionLookup::Found(TableFunctionKind::SqlKeywords),
+            n if Self::is_generator(n) => {
+                TableFunctionLookup::Found(TableFunctionKind::UnsupportedGenerator)
+            }
+            _ => TableFunctionLookup::NotFound,
+        }
+    }
+
+    fn version(&self) -> u64 {
+        0
+    }
+}
+
 /// Who runs a query. Build it with [`Principal::new`]; more attributes
 /// arrive with authentication (P2-T136).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -473,6 +560,10 @@ pub trait SqlFrontend: Send + Sync {
     /// A digest of the options that change how text parses; part of the
     /// context fingerprint.
     fn fingerprint(&self) -> u64;
+    /// The rows of `sql_keywords()`: `(keyword, reserved)` with the
+    /// session's enforced-keywords flag applied. The list comes from the
+    /// SQL front end so the analyzer never duplicates the parser's table.
+    fn keywords(&self) -> Vec<(String, bool)>;
 }
 
 /// What a data source name in `` format.`path` `` is, for Spark's

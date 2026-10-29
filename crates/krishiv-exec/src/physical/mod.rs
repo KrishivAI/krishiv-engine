@@ -268,6 +268,8 @@ pub enum PhysNode {
     Scan(ScanNode),
     /// One row without columns (`SELECT` without `FROM`).
     OneRow,
+    /// A range of `id BIGINT NOT NULL` values.
+    Range(RangeNode),
     /// The rows of `input` for which `predicate` is true.
     Filter {
         /// The input.
@@ -415,6 +417,23 @@ pub struct ScanNode {
     pub runtime_filters: Vec<ScanRuntimeFilter>,
     /// The runtime filters' row-stage settings.
     pub row_stage: RowStageSettings,
+}
+
+/// A range source: `range(start, end, step, numSlices)` (Spark's `Range`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RangeNode {
+    /// First value (inclusive).
+    pub start: i64,
+    /// End (exclusive).
+    pub end: i64,
+    /// Step (never zero).
+    pub step: i64,
+    /// The partition count, when `numSlices` was written. `None` means the
+    /// task's default parallelism decides at execution; the fragment never
+    /// stores a count it did not get from `numSlices`.
+    pub num_slices: Option<u32>,
+    /// The output attribute.
+    pub output: AttrId,
 }
 
 /// A filter pushed into a scan, over the table schema.
@@ -672,6 +691,7 @@ plan_data!(struct ExprEnv {
 plan_data!(enum PhysNode {
     Scan(scan),
     OneRow,
+    Range(range),
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
@@ -698,6 +718,7 @@ plan_data!(struct WritePlan {
     target_file_bytes
 });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage });
+plan_data!(struct RangeNode { start, end, step, num_slices, output });
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
 plan_data!(struct JoinFilterPlan { id, key, options });
@@ -723,7 +744,7 @@ impl PhysNode {
     /// first.
     pub fn children(&self) -> Vec<&PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow => Vec::new(),
+            Self::Scan(_) | Self::OneRow | Self::Range(_) => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }
@@ -755,7 +776,7 @@ impl PhysNode {
     /// [`Self::children`], mutable.
     pub(crate) fn children_mut(&mut self) -> Vec<&mut PhysNode> {
         match self {
-            Self::Scan(_) | Self::OneRow => Vec::new(),
+            Self::Scan(_) | Self::OneRow | Self::Range(_) => Vec::new(),
             Self::Filter {
                 input, subqueries, ..
             }

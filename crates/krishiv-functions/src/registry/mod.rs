@@ -60,6 +60,10 @@ pub enum Execution {
     /// (`krishiv_exec::planner::eval::hof`, over `krishiv_kernels::list`).
     /// A lambda is no Arrow value, so these never bind a kernel here.
     HigherOrder,
+    /// Rewritten to a `CAST` during analysis (the cast-named functions:
+    /// `float(x)`, `int(x)`, ...); the plan only ever holds the `Cast`
+    /// node, so this is never executed and never bound.
+    Cast,
 }
 
 /// The aggregates the executor implements.

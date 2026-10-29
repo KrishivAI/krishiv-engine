@@ -195,6 +195,13 @@ impl Encoder {
             }
             PhysNode::Scan(scan) => Kind::Scan(self.scan(scan)?),
             PhysNode::OneRow => Kind::OneRow(pb::Empty {}),
+            PhysNode::Range(r) => Kind::Range(pb::RangeNode {
+                start: r.start,
+                end: r.end,
+                step: r.step,
+                num_slices: r.num_slices,
+                output: r.output.0,
+            }),
             PhysNode::Filter {
                 input,
                 layout: l,
@@ -780,6 +787,7 @@ fn aggregate_expr(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggregat
         } as i32,
         arg_type: arrow_bytes(&a.arg_type, nested),
         name: a.name.clone(),
+        mask: a.mask.map(|m| m as u64),
     })
 }
 

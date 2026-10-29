@@ -215,6 +215,7 @@ pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
         input: AggInput::Raw,
         arg_type,
         name: "x".to_owned(),
+        mask: None,
     };
     vec![
         AggregateExpr::count_star("n"),
@@ -239,6 +240,7 @@ pub(crate) fn aggregate_exprs() -> Vec<AggregateExpr> {
             input: AggInput::State,
             arg_type: ArrowType::Int32,
             name: "merged".to_owned(),
+            mask: None,
         },
     ]
 }
@@ -493,6 +495,16 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
         ("file_scan", PhysNode::Scan(file_scan())),
         ("one_row", PhysNode::OneRow),
         (
+            "range",
+            PhysNode::Range(krishiv_exec::physical::RangeNode {
+                start: 0,
+                end: 10,
+                step: 2,
+                num_slices: Some(4),
+                output: krishiv_plan::AttrId(1),
+            }),
+        ),
+        (
             "filter",
             PhysNode::Filter {
                 input: boxed(scan()),
@@ -658,6 +670,35 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     group_by: Vec::new(),
                     aggregates: vec![AggregateExpr::count_star("n")],
                     distinct: vec![true],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_filter",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    distinct: vec![false, false],
+                    aggregates: vec![
+                        AggregateExpr {
+                            function: AggregateFunction::Count,
+                            args: vec![0],
+                            input: AggInput::Raw,
+                            arg_type: ArrowType::Int32,
+                            name: "masked".to_owned(),
+                            mask: Some(1),
+                        },
+                        AggregateExpr {
+                            function: AggregateFunction::Sum,
+                            args: vec![0],
+                            input: AggInput::Raw,
+                            arg_type: ArrowType::Int32,
+                            name: "plain".to_owned(),
+                            mask: None,
+                        },
+                    ],
                     output: AggregateOutput::Final,
                 },
             },

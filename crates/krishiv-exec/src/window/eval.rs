@@ -325,10 +325,13 @@ fn aggregate(
     if picks_bytes(a) {
         return byte_values(a, f, shape, u);
     }
-    // The argument columns are passed as they are, in order.
+    // The argument columns are passed as they are, in order. The window
+    // applies the filter itself (see `filter_mask`); the accumulator
+    // never sees it.
     let local = AggregateExpr {
         args: (0..a.args.len()).collect(),
         input: AggInput::Raw,
+        mask: None,
         ..a.clone()
     };
     let mut acc = Accumulator::new(&local, ansi)?;
@@ -772,9 +775,12 @@ pub(super) fn cost(plan: &WindowPlan, rows: usize, parts: usize, peers: usize) -
                         + rows * size_of::<(usize, usize)>()
                         + width(&out, rows)
                 } else {
+                    // The window applies the filter itself (see
+                    // `filter_mask`); the accumulator never sees it.
                     let local = AggregateExpr {
                         args: (0..a.args.len()).collect(),
                         input: AggInput::Raw,
+                        mask: None,
                         ..a.clone()
                     };
                     let state = Accumulator::new(&local, true)?.group_bytes();

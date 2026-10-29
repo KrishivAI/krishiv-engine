@@ -1,10 +1,5 @@
 {
   "cases": {
-    "cast-matrix": [
-      0,
-      1,
-      7
-    ],
     "datetime": [
       11
     ],
@@ -30,9 +25,6 @@
       38,
       39,
       40
-    ],
-    "query-features": [
-      18
     ],
     "sql-commands": [
       2,

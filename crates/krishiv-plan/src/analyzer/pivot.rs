@@ -199,7 +199,7 @@ impl Resolver<'_> {
         // The grouping columns ride as items, as in `SELECT year,
         // sum(...) GROUP BY year`: the aggregate's output is the grouping
         // columns, then one aggregate per (value, aggregate) pair.
-        self.build_aggregate(p.origin, &c, group, &combined, global, None)
+        self.build_aggregate(p.origin, &c, group, &combined, global, None, env)
     }
 
     /// Several pivot columns: Spark validates the values against the struct

@@ -851,6 +851,10 @@ impl<'s> Parser<'s> {
     fn error_with_recovery<R: TopRule>(&mut self, opts: ParserOptions) -> ParseError {
         self.dangling_clause_word::<R>(opts);
         self.organization_clause_failure::<R>(opts);
+        self.group_by_with_rollup_failure();
+        self.filter_without_where_failure();
+        self.extract_identifier_failure();
+        self.pipe_extend_distinct_failure();
         if let Some((at, sym, how)) = self.matched
             && at == self.far
             && self.extra != Some(at)
@@ -971,6 +975,150 @@ impl<'s> Parser<'s> {
                 self.matched = p.matched;
             }
             Err(_) => {}
+        }
+    }
+
+    /// `GROUP BY WITH ROLLUP` / `WITH CUBE` with no grouping expressions
+    /// (`SELECT a, b FROM grouping GROUP BY WITH ROLLUP`): ANTLR reads the
+    /// `WITH` as part of the grouping and reports the `ROLLUP` / `CUBE` as
+    /// extra input. This parser's `GROUP BY` items fail at the `WITH`, so the
+    /// error is moved to the next token with the extra-input hint.
+    fn group_by_with_rollup_failure(&mut self) {
+        if self.extra.is_some() || self.missing.is_some() {
+            return;
+        }
+        let at = self.far;
+        let is_with = self
+            .toks
+            .get(at)
+            .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "WITH"));
+        let next_is_rollup_cube = self.toks.get(at + 1).is_some_and(|t| {
+            t.kind == TokenKind::Word
+                && (is_kw(t.span.text(self.src), "ROLLUP") || is_kw(t.span.text(self.src), "CUBE"))
+        });
+        let prev_is_group_by = at >= 2
+            && self.toks.get(at - 2).is_some_and(|t| {
+                t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "GROUP")
+            })
+            && self
+                .toks
+                .get(at - 1)
+                .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "BY"));
+        if is_with && next_is_rollup_cube && prev_is_group_by {
+            self.far = at + 1;
+            self.extra = Some(at + 1);
+        }
+    }
+
+    /// `FILTER (expr)` without `WHERE` (`SELECT sum(c1) FILTER (c1 != var1)`):
+    /// Spark reports the opening `(`. This parser's `expect_kw("WHERE")`
+    /// fails at the first token of the expression, so the error is moved back
+    /// to the `(` with no hint.
+    fn filter_without_where_failure(&mut self) {
+        if self.extra.is_some() || self.missing.is_some() {
+            return;
+        }
+        let far = self.far;
+        for (i, t) in self.toks.iter().enumerate() {
+            if t.kind != TokenKind::Word || !is_kw(t.span.text(self.src), "FILTER") {
+                continue;
+            }
+            let Some(open) = self.toks.get(i + 1) else {
+                continue;
+            };
+            if open.kind != TokenKind::Sym(Sym::LParen) {
+                continue;
+            }
+            // An aggregate `FILTER` follows the `)` that closes the call;
+            // the higher-order function `filter(array, x -> p)` does not.
+            if i == 0 || self.toks[i - 1].kind != TokenKind::Sym(Sym::RParen) {
+                continue;
+            }
+            // The `(` whose matching `)` (or the end of input) contains the
+            // failure, and whose first token inside is not `WHERE`.
+            let close = self.closers.get(i + 1).copied().unwrap_or(usize::MAX);
+            let inside_end = if close == usize::MAX {
+                self.toks.len()
+            } else {
+                close
+            };
+            if far <= i + 1 || far >= inside_end {
+                continue;
+            }
+            let first_inside = self.toks.get(i + 2);
+            let has_where = first_inside.is_some_and(|t| {
+                t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "WHERE")
+            });
+            if !has_where {
+                self.far = i + 1;
+                self.matched = None;
+                return;
+            }
+        }
+    }
+
+    /// `EXTRACT(IDENTIFIER('...') FROM ...)` (`SELECT EXTRACT(IDENTIFIER('YEAR')
+    /// FROM ...)`): Spark inserts the missing `)` before the `FROM`. This
+    /// parser reads `EXTRACT` as an ordinary call (the field is not a plain
+    /// word) and its `expect_closing` only drops, so the missing hint is added
+    /// here when the failure is at that `FROM`.
+    fn extract_identifier_failure(&mut self) {
+        if self.extra.is_some() || self.missing.is_some() {
+            return;
+        }
+        let at = self.far;
+        let is_from = self
+            .toks
+            .get(at)
+            .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "FROM"));
+        if !is_from {
+            return;
+        }
+        // The sequence `EXTRACT ( IDENTIFIER (`: the field position of an
+        // `EXTRACT` holds an `IDENTIFIER(...)` call.
+        let word = |i: usize, kw: &str| {
+            self.toks
+                .get(i)
+                .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), kw))
+        };
+        let sym = |i: usize| {
+            self.toks
+                .get(i)
+                .is_some_and(|t| t.kind == TokenKind::Sym(Sym::LParen))
+        };
+        let has_extract_identifier = (0..self.toks.len())
+            .any(|i| word(i, "EXTRACT") && sym(i + 1) && word(i + 2, "IDENTIFIER") && sym(i + 3));
+        if has_extract_identifier {
+            self.missing = Some((at, "')'"));
+        }
+    }
+
+    /// `TABLE t |> EXTEND DISTINCT x AS z`: Spark reads `extend distinct x`
+    /// and reports the `AS`. This parser rejects the `DISTINCT`, so the error
+    /// is moved forward to the `AS` with no hint.
+    fn pipe_extend_distinct_failure(&mut self) {
+        if self.extra.is_some() || self.missing.is_some() {
+            return;
+        }
+        let at = self.far;
+        let is_distinct = self
+            .toks
+            .get(at)
+            .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "DISTINCT"));
+        if !is_distinct {
+            return;
+        }
+        let prev_is_extend = at >= 1
+            && self.toks.get(at - 1).is_some_and(|t| {
+                t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "EXTEND")
+            });
+        // `EXTEND DISTINCT <item> AS ...`: the failure belongs at the `AS`.
+        let next_next_is_as = self
+            .toks
+            .get(at + 2)
+            .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "AS"));
+        if prev_is_extend && next_next_is_as {
+            self.far = at + 2;
         }
     }
 

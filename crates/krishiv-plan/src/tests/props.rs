@@ -944,7 +944,7 @@ fn m_grouping(g: &mut Grouping, w: &mut Walk) -> bool {
 fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
     let p = Arc::make_mut(p);
     match &mut p.node {
-        PlanNode::OneRowRelation => false,
+        PlanNode::OneRowRelation | PlanNode::TableFunction { .. } | PlanNode::Range { .. } => false,
         PlanNode::Read(s) => m_source(s, w),
         PlanNode::Sql { query, args } => {
             site!(w, query.push('x'));

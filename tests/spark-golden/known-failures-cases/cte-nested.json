@@ -2,8 +2,7 @@
   "cases": {
     "query-features": [
       3,
-      4,
-      5
+      4
     ]
   },
   "file": "cte-nested",

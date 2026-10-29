@@ -1,7 +1,6 @@
 {
   "cases": {
     "query-features": [
-      1,
       2
     ],
     "subqueries": [
