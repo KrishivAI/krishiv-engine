@@ -286,27 +286,23 @@ fn run(
                 }
             }
         }
-        let root = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
-        let mut root = batch(root, "Tidy", &mut t)?;
+        let pruned = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
+        let mut root = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
         // Tidying can fold a filter to a constant and leave columns unread
-        // (a `false` that reached a filter on `b` frees `b`): prune again and,
-        // only when that removed something, tidy again, until the plan is a
-        // fixed point. Pruning returns the same relation when it removes
-        // nothing, and so does a tidy batch that changes nothing, so the
-        // common case costs one extra prune and no comparison; a prune that
-        // rebuilds without removing anything stops after one more tidy.
-        for round in 2..=MAX_ITERATIONS {
+        // (a `false` that reached a filter on `b` frees `b`), so after a tidy
+        // that changed the plan, prune and tidy again until a tidy changes
+        // nothing: then the plan is pruned and tidy, a fixed point. A tidy
+        // batch that changes nothing returns its input, so the common case
+        // (tidying a pruned plan changes nothing) costs no extra pass.
+        let mut changed = !Arc::ptr_eq(&root, &pruned);
+        let mut round = 2;
+        while changed && round <= MAX_ITERATIONS {
             let pruned = prune::prune(&root);
             t.step("Prune", round, "Prune", &root, &pruned);
-            if Arc::ptr_eq(&pruned, &root) {
-                break;
-            }
             let tidied = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
-            let settled = Arc::ptr_eq(&tidied, &pruned);
+            changed = !Arc::ptr_eq(&tidied, &pruned);
             root = tidied;
-            if settled {
-                break;
-            }
+            round += 1;
         }
         Ok((root, t.steps))
     };
