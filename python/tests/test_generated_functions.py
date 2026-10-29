@@ -383,3 +383,16 @@ def test_aggregates_run(df: DataFrame) -> None:
     assert _rows(out) == [[1.5, 3, 6, pytest.approx(2.0 / 3), 2.0, -2.5, 3, 3]]
     grouped = df.groupBy(F.col("d")).agg(F.sum("i"))
     assert _rows(grouped) == [["2024-01-30", 6]]
+
+
+def test_unix_timestamp_without_a_timestamp_takes_no_arguments() -> None:
+    """``unix_timestamp()`` is the current time: the default format must not be sent as the timestamp."""
+    from krishiv.sql import SparkSession
+
+    spark = SparkSession.builder.config("spark.sql.session.timeZone", "UTC").create()
+    df = spark.createDataFrame([(1,)], ["a"])
+    now = df.select(F.unix_timestamp().alias("t")).collect()[0]["t"]
+    assert isinstance(now, int)
+    assert now > 1_700_000_000
+    parsed = df.select(F.unix_timestamp(F.lit("1970-01-02 00:00:00")).alias("t")).collect()[0]["t"]
+    assert parsed == 86400

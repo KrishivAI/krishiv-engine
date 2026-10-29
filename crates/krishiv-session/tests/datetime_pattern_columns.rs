@@ -330,6 +330,9 @@ fn the_legacy_time_parser_is_refused() {
         "SELECT to_timestamp('2024-01-05', 'yyyy-MM-dd')",
         "SELECT date_format(TIMESTAMP '2024-01-05 10:00:00', 'yyyy')",
         "SELECT unix_timestamp('2024-01-05', 'yyyy-MM-dd')",
+        // The default pattern of the one-argument string forms is a pattern too.
+        "SELECT unix_timestamp('2024-01-05 10:00:00')",
+        "SELECT to_unix_timestamp('2024-01-05 10:00:00')",
     ] {
         let err = block_on(s.sql(sql))
             .err()
@@ -346,6 +349,8 @@ fn the_legacy_time_parser_is_refused() {
         column(&s, "to_timestamp('2024-01-05')", ""),
         text(&[Some("2024-01-05 00:00:00")])
     );
+    // A timestamp argument has no text to parse: not refused.
+    block_on(s.sql("SELECT unix_timestamp(TIMESTAMP '2024-01-05 10:00:00')")).unwrap();
     block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = CORRECTED")).unwrap();
     assert_eq!(
         column(&s, "to_date('2024-01-05', 'yyyy-MM-dd')", ""),

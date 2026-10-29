@@ -119,6 +119,10 @@ pub(super) const HANDWRITTEN: &[(&str, &str)] = &[
         "convert_timezone",
         "the first parameter is `Optional[Column]` without a default, so `None` omits it",
     ),
+    (
+        "unix_timestamp",
+        "`unix_timestamp()` takes no arguments: the default format must not become the timestamp",
+    ),
 ];
 
 const C: &str = "col: ColumnOrName";
@@ -545,10 +549,6 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "to_timestamp_ntz",
             "timestamp: ColumnOrName, format: ColumnOrName = None",
-        ),
-        Row::new(
-            "unix_timestamp",
-            "timestamp: ColumnOrName = None, format: str = \"yyyy-MM-dd HH:mm:ss\"",
         ),
         Row::new(
             "to_unix_timestamp",

@@ -157,6 +157,6 @@ fn parsing_matches_spark() -> R {
     assert!(checked > 3000, "only {checked} values checked");
     // Region zones resolve against the bundled database, so nothing should
     // need it counted out anymore.
-    assert!(regions < 150, "{regions} strings needed the tz database");
+    assert_eq!(regions, 0, "{regions} strings needed the tz database");
     Ok(())
 }

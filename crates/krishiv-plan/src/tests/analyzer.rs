@@ -1366,6 +1366,7 @@ fn every_context_input_changes_the_key() {
     v("profile", &|c| c.profile = SparkProfile::V4_1);
     v("caseSensitive", &|c| c.conf.case_sensitive ^= true);
     v("ansi", &|c| c.conf.ansi ^= true);
+    v("legacyTimeParser", &|c| c.conf.legacy_time_parser ^= true);
     v("groupByAliases", &|c| c.conf.group_by_aliases ^= true);
     v("groupByOrdinal", &|c| c.conf.group_by_ordinal ^= true);
     v("orderByOrdinal", &|c| c.conf.order_by_ordinal ^= true);

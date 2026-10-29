@@ -279,7 +279,6 @@ __all__ = [
     "unhex",
     "uniform",
     "unix_date",
-    "unix_timestamp",
     "upper",
     "url_decode",
     "url_encode",
@@ -1594,11 +1593,6 @@ def uniform(min: ColumnOrName | float, max: ColumnOrName | float, seed: int | Co
 def unix_date(col: ColumnOrName) -> Column:
     """Calls the registry function ``unix_date``."""
     return _call("unix_date", _named(col, "col"))
-
-
-def unix_timestamp(timestamp: ColumnOrName | None = None, format: str = "yyyy-MM-dd HH:mm:ss") -> Column:
-    """Calls the registry function ``unix_timestamp``."""
-    return _call("unix_timestamp", *_opt(_named, timestamp, "timestamp"), _lit(format, "format"))
 
 
 def upper(col: ColumnOrName) -> Column:

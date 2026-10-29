@@ -316,6 +316,7 @@ impl ContextFingerprint {
             c.map_key_dedup_last_win,
             c.run_sql_on_files,
             c.timestamp_ntz,
+            c.legacy_time_parser,
             self.files,
         ];
         num(
