@@ -3,6 +3,10 @@
 //! reference over random partitions, orderings and batch splits; Spark's
 //! `NTile`, exact decimal frames, filters, memory, weights and plan checks.
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "test-only runtime plumbing and temp-dir cleanup; never runs on a compute worker"
+)]
 
 use std::sync::Arc;
 use std::time::Duration;

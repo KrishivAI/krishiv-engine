@@ -54,6 +54,7 @@ mod profile;
 mod session;
 mod udfs;
 mod variables;
+mod window;
 
 pub use access::{PathPrefixPolicy, StatementInfo};
 pub use column::Column;
@@ -79,3 +80,4 @@ pub use session::{RecordBatchStream, Session, SessionBuilder};
 /// Native Rust scalar UDFs: the [`ScalarUdf`] trait and its boundary types,
 /// for [`Session::register_udf`].
 pub use udfs::SessionFunctions;
+pub use window::WindowSpec;

@@ -11,6 +11,7 @@ from krishiv.sql.readwriter import DataFrameReader, DataFrameWriter
 from krishiv.sql.row import Row
 from krishiv.sql.session import Catalog, SparkSession
 from krishiv.sql.stat import DataFrameStatFunctions
+from krishiv.sql.window import Window, WindowSpec
 
 __all__ = [
     "Catalog",
@@ -24,6 +25,8 @@ __all__ = [
     "Row",
     "RuntimeConfig",
     "SparkSession",
+    "Window",
+    "WindowSpec",
     "functions",
     "types",
 ]

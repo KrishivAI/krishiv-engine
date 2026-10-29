@@ -275,10 +275,13 @@ pub(super) fn rows() -> Vec<Row> {
         ));
     }
     for name in ["lag", "lead"] {
-        rows.push(Row::new(
-            name,
-            "col: ColumnOrName, offset: int = 1, default: Any = None",
-        ));
+        rows.push(
+            Row::new(
+                name,
+                "col: ColumnOrName, offset: int = 1, default: Any = None",
+            )
+            .always("default"),
+        );
     }
     for name in ["first_value", "last_value"] {
         rows.push(Row::new(
