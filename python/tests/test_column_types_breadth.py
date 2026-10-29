@@ -68,17 +68,19 @@ def test_when_takes_columns_and_literals(df: DataFrame) -> None:
         Row(w="n"),
         Row(w="y"),
     ]
-    # A scanned string column as a branch fails exactly as the SQL CASE does
-    # (a pre-existing engine gap with string storage in CASE).
+    # A scanned string column as a branch works: branches of one Spark
+    # `STRING` in different carriers meet the `CASE` type.
     spark = df.sparkSession
     df.createOrReplaceTempView("when_people")
     try:
-        with pytest.raises(errors.SparkRuntimeException) as py:
-            df.select(F.when(df.age > 3, df.name).otherwise(df.name)).collect()
-        with pytest.raises(errors.SparkRuntimeException) as sql:
-            spark.sql("SELECT CASE WHEN age > 3 THEN name ELSE name END AS w FROM when_people").collect()
-        assert type(py.value) is type(sql.value)
-        assert str(py.value) == str(sql.value)
+        assert df.select(F.when(df.age > 3, df.name).otherwise(df.name).alias("w")).collect() == [
+            Row(w="Alice"),
+            Row(w="Bob"),
+        ]
+        assert spark.sql("SELECT CASE WHEN age > 3 THEN name ELSE name END AS w FROM when_people").collect() == [
+            Row(w="Alice"),
+            Row(w="Bob"),
+        ]
     finally:
         spark.catalog.dropTempView("when_people")
     with pytest.raises(errors.PySparkTypeError, match="NOT_EXPECTED_TYPE"):

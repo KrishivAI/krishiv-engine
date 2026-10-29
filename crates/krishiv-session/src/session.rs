@@ -18,7 +18,7 @@ use krishiv_common::error::{
 };
 use krishiv_common::redact::RedactedSql;
 use krishiv_common::secret::OptionValue;
-use krishiv_exec::files::{FileReads, LocalPaths, PathLocator as _};
+use krishiv_exec::files::{FileReads, LocalPaths, ObjectPaths, PathLocator as _};
 use krishiv_exec::physical::{SpillScopes, WorkerContext, WritePlan};
 use krishiv_exec::planner::{
     DefaultPlanner, PhysicalPlan, PhysicalPlanner, PlanningContext, ProviderStatistics,
@@ -28,7 +28,8 @@ use krishiv_exec::{
     TokioExecutor, WorkloadClass,
 };
 use krishiv_io::{
-    DirectoryWrite, FormatRegistry, IoConfig, IoScheduler, SaveMode, StoreId, is_spark_file_source,
+    DirectoryWrite, FormatRegistry, IoConfig, IoScheduler, SaveMode, StoreId, StoreRegistry,
+    is_spark_file_source, parse_object_url,
 };
 use krishiv_memory::{
     MemoryConfig, MemoryPool, RelationStore, SpillConfig, SpillManager, SpillScope, TreePool,
@@ -758,12 +759,18 @@ impl Session {
     /// The analysis inputs of one query.
     pub(crate) fn query_env(&self) -> QueryEnv {
         let (config, conf_version) = self.state.conf.versioned_snapshot();
+        // Cloud stores are built from this snapshot, lazily per query:
+        // plans carry only path strings, and the worker resolves the store
+        // at listing from the read's option values (P2-T084).
+        let stores = Arc::new(StoreRegistry::new(Arc::clone(&config)));
         let files = Arc::new(FileReads::new(
             self.state.io.context(),
             Arc::clone(&self.state.formats),
-            Arc::new(LocalPaths::new(
+            Arc::new(ObjectPaths::new(
                 StoreId::new(LOCAL_STORE),
                 self.state.cwd.clone(),
+                Arc::clone(&self.state.io),
+                Arc::clone(&stores),
             )),
             Arc::clone(&config),
         ));
@@ -1055,7 +1062,17 @@ impl Session {
             }
             .into());
         };
-        let at = LocalPaths::new(StoreId::new(LOCAL_STORE), self.state.cwd.clone()).locate(text)?;
+        // Cloud stores are built from the query snapshot with the write's
+        // per-relation `fs.*` options overriding it (Spark's per-relation
+        // Hadoop configuration).
+        let stores = Arc::new(StoreRegistry::new(Arc::clone(&env.config)));
+        let at = ObjectPaths::new(
+            StoreId::new(LOCAL_STORE),
+            self.state.cwd.clone(),
+            Arc::clone(&self.state.io),
+            stores,
+        )
+        .locate_with_options(text, &options)?;
         // The directory as it physically is (links in its existing part
         // resolved): the policy is asked about the directory that is
         // written, never about a name that a link sends elsewhere.
@@ -1195,6 +1212,11 @@ impl Session {
     /// `path` in the qualified form reads and writes use (`file:/a/b`),
     /// which the access policy is asked about.
     pub(crate) fn qualify_path(&self, path: &str) -> Result<String, KrishivError> {
+        // No store is built here: cloud paths qualify through their canonical
+        // display (as reads qualify them), local paths through `LocalPaths`.
+        if let Ok(url) = parse_object_url(path) {
+            return Ok(url.display);
+        }
         Ok(
             LocalPaths::new(StoreId::new(LOCAL_STORE), self.state.cwd.clone())
                 .locate(path)?
@@ -1481,6 +1503,19 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), OptionValue::from_user(k, *v)))
             .collect()
+    }
+
+    /// The access policy is asked about the qualified path: a cloud URL
+    /// keeps its canonical form (no store is built), a local path gets the
+    /// `file:` form.
+    #[test]
+    fn qualify_path_keeps_cloud_urls_and_qualifies_local_paths() {
+        let session = super::Session::new().unwrap();
+        assert_eq!(
+            session.qualify_path("s3a://bucket/k").unwrap(),
+            "s3a://bucket/k"
+        );
+        assert_eq!(session.qualify_path("/a/b").unwrap(), "file:/a/b");
     }
 
     #[test]

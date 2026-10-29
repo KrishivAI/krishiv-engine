@@ -60,6 +60,18 @@ tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync
 [target.'cfg(loom)'.dev-dependencies]
 loom.workspace = true
 
+[features]
+# Cloud object stores (S3, GCS, Azure): the `aws`/`azure`/`gcp` features of
+# `object_store` (reqwest over rustls). Opt-in so the default build stays
+# inside the dependency and binary-size budgets. Without it, cloud URLs fail
+# with `KRISHIV_UNSUPPORTED_FEATURE`.
+cloud = ["object_store/aws", "object_store/azure", "object_store/gcp"]
+
+# The emulator round-trips need the cloud builders.
+[[test]]
+name = "object_stores"
+required-features = ["cloud"]
+
 [[bench]]
 name = "coalesce"
 harness = false
