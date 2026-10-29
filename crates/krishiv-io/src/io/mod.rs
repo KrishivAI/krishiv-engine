@@ -24,6 +24,7 @@ pub mod cache;
 mod coalesce;
 pub mod fault;
 mod pace;
+pub mod stores;
 pub mod upload;
 
 use std::collections::HashMap;
@@ -52,6 +53,12 @@ pub use self::coalesce::{Coalesced, Waste, coalesce, coalesce_with};
 pub use self::fault::{FaultStats, FaultStore, ScheduledRequest, TransientError};
 pub use self::pace::StorePolicy;
 use self::pace::{Direction, Pacer};
+pub use self::stores::{
+    AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
+    GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, ParsedUrl, S3_ACCESS_KEY, S3_ENDPOINT,
+    S3_ENDPOINT_REGION, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_KEY, S3_SESSION_TOKEN,
+    StoreRegistry, parse_object_url,
+};
 pub use self::upload::Upload;
 use crate::error::{
     Result, cancelled, changed, internal, not_found, read_failed, store_failed, write_failed,
@@ -420,7 +427,7 @@ impl IoScheduler {
     }
 
     /// Registers (or replaces) the store `id` with a pacing `policy`
-    /// ([`StorePolicy::S3`] for S3).
+    /// (one [`StorePolicy`] per cloud scheme).
     pub fn register_store_with(
         &self,
         id: StoreId,
