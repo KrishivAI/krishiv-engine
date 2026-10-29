@@ -299,6 +299,9 @@ fn run(
         while changed && round <= MAX_ITERATIONS {
             let pruned = prune::prune(&root);
             t.step("Prune", round, "Prune", &root, &pruned);
+            if Arc::ptr_eq(&pruned, &root) {
+                break;
+            }
             let tidied = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
             changed = !Arc::ptr_eq(&tidied, &pruned);
             root = tidied;
