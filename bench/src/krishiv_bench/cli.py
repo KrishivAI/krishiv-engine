@@ -138,6 +138,19 @@ def main(argv=None) -> None:
     xb.add_argument("--threads", type=int, default=8, help="threads for both sides")
     xb.add_argument("--memory-limit", default="12g", help="memory limit for both sides")
     xb.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    lg = sub.add_parser(
+        "ledger",
+        help="gap ledger: Krishiv vs DuckDB wall time split into operator buckets (perf + DuckDB profile)",
+    )
+    lg.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    lg.add_argument("--sf", type=float, default=10)
+    lg.add_argument("--dataset", default=None, help="dataset dir under $KRISHIV_DATA (default per suite)")
+    lg.add_argument("--queries", help="comma list, e.g. q01,q05")
+    lg.add_argument("--threads", type=int, default=12)
+    lg.add_argument("--memory-limit", default="32g")
+    lg.add_argument("--timeout", type=float, default=600, help="per-run timeout seconds")
+    lg.add_argument("--previous", help="ledger JSON to diff against (default: the newest earlier one)")
+    lg.add_argument("--runner", help=RUNNER_HELP + "; build it with frame pointers (see ledger.py)")
     rr = sub.add_parser(
         "reproduce",
         help="reference engines side by side: correctness vs DuckDB, then ours (interleaved) and/or theirs (best of N)",
@@ -169,8 +182,45 @@ def main(argv=None) -> None:
     rp.add_argument("--rows", default="10m", help="memcap: sales rows of the results to report")
     rp.add_argument("--baseline", default="duckdb")
     rp.add_argument("files", nargs="*", type=Path, help="explicit result JSONs (default: newest per engine)")
+    mn = sub.add_parser(
+        "minimize", help="shrink a query that differs from the reference engine to a minimal query and data slice"
+    )
+    mn.add_argument("--suite", default="tpch", choices=["tpch", "tpcds", "clickbench"])
+    mn.add_argument("--query", required=True, help="query id, e.g. q07")
+    mn.add_argument("--sf", type=float, default=1)
+    mn.add_argument("--dataset", help="dataset dir under $KRISHIV_DATA (default per suite)")
+    mn.add_argument("--reference", default="duckdb", choices=["duckdb", "spark-connect"])
+    mn.add_argument("--spark-remote", default="sc://127.0.0.1:15012", help="Spark Connect server (the oracle)")
+    mn.add_argument("--seed-rows", type=int, default=2000, help="rows per table in the first slice")
+    mn.add_argument("--max-runs", type=int, default=3000, help="engine comparisons before the shrink stops")
+    mn.add_argument("--max-seconds", type=float, default=1500, help="time budget; the best case so far is written")
+    mn.add_argument("--run-timeout", type=float, default=30, help="seconds per engine run of one candidate")
+    mn.add_argument("--no-pin", action="store_true", help="accept any difference, not just the original kind")
+    mn.add_argument("--full-data", action="store_true", help="shrink the query only, on the full data")
+    mn.add_argument("--out", help="case directory (default $KRISHIV_DATA/minimized/<suite>_<query>)")
+    mn.add_argument("--runner", help=RUNNER_HELP)
     a = ap.parse_args(argv)
     _set_runner(getattr(a, "runner", None))
+    if a.cmd == "minimize":
+        from .minimize import run_minimize
+
+        run_minimize(
+            a.suite,
+            a.query,
+            a.sf,
+            a.dataset,
+            a.reference,
+            a.runner,
+            a.seed_rows,
+            a.max_runs,
+            a.full_data,
+            a.out,
+            pin=not a.no_pin,
+            max_seconds=a.max_seconds,
+            run_timeout=a.run_timeout,
+            spark_remote=a.spark_remote,
+        )
+        return
     if a.cmd in ("reproduce", "ab") and h2o.is_h2o(a.suite):
         _, a.dataset, a.sf = h2o_target(ap, a)
     if a.cmd == "reproduce" and a.suite == "memcap":
@@ -195,6 +245,20 @@ def main(argv=None) -> None:
             a.runs,
             a.their_timeout,
             a.profile,
+        )
+    elif a.cmd == "ledger":
+        from .ledger import run_ledger
+
+        run_ledger(
+            a.suite,
+            a.sf,
+            a.dataset,
+            a.queries.split(",") if a.queries else None,
+            a.threads,
+            a.memory_limit,
+            a.timeout,
+            a.runner,
+            a.previous,
         )
     elif a.cmd == "abba":
         from .abba import run_abba

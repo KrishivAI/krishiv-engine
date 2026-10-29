@@ -26,6 +26,7 @@ import json
 import os
 import select
 import shutil
+import signal
 import subprocess
 import tempfile
 import urllib.parse
@@ -67,11 +68,13 @@ class KrishivEngine(Engine):
         memory_limit: str = "12g",
         binary: Path | str | None = None,
         conf: list[tuple[str, str]] | None = None,
+        launcher: list[str] | None = None,
     ):
         self.threads = threads or os.cpu_count() or 1
         self.memory_limit = memory_limit
         self.binary = runner_binary(binary)
         self.conf = list(conf or [])
+        self.launcher = list(launcher or [])  # command prefix (e.g. `perf record ... --`)
         self._proc: subprocess.Popen[str] | None = None
         self._dataset: Dataset | None = None
         self._version = "unknown"
@@ -131,6 +134,7 @@ class KrishivEngine(Engine):
                 "RUSTFLAGS='-C target-cpu=x86-64-v3' cargo build --profile dist -p krishiv-bench-runner"
             )
         cmd = [
+            *self.launcher,
             str(self.binary),
             "--data",
             str(self._dataset.root),
@@ -145,7 +149,15 @@ class KrishivEngine(Engine):
         self._stderr_log = self._tmp / f"runner-{self._starts}.stderr"
         with self._stderr_log.open("wb") as err:
             self._proc = subprocess.Popen(
-                cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err, text=True, bufsize=1
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=err,
+                text=True,
+                bufsize=1,
+                # A launcher (perf) is the direct child and the runner its child: own process group, so a
+                # kill reaches both and never orphans the runner.
+                start_new_session=bool(self.launcher),
             )
         ready = self._readline(120)
         parts = ready.split(" ", 2)
@@ -206,6 +218,9 @@ class KrishivEngine(Engine):
     def _kill(self) -> None:
         proc, self._proc = self._proc, None
         if proc is not None:
+            if self.launcher:
+                with contextlib.suppress(OSError):
+                    os.killpg(proc.pid, signal.SIGKILL)
             proc.kill()
             proc.wait()
             for f in (proc.stdin, proc.stdout):
@@ -220,6 +235,7 @@ class KrishivEngine(Engine):
 
     # ------------------------------------------------------------------ Engine
     def setup(self, dataset: Dataset) -> None:
+        self._tmp.mkdir(parents=True, exist_ok=True)  # `teardown()` removes it; setup may run again
         self._dataset = dataset
         self._start()
 
