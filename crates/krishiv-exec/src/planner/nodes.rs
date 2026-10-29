@@ -32,7 +32,8 @@ impl ExecNode for OperatorNode {
 
 /// `inner` with its pipeline run by one driver, so the rows keep their source
 /// order (a `LIMIT` over a `range` takes the first rows, as Spark's limit
-/// takes partitions in order).
+/// takes partitions in order, and a collected `range` returns its rows in
+/// slice order).
 pub(crate) struct OrderedNode {
     pub(crate) inner: Arc<dyn ExecNode>,
 }
