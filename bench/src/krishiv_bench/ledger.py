@@ -75,7 +75,7 @@ BUCKET_RULES: tuple[tuple[re.Pattern[str], str], ...] = tuple(
         (r"(?i)exchange|repartition|shuffle", "exchange/repartition"),
         (r"krishiv_io.*(row_?filter|runtime_?filter)", SCAN_FILTER),
         (r"operators::(filter|project|expr)|planner::eval|krishiv_functions", "filter/project"),
-        (r"krishiv_io|parquet::|zstd|snappy|lz4|flate|object_store", "scan/decode"),
+        (r"krishiv_io|parquet::|zstd|snappy|lz4|deflate|inflate|object_store", "scan/decode"),
     )
 )
 
