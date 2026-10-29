@@ -126,6 +126,8 @@ def test_shrink_rows_keeps_only_the_rows_that_matter():
 class FakeEngine:
     """Answers ``select count(*) from t`` and a few other shapes from the tables it was set up with."""
 
+    timeout_s: float | None = None
+
     def __init__(self, bug: bool = False, bug_row: int = 13):
         self.bug = bug
         self.bug_row = bug_row
@@ -444,3 +446,32 @@ def test_a_timed_out_run_is_not_interesting_and_the_pin_uses_a_long_timeout(tmp_
     o.pin(Dataset("d", 1, root, ["t"]), "select count(*) from t")
     assert seen[-1] == mz.PIN_TIMEOUT
     assert o.krishiv.timeout_s == 7
+
+
+def test_shrink_query_does_not_rerun_a_candidate():
+    calls: list[str] = []
+
+    def interesting(sql: str) -> bool:
+        calls.append(sql)
+        return "b < 5" in sql
+
+    mz.shrink_query("select a, b from t where a > 1 and b < 5 order by a limit 7", interesting)
+    assert len(calls) == len(set(calls))
+
+
+def test_tune_timeout_bounds_candidates_by_the_reproducing_run(tmp_path: Path):
+    now = [0.0]
+
+    def clock() -> float:
+        now[0] += 4.0  # a run takes 4 "seconds" (two clock reads)
+        return now[0]
+
+    o = mz.Oracle(FakeEngine(), FakeEngine(bug=True), tmp_path / "u", run_timeout=100, clock=clock)
+    o.differs("select count(*) from t", {"t": _table(20)})
+    assert o.last_secs > 0
+    o.tune_timeout(factor=2, floor=1)
+    assert o.run_timeout == min(100, max(1, 2 * o.last_secs))
+    assert o.krishiv.timeout_s == o.run_timeout
+    o.last_secs = 1000
+    o.tune_timeout()
+    assert o.run_timeout <= 100

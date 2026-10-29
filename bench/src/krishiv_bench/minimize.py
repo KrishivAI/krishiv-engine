@@ -45,6 +45,8 @@ DEFAULT_SEED_ROWS = 2000
 DEFAULT_MAX_RUNS = 1500
 DEFAULT_MAX_SECONDS = 1200.0
 DEFAULT_RUN_TIMEOUT = 30.0  # seconds per engine run of one candidate
+TIMEOUT_FACTOR = 5.0  # a candidate may run this many times as long as the slice's reproducing run
+TIMEOUT_FLOOR = 3.0
 PIN_TIMEOUT = 900.0  # the pin run on the real dataset
 DEFAULT_WHOLE_ROWS = 250_000  # tables up to this size stay whole in the first slice
 ESCALATION = (1, 10, 100)  # the first slice's row count is seed_rows times each, until the difference reproduces
@@ -263,6 +265,7 @@ def ddmin(items: list[Any], test: Callable[[list[Any]], bool]) -> list[Any]:
 def shrink_query(sql: str, interesting: Callable[[str], bool], budget: Callable[[], bool] = lambda: True) -> str:
     """Greedy fixpoint over :func:`candidates`: take the first interesting smaller candidate and start again."""
     best = sql.strip().rstrip(";").strip()
+    verdicts: dict[str, bool] = {}  # a candidate tried before is not run again after the restart
     changed = True
     while changed and budget():
         changed = False
@@ -271,7 +274,9 @@ def shrink_query(sql: str, interesting: Callable[[str], bool], budget: Callable[
                 continue
             if not budget():
                 break
-            if interesting(cand):
+            if cand not in verdicts:
+                verdicts[cand] = interesting(cand)
+            if verdicts[cand]:
                 best, changed = cand, True
                 break
     return best
@@ -331,6 +336,7 @@ class Oracle:
         self.max_runs = max_runs
         self.clock = clock
         self.run_timeout = run_timeout
+        self.last_secs = 0.0
         if hasattr(krishiv, "timeout_s"):
             krishiv.timeout_s = run_timeout  # a runaway candidate (a cross join, say) is not interesting
         self.deadline = clock() + max_seconds
@@ -390,7 +396,21 @@ class Oracle:
         self.runs += 1
         return self._compare(sql)
 
+    def tune_timeout(self, factor: float = TIMEOUT_FACTOR, floor: float = TIMEOUT_FLOOR) -> None:
+        """Bounds a candidate run to ``factor`` times the last run, so a candidate that explodes (a cross join
+        after a join condition is dropped) is cut off quickly; never above the configured timeout."""
+        self.run_timeout = min(self.run_timeout, max(floor, factor * self.last_secs))
+        if hasattr(self.krishiv, "timeout_s"):
+            self.krishiv.timeout_s = self.run_timeout
+
     def _compare(self, sql: str) -> dict[str, Any]:
+        t0 = self.clock()
+        try:
+            return self._compare_untimed(sql)
+        finally:
+            self.last_secs = self.clock() - t0
+
+    def _compare_untimed(self, sql: str) -> dict[str, Any]:
         q = _Q(sql)
         timer = threading.Timer(self.run_timeout, self.reference.cancel)
         timer.start()
@@ -451,6 +471,7 @@ def minimize(
     used = {n: tables[n] for n in referenced_tables(sql, list(tables))}
     if not full_data:
         used = _first_slice(sql, used, oracle, seed_rows, whole_rows, big)
+        oracle.tune_timeout()
         _progress("first slice", oracle, used)
     elif not oracle.differs(sql, used):
         raise ValueError("the query does not differ on the full data")
