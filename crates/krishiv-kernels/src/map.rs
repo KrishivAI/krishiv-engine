@@ -666,7 +666,8 @@ fn hash_all(arrays: &[&dyn Array], counts: &[usize]) -> Result<Vec<i32>, KernelE
         if *n == 0 {
             continue;
         }
-        let h = hash::hash(std::slice::from_ref(a), *n)?;
+        let plain = hashable(*a)?;
+        let h = hash::hash(&[plain.as_ref()], *n)?;
         out.extend(h.values().iter().copied());
     }
     Ok(out)
@@ -1042,6 +1043,302 @@ pub fn from_pairs(
         &Deduped::of(per_row, policy, &ordered)?,
         nulls.finish(),
     )
+}
+
+/// The `entries` field of a map of `key_type` to `value_type` (non-null
+/// keys, values nullable as `value_nullable`).
+fn entries_field_of(key_type: &DataType, value_type: &DataType, value_nullable: bool) -> FieldRef {
+    Arc::new(arrow_schema::Field::new(
+        "entries",
+        DataType::Struct(
+            vec![
+                arrow_schema::Field::new("key", key_type.clone(), false),
+                arrow_schema::Field::new("value", value_type.clone(), value_nullable),
+            ]
+            .into(),
+        ),
+        false,
+    ))
+}
+
+/// A map over `keys` and `values` with `offsets` (one entry per element)
+/// and the row `nulls`, for the map higher-order functions that rebuild a
+/// map from flattened entries.
+///
+/// # Errors
+/// An engine error when the key and value counts disagree or the offsets
+/// do not fit the entries.
+pub fn build_map(
+    keys: &ArrayRef,
+    values: &ArrayRef,
+    offsets: OffsetBuffer<i32>,
+    nulls: Option<NullBuffer>,
+    value_nullable: bool,
+) -> Result<MapArray, KernelError> {
+    if keys.len() != values.len() {
+        return Err(internal(format!(
+            "a map over {} keys and {} values",
+            keys.len(),
+            values.len()
+        )));
+    }
+    let entries = entries_field_of(keys.data_type(), values.data_type(), value_nullable);
+    let DataType::Struct(fields) = entries.data_type() else {
+        return Err(internal("map entries that are no struct"));
+    };
+    let body = StructArray::try_new(
+        fields.clone(),
+        vec![Arc::clone(keys), Arc::clone(values)],
+        None,
+    )
+    .map_err(internal)?;
+    MapArray::try_new(entries, offsets, body, nulls, false).map_err(internal)
+}
+
+/// `array` with view string and binary carriers read as the plain ones the
+/// hash kernel takes (the same bytes hash the same).
+fn hashable(array: &dyn Array) -> Result<ArrayRef, KernelError> {
+    Ok(match array.data_type() {
+        DataType::Utf8View => Arc::new(arrow_array::StringArray::from_iter(
+            array.as_string_view().iter(),
+        )),
+        DataType::BinaryView => Arc::new(arrow_array::BinaryArray::from_iter(
+            array.as_binary_view().iter(),
+        )),
+        DataType::List(field) if has_view(field.data_type()) => {
+            let list = array.as_list::<i32>();
+            let values = hashable(list.values().as_ref())?;
+            let field = Arc::new(arrow_schema::Field::new(
+                field.name(),
+                values.data_type().clone(),
+                field.is_nullable(),
+            ));
+            Arc::new(
+                ListArray::try_new(field, list.offsets().clone(), values, list.nulls().cloned())
+                    .map_err(internal)?,
+            )
+        }
+        DataType::Struct(fields) if fields.iter().any(|f| has_view(f.data_type())) => {
+            let s = array.as_struct();
+            let columns = s
+                .columns()
+                .iter()
+                .map(|c| hashable(c.as_ref()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let fields: Vec<_> = fields
+                .iter()
+                .zip(&columns)
+                .map(|(f, c)| {
+                    arrow_schema::Field::new(f.name(), c.data_type().clone(), f.is_nullable())
+                })
+                .collect();
+            Arc::new(
+                StructArray::try_new(fields.into(), columns, s.nulls().cloned())
+                    .map_err(internal)?,
+            )
+        }
+        _ => arrow_array::make_array(array.to_data()),
+    })
+}
+
+/// Whether `t` holds a view string or binary at any depth the hash kernel
+/// would meet.
+fn has_view(t: &DataType) -> bool {
+    match t {
+        DataType::Utf8View | DataType::BinaryView => true,
+        DataType::List(f) => has_view(f.data_type()),
+        DataType::Struct(fs) => fs.iter().any(|f| has_view(f.data_type())),
+        _ => false,
+    }
+}
+
+/// A row index as `u32`: a row that does not fit is an engine error, never
+/// a wrap.
+fn index32(n: usize) -> Result<u32, KernelError> {
+    u32::try_from(n).map_err(|_| internal(format!("a map of {n} entries")))
+}
+
+/// Spark's key order over `keys[a]` and `other[b]`: the total order of
+/// [`crate::order::cmp_rows`] (NaN equals NaN, `-0.0` equals `0.0`, views
+/// and nested keys included), where equal means the same map key.
+fn key_order(
+    keys: &dyn Array,
+    a: usize,
+    other: &dyn Array,
+    b: usize,
+) -> Result<std::cmp::Ordering, KernelError> {
+    crate::order::cmp_rows(keys, a, other, b)
+}
+
+/// The deduplicated entries of one map's `len` keys (the first `len` of
+/// `keys`): the kept key indices and the value indices, which differ under
+/// `LAST_WIN` (the last value wins but the key keeps its first-seen
+/// position).
+///
+/// Keys are grouped by sorting their indices once under `key_order`, so
+/// nested and view keys need no hashing.
+///
+/// # Errors
+/// `NULL_MAP_KEY` for a null key, `DUPLICATED_MAP_KEY` for a repeat under
+/// `EXCEPTION` (the earlier of the two failures in key order, as a scan
+/// would meet it), or an engine error for a key type [`supports_key`]
+/// refuses.
+pub fn dedup_entries(
+    keys: &dyn Array,
+    len: usize,
+    last_win: bool,
+) -> Result<(Vec<u32>, Vec<u32>), KernelError> {
+    if keys.len() < len {
+        return Err(internal(format!(
+            "{len} keys over an array of {}",
+            keys.len()
+        )));
+    }
+    if let Some(null) = (0..len).find(|&e| keys.is_null(e)) {
+        // A scan stops at the first null unless a duplicate comes first.
+        let mut head = Vec::with_capacity(null);
+        head.extend(0..null);
+        if let Some(dup) = first_duplicate(keys, &head)?
+            && !last_win
+        {
+            return Err(KernelError::with_row(None, duplicate_key(keys, dup)?));
+        }
+        return Err(KernelError::with_row(None, NullMapKey {}.into()));
+    }
+    let mut order: Vec<usize> = (0..len).collect();
+    let mut failure = None;
+    order.sort_by(|&a, &b| match key_order(keys, a, keys, b) {
+        Ok(ord) => ord.then(a.cmp(&b)),
+        Err(e) => {
+            failure.get_or_insert(e);
+            std::cmp::Ordering::Equal
+        }
+    });
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    // Group boundaries: a key equal to its sorted predecessor repeats it.
+    let mut first_of: Vec<usize> = (0..len).collect();
+    let mut last_of: Vec<usize> = (0..len).collect();
+    let mut duplicate: Option<usize> = None;
+    let mut group_first = 0;
+    for pair in order.windows(2) {
+        let (prev, cur) = (pair[0], pair[1]);
+        if key_order(keys, prev, keys, cur)? == std::cmp::Ordering::Equal {
+            first_of[cur] = group_first;
+            last_of[group_first] = cur;
+            duplicate = Some(duplicate.map_or(cur, |d| d.min(cur)));
+        } else {
+            group_first = cur;
+        }
+    }
+    if let Some(dup) = duplicate
+        && !last_win
+    {
+        return Err(KernelError::with_row(None, duplicate_key(keys, dup)?));
+    }
+    let mut kept: Vec<u32> = Vec::with_capacity(len);
+    let mut values: Vec<u32> = Vec::with_capacity(len);
+    for e in 0..len {
+        if first_of[e] == e {
+            kept.push(index32(e)?);
+            values.push(index32(last_of[e])?);
+        }
+    }
+    Ok((kept, values))
+}
+
+/// The earliest index among `head` whose key repeats an earlier one.
+fn first_duplicate(keys: &dyn Array, head: &[usize]) -> Result<Option<usize>, KernelError> {
+    for (n, &e) in head.iter().enumerate() {
+        for &p in &head[..n] {
+            if key_order(keys, p, keys, e)? == std::cmp::Ordering::Equal {
+                return Ok(Some(e));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// One key of the union of two maps' key sets: the key's index into the
+/// concatenated keys, and each map's value index (`None` for a key the map
+/// does not hold). A map holding a key twice contributes its first entry
+/// (Spark's `MapZipWith`).
+pub type UnionEntry = (u32, Option<u32>, Option<u32>);
+
+/// The union of two maps' key sets, in first-seen order (see
+/// [`UnionEntry`]); `keys1` and `keys2` hold each map's keys in order. The
+/// second map's key index counts past the first map's `len1` keys, while
+/// each value index counts within its own map.
+///
+/// # Errors
+/// `NULL_MAP_KEY` for a null key, or an engine error for a key type
+/// [`supports_key`] refuses.
+pub fn union_keys(
+    keys1: &dyn Array,
+    len1: usize,
+    keys2: &dyn Array,
+    len2: usize,
+) -> Result<Vec<UnionEntry>, KernelError> {
+    if keys1.len() < len1 || keys2.len() < len2 {
+        return Err(internal(format!(
+            "zip over {len1} and {len2} keys of {} and {}",
+            keys1.len(),
+            keys2.len()
+        )));
+    }
+    if (0..len1).any(|e| keys1.is_null(e)) || (0..len2).any(|e| keys2.is_null(e)) {
+        return Err(KernelError::with_row(None, NullMapKey {}.into()));
+    }
+    // Entries as (map, index), grouped by key under [`key_order`]; within
+    // a group the first map's entries come first, each in key order.
+    let at = |w: usize| if w == 0 { keys1 } else { keys2 };
+    let mut entries: Vec<(usize, usize)> = (0..len1)
+        .map(|e| (0, e))
+        .chain((0..len2).map(|e| (1, e)))
+        .collect();
+    let mut failure = None;
+    entries.sort_by(|&(wa, a), &(wb, b)| match key_order(at(wa), a, at(wb), b) {
+        Ok(ord) => ord.then((wa, a).cmp(&(wb, b))),
+        Err(e) => {
+            failure.get_or_insert(e);
+            std::cmp::Ordering::Equal
+        }
+    });
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    let mut groups: Vec<(usize, UnionEntry)> = Vec::new();
+    let mut previous: Option<(usize, usize)> = None;
+    for &(w, e) in &entries {
+        let same = match previous {
+            Some((pw, pe)) => key_order(at(pw), pe, at(w), e)? == std::cmp::Ordering::Equal,
+            None => false,
+        };
+        previous = Some((w, e));
+        let value = Some(index32(e)?);
+        if same {
+            let (_, entry) = groups
+                .last_mut()
+                .ok_or_else(|| internal("a map key group without a first entry"))?;
+            let slot = if w == 0 { &mut entry.1 } else { &mut entry.2 };
+            if slot.is_none() {
+                *slot = value;
+            }
+        } else {
+            // First-seen position: the first map's keys, then the second's.
+            let seen = if w == 0 { e } else { len1.saturating_add(e) };
+            let key = index32(seen)?;
+            let entry = if w == 0 {
+                (key, value, None)
+            } else {
+                (key, None, value)
+            };
+            groups.push((seen, entry));
+        }
+    }
+    groups.sort_by_key(|&(seen, _)| seen);
+    Ok(groups.into_iter().map(|(_, entry)| entry).collect())
 }
 
 #[cfg(test)]
@@ -1940,5 +2237,99 @@ mod tests {
             ),
         ]));
         assert!(keys_equal(s1.as_ref(), 0, renamed.as_ref(), 0).unwrap());
+    }
+
+    fn strs(values: Vec<&str>) -> ArrayRef {
+        Arc::new(StringArray::from(values))
+    }
+
+    #[test]
+    fn dedup_raises_on_duplicates_and_keeps_last_under_last_win() {
+        let keys = strs(vec!["b", "a", "b"]);
+        let err = KrishivError::from(dedup_entries(keys.as_ref(), 3, false).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::DuplicatedMapKey);
+        assert!(err.to_string().contains("b"), "{err}");
+        let (kept, taken) = dedup_entries(keys.as_ref(), 3, true).unwrap();
+        assert_eq!((kept, taken), (vec![0, 1], vec![2, 1]));
+    }
+
+    #[test]
+    fn dedup_rejects_null_keys_and_short_arrays() {
+        let nulls: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), None]));
+        let err = KrishivError::from(dedup_entries(nulls.as_ref(), 2, true).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::NullMapKey);
+        assert!(dedup_entries(nulls.as_ref(), 3, true).is_err());
+        assert_eq!(
+            dedup_entries(nulls.as_ref(), 0, true).unwrap(),
+            (vec![], vec![])
+        );
+    }
+
+    #[test]
+    fn union_merges_in_first_seen_order() {
+        let (k1, k2) = (strs(vec!["a", "b", "b"]), strs(vec!["b", "c", "c"]));
+        let m = union_keys(k1.as_ref(), 3, k2.as_ref(), 3).unwrap();
+        // `a` only left, `b` both (first entries), `c` only right.
+        assert_eq!(
+            m,
+            vec![
+                (0, Some(0), None),
+                (1, Some(1), Some(0)),
+                (4, None, Some(1)),
+            ]
+        );
+        let nulls: ArrayRef = Arc::new(StringArray::from(vec![None::<&str>]));
+        let err = KrishivError::from(union_keys(k1.as_ref(), 1, nulls.as_ref(), 1).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::NullMapKey);
+        let err = KrishivError::from(union_keys(nulls.as_ref(), 1, k1.as_ref(), 1).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::NullMapKey);
+        assert!(union_keys(k1.as_ref(), 9, k2.as_ref(), 1).is_err());
+    }
+
+    #[test]
+    fn build_map_checks_its_lengths() {
+        let keys = strs(vec!["a", "b"]);
+        let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let offsets = OffsetBuffer::new(vec![0_i32, 2].into());
+        let m = build_map(&keys, &values, offsets.clone(), None, false).unwrap();
+        assert_eq!(m.len(), 1);
+        let short: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        assert!(build_map(&keys, &short, offsets, None, false).is_err());
+    }
+
+    #[test]
+    fn view_keys_hash_like_plain_keys() {
+        let views: ArrayRef = Arc::new(StringViewArray::from(vec!["a", "b", "a"]));
+        let err = KrishivError::from(dedup_entries(views.as_ref(), 3, false).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::DuplicatedMapKey);
+        let bins: ArrayRef = Arc::new(arrow_array::BinaryViewArray::from(vec![
+            b"x".as_slice(),
+            b"x".as_slice(),
+        ]));
+        let (kept, taken) = dedup_entries(bins.as_ref(), 2, true).unwrap();
+        assert_eq!((kept, taken), (vec![0], vec![1]));
+    }
+
+    #[test]
+    fn nested_and_view_keys_group_by_value() {
+        use arrow_array::builder::{ListBuilder, StringViewBuilder};
+        let mut b = ListBuilder::new(StringViewBuilder::new());
+        for row in [["a"], ["b"], ["a"]] {
+            b.values().append_value(row[0]);
+            b.append(true);
+        }
+        let keys: ArrayRef = Arc::new(b.finish());
+        let err = KrishivError::from(dedup_entries(keys.as_ref(), 3, false).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::DuplicatedMapKey);
+        let (kept, taken) = dedup_entries(keys.as_ref(), 3, true).unwrap();
+        assert_eq!((kept, taken), (vec![0, 1], vec![2, 1]));
+        // A duplicate before a NULL key raises first, as a scan meets it.
+        let nulls: ArrayRef = Arc::new(StringArray::from(vec![Some("a"), Some("a"), None]));
+        let err = KrishivError::from(dedup_entries(nulls.as_ref(), 3, false).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::DuplicatedMapKey);
+        let err = KrishivError::from(dedup_entries(nulls.as_ref(), 3, true).unwrap_err());
+        assert_eq!(err.error_class(), ErrorClass::NullMapKey);
+        let hashed = hashable(keys.as_ref()).unwrap();
+        assert!(!has_view(hashed.data_type()));
     }
 }

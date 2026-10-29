@@ -24,7 +24,32 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Not for the pull-request run of this file. The merge queue skips Miri, the fuzz-target build and
+  # the wheel matrix; the nightly CI run of main runs them, and binaries are built only on code that
+  # run has seen green.
+  nightly-green:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Latest scheduled CI run is green on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/require-green-nightly.sh
+
   cli-x86_64:
+    needs: nightly-green
+    if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
     name: cli (${{ matrix.artifact }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -93,6 +118,8 @@ jobs:
           if-no-files-found: error
 
   cli-aarch64:
+    needs: nightly-green
+    if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
     name: cli (krishiv-linux-aarch64)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
