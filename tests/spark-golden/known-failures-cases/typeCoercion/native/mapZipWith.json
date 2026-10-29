@@ -1,6 +1,6 @@
 {
   "cases": {
-    "hof": [
+    "depends-on-command": [
       1,
       2,
       3,
