@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "minute#4480f918603c/ansi_on",
-      "reason": "SELECT minute(CAST(NULL AS time(6))) | parse: KRISHIV_UNSUPPORTED_FEATURE: the time data type (\"TIME\") where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
-      "id": "minute#4480f918603c/ansi_off",
-      "reason": "SELECT minute(CAST(NULL AS time(6))) | parse: KRISHIV_UNSUPPORTED_FEATURE: the time data type (\"TIME\") where Spark has UNSUPPORTED_TIME_TYPE"
-    },
-    {
       "id": "minute#7dda78084d4d/ansi_on",
       "reason": "SELECT minute(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

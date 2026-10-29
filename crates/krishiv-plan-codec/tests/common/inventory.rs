@@ -28,7 +28,7 @@ use krishiv_plan::{
     Literal, Origin, PlanId, ReadSource, ResolvedExpr, ResolvedFunction, Scan, SourceId, Span,
     TableVersion, YearMonthField,
 };
-use krishiv_types::{DataType, DecimalType, parse_data_type};
+use krishiv_types::{DataType, DecimalType, Srid, parse_data_type};
 
 pub(crate) fn env() -> ExprEnv {
     ExprEnv {
@@ -1138,6 +1138,11 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     out.push(("lambda_functions".to_owned(), plan_of(lambda_functions())));
     out.push(("struct_field".to_owned(), plan_of(struct_field())));
     out.push(("map_key_dedup_policy".to_owned(), map_key_dedup_policy()));
+    out.extend(
+        typed()
+            .into_iter()
+            .map(|(name, node)| (name.to_owned(), plan_of(node))),
+    );
     out
 }
 
@@ -1177,4 +1182,79 @@ pub(crate) fn struct_field() -> PhysNode {
         nullable: None,
         subqueries: Vec::new(),
     }
+}
+
+/// Plans that name the `TIME` and spatial types: in a cast nested below a
+/// baseline function, a typed `NULL`, a scan's output and a join residual.
+pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
+    let time_cast = Arc::new(Expr::new(ExprNode::Cast {
+        expr: col(1, "a", DataType::Integer),
+        to: DataType::Time { precision: 3 },
+        mode: CastMode::Ansi,
+    }));
+    let times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![
+            ProjectItemPlan::Expr {
+                name: "has_time".to_owned(),
+                expr: call(Builtin::IsNotNull, vec![time_cast], DataType::Boolean),
+            },
+            ProjectItemPlan::Expr {
+                name: "no_time".to_owned(),
+                expr: lit(Literal::Null(Some(DataType::Time { precision: 0 }))),
+            },
+        ],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    let mut spatial = file_scan();
+    spatial.scan.output = vec![
+        column(3, "g", DataType::Geometry { srid: Srid::Any }, true),
+        column(
+            4,
+            "gg",
+            DataType::Geography {
+                srid: Srid::Fixed(4326),
+            },
+            false,
+        ),
+    ];
+    let geometry = col(
+        5,
+        "g3857",
+        DataType::Geometry {
+            srid: Srid::Fixed(3857),
+        },
+    );
+    let residual_join = PhysNode::NestedLoopJoin(NestedLoopPlan {
+        probe: boxed(scan()),
+        build: boxed(PhysNode::OneRow),
+        join_type: JoinType::Inner,
+        residual: Some(Residual {
+            layout: vec![AttrId(1), AttrId(5)],
+            conjuncts: vec![call(Builtin::IsNull, vec![geometry], DataType::Boolean)],
+        }),
+    });
+    // A time inside an array, a map and a struct: the nested type needs
+    // `time_type` as well as `nested_types`.
+    let time3 = DataType::Time { precision: 3 };
+    let nested_times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "times".to_owned(),
+            expr: lit(Literal::Null(Some(DataType::Array(
+                krishiv_types::ArrayType::new(time3, true).into(),
+            )))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    vec![
+        ("time_nested", nested_times),
+        ("time_project", times),
+        ("geo_scan", PhysNode::Scan(spatial)),
+        ("geo_join_residual", residual_join),
+    ]
 }

@@ -544,15 +544,16 @@ impl Parser<'_> {
                 Ok(args)
             }
             Arguments::Srid => {
-                if !((int_at(self, 1) || self.kw_at(1, "ANY")) && self.sym_at(2, Sym::RParen)) {
+                if int_at(self, 1) {
+                    // An integer list, as for any type: `geometry(4326, 0)`
+                    // is an unsupported type and `geography(4326, x)` an
+                    // error at `x`, as in Spark.
+                    return self.type_arguments(Arguments::Committed);
+                }
+                if !(self.kw_at(1, "ANY") && self.sym_at(2, Sym::RParen)) {
                     return Ok(vec![]);
                 }
-                let srid = self.text(1);
-                let arg = if int_at(self, 1) {
-                    srid.to_owned()
-                } else {
-                    srid.to_ascii_uppercase()
-                };
+                let arg = self.text(1).to_ascii_uppercase();
                 self.pos += 3;
                 Ok(vec![arg])
             }
@@ -607,6 +608,11 @@ impl Parser<'_> {
         let zone = |p: &Self, words: &[&str]| words.iter().enumerate().all(|(n, w)| p.kw_at(n, w));
         if (is("TIMESTAMP") || is("TIME")) && zone(self, &["WITHOUT", "TIME", "ZONE"]) {
             push(self, &["WITHOUT", "TIME", "ZONE"]);
+        } else if is("TIME") && zone(self, &["WITHOUT", "TIME"]) && self.kind(2).is_none() {
+            // ANTLR inserts the missing `ZONE` at the end of the input.
+            self.pos += 2;
+            self.missing = Some((self.pos, "'ZONE'"));
+            return self.fail();
         } else if is("TIMESTAMP") && zone(self, &["WITH", "LOCAL", "TIME", "ZONE"]) {
             push(self, &["WITH", "LOCAL", "TIME", "ZONE"]);
         }

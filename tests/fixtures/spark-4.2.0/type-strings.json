@@ -2210,6 +2210,419 @@
    "type_name": "struct",
    "json": "{\"type\":\"struct\",\"fields\":[{\"name\":\"a\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{\"comment\":\"AA\"}}]}",
    "simple_string_reparses": false
+  },
+  {
+   "ddl": "TIME",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(0)",
+   "simple_string": "time(0)",
+   "catalog_string": "time(0)",
+   "sql": "TIME(0)",
+   "type_name": "time(0)",
+   "json": "\"time(0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(3)",
+   "simple_string": "time(3)",
+   "catalog_string": "time(3)",
+   "sql": "TIME(3)",
+   "type_name": "time(3)",
+   "json": "\"time(3)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIME(6)",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(06)",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time(7)",
+   "error_class": "UNSUPPORTED_TIME_PRECISION",
+   "sql_state": "0A001",
+   "message_parameters": {
+    "precision": "7"
+   }
+  },
+  {
+   "ddl": "time(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'-'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time()",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "')'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time(1,2)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIME(1,2)\""
+   }
+  },
+  {
+   "ddl": "time(99999999999)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "time without time zone",
+   "simple_string": "time(6)",
+   "catalog_string": "time(6)",
+   "sql": "TIME(6)",
+   "type_name": "time(6)",
+   "json": "\"time(6)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "TIME(3) WITHOUT TIME ZONE",
+   "simple_string": "time(3)",
+   "catalog_string": "time(3)",
+   "sql": "TIME(3)",
+   "type_name": "time(3)",
+   "json": "\"time(3)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "time with time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time with local time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time(3) with time zone",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'with'",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "time_ntz",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"TIME_NTZ\""
+   }
+  },
+  {
+   "ddl": "time without",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'without'",
+    "hint": ": extra input 'without'"
+   }
+  },
+  {
+   "ddl": "time(3) without time",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "end of input",
+    "hint": ": missing 'ZONE'"
+   }
+  },
+  {
+   "ddl": "geometry(0)",
+   "simple_string": "geometry(0)",
+   "catalog_string": "geometry(0)",
+   "sql": "GEOMETRY(0)",
+   "type_name": "geometry(0)",
+   "json": "\"geometry(SRID:0)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOMETRY(4326)",
+   "simple_string": "geometry(4326)",
+   "catalog_string": "geometry(4326)",
+   "sql": "GEOMETRY(4326)",
+   "type_name": "geometry(4326)",
+   "json": "\"geometry(OGC:CRS84)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(3857)",
+   "simple_string": "geometry(3857)",
+   "catalog_string": "geometry(3857)",
+   "sql": "GEOMETRY(3857)",
+   "type_name": "geometry(3857)",
+   "json": "\"geometry(EPSG:3857)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry( 3857 )",
+   "simple_string": "geometry(3857)",
+   "catalog_string": "geometry(3857)",
+   "sql": "GEOMETRY(3857)",
+   "type_name": "geometry(3857)",
+   "json": "\"geometry(EPSG:3857)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(04326)",
+   "simple_string": "geometry(4326)",
+   "catalog_string": "geometry(4326)",
+   "sql": "GEOMETRY(4326)",
+   "type_name": "geometry(4326)",
+   "json": "\"geometry(OGC:CRS84)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(any)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOMETRY(ANY)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(Any)",
+   "simple_string": "geometry(any)",
+   "catalog_string": "geometry(any)",
+   "sql": "GEOMETRY(ANY)",
+   "type_name": "geometry(any)",
+   "json": "\"geometry(SRID:ANY)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geometry(`any`)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(anything)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOMETRY\""
+   }
+  },
+  {
+   "ddl": "geometry()",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(9999)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "9999"
+   }
+  },
+  {
+   "ddl": "geometry(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(1)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "1"
+   }
+  },
+  {
+   "ddl": "geometry(99999999999)",
+   "error_class": "UNCLASSIFIED",
+   "exception": "java.lang.NumberFormatException"
+  },
+  {
+   "ddl": "geometry(4326,0)",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOMETRY(4326,0)\""
+   }
+  },
+  {
+   "ddl": "geometry(srid:0)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(any",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geometry(any,1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geography(any) int",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'int'",
+    "hint": ": extra input 'int'"
+   }
+  },
+  {
+   "ddl": "geography(4326)",
+   "simple_string": "geography(4326)",
+   "catalog_string": "geography(4326)",
+   "sql": "GEOGRAPHY(4326)",
+   "type_name": "geography(4326)",
+   "json": "\"geography(OGC:CRS84, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "GEOGRAPHY(ANY)",
+   "simple_string": "geography(any)",
+   "catalog_string": "geography(any)",
+   "sql": "GEOGRAPHY(ANY)",
+   "type_name": "geography(any)",
+   "json": "\"geography(SRID:ANY, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geography(any)",
+   "simple_string": "geography(any)",
+   "catalog_string": "geography(any)",
+   "sql": "GEOGRAPHY(ANY)",
+   "type_name": "geography(any)",
+   "json": "\"geography(SRID:ANY, SPHERICAL)\"",
+   "simple_string_reparses": true
+  },
+  {
+   "ddl": "geography",
+   "error_class": "UNSUPPORTED_DATATYPE",
+   "sql_state": "0A000",
+   "message_parameters": {
+    "typeName": "\"GEOGRAPHY\""
+   }
+  },
+  {
+   "ddl": "geography(0)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "0"
+   }
+  },
+  {
+   "ddl": "geography(3857)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "3857"
+   }
+  },
+  {
+   "ddl": "geography(9999)",
+   "error_class": "ST_INVALID_SRID_VALUE",
+   "sql_state": "22023",
+   "message_parameters": {
+    "srid": "9999"
+   }
+  },
+  {
+   "ddl": "geography(-1)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'('",
+    "hint": ""
+   }
+  },
+  {
+   "ddl": "geography(4326, spherical)",
+   "error_class": "PARSE_SYNTAX_ERROR",
+   "sql_state": "42601",
+   "message_parameters": {
+    "error": "'spherical'",
+    "hint": ""
+   }
   }
  ],
  "decimal_constructor": [
@@ -2377,6 +2790,18 @@
    "message": [
     "Decimal scale (<scale>) cannot be greater than precision (<precision>)."
    ]
+  },
+  "ST_INVALID_SRID_VALUE": {
+   "message": [
+    "Invalid or unsupported SRID (spatial reference identifier) value: <srid>."
+   ],
+   "sqlState": "22023"
+  },
+  "UNSUPPORTED_TIME_PRECISION": {
+   "message": [
+    "The seconds precision <precision> of the TIME data type is out of the supported range [0, 6]."
+   ],
+   "sqlState": "0A001"
   }
  }
 }
