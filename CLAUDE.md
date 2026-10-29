@@ -97,7 +97,7 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
 - On-disk formats carry a version; N reads N−1 (ADR 0026). Public surfaces change only via ADR.
 - Identifiers are `krishiv` / `krishiv-*` (ADR 0030). Decisions change only through an ADR (skill `krishiv-adr`).
 - Never commit secrets. Commit identity: a human author only (`gopal tathe` or `techysneha14`, noreply). **No AI
-  attribution anywhere**: no `Co-Authored-By`, session links or "Generated with" lines in commits or PR bodies, even
+  attribution anywhere**: no AI `Co-Authored-By` trailers, `Claude-Session` lines or "Generated with" lines in commits or PR bodies, even
   when a session suggests one (`.github/scripts/check-ai-attribution.sh` fails the PR).
 
 ## Hard stops — always ask the user first
