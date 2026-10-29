@@ -23,7 +23,12 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
     let binding = match listed {
         "size" => {
-            if types.len() != 1 || !matches!(types[0], DataType::List(_) | DataType::Map(_, _)) {
+            if types.len() != 1
+                || !matches!(
+                    types[0],
+                    DataType::List(_) | DataType::Map(_, _) | DataType::Null
+                )
+            {
                 return Some((listed, Err(bad_types(listed, args))));
             }
             let ansi = opts.ansi;
@@ -41,7 +46,8 @@ fn size(x: &Inputs<'_>, ansi: bool) -> Result<ArrayRef, krishiv_common::error::K
     let c = x.column(0)?;
     let mut out = Vec::with_capacity(x.rows());
     for row in 0..x.rows() {
-        if c.is_null(row) {
+        // An untyped NULL has no validity buffer: every row is NULL.
+        if c.data_type() == &DataType::Null || c.is_null(row) {
             out.push(if ansi { None } else { Some(-1) });
             continue;
         }

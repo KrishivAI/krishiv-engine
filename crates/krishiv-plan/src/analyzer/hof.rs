@@ -28,18 +28,16 @@
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    InternalError, InvalidLambdaFunctionCallDuplicateArgNames,
-    InvalidLambdaFunctionCallNonHigherOrderFunction, InvalidLambdaFunctionCallNumArgsMismatch,
-    WrongNumArgsWithoutSuggestion,
+    InvalidLambdaFunctionCallDuplicateArgNames, InvalidLambdaFunctionCallNonHigherOrderFunction,
+    InvalidLambdaFunctionCallNumArgsMismatch, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::DataType;
 
 use super::AnalysisError;
 use super::bind::{addr, same, unsupported};
-use super::catalog::ArgType;
 use super::exprs::{Bound, Ctx, Cx, SPARK_DOC_ROOT};
 use super::resolve::Resolver;
-use crate::{BoundColumn, Expr, ExprNode, FunctionCall, Origin, ResolvedExpr};
+use crate::{BoundColumn, Expr, ExprNode, FunctionCall, Origin};
 
 /// One pushed lambda scope: its variables, innermost last.
 #[derive(Debug, Clone, Default)]
@@ -302,46 +300,6 @@ impl Resolver<'_> {
             if i < f.args.len() {
                 let bound = self.hof_lambda(h, ctx_of(i), i, &values, &f.args[i], cx)?;
                 done.push((key(i), bound));
-            } else if matches!(h, Hof::Aggregate | Hof::Reduce) {
-                // An absent `finish` is the identity lambda over the
-                // accumulator (Spark's `ArrayAggregate` default): one
-                // hidden variable whose body is itself.
-                let Some(zero) = values.get(1) else {
-                    return Err(AnalysisError::new(
-                        InternalError {
-                            message: format!("{} typed without its zero argument", h.name()),
-                        },
-                        origin,
-                    ));
-                };
-                let var = BoundColumn {
-                    id: self.fresh(),
-                    name: "namedlambdavariable()".to_owned(),
-                    data_type: zero.clone().unwrap_or(DataType::Null),
-                    nullable: true,
-                };
-                let body = Arc::new(
-                    Expr::new(ExprNode::Resolved(ResolvedExpr::LambdaVar(var.clone())))
-                        .with_origin(origin),
-                );
-                done.push((
-                    usize::MAX - i,
-                    Bound {
-                        expr: Arc::new(
-                            Expr::new(ExprNode::Lambda {
-                                params: vec![var.clone()],
-                                body: Arc::clone(&body),
-                            })
-                            .with_origin(origin),
-                        ),
-                        ty: ArgType::new(var.data_type.clone(), true),
-                        agg: None,
-                        win: None,
-                        outer: None,
-                        lateral: Vec::new(),
-                        shown: None,
-                    },
-                ));
             }
         }
         Ok(done)

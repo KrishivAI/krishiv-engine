@@ -30,14 +30,17 @@ use super::text::{java_double_string, java_float_string32};
 
 /// The child values, start and length of the list at `idx`.
 fn list_slice(array: &dyn Array, idx: usize) -> Result<(ArrayRef, usize, usize), KernelError> {
-    // Every arm reads `offsets[idx]` and `offsets[idx + 1]`; the row count
-    // was validated upstream, so the neighbor always exists.
+    // The neighbor of `idx` must exist: an index past the rows is an engine
+    // error, never a panic.
     let next = idx
         .checked_add(1)
         .ok_or_else(|| KernelError::internal("a map key list of the wrong length"))?;
     if let Some(list) = array.as_list_opt::<i32>() {
         let offsets = list.value_offsets();
-        let (start, stop) = (offsets[idx].as_usize(), offsets[next].as_usize());
+        let (Some(start), Some(stop)) = (offsets.get(idx), offsets.get(next)) else {
+            return Err(KernelError::internal("a map key list past its offsets"));
+        };
+        let (start, stop) = (start.as_usize(), stop.as_usize());
         let len = stop
             .checked_sub(start)
             .ok_or_else(|| KernelError::internal("a map key list with decreasing offsets"))?;
@@ -45,7 +48,10 @@ fn list_slice(array: &dyn Array, idx: usize) -> Result<(ArrayRef, usize, usize),
     }
     if let Some(list) = array.as_list_opt::<i64>() {
         let offsets = list.value_offsets();
-        let (start, stop) = (offsets[idx].as_usize(), offsets[next].as_usize());
+        let (Some(start), Some(stop)) = (offsets.get(idx), offsets.get(next)) else {
+            return Err(KernelError::internal("a map key list past its offsets"));
+        };
+        let (start, stop) = (start.as_usize(), stop.as_usize());
         let len = stop
             .checked_sub(start)
             .ok_or_else(|| KernelError::internal("a map key list with decreasing offsets"))?;

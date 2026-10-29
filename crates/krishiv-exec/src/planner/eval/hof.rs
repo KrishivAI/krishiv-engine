@@ -910,6 +910,27 @@ fn padded(array: &ArrayRef, len: usize) -> Result<ArrayRef> {
         .map_err(|e| internal(&e.to_string()))
 }
 
+/// Whether `a` and `b` are the same type up to nested field names and
+/// nullability.
+fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
+    match (a, b) {
+        (ArrowType::List(x), ArrowType::List(y))
+        | (ArrowType::LargeList(x), ArrowType::LargeList(y)) => {
+            same_shape(x.data_type(), y.data_type())
+        }
+        (ArrowType::Struct(x), ArrowType::Struct(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|(p, q)| same_shape(p.data_type(), q.data_type()))
+        }
+        (ArrowType::Map(x, sx), ArrowType::Map(y, sy)) => {
+            sx == sy && same_shape(x.data_type(), y.data_type())
+        }
+        _ => a == b,
+    }
+}
+
 /// The column with the analyzer's carrier: string and binary storage
 /// alternatives read as their canonical `Utf8View`/`BinaryView` (as the
 /// scalar bindings read them); anything else must already match.
@@ -942,6 +963,18 @@ fn canonical(column: &ArrayRef, target: &ArrowType) -> Result<ArrayRef> {
                 .iter()
                 .collect::<arrow_array::BinaryViewArray>(),
         ) as ArrayRef,
+        // The same type up to nested nullability and field names (the
+        // analyzer unifies key types of two maps that differ only there):
+        // the buffers are shared and the type is the analyzer's.
+        (have, want) if same_shape(have, want) => {
+            let data = column
+                .to_data()
+                .into_builder()
+                .data_type(want.clone())
+                .build()
+                .map_err(|e| internal(&e.to_string()))?;
+            arrow_array::make_array(data)
+        }
         _ => {
             return Err(internal(&format!(
                 "a higher-order map of {} where the analyzer typed {target}",
@@ -2558,5 +2591,23 @@ mod tests {
             }
             assert_eq!(machine.perm, expected, "{case:?}");
         }
+    }
+
+    /// Key columns that differ from the analyzer's type only in nested
+    /// nullability read as the analyzer's type.
+    #[test]
+    fn canonical_reads_nullability_variants() {
+        let have = ArrowType::List(Arc::new(Field::new("item", ArrowType::Int32, true)));
+        let want = ArrowType::List(Arc::new(Field::new("element", ArrowType::Int32, false)));
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new("item", ArrowType::Int32, true)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 1])),
+            Arc::new(Int32Array::from(vec![1])),
+            None,
+        ));
+        assert_eq!(list.data_type(), &have);
+        let out = super::super::hof::canonical(&list, &want).unwrap();
+        assert_eq!(out.data_type(), &want);
+        assert_eq!(out.len(), 1);
     }
 }

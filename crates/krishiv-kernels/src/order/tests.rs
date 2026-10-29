@@ -221,6 +221,8 @@ fn list_and_dictionary_carriers() {
         Ordering::Less
     );
     assert_eq!(render_value(list.as_ref(), 0), "[1,2]");
+    // An index past the rows is an engine error, not a panic.
+    assert!(cmp_rows(list.as_ref(), 9, list.as_ref(), 0).is_err());
     let large: ArrayRef = Arc::new(LargeListArray::new(
         Arc::clone(&field),
         OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 2, 4, 5])),

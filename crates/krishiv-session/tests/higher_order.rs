@@ -1199,9 +1199,16 @@ fn map_lambda_bodies_may_nest() {
 #[test]
 fn folds_step_rows_together() {
     let s = session();
+    // Rows of different lengths, a NULL array and an empty one.
     assert_eq!(
-        strings(&s, "aggregate(ys, 0, (acc, y) -> acc + y)", "FROM t").len(),
-        5
+        strings(&s, "aggregate(ys, 0, (acc, y) -> acc + y)", "FROM t"),
+        [
+            Some("129".to_owned()),
+            Some("1".to_owned()),
+            Some("12".to_owned()),
+            None,
+            Some("0".to_owned()),
+        ]
     );
     assert_eq!(
         strings(
@@ -1240,4 +1247,17 @@ fn nested_map_keys_deduplicate() {
         "SELECT transform_keys(map(1, 1, 2, 2), (k, v) -> array('x'))",
     );
     assert_eq!(e.error_class(), ErrorClass::DuplicatedMapKey);
+}
+
+/// `size` of an untyped NULL: NULL under ANSI, -1 with ANSI off.
+#[test]
+fn size_of_null_follows_ansi() {
+    let s = session();
+    assert_eq!(strings(&s, "size(NULL)", ""), [None]);
+    block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
+    assert_eq!(strings(&s, "size(NULL)", ""), [Some("-1".to_owned())]);
+    assert_eq!(
+        strings(&s, "size(CAST(NULL AS ARRAY<INT>))", ""),
+        [Some("-1".to_owned())]
+    );
 }
