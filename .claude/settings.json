@@ -87,7 +87,7 @@
       "Bash(docker ps:*)",
       "Bash(docker logs:*)",
       "Bash(tmux ls)",
-      "Bash(tmux capture-pane *)",
+      "Bash(tmux capture-pane -p *)",
       "Bash(typos)",
       "Bash(crontab -l)",
       "Bash(sccache --show-stats)",
