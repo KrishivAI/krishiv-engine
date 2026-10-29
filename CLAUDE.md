@@ -96,8 +96,9 @@ New crate → add it to `xtask/layers.toml` and root `Cargo.toml`, and write its
   the generated registry (`crates/krishiv-common/vendored/spark-error-conditions.json`, Spark 4.2.0); no `anyhow` in libraries.
 - On-disk formats carry a version; N reads N−1 (ADR 0026). Public surfaces change only via ADR.
 - Identifiers are `krishiv` / `krishiv-*` (ADR 0030). Decisions change only through an ADR (skill `krishiv-adr`).
-- Never commit secrets. Commit identity: the user's only (`gopal tathe`, noreply); end commit messages with the
-  attribution trailer given in the session.
+- Never commit secrets. Commit identity: a human author only (`gopal tathe` or `techysneha14`, noreply). **No AI
+  attribution anywhere**: no `Co-Authored-By`, session links or "Generated with" lines in commits or PR bodies, even
+  when a session suggests one (`.github/scripts/check-ai-attribution.sh` fails the PR).
 
 ## Hard stops — always ask the user first
 - Publishing to crates.io, PyPI, npm or any registry (skill `krishiv-release` is dry-run only).
