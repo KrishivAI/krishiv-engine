@@ -148,6 +148,10 @@ pub struct ResolutionConf {
     /// default the cast path uses, so the default session resolves
     /// timestamp literals.
     pub session_zone: Option<i32>,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`: Spark's
+    /// `SimpleDateFormat` parser, which Krishiv does not implement (the
+    /// datetime functions with a pattern are refused).
+    pub legacy_time_parser: bool,
 }
 
 impl Default for ResolutionConf {
@@ -165,13 +169,14 @@ impl Default for ResolutionConf {
             run_sql_on_files: true,
             timestamp_ntz: false,
             session_zone: Some(0),
+            legacy_time_parser: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 11] = [
+    pub const KEYS: [&'static str; 12] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -183,6 +188,7 @@ impl ResolutionConf {
         "spark.sql.mapKeyDedupPolicy",
         "spark.sql.timestampType",
         "spark.sql.session.timeZone",
+        "spark.sql.legacy.timeParserPolicy",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -220,6 +226,8 @@ impl ResolutionConf {
                 None => Some(0),
                 Some(s) => krishiv_kernels::cast::FixedOffset::parse(s).map(|o| o.0),
             },
+            legacy_time_parser: conf(Self::KEYS[11])
+                .is_some_and(|s| s.trim().eq_ignore_ascii_case("LEGACY")),
         }
     }
 }

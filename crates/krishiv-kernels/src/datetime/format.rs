@@ -320,9 +320,9 @@ fn finish<T: arrow_array::ArrowPrimitiveType>(
     Ok(arrow_array::PrimitiveArray::<T>::new(values.into(), nulls))
 }
 
-/// A decimal number of seconds as micros, as Spark's `longValueExact`:
-/// `None` where a fraction the micros cannot hold remains, or the micros
-/// leave the `i64` range.
+/// A decimal number of seconds as micros: digits beyond the micros are
+/// dropped toward zero (the `longValue` of Spark's `BigDecimal` product),
+/// and `None` where the micros leave the `i64` range.
 fn decimal_seconds_to_micros(value: i128, scale: i8) -> Option<i64> {
     // Decimal scales stay far from the `i32` limits in practice; the
     // checked steps below make any other scale `None` instead of wrapping.
@@ -332,17 +332,15 @@ fn decimal_seconds_to_micros(value: i128, scale: i8) -> Option<i64> {
         value.checked_mul(factor)?.try_into().ok()
     } else {
         let divisor = 10_i128.checked_pow(u32::try_from(scale.checked_sub(6)?).ok()?)?;
-        if value.rem_euclid(divisor) != 0 {
-            return None;
-        }
-        value.div_euclid(divisor).try_into().ok()
+        // Integer division truncates toward zero.
+        value.checked_div(divisor)?.try_into().ok()
     }
 }
 
 /// A numeric `to_timestamp` argument as an instant: Spark's
 /// `longToTimestamp` treats integrals as seconds since the epoch
-/// (`to_timestamp(1)` is one second past it), and exact fractional
-/// seconds the same way. Overflow raises `DATETIME_OVERFLOW`, as Java's
+/// (`to_timestamp(1)` is one second past it), and fractional seconds the
+/// same way (digits beyond the micros are dropped). Overflow raises `DATETIME_OVERFLOW`, as Java's
 /// `ArithmeticException` escapes even `try_to_timestamp`.
 pub fn seconds_to_timestamps(
     a: &ArrayRef,

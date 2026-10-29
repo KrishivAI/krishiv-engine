@@ -105,6 +105,28 @@ fn fold_seconds(seconds: i64) -> i64 {
 /// `INVALID_TIMEZONE` for text no zone id can have and for unknown region
 /// ids.
 pub fn resolve_zone(text: &str) -> Result<ZoneRef, KrishivError> {
+    /// Zones resolved on this thread: a batch names few distinct zones,
+    /// so each is looked up once rather than once per row.
+    const CACHE_CAP: usize = 256;
+    thread_local! {
+        static CACHE: std::cell::RefCell<std::collections::HashMap<String, ZoneRef>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(text).cloned()) {
+        return Ok(hit);
+    }
+    let zone = resolve_uncached(text)?;
+    CACHE.with(|c| {
+        let mut cache = c.borrow_mut();
+        if cache.len() >= CACHE_CAP {
+            cache.clear();
+        }
+        cache.insert(text.to_owned(), zone.clone());
+    });
+    Ok(zone)
+}
+
+fn resolve_uncached(text: &str) -> Result<ZoneRef, KrishivError> {
     if text != text.trim() || text.is_empty() {
         return Err(invalid(text));
     }
@@ -144,6 +166,9 @@ pub fn resolve_zone(text: &str) -> Result<ZoneRef, KrishivError> {
         && !rest.is_empty()
         && let Some(digits) = rest.strip_prefix('+').or_else(|| rest.strip_prefix('-'))
         && (1..=2).contains(&digits.len())
+        // Spark rejects a zero-padded hour (`Etc/GMT+05`); the database
+        // below does too.
+        && !(digits.len() == 2 && digits.starts_with('0'))
         && digits.bytes().all(|b| b.is_ascii_digit())
         && let Ok(hours) = digits.parse::<i32>()
         && hours <= 12

@@ -279,3 +279,76 @@ fn numeric_and_zone_pattern_inputs() {
         assert_eq!(column(&s, expr, ""), text(&[*expected]), "{expr}");
     }
 }
+
+/// Digits beyond the micros of a decimal number of seconds are dropped
+/// toward zero (Spark: `00:00:01.5`), not refused.
+#[test]
+fn decimal_seconds_truncate_to_micros() {
+    let s = session();
+    assert_eq!(
+        column(&s, "to_timestamp(CAST(1.5000001 AS DECIMAL(8,7)))", ""),
+        text(&[Some("1970-01-01 00:00:01.5")])
+    );
+    assert_eq!(
+        column(&s, "to_timestamp(CAST(-1.5000009 AS DECIMAL(8,7)))", ""),
+        text(&[Some("1969-12-31 23:59:58.5")])
+    );
+}
+
+/// `Etc/GMT+5` is a zone; a zero-padded hour is not.
+#[test]
+fn etc_gmt_zones_reject_a_padded_hour() {
+    let s = session();
+    assert_eq!(
+        column(
+            &s,
+            "from_utc_timestamp(TIMESTAMP '2024-07-05 10:00:00', 'Etc/GMT+5')",
+            ""
+        ),
+        text(&[Some("2024-07-05 05:00:00")])
+    );
+    let df =
+        block_on(s.sql("SELECT from_utc_timestamp(TIMESTAMP '2024-07-05 10:00:00', 'Etc/GMT+05')"));
+    let err = match df {
+        Ok(df) => block_on(df.collect()).unwrap_err(),
+        Err(e) => e,
+    };
+    assert_eq!(
+        err.error_class(),
+        krishiv_common::error::ErrorClass::InvalidTimezone
+    );
+}
+
+/// The legacy time parser is not implemented: pattern functions refuse it
+/// by name instead of answering with the new parser; the other policies
+/// behave as before.
+#[test]
+fn the_legacy_time_parser_is_refused() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+    for sql in [
+        "SELECT to_timestamp('2024-01-05', 'yyyy-MM-dd')",
+        "SELECT date_format(TIMESTAMP '2024-01-05 10:00:00', 'yyyy')",
+        "SELECT unix_timestamp('2024-01-05', 'yyyy-MM-dd')",
+    ] {
+        let err = block_on(s.sql(sql))
+            .err()
+            .unwrap_or_else(|| panic!("{sql} resolved"));
+        assert_eq!(
+            err.error_class(),
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+            "{sql}"
+        );
+        assert!(err.to_string().contains("timeParserPolicy"), "{err}");
+    }
+    // One-argument forms are casts, not patterns.
+    assert_eq!(
+        column(&s, "to_timestamp('2024-01-05')", ""),
+        text(&[Some("2024-01-05 00:00:00")])
+    );
+    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = CORRECTED")).unwrap();
+    assert_eq!(
+        column(&s, "to_date('2024-01-05', 'yyyy-MM-dd')", ""),
+        text(&[Some("2024-01-05")])
+    );
+}

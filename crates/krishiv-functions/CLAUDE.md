@@ -55,8 +55,11 @@ Paths are relative to this crate.
   `to_timestamp`/`try_to_timestamp`/`to_timestamp_ltz`/`to_timestamp_ntz`, `unix_timestamp`/`to_unix_timestamp`,
   `from_unixtime` and `current_timezone`. Zones resolve through the kernels' `resolve_zone` (fixed offsets without the
   database, region and short ids against `jiff`'s bundled TZDB); anything else (`xx`, `abc`,
-  `etc/utc`) is `INVALID_TIMEZONE`. A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
-  NULL for every row), a column resolves per row. Out-of-range results raise `DATETIME_OVERFLOW` with ANSI on and are NULL
+  `etc/utc`, `Etc/GMT+05`) is `INVALID_TIMEZONE`. Region zones work as function arguments and in patterns; a region *session* zone
+  (`spark.sql.session.timeZone`) is still refused by the CLI (`krishiv-cli/src/sql.rs`) and read as a fixed offset by the analyzer. The
+  database is `jiff-tzdb` 0.1.9 as pinned in `Cargo.lock`; the crate does not record its IANA release. `spark.sql.legacy.timeParserPolicy=LEGACY`
+  (the `SimpleDateFormat` parser) is refused by name for the pattern functions. A literal zone reads every row with one lookup (`Zones::One`; a NULL literal zone is
+  NULL for every row), a column resolves per row (the resolution itself is cached per thread). Out-of-range results raise `DATETIME_OVERFLOW` with ANSI on and are NULL
   with it off (as `next_day`'s bad name and `make_date`'s bad field already do). A literal pattern compiles once per bind;
   a column pattern compiles per distinct value behind a small bounded cache. Parse failures are `CANNOT_PARSE_TIMESTAMP`
   with ANSI on and NULL with it off (pattern errors always raise); a `timestamp_ntz`

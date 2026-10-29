@@ -175,6 +175,11 @@
       77,
       224
     ],
+    "legacy-time-parser": [
+      13,
+      14,
+      15
+    ],
     "nested-interval-types": [
       74,
       218

@@ -128,3 +128,6 @@ Paths are relative to this crate.
 `KRISHIV_REQUIRE_TARGETS=baseline,x86_64v3` makes a skipped CPU target a test failure (set in CI) ·
 `cargo +nightly miri test -p krishiv-kernels` · `cargo bench -p krishiv-kernels` ·
 `(cd crates/krishiv-kernels/fuzz && cargo +nightly fuzz run differential -- -max_total_time=60)`
+
+## Time zones and datetime patterns
+`datetime::resolve_zone` resolves fixed offsets without a database and region ids against `jiff-tzdb` 0.1.9 (pinned in `Cargo.lock`; the crate does not record its IANA release), caching each id per thread. A region *session* zone is still refused by the CLI; only function arguments and pattern zone fields use regions. Known gaps: the `z` pattern letter does not parse daylight-saving short names (`PDT`, `EDT`, `CEST`, ...), and `spark.sql.legacy.timeParserPolicy=LEGACY` is unsupported (the pattern functions refuse it).
