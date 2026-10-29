@@ -540,6 +540,7 @@ async fn deterministic_mode_replays_morsel_order() {
 /// charges a poll its slice minus the thread's run-queue wait, so a spin
 /// timed by the wall clock holds the CPU for less than `d` on a loaded
 /// machine (the thread is preempted for part of it) and may not trip it.
+#[cfg(unix)]
 fn spin_on_cpu(d: Duration) {
     let cpu = || {
         let t = rustix::time::clock_gettime(rustix::time::ClockId::ThreadCPUTime);
@@ -550,6 +551,16 @@ fn spin_on_cpu(d: Duration) {
     };
     let start = cpu();
     while cpu().saturating_sub(start) < d {
+        std::hint::spin_loop();
+    }
+}
+
+/// Targets without `rustix::time` (Windows) time the spin by the wall clock:
+/// the test compiles there, and is only as reliable as a wall-clock spin.
+#[cfg(not(unix))]
+fn spin_on_cpu(d: Duration) {
+    let start = std::time::Instant::now();
+    while start.elapsed() < d {
         std::hint::spin_loop();
     }
 }
