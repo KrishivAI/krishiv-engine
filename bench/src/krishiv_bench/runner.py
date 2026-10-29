@@ -128,8 +128,50 @@ def load_queries(
         if only and f.stem not in only:
             continue
         ov = d / engine / f.name
-        out.append(Query(f.stem, (ov if ov.exists() else f).read_text(), suite))
+        if ov.exists():
+            out.append(Query(f.stem, ov.read_text(), suite))
+            continue
+        sql = f.read_text()
+        if engine in clickbench_queries.SPARK_DIALECT:
+            sql = backtick_identifiers(sql)
+        out.append(Query(f.stem, sql, suite))
     return out
+
+
+def backtick_identifiers(sql: str) -> str:
+    """``sql`` with each double-quoted identifier written as Spark quotes one.
+
+    The TPC-DS texts come from DuckDB, where ``AS "order count"`` names a column. In Spark SQL a double-quoted
+    token is a string literal (``spark.sql.ansi.doubleQuotedIdentifiers`` is off by default), so Spark 4.2 rejects
+    those eight queries with ``PARSE_SYNTAX_ERROR``; its identifier quote is the backtick. Single-quoted string
+    literals (``''`` escapes a quote) are left as they are; a backtick inside a name is doubled.
+    """
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        c = sql[i]
+        if c == "'":  # a string literal, to its closing quote ('' is an escaped quote)
+            j = i + 1
+            while j < n:
+                if sql[j] == "'" and j + 1 < n and sql[j + 1] == "'":
+                    j += 2
+                elif sql[j] == "'":
+                    break
+                else:
+                    j += 1
+            out.append(sql[i : j + 1])
+            i = j + 1
+        elif c == '"':
+            j = sql.find('"', i + 1)
+            if j < 0:  # unterminated: left for the engine to reject
+                out.append(sql[i:])
+                break
+            out.append("`" + sql[i + 1 : j].replace("`", "``") + "`")
+            i = j + 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
 
 
 def percentile(xs: list[float], p: float) -> float:

@@ -311,6 +311,10 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   The harness pins `duckdb==2.0.0` (`pyproject.toml`). TPC-H `dbgen` text columns differ between DuckDB versions, and `tpch_answers()`
   matches the `dbgen` of the same version, so `tpch-dbgen` reference datasets are versioned by generator (see below); answer checks
   run only when the dataset's generator version matches the running DuckDB.
+* **Spark-dialect identifiers**: eight TPC-DS texts (q16, q32, q50, q62, q92, q94, q95, q99) name columns with double
+  quotes (`AS "order count"`), DuckDB's identifier quote. Spark SQL reads a double-quoted token as a string literal, so
+  Spark 4.2 rejects them (`PARSE_SYNTAX_ERROR`); Spark-dialect engines (Krishiv, Spark, Sail) get backticks instead
+  (`runner.backtick_identifiers`, applied at load time; an `<suite>/<engine>/qNN.sql` override still wins).
 * **ClickBench** (ClickHouse/ClickBench, licensed **CC BY-NC-SA 4.0**): the query texts are **fetched, not redistributed**. They are not in this repository.
   On first use the harness downloads two files from the pinned upstream commit `0e10b8434eef001b43156b860a4e2e3665a35d51`
   (`duckdb-parquet/queries.sql` for every engine but ClickHouse, `clickhouse/queries.sql` for ClickHouse), checks their SHA-256 (pinned in
