@@ -340,7 +340,7 @@ class Oracle:
         if hasattr(krishiv, "timeout_s"):
             krishiv.timeout_s = run_timeout  # a runaway candidate (a cross join, say) is not interesting
         self.deadline = clock() + max_seconds
-        self._data_key: tuple | None = None
+        self._loaded: dict[str, pa.Table] = {}
         self._sig: str | None = None
 
     def within_budget(self) -> bool:
@@ -359,7 +359,7 @@ class Oracle:
         appears once the data is tiny, say) and report that instead of the bug the query was chosen for.
         """
         self._setup(ds)
-        self._data_key = None
+        self._loaded = {}
         self.runs += 1
         short = self.run_timeout
         self.run_timeout = PIN_TIMEOUT  # the real dataset is big: the short candidate timeout does not apply
@@ -377,18 +377,18 @@ class Oracle:
         return out
 
     def _load(self, tables: dict[str, pa.Table]) -> None:
-        key = tuple(
-            (n, t.num_rows, hash(tuple(t.column(0).to_pylist()[:50])) if t.num_columns else 0)
-            for n, t in sorted(tables.items())
-        )
-        if key == self._data_key:
+        """Makes the engines read ``tables``; only changed tables are rewritten, and nothing when none changed."""
+        old = self._loaded
+        if old.keys() == tables.keys() and all(old[n].equals(t) for n, t in tables.items()):
             return
-        shutil.rmtree(self.workdir, ignore_errors=True)
-        self.workdir.mkdir(parents=True)
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        for stale in old.keys() - tables.keys():
+            (self.workdir / f"{stale}.parquet").unlink(missing_ok=True)
         for n, t in tables.items():
-            pq.write_table(t, self.workdir / f"{n}.parquet")
+            if n not in old or not old[n].equals(t):
+                pq.write_table(t, self.workdir / f"{n}.parquet")
         self._setup(Dataset("minimize", 0, self.workdir, sorted(tables)))
-        self._data_key = key
+        self._loaded = dict(tables)
 
     def outcome(self, sql: str, tables: dict[str, pa.Table]) -> dict[str, Any]:
         """``{"differs": bool, "reference": rows | error, "krishiv": rows | error}``."""

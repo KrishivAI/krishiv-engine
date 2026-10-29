@@ -475,3 +475,20 @@ def test_tune_timeout_bounds_candidates_by_the_reproducing_run(tmp_path: Path):
     o.last_secs = 1000
     o.tune_timeout()
     assert o.run_timeout <= 100
+
+
+def test_load_rewrites_only_the_tables_that_changed(tmp_path: Path):
+    o = _oracle(tmp_path)
+    a, b = _table(20), _table(30)
+    o._load({"t": a, "u": b})
+    stamp = (tmp_path / "d" / "u.parquet").stat().st_mtime_ns
+    # Same size and same first rows, different later rows: still a change.
+    changed = pa.table({"k": [*range(19), 999], "v": [f"s{i}" for i in range(20)]})
+    o._load({"t": changed, "u": b})
+    assert o.krishiv.setups == 2
+    assert (tmp_path / "d" / "u.parquet").stat().st_mtime_ns == stamp
+    o._load({"t": changed, "u": b})
+    assert o.krishiv.setups == 2
+    o._load({"t": changed})
+    assert not (tmp_path / "d" / "u.parquet").exists()
+    assert o.krishiv.tables["t"][-1] == 999
