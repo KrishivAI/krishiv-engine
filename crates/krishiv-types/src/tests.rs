@@ -853,3 +853,19 @@ fn a_type_tag_counts_towards_the_nesting_limit() {
         Err(ErrorClass::FailedToParseTooComplex)
     );
 }
+
+/// A malformed WKB value is Spark's `WKB_PARSE_ERROR` with the problem and
+/// the byte position.
+#[test]
+fn malformed_wkb_is_a_wkb_parse_error() {
+    use crate::geo::{ByteOrder, SpatialKind, rewrite};
+    let e = rewrite(&[], SpatialKind::Geometry, ByteOrder::Ndr).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::WkbParseError);
+    assert_eq!(
+        e.message_parameters().to_vec(),
+        vec![
+            ("parseError", "WKB data is empty or null".to_owned()),
+            ("pos", "0".to_owned())
+        ]
+    );
+}

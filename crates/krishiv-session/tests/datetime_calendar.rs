@@ -326,7 +326,6 @@ fn expected_not_run() -> BTreeMap<String, usize> {
                 .to_owned(),
             24,
         ),
-        ("unsupported: the time data type (\"TIME\")".to_owned(), 6),
     ])
 }
 

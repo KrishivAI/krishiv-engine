@@ -6,6 +6,7 @@
 
 use std::ops::ControlFlow;
 
+use krishiv_common::error::UnsupportedTimeType;
 use krishiv_types::DataType;
 
 use super::AnalysisError;
@@ -13,9 +14,12 @@ use super::bind::unsupported;
 use crate::walk::{Node, visit_distinct};
 use crate::{ExprNode, Literal, LogicalPlan, PlanNode, ResolvedExpr};
 
+/// The feature name of the `TIME` type.
+const TIME: &str = "the TIME data type";
+
 fn feature(t: &DataType) -> Option<&'static str> {
     match t {
-        DataType::Time { .. } => Some("the TIME data type"),
+        DataType::Time { .. } => Some(TIME),
         DataType::Geometry { .. } => Some("the GEOMETRY data type"),
         DataType::Geography { .. } => Some("the GEOGRAPHY data type"),
         _ => None,
@@ -51,6 +55,13 @@ pub(super) fn check(root: &LogicalPlan) -> Result<(), AnalysisError> {
             }
         };
         match types.into_iter().find_map(feature) {
+            // Spark rejects `TIME` with its own class while
+            // `spark.sql.timeType.enabled` is false (the default; the type
+            // cannot be evaluated here either way).
+            Some(TIME) => {
+                error = Some(AnalysisError::new(UnsupportedTimeType {}, origin));
+                ControlFlow::Break(())
+            }
             Some(f) => {
                 error = Some(unsupported(f, origin));
                 ControlFlow::Break(())

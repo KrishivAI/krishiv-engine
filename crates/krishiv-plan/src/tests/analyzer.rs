@@ -4357,3 +4357,22 @@ fn types_without_evaluation_are_refused() {
     let fine = Expr::from(Literal::Null(None)).cast(DataType::Date);
     assert!(run(one_row().project(vec![fine]), &ctx()).is_ok());
 }
+
+/// Spark 4.2 rejects the `TIME` type with `UNSUPPORTED_TIME_TYPE` while
+/// `spark.sql.timeType.enabled` is false (its default), before any cast is
+/// checked: the same class for a cast of a column and a typed `NULL`.
+#[test]
+fn casting_to_time_is_unsupported_time_type() {
+    let ctx = ctx();
+    let time = DataType::time(6).unwrap();
+    for e in [
+        c("a").cast(time.clone()),
+        Expr::new(ExprNode::Literal(Literal::Null(Some(time)))),
+    ] {
+        let r = run(LogicalPlan::table(["t"]).project(vec![e]), &ctx);
+        assert_eq!(
+            summary(&r),
+            serde_json::json!(["UNSUPPORTED_TIME_TYPE", {}])
+        );
+    }
+}
