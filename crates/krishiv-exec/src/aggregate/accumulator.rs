@@ -30,10 +30,12 @@ use arrow_array::types::{
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float64Array,
-    Int64Array, PrimitiveArray, StringArray, StringViewArray,
+    Int64Array, PrimitiveArray, StringArray, StringViewArray, UInt32Array,
 };
 use arrow_buffer::{NullBuffer, i256};
 use arrow_schema::{DataType, TimeUnit};
+use krishiv_kernels::KernelCtx;
+use krishiv_kernels::compare::CompareKind;
 use krishiv_kernels::decimal::DecimalNative;
 use krishiv_types::batch::Weights;
 
@@ -43,6 +45,8 @@ use super::{
     unsupported,
 };
 use crate::error::{Result, internal};
+use crate::planner::eval::Value;
+use crate::planner::eval::logic::cmp;
 
 /// Whether `min`/`max` take arguments of type `t`.
 pub(crate) fn min_max_supported(t: &DataType) -> bool {
@@ -64,6 +68,13 @@ pub(crate) fn min_max_supported(t: &DataType) -> bool {
             | DataType::Binary
             | DataType::BinaryView
     )
+}
+
+/// Whether `min`/`max` take structs of Arrow type `t`: the same field-wise
+/// comparator the comparison operators use accepts them
+/// ([`krishiv_kernels::r#struct::comparable`]).
+pub(crate) fn struct_min_max_supported(t: &DataType) -> bool {
+    matches!(t, DataType::Struct(_)) && krishiv_kernels::r#struct::comparable(t)
 }
 
 /// `min`/`max` values, by physical kind.
@@ -232,6 +243,21 @@ enum Kind {
         set: Vec<bool>,
         /// Heap bytes of `Values::Bytes`.
         heap: usize,
+    },
+    /// `min`/`max` over structs: one owned winning row per group (`None`:
+    /// no row yet). Rows compare with the same field-wise comparator the
+    /// comparison operators use (NULL fields sort smallest and equal one
+    /// another); a NULL struct row is skipped like any NULL input.
+    MinMaxStruct {
+        max: bool,
+        /// The winning row of each group, as an owned one-row struct.
+        values: Vec<Option<ArrayRef>>,
+        /// Owned bytes of each group's winning row.
+        bytes: Vec<usize>,
+        set: Vec<bool>,
+        /// Heap bytes of the winning rows.
+        heap: usize,
+        kernels: KernelCtx,
     },
     /// `first` / `last`: `set` = a row was taken, `null` = its value is NULL.
     Pick {
@@ -903,6 +929,14 @@ impl Accumulator {
                 count: Vec::new(),
                 overflow: Vec::new(),
             },
+            (f @ (F::Min | F::Max), DataType::Struct(_)) => Kind::MinMaxStruct {
+                max: f == F::Max,
+                values: Vec::new(),
+                bytes: Vec::new(),
+                set: Vec::new(),
+                heap: 0,
+                kernels: KernelCtx::new(),
+            },
             (f @ (F::Min | F::Max), t) => Kind::MinMax {
                 max: f == F::Max,
                 values: Values::empty(t),
@@ -998,6 +1032,11 @@ impl Accumulator {
                 overflow,
             } => vec![v(sum), v(count), v(overflow)],
             Kind::MinMax { values, set, .. } => vec![values.vec(), v(set)],
+            Kind::MinMaxStruct {
+                values, bytes, set, ..
+            } => {
+                vec![v(values), v(bytes), v(set)]
+            }
             Kind::Pick {
                 values, set, null, ..
             } => vec![values.vec(), v(set), v(null)],
@@ -1015,7 +1054,10 @@ impl Accumulator {
     /// Bytes held.
     pub(crate) fn size(&self) -> usize {
         let heap = match &self.kind {
-            Kind::MinMax { heap, .. } | Kind::Pick { heap, .. } | Kind::By { heap, .. } => *heap,
+            Kind::MinMax { heap, .. }
+            | Kind::MinMaxStruct { heap, .. }
+            | Kind::Pick { heap, .. }
+            | Kind::By { heap, .. } => *heap,
             _ => 0,
         };
         heap + self.vecs().iter().map(|(_, c, e)| c * e).sum::<usize>()
@@ -1054,7 +1096,8 @@ impl Accumulator {
                 values: Values::Bytes(_),
                 heap,
                 ..
-            } => heap + arg.map_or(0, value_bytes),
+            }
+            | Kind::MinMaxStruct { heap, .. } => heap + arg.map_or(0, value_bytes),
             Kind::By {
                 values, keys, heap, ..
             } => {
@@ -1102,6 +1145,13 @@ impl Accumulator {
             Kind::MinMax { values, set, .. } => {
                 set.resize(n, false);
                 values.resize(n);
+            }
+            Kind::MinMaxStruct {
+                values, bytes, set, ..
+            } => {
+                values.resize(n, None);
+                bytes.resize(n, 0);
+                set.resize(n, false);
             }
             Kind::Pick {
                 values, set, null, ..
@@ -1158,6 +1208,13 @@ impl Accumulator {
             Kind::MinMax { values, set, .. } => {
                 set.reserve(new);
                 values.reserve(new);
+            }
+            Kind::MinMaxStruct {
+                values, bytes, set, ..
+            } => {
+                values.reserve(new);
+                bytes.reserve(new);
+                set.reserve(new);
             }
             Kind::Pick {
                 values, set, null, ..
@@ -1282,7 +1339,11 @@ impl Accumulator {
         if (state
             || matches!(
                 self.kind,
-                Kind::MinMax { .. } | Kind::Pick { .. } | Kind::By { .. } | Kind::Moments(_)
+                Kind::MinMax { .. }
+                    | Kind::MinMaxStruct { .. }
+                    | Kind::Pick { .. }
+                    | Kind::By { .. }
+                    | Kind::Moments(_)
             ))
             && !is_unit(w)
         {
@@ -1526,6 +1587,74 @@ impl Accumulator {
                 }
             }
             (
+                Kind::MinMaxStruct {
+                    max,
+                    values,
+                    bytes,
+                    set,
+                    heap,
+                    kernels,
+                },
+                _,
+            ) => {
+                let a = args[0];
+                if a.len() != groups.len() {
+                    return Err(internal(
+                        "a struct extremum of another length than the group ids".to_owned(),
+                    ));
+                }
+                if !matches!(a.data_type(), DataType::Struct(_)) {
+                    return Err(internal(format!("a struct extremum of {}", a.data_type())));
+                }
+                let order = if *max {
+                    CompareKind::Greater
+                } else {
+                    CompareKind::Less
+                };
+                for (i, &g) in groups.iter().enumerate() {
+                    let g = g as usize;
+                    if valid(i) {
+                        // A strict win keeps the first row on ties, so the
+                        // value is the same whatever the grouping.
+                        let better = match &values[g] {
+                            None => true,
+                            Some(current) => {
+                                let candidate = a.slice(i, 1);
+                                let out = cmp(
+                                    order,
+                                    &Value::Array(candidate),
+                                    &Value::Array(Arc::clone(current)),
+                                    kernels,
+                                )?;
+                                out.is_valid(0) && out.value(0)
+                            }
+                        };
+                        if better {
+                            let index = u32::try_from(i).map_err(|_| {
+                                internal("a struct extremum past row u32::MAX".to_owned())
+                            })?;
+                            let taken =
+                                arrow_select::take::take(a, &UInt32Array::from(vec![index]), None)
+                                    .map_err(|e| internal(e.to_string()))?;
+                            *heap = heap.saturating_sub(bytes[g]) + taken.get_buffer_memory_size();
+                            bytes[g] = taken.get_buffer_memory_size();
+                            values[g] = Some(taken);
+                            set[g] = true;
+                        }
+                    }
+                    if let Some(r) = run {
+                        let to = r.snapshots[i];
+                        if to != Running::NONE {
+                            let (to, from) = (to as usize, r.parts[i] as usize);
+                            *heap = heap.saturating_sub(bytes[to]) + bytes[from];
+                            bytes[to] = bytes[from];
+                            values[to] = values[from].clone();
+                            set[to] = set[from];
+                        }
+                    }
+                }
+            }
+            (
                 Kind::Pick {
                     last,
                     ignore_nulls,
@@ -1682,7 +1811,11 @@ impl Accumulator {
     /// Number of state columns.
     pub(crate) fn state_len(&self) -> usize {
         match self.kind {
-            Kind::Count(_) | Kind::SumInt { .. } | Kind::SumFloat { .. } | Kind::MinMax { .. } => 1,
+            Kind::Count(_)
+            | Kind::SumInt { .. }
+            | Kind::SumFloat { .. }
+            | Kind::MinMax { .. }
+            | Kind::MinMaxStruct { .. } => 1,
             Kind::SumDec { .. }
             | Kind::AvgFloat { .. }
             | Kind::AvgDec { .. }
@@ -1740,6 +1873,9 @@ impl Accumulator {
             Kind::MinMax { values, set, .. } => {
                 vec![self.value_array(values, &self.result, |i| set[i], ids)?]
             }
+            Kind::MinMaxStruct { values, set, .. } => {
+                vec![self.struct_values(values, &self.result, |i| set[i], ids)?]
+            }
             Kind::Pick {
                 values, set, null, ..
             } => vec![
@@ -1776,6 +1912,32 @@ impl Accumulator {
                 Decimal128Array::from_iter(v).with_data_type(t.clone()),
             )),
         }
+    }
+
+    /// The struct winners of groups `ids` as type `t`; `on(group)` says
+    /// whether the group has a value (else a NULL struct row). The
+    /// partial state is the struct value itself, so partial and final
+    /// states share this column.
+    fn struct_values(
+        &self,
+        values: &[Option<ArrayRef>],
+        t: &DataType,
+        on: impl Fn(usize) -> bool,
+        ids: &[u32],
+    ) -> Result<ArrayRef> {
+        let mut parts = Vec::with_capacity(ids.len());
+        for i in ids {
+            let g = *i as usize;
+            match on(g).then(|| values[g].as_ref()).flatten() {
+                Some(winner) => parts.push(Arc::clone(winner)),
+                None => parts.push(arrow_array::new_null_array(t, 1)),
+            }
+        }
+        if parts.is_empty() {
+            return Ok(arrow_array::new_null_array(t, 0));
+        }
+        let refs: Vec<&dyn Array> = parts.iter().map(AsRef::as_ref).collect();
+        arrow_select::concat::concat(&refs).map_err(|e| internal(e.to_string()))
     }
 
     /// `values` of groups `ids` as type `t`; `on(group)` says whether the
@@ -1903,6 +2065,7 @@ impl Accumulator {
             | Kind::SumInt { .. }
             | Kind::SumFloat { .. }
             | Kind::MinMax { .. }
+            | Kind::MinMaxStruct { .. }
             | Kind::Pick { .. } => {
                 let mut s = self.state(ids)?;
                 s.swap_remove(0)

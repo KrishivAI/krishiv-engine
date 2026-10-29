@@ -4,10 +4,10 @@
 //! Arity, determinism and availability come from Spark's catalog.
 
 use krishiv_common::error::{
-    DatatypeMismatchNonFoldableInput, DatatypeMismatchUnexpectedInputType,
-    DatatypeMismatchValueOutOfRange, InvalidExtractField, InvalidParameterValueBoolean,
-    KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210, NonFoldableArgument,
-    SecondFunctionArgumentNotInteger,
+    DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
+    DatatypeMismatchUnexpectedInputType, DatatypeMismatchValueOutOfRange, InvalidExtractField,
+    InvalidParameterValueBoolean, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1210,
+    NonFoldableArgument, SecondFunctionArgumentNotInteger,
 };
 use krishiv_kernels::datetime::DatePart;
 use krishiv_types::{DataType, DecimalType};
@@ -615,6 +615,36 @@ fn min_max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     })
 }
 
+/// `min`/`max` over `function`'s argument: its type, which must order. A
+/// struct orders field by field (recursively): one holding a map, an array
+/// or anything else the struct comparator does not take
+/// ([`krishiv_kernels::r#struct::comparable`], the same predicate the
+/// executor compares with) is `DATATYPE_MISMATCH.INVALID_ORDERING_TYPE`.
+fn ordered_min_max(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
+    if let Some(t) = c.data_type(0)
+        && matches!(t, DataType::Struct(_))
+        && !krishiv_kernels::r#struct::comparable(&t.to_arrow())
+    {
+        return Err(DatatypeMismatchInvalidOrderingType {
+            sql_expr: format!("\"{function}({})\"", c.sql(0).unwrap_or_default()),
+            function_name: format!("`{function}`"),
+            data_type: format!("\"{}\"", t.sql()),
+        }
+        .into());
+    }
+    min_max(c)
+}
+
+/// `min`: as [`ordered_min_max`].
+fn min(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    ordered_min_max(c, "min")
+}
+
+/// `max`: as [`ordered_min_max`].
+fn max(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    ordered_min_max(c, "max")
+}
+
 /// `first(x [, ignoreNulls])`: the type of `x`; the flag must be a boolean
 /// literal (Spark matches `Literal(b, BooleanType)`, so `1 = 1` is rejected).
 fn pick(c: &CallTypes<'_>, function: &str) -> Result<ArgType, KrishivError> {
@@ -675,8 +705,8 @@ fn aggregates() -> Vec<Spec> {
         aggregate("sum", numeric(), sum, Aggregate::Sum),
         aggregate("avg", numeric(), avg, Aggregate::Avg),
         aggregate("mean", numeric(), avg, Aggregate::Avg),
-        aggregate("min", Inputs::Any, min_max, Aggregate::Min),
-        aggregate("max", Inputs::Any, min_max, Aggregate::Max),
+        aggregate("min", Inputs::Any, min, Aggregate::Min),
+        aggregate("max", Inputs::Any, max, Aggregate::Max),
         aggregate("first", Inputs::Any, first, Aggregate::First),
         aggregate("first_value", Inputs::Any, first, Aggregate::First),
         aggregate("last", Inputs::Any, last, Aggregate::Last),

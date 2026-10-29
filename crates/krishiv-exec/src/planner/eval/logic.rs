@@ -320,7 +320,7 @@ fn maybe_null(e: &Arc<dyn PhysExpr>) -> bool {
 }
 
 /// `l kind r` (NULL where either is NULL).
-pub(super) fn cmp(
+pub(crate) fn cmp(
     kind: CompareKind,
     l: &Value,
     r: &Value,

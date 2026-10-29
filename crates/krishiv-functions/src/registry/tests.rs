@@ -675,6 +675,64 @@ fn unary_math_nullability_matches_spark() {
     assert_eq!(result("pi", &[], &[]).unwrap(), d);
 }
 
+/// `min`/`max` take any orderable type — structs field by field — and
+/// refuse the rest with Spark's `INVALID_ORDERING_TYPE`.
+#[test]
+fn min_max_signatures_order_structs_field_by_field() {
+    use krishiv_types::{MapType, StructField, StructType};
+
+    let struct_of = |t: DataType| {
+        ty(DataType::Struct(StructType::new(vec![StructField::new(
+            "f", t, true,
+        )])))
+    };
+    let ordered = struct_of(DataType::Integer);
+    for name in ["min", "max"] {
+        assert_eq!(
+            result(name, std::slice::from_ref(&ordered), &[]).unwrap(),
+            nullable_struct()
+        );
+        let nested = struct_of(DataType::Struct(StructType::new(vec![
+            StructField::new("x", DataType::Double, true),
+            StructField::new("y", DataType::String, true),
+        ])));
+        assert!(result(name, &[nested], &[]).is_ok());
+        // A map field (or one nested in a struct) does not order.
+        let map = DataType::Map(MapType::new(DataType::String, DataType::Integer, true).into());
+        let nested_map = struct_of(map.clone());
+        let nested_map = struct_of(nested_map.data_type.clone().unwrap());
+        for bad in [struct_of(map), nested_map] {
+            let err = result(name, &[bad], &[]).unwrap_err();
+            assert_eq!(
+                err.error_class(),
+                ErrorClass::DatatypeMismatchInvalidOrderingType,
+                "{name}"
+            );
+        }
+        // `first`/`last` keep their old rule (any type, no ordering check).
+        for other in ["first", "last", "any_value"] {
+            assert!(
+                result(other, std::slice::from_ref(&ordered), &[]).is_ok(),
+                "{other}"
+            );
+        }
+    }
+}
+
+/// A nullable struct of one `INT` field, for `min`/`max` result checks.
+fn nullable_struct() -> ArgType {
+    use krishiv_types::{StructField, StructType};
+
+    ArgType::new(
+        DataType::Struct(StructType::new(vec![StructField::new(
+            "f",
+            DataType::Integer,
+            true,
+        )])),
+        true,
+    )
+}
+
 #[test]
 fn math_signatures() {
     let (d, i, l) = (

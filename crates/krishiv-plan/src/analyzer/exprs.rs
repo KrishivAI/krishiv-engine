@@ -1550,7 +1550,8 @@ impl Resolver<'_> {
                 // `struct(a, ...)`: children with names keep them (a column
                 // contributes its name, a struct field its field name), so a
                 // call with any named child becomes `named_struct(name, ...)`
-                // with `colN` defaults; all-default calls stay `struct`.
+                // with `colN` defaults; all-default calls stay `struct`
+                // (even one written with aliases: the alias is its default).
                 // Only for the built-in: a qualified session UDF named
                 // `struct` runs the UDF.
                 if is_builtin_entry(&entry)
@@ -1573,6 +1574,23 @@ impl Resolver<'_> {
                             }
                         }
                     }
+                    // Shown as written (`struct(1 AS a)`), not the
+                    // `named_struct` it binds as: aliases keep `AS name`.
+                    let mut shown_kids = Vec::with_capacity(n);
+                    for (arg, k) in f.args.iter().zip(&kids[..n]) {
+                        if let ExprNode::Alias { name, .. } = &arg.node {
+                            shown_kids.push(Arc::new(
+                                Expr::new(ExprNode::Alias {
+                                    expr: k.shown(),
+                                    name: name.clone(),
+                                })
+                                .with_origin(arg.origin),
+                            ));
+                        } else {
+                            shown_kids.push(k.shown());
+                        }
+                    }
+                    b.shown = Some(with_children(e, shown_kids));
                     return Ok(b);
                 }
                 // `assert_true(c)` is `assert_true(c, '<c>' is not true!)`:
@@ -3619,6 +3637,10 @@ impl Resolver<'_> {
             .iter()
             .enumerate()
             .all(|(i, n)| *n == format!("col{}", i + 1))
+            && !f
+                .args
+                .iter()
+                .any(|a| matches!(a.node, ExprNode::Alias { .. }))
         {
             return None;
         }
@@ -4072,7 +4094,11 @@ fn pretty_node(x: &Expr, k: &[&str], zone: Option<i32>) -> String {
             };
             format!("{cast}({} AS {})", k[0], to.sql())
         }
-        ExprNode::Alias { .. } | ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
+        // An unresolved alias keeps `AS name` (a `struct` call rewritten
+        // to `named_struct` shows its children as written); a resolved
+        // one is its expression (its output names the attribute).
+        ExprNode::Alias { name, .. } => format!("{} AS {name}", k[0]),
+        ExprNode::Resolved(ResolvedExpr::Alias { .. }) => k[0].to_owned(),
         ExprNode::Field { name, .. } | ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => {
             format!("{}.{}", k[0], name)
         }

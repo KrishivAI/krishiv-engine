@@ -1598,6 +1598,7 @@ async fn first_and_last_pick_rows_in_input_order() {
 }
 
 mod simple;
+mod structs;
 
 #[test]
 fn first_and_last_types_and_states() {
