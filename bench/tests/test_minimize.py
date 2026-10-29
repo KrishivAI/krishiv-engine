@@ -242,8 +242,8 @@ def test_sql_literal_and_setup_sql():
     assert [mz.sql_literal(v) for v in (None, True, 3, 1.5, "o'k")] == ["NULL", "true", "3", "1.5", "'o''k'"]
     s = mz.setup_sql({"t": pa.table({"k": [1, 2], "v": ["a", None]})})
     assert "CREATE TEMPORARY VIEW t AS SELECT * FROM VALUES" in s
-    assert "(1, 'a')" in s
-    assert "(2, NULL)" in s
+    assert "(CAST(1 AS BIGINT), 'a')" in s
+    assert "(CAST(2 AS BIGINT), NULL)" in s
     assert "AS t(k, v);" in s
     empty = mz.setup_sql({"e": pa.table({"k": pa.array([], pa.int64())})})
     assert "WHERE false" in empty
@@ -278,8 +278,12 @@ def test_run_minimize_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(adapters, "make_engine", lambda name, **kw: FakeEngine())
     monkeypatch.setattr(mz, "KrishivEngine", lambda **kw: FakeEngine(bug=True))
     out = mz.run_minimize("tpch", "q1", 1, seed_rows=20, out_dir=str(tmp_path / "case"))
-    assert (out / "query.sql").is_file()
-    assert json.loads((out / "expected.json").read_text())
+    assert (out / "query.sql").read_text() == "select count(*) from t;\n"
+    assert json.loads((out / "expected.json").read_text()) == [[1]]
+    assert json.loads((out / "actual.json").read_text()) == [[2]]
+    import pyarrow.parquet as pq2
+
+    assert pq2.read_table(out / "data" / "t.parquet").column("k").to_pylist() == [13]
     monkeypatch.setattr(mz, "KrishivEngine", lambda **kw: FakeEngine())
     with pytest.raises(SystemExit, match="does not differ"):
         mz.run_minimize("tpch", "q1", 1, seed_rows=20, out_dir=str(tmp_path / "case2"))
@@ -469,24 +473,34 @@ def test_tune_timeout_bounds_candidates_by_the_reproducing_run(tmp_path: Path):
     o = mz.Oracle(FakeEngine(), FakeEngine(bug=True), tmp_path / "u", run_timeout=100, clock=clock)
     o.differs("select count(*) from t", {"t": _table(20)})
     assert o.last_secs > 0
+    assert o.last_secs == 4.0
     o.tune_timeout(factor=2, floor=1)
-    assert o.run_timeout == min(100, max(1, 2 * o.last_secs))
-    assert o.krishiv.timeout_s == o.run_timeout
+    assert o.run_timeout == 8.0  # twice the reproducing run
+    assert o.krishiv.timeout_s == 8.0
+    o.last_secs = 0.1
+    o.tune_timeout(factor=2, floor=3)
+    assert o.run_timeout == 3.0  # the floor
     o.last_secs = 1000
     o.tune_timeout()
-    assert o.run_timeout <= 100
+    assert o.run_timeout == 3.0  # tuning never raises the timeout
 
 
-def test_load_rewrites_only_the_tables_that_changed(tmp_path: Path):
+def test_load_rewrites_only_the_tables_that_changed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    written: list[str] = []
+    real = mz.pq.write_table
+    monkeypatch.setattr(
+        mz.pq, "write_table", lambda t, where, *a, **k: (written.append(Path(where).name), real(t, where, *a, **k))[1]
+    )
     o = _oracle(tmp_path)
     a, b = _table(20), _table(30)
     o._load({"t": a, "u": b})
-    stamp = (tmp_path / "d" / "u.parquet").stat().st_mtime_ns
+    assert sorted(written) == ["t.parquet", "u.parquet"]
+    written.clear()
     # Same size and same first rows, different later rows: still a change.
     changed = pa.table({"k": [*range(19), 999], "v": [f"s{i}" for i in range(20)]})
     o._load({"t": changed, "u": b})
     assert o.krishiv.setups == 2
-    assert (tmp_path / "d" / "u.parquet").stat().st_mtime_ns == stamp
+    assert written == ["t.parquet"]  # `u` was not rewritten
     o._load({"t": changed, "u": b})
     assert o.krishiv.setups == 2
     o._load({"t": changed})
@@ -542,7 +556,15 @@ def test_refuses_to_delete_an_unrelated_output_directory(tmp_path: Path):
     afile.write_text("x")
     with pytest.raises(SystemExit, match="refusing"):
         mz.check_case_dir(afile)
+    # A directory with a README.txt and a query.sql of someone's own project is not a previous case.
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "README.txt").write_text("mine")
+    (project / "query.sql").write_text("select 1")
+    with pytest.raises(SystemExit, match="refusing"):
+        mz.check_case_dir(project)
     case = mz.write_case(tmp_path / "case", "select 1", {"t": _table(2)}, {"reference": [], "krishiv": []}, "n")
+    assert (case / mz.CASE_MARKER).is_file()
     mz.write_case(
         case, "select 2", {"t": _table(2)}, {"reference": [], "krishiv": []}, "n"
     )  # a previous case: replaced
@@ -608,3 +630,65 @@ def test_run_minimize_aborts_when_the_final_run_no_longer_differs(tmp_path: Path
     (busy / "x").write_text("x")
     with pytest.raises(SystemExit, match="refusing"):
         mz.run_minimize("tpch", "q1", 1, out_dir=str(busy))
+
+
+def test_setup_sql_keeps_the_column_types():
+    import datetime as dt
+    import decimal
+
+    t = pa.table(
+        {
+            "i": pa.array([1, None], pa.int32()),
+            "d": pa.array([dt.date(2020, 1, 2), None], pa.date32()),
+            "ts": pa.array([dt.datetime(2020, 1, 2, 3, 4, 5), None], pa.timestamp("us")),
+            "tz": pa.array([dt.datetime(2020, 1, 2, 3, 4, 5, tzinfo=dt.UTC), None], pa.timestamp("us", "UTC")),
+            "n": pa.array([decimal.Decimal("1.50"), None], pa.decimal128(5, 2)),
+            "f": pa.array([1.5, None], pa.float64()),
+            "b": pa.array([b"\x01\xff", None], pa.binary()),
+            "s": pa.array(["x", None], pa.string()),
+            "ok": pa.array([True, None], pa.bool_()),
+        }
+    )
+    sql = mz.setup_sql({"t": t})
+    assert "CAST(1 AS INT)" in sql
+    assert "CAST(NULL AS INT)" in sql
+    assert "CAST('2020-01-02' AS DATE)" in sql
+    assert "CAST('2020-01-02 03:04:05' AS TIMESTAMP_NTZ)" in sql
+    assert "AS TIMESTAMP)" in sql
+    assert "CAST('1.50' AS DECIMAL(5,2))" in sql
+    assert "CAST(1.5 AS DOUBLE)" in sql
+    assert "X'01ff'" in sql
+    assert "'x'" in sql
+    assert "true" in sql
+    assert mz.sql_type(pa.int8()) == "TINYINT"
+    assert mz.sql_type(pa.int16()) == "SMALLINT"
+    assert mz.sql_type(pa.int64()) == "BIGINT"
+    assert mz.sql_type(pa.float32()) == "FLOAT"
+    assert mz.sql_type(pa.large_binary()) == "BINARY"
+    assert mz.sql_type(pa.string()) is None
+    empty = mz.setup_sql({"e": pa.table({"d": pa.array([], pa.date32())})})
+    assert "CAST(NULL AS DATE)" in empty
+    assert "WHERE false" in empty
+
+
+def test_table_files_handles_every_layout(tmp_path: Path):
+    import pyarrow.parquet as pq
+
+    one = _table(3)
+    pq.write_table(one, tmp_path / "a.parquet")
+    (tmp_path / "b.parquet").mkdir()
+    pq.write_table(one, tmp_path / "b.parquet" / "p0.parquet")
+    pq.write_table(one, tmp_path / "b.parquet" / "p1.parquet")
+    (tmp_path / "c").mkdir()
+    pq.write_table(one, tmp_path / "c" / "p0.parquet")
+    assert [p.name for p in mz.table_files(tmp_path, "a")] == ["a.parquet"]
+    assert [p.name for p in mz.table_files(tmp_path, "b")] == ["p0.parquet", "p1.parquet"]  # hits.parquet/
+    assert [p.name for p in mz.table_files(tmp_path, "c")] == ["p0.parquet"]  # hits/
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(SystemExit, match="no Parquet files for table 'empty'"):
+        mz.table_files(tmp_path, "empty")
+    with pytest.raises(SystemExit, match="no Parquet files for table 'nope'"):
+        mz.table_files(tmp_path, "nope")
+    tables, big = mz.load_tables(tmp_path, ["a", "b"], whole_rows=1000, pool_rows=100)
+    assert tables["b"].num_rows == 6
+    assert big == set()

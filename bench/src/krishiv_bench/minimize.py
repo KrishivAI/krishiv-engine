@@ -41,6 +41,7 @@ from .adapters.krishiv import KrishivEngine, RunnerCrashed, RunnerError
 from .errors import describe_error
 from .paths import data_root
 
+CASE_MARKER = ".krishiv-minimize-case"  # in every case directory: only such a directory is replaced
 DEFAULT_SEED_ROWS = 2000
 DEFAULT_MAX_RUNS = 3000
 DEFAULT_MAX_SECONDS = 1500.0
@@ -562,15 +563,30 @@ def load_tables(root: Path, names: list[str], whole_rows: int, pool_rows: int) -
     tables: dict[str, pa.Table] = {}
     big: set[str] = set()
     for t in names:
-        f = root / f"{t}.parquet"
-        src = f if f.is_file() else root / t
-        files = [src] if src.is_file() else sorted(src.glob("*.parquet"))
+        files = table_files(root, t)
         if sum(pq.ParquetFile(x).metadata.num_rows for x in files) > whole_rows:
             tables[t] = _pool(files, pool_rows)
             big.add(t)
         else:
             tables[t] = pa.concat_tables([pq.read_table(x) for x in files])
     return tables, big
+
+
+def table_files(root: Path, table: str) -> list[Path]:
+    """The Parquet files of ``table`` under ``root``: ``<t>.parquet`` (a file, or a directory of parts) or a
+    directory ``<t>/`` of parts.
+
+    Raises:
+        SystemExit: no file is found (``hits.parquet/`` and ``hits/`` layouts are both handled).
+    """
+    single = root / f"{table}.parquet"
+    if single.is_file():
+        return [single]
+    for d in (single, root / table):
+        files = sorted(d.glob("*.parquet")) if d.is_dir() else []
+        if files:
+            return files
+    raise SystemExit(f"no Parquet files for table {table!r} under {root}")
 
 
 def _pool(files: list[Path], rows: int) -> pa.Table:
@@ -584,13 +600,57 @@ def _pool(files: list[Path], rows: int) -> pa.Table:
 
 
 def sql_literal(v: Any) -> str:
+    """``v`` as a SQL literal: NULL, true/false, numbers as written, bytes as ``X'..'``, else a quoted string."""
     if v is None:
         return "NULL"
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, int | float):
         return repr(v)
+    if isinstance(v, bytes | bytearray):
+        return "X'" + bytes(v).hex() + "'"
     return "'" + str(v).replace("'", "''") + "'"
+
+
+def sql_type(t: pa.DataType) -> str | None:
+    """The Spark SQL type of Arrow type ``t`` for a ``CAST`` in the case's setup, or ``None`` to leave the literal as
+    its own type (strings, booleans)."""
+    import pyarrow.types as pt
+
+    if pt.is_int8(t):
+        return "TINYINT"
+    if pt.is_int16(t):
+        return "SMALLINT"
+    if pt.is_int32(t):
+        return "INT"
+    if pt.is_int64(t):
+        return "BIGINT"
+    if pt.is_float32(t):
+        return "FLOAT"
+    if pt.is_float64(t):
+        return "DOUBLE"
+    if pt.is_decimal(t):
+        return f"DECIMAL({t.precision},{t.scale})"
+    if pt.is_date(t):
+        return "DATE"
+    if pt.is_timestamp(t):
+        return "TIMESTAMP" if t.tz else "TIMESTAMP_NTZ"
+    if pt.is_binary(t) or pt.is_large_binary(t):
+        return "BINARY"
+    return None
+
+
+def typed_literal(v: Any, t: pa.DataType) -> str:
+    """``v`` as a literal of Arrow type ``t``: a ``CAST`` keeps dates, timestamps, decimals and integer widths, which
+    bare literals would turn into strings and ``INT``/``DECIMAL`` of their own."""
+    target = sql_type(t)
+    if target is None:
+        return sql_literal(v)
+    if v is None:
+        return f"CAST(NULL AS {target})"
+    if target == "BINARY":
+        return sql_literal(v)
+    return f"CAST({sql_literal(v if isinstance(v, int | float) else str(v))} AS {target})"
 
 
 def setup_sql(tables: dict[str, pa.Table]) -> str:
@@ -598,10 +658,13 @@ def setup_sql(tables: dict[str, pa.Table]) -> str:
     out = []
     for name, t in sorted(tables.items()):
         cols = t.column_names
+        types = [f.type for f in t.schema]
         rows = zip(*[c.to_pylist() for c in t.columns], strict=True) if t.num_rows else []
-        values = ",\n  ".join("(" + ", ".join(sql_literal(v) for v in r) + ")" for r in rows)
+        values = ",\n  ".join(
+            "(" + ", ".join(typed_literal(v, ty) for v, ty in zip(r, types, strict=True)) + ")" for r in rows
+        )
         if not values:
-            values = "(" + ", ".join("NULL" for _ in cols) + ")"
+            values = "(" + ", ".join(typed_literal(None, ty) for ty in types) + ")"
             out.append(
                 f"CREATE TEMPORARY VIEW {name} AS SELECT * FROM VALUES\n  {values}\n"
                 f"AS {name}({', '.join(cols)}) WHERE false;"
@@ -614,11 +677,9 @@ def setup_sql(tables: dict[str, pa.Table]) -> str:
 
 
 def check_case_dir(out: Path) -> None:
-    """Refuses an ``--out`` that exists, is not empty and is not a previous case: it would be deleted."""
-    if out.exists() and (
-        not out.is_dir()
-        or (any(out.iterdir()) and not (out / "query.sql").exists() and not (out / "README.txt").exists())
-    ):
+    """Refuses an ``--out`` that exists, is not empty and is not a case an earlier run wrote (it carries
+    ``CASE_MARKER``): it would be deleted."""
+    if out.exists() and (not out.is_dir() or (any(out.iterdir()) and not (out / CASE_MARKER).is_file())):
         raise SystemExit(f"{out} exists and is not a previous minimize case; refusing to replace it")
 
 
@@ -634,6 +695,7 @@ def write_case(out: Path, sql: str, tables: dict[str, pa.Table], outcome: dict[s
     (out / "expected.json").write_text(json.dumps(_jsonable(outcome["reference"]), indent=2))
     (out / "actual.json").write_text(json.dumps(_jsonable(outcome["krishiv"]), indent=2))
     (out / "README.txt").write_text(note + "\n")
+    (out / CASE_MARKER).write_text("written by krishiv-bench minimize\n")
     return out
 
 

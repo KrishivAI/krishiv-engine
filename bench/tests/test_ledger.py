@@ -132,7 +132,9 @@ def test_duckdb_buckets_other_aggregate_sort_window_and_degenerate_inputs():
     assert math.isclose(out["sort/top-N"], 1.0)
     assert math.isclose(out["window"], 1.0)
     assert math.isclose(out["other"], 1.0)
-    assert math.isclose(out["join probe"], 1.5 + 0.5 * 1.0 / 1.0 * 1.0 + 0.0) or out["join probe"] > 0
+    # HASH_JOIN without two children: all probe (1.0). CROSS_PRODUCT over two empty children: half and half (0.5 each).
+    assert math.isclose(out["join probe"], 1.5)
+    assert math.isclose(out["join build"], 0.5)
     assert ledger.duckdb_buckets({"operator": []}, 1.0) == {"scan/decode": 1.0}  # answered from metadata
     assert ledger.duckdb_buckets({"children": [_op("FILTER", 1, 1)]}, 1.0) == {"filter/project": 1.0}
     assert ledger.duckdb_buckets({"operator": ops}, 0.0) == {}
@@ -318,7 +320,8 @@ def test_profile_of_a_metadata_only_query_is_empty(tmp_path: Path):
     duck.con = duckdb.connect()
     duck.con.execute(f"create view l as select * from read_parquet('{tmp_path}/l.parquet')")
     prof = ledger.duckdb_profile(duck, Query("q", "select count(*) from l", "t"))
-    assert ledger.duckdb_buckets(prof, 1.0) == {} or "operator" in prof
+    assert prof == {"operator": []}
+    assert ledger.duckdb_buckets(prof, 1.0) == {"scan/decode": 1.0}  # booked as scan, like the reference scripts
 
 
 def test_measure_duckdb_times_and_splits():
@@ -428,6 +431,7 @@ def test_a_launched_runner_gets_its_own_process_group_and_is_killed_with_it(tmp_
     import os
     import stat
 
+    import psutil
     from test_abba import FAKE_RUNNER
 
     from krishiv_bench.adapters.base import Dataset
@@ -435,14 +439,21 @@ def test_a_launched_runner_gets_its_own_process_group_and_is_killed_with_it(tmp_
     binary = tmp_path / "runner"
     binary.write_text(FAKE_RUNNER)
     binary.chmod(binary.stat().st_mode | stat.S_IEXEC)
-    eng = KrishivEngine(threads=1, memory_limit="1g", binary=binary, launcher=["env"])
+    # `sh` cannot exec the runner (it has a command left to run), so the runner is its child, as under perf.
+    launcher = ["sh", "-c", '"$@"; rc=$?; exit $rc', "sh"]
+    eng = KrishivEngine(threads=1, memory_limit="1g", binary=binary, launcher=launcher)
     eng.timeout_s = 30
     eng.setup(Dataset("t", 0, tmp_path, ["t"]))
     proc = eng._proc
     assert proc is not None
     assert os.getsid(proc.pid) == proc.pid  # a session (and group) of its own
+    children = psutil.Process(proc.pid).children(recursive=True)
+    assert children, "the runner must be a child of the launcher"
     eng.cancel()
     assert proc.poll() is not None
+    gone, alive = psutil.wait_procs(children, timeout=5)
+    assert not alive, "the kill must reach the runner, not only the launcher"
+    assert len(gone) == len(children)
     plain = KrishivEngine(threads=1, memory_limit="1g", binary=binary)
     plain.setup(Dataset("t", 0, tmp_path, ["t"]))
     assert plain._proc is not None
@@ -450,17 +461,73 @@ def test_a_launched_runner_gets_its_own_process_group_and_is_killed_with_it(tmp_
     plain.teardown()
 
 
-def test_measure_krishiv_cleans_up_when_the_engine_cannot_be_built(monkeypatch: pytest.MonkeyPatch):
+def test_measure_krishiv_cleans_up_when_the_engine_cannot_be_built(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     def boom(**kw):
         raise OSError("no such runner")
 
     monkeypatch.setattr(ledger, "KrishivEngine", boom)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))  # a private temp directory: nothing else writes here
 
     class Plain:
         def profile(self, query):
             return {"seconds": 1.0}
 
-    before = set(Path(tempfile.gettempdir()).glob("ledger-perf-*"))
     with pytest.raises(OSError, match="no such runner"):
         ledger.measure_krishiv(None, None, Query("q", "select 1", "t"), 1, "1g", 0, Plain())  # ty: ignore[invalid-argument-type]
-    assert set(Path(tempfile.gettempdir()).glob("ledger-perf-*")) == before
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_perf_script_is_bounded_and_a_timeout_fails_only_the_query(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    seen = {}
+
+    def hung(cmd, **kw):
+        seen.update(kw)
+        raise ledger.subprocess.TimeoutExpired(cmd, kw["timeout"])
+
+    monkeypatch.setattr(ledger.subprocess, "run", hung)
+    with pytest.raises(ledger.subprocess.TimeoutExpired):
+        ledger.perf_script(tmp_path / "p.data", timeout_s=7)
+    assert seen["timeout"] == 7
+    q = Query("q01", "select 1", "tpch")
+    monkeypatch.setattr(
+        ledger, "measure_duckdb", lambda duck, query, t: {"seconds": 1.0, "runs": [1.0], "buckets": {"other": 1.0}}
+    )
+
+    def stuck(*a):
+        raise ledger.subprocess.TimeoutExpired("perf", 1)
+
+    e = ledger._one_query(q, None, None, object(), 2, "1g", 5, None, stuck)
+    assert e["status"] == "failed"
+    assert e["reason"].startswith("perf:")
+
+
+def test_a_failed_profiled_query_leaves_profiling_off_and_the_connection_usable(tmp_path: Path):
+    duck = DuckDBEngine(threads=1, memory_limit="1GB")
+    duck.con = duckdb.connect()
+    duck.con.execute("create table t as select range i from range(10)")
+    with pytest.raises(duckdb.Error):
+        ledger.duckdb_profile(duck, Query("q", "select nope from t", "t"))
+    assert duck.con.execute("select count(*) from t").fetchone() == (10,)
+    assert duck.con.execute("select current_setting('enable_profiling')").fetchone() in {(None,), ("no_output",), ("",)}
+
+
+def test_duckdb_runs_are_bounded_by_the_timeout():
+    duck = DuckDBEngine(threads=1, memory_limit="1GB")
+    duck.con = duckdb.connect()
+    slow = Query("q", "select count(*) from range(30000000000) a, range(100) b", "t")
+    with pytest.raises(duckdb.Error):
+        ledger.measure_duckdb(duck, slow, 0.3)
+    assert ledger.bounded(duck, 0, lambda: 5) == 5  # no bound: just the call
+    assert ledger.bounded(duck, 5, lambda: 6) == 6
+
+
+def test_an_unreadable_previous_ledger_does_not_lose_the_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
+    broken = tmp_path / "20260101T000000Z_ledger_tpch_sf1.json"
+    broken.write_text('{"queries": ')  # an interrupted run
+    assert ledger._read_previous(broken) is None
+    assert "ignoring the previous ledger" in capsys.readouterr().out
+    assert ledger._read_previous(None) is None
+    assert ledger._read_previous(tmp_path / "missing.json") is None
+    ok = tmp_path / "ok.json"
+    ok.write_text('{"a": 1}')
+    assert ledger._read_previous(ok) == {"a": 1}

@@ -27,6 +27,7 @@ ledger of the same suite (``--previous FILE`` or the newest earlier one).
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import math
@@ -35,11 +36,14 @@ import shutil
 import statistics
 import subprocess
 import tempfile
+import threading
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
+
+import duckdb
 
 from .abba import bench_lock, discover_tables, geomean, wait_idle
 from .adapters import Dataset
@@ -62,6 +66,7 @@ BUCKETS = (
 )
 BIN_S = 0.02
 PERF_FREQ = 499
+PERF_SCRIPT_TIMEOUT_S = 900.0
 SCAN_FILTER = "scan-filter"  # in-scan predicates; merged into scan/decode (DuckDB evaluates them in its scan)
 
 # Leaf-up, first frame matching any rule decides; rules are tried in order within a frame. The rules are the
@@ -372,12 +377,18 @@ def perf_launcher(data: Path) -> list[str]:
             "-o", str(data), "--"]  # fmt: skip
 
 
-def perf_script(data: Path) -> str:
+def perf_script(data: Path, timeout_s: float = PERF_SCRIPT_TIMEOUT_S) -> str:
+    """``perf script`` of ``data``, bounded: a stuck call must not hold the bench lock forever.
+
+    # Errors
+    ``subprocess.CalledProcessError`` or ``subprocess.TimeoutExpired`` (both ``SubprocessError``).
+    """
     out = subprocess.run(
         ["perf", "script", "-i", str(data), "-F", "tid,time,ip,sym", "--no-inline"],
         capture_output=True,
         text=True,
         check=True,
+        timeout=timeout_s,
     )
     return out.stdout
 
@@ -387,14 +398,18 @@ def duckdb_profile(duck: DuckDBEngine, query) -> dict[str, Any]:
     con = duck.con
     assert con is not None
     out = Path(tempfile.mkdtemp(prefix="ledger-duck-")) / "profile.json"
+    quoted = str(out).replace("'", "''")
     try:
         con.execute("PRAGMA enable_profiling='json'")
-        con.execute(f"SET profiling_output='{out}'")
+        con.execute(f"SET profiling_output='{quoted}'")
         con.execute(query.sql).fetchall()
         con.execute("PRAGMA disable_profiling")
         # DuckDB writes no profile for a query it answers from metadata alone (no operators).
         return json.loads(out.read_text()) if out.is_file() else {"operator": []}
     finally:
+        # A failed query must not leave profiling on, pointing at a directory that is about to go.
+        with contextlib.suppress(duckdb.Error):
+            con.execute("PRAGMA disable_profiling")
         shutil.rmtree(out.parent, ignore_errors=True)
 
 
@@ -426,14 +441,31 @@ def measure_krishiv(
 
 def measure_duckdb(duck: DuckDBEngine, query, timeout_s: float) -> dict[str, Any]:
     """Median of 3 warm runs and the operator-bucket split of one profiled run."""
-    duck.run(query)  # warm-up
+    bounded(duck, timeout_s, lambda: duck.run(query))  # warm-up
     times = []
     for _ in range(3):
         t0 = time.perf_counter()
-        duck.run(query)
+        bounded(duck, timeout_s, lambda: duck.run(query))
         times.append(time.perf_counter() - t0)
     wall = statistics.median(times)
-    return {"seconds": wall, "runs": times, "buckets": duckdb_buckets(duckdb_profile(duck, query), wall)}
+    profile = bounded(duck, timeout_s, lambda: duckdb_profile(duck, query))
+    return {"seconds": wall, "runs": times, "buckets": duckdb_buckets(profile, wall)}
+
+
+def bounded(duck: DuckDBEngine, timeout_s: float, work: Callable[[], Any]) -> Any:
+    """``work()``, with the DuckDB connection interrupted after ``timeout_s`` (0 or less: no bound).
+
+    A hung query would otherwise block the run while it holds the bench lock; the interrupt makes it fail,
+    and the query is reported as failed.
+    """
+    if timeout_s <= 0:
+        return work()
+    timer = threading.Timer(timeout_s, duck.cancel)
+    timer.start()
+    try:
+        return work()
+    finally:
+        timer.cancel()
 
 
 def run_ledger(
@@ -493,16 +525,29 @@ def _run_locked(ds, suite, queries, threads, memory_limit, timeout_s, runner, pr
     record["summary"] = summarize(record["queries"])
     stamp = started.strftime("%Y%m%dT%H%M%SZ")
     prev_path = Path(previous) if previous else previous_ledger(suite, ds.sf, stamp)
-    prev = json.loads(prev_path.read_text()) if prev_path and prev_path.is_file() else None
-    record["previous"] = str(prev_path) if prev else None
     out = results_dir()
     out.mkdir(parents=True, exist_ok=True)
     base = out / f"{stamp}_ledger_{suite}_sf{fmt_sf(ds.sf)}"
+    # The measurements first: an unreadable previous ledger (a truncated file of an interrupted run) must not
+    # lose a finished run.
+    prev = _read_previous(prev_path)
+    record["previous"] = str(prev_path) if prev else None
     base.with_suffix(".json").write_text(json.dumps(record, indent=2))
     base.with_suffix(".md").write_text(render_markdown(record, prev))
     print(base.with_suffix(".md").read_text())
     print(f"result: {base.with_suffix('.json')}\nledger: {base.with_suffix('.md')}")
     return base.with_suffix(".json")
+
+
+def _read_previous(path: Path | None) -> dict[str, Any] | None:
+    """The previous ledger at ``path``, or ``None`` (with a note) when it is missing or unreadable."""
+    if path is None or not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        print(f"ledger: ignoring the previous ledger {path}: {e}")
+        return None
 
 
 def _one_query(q, ds, plain, duck, threads, memory_limit, timeout_s, runner, measure=None) -> dict[str, Any]:
@@ -515,7 +560,7 @@ def _one_query(q, ds, plain, duck, threads, memory_limit, timeout_s, runner, mea
         k = kr_fn(runner, ds, q, threads, memory_limit.lower(), timeout_s, plain)
     except (RunnerError, RunnerCrashed) as e:
         return {"status": "failed", "reason": f"krishiv {describe_error(e)}"}
-    except (subprocess.CalledProcessError, OSError) as e:
+    except (subprocess.SubprocessError, OSError) as e:
         return {"status": "failed", "reason": f"perf: {e}"}
     gaps = bucket_gaps(k["buckets"], d["buckets"])
     print(f"  {q.id}: krishiv {k['seconds']:.3f}s duckdb {d['seconds']:.3f}s x{k['seconds'] / d['seconds']:.2f}")
