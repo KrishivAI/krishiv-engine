@@ -1,0 +1,20 @@
+{
+  "category": "fn-string",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature the operator ilike",
+      "order": 180
+    },
+    {
+      "family": [
+        "string",
+        "math"
+      ],
+      "order": 390
+    }
+  ],
+  "summary": "string and math-tail functions not in P2a (hex, conv, bin, width_bucket, ...)",
+  "task": "P2-T023"
+}

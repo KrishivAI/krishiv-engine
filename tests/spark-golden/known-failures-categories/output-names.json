@@ -1,0 +1,13 @@
+{
+  "category": "output-names",
+  "format_version": 1,
+  "kind": "bug",
+  "owner": "analyzer output-name follow-up of P2-T071a",
+  "rules": [
+    {
+      "detail": "^schema ",
+      "order": 500
+    }
+  ],
+  "summary": "auto-generated column names differ from Spark's toPrettySQL (Java float/decimal text, default arguments, TRIM/CEIL/LOG/mod spellings, +year dates)"
+}

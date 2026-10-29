@@ -1,0 +1,28 @@
+{
+  "category": "datetime",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "WRONG_NUM_ARGS.*`(date_add|dateadd|datediff|date_diff)`|Cannot resolve routine `(timestampadd|timestampdiff|timediff)`",
+      "order": 120
+    },
+    {
+      "detail": "INVALID_TYPED_LITERAL",
+      "file": "^postgreSQL/date$",
+      "order": 130
+    },
+    {
+      "detail": "The feature (TIMESTAMP|TIMESTAMP_NTZ|TIMESTAMP_LTZ) literals|The feature date and timestamp arithmetic",
+      "order": 270
+    },
+    {
+      "family": [
+        "datetime"
+      ],
+      "order": 400
+    }
+  ],
+  "summary": "datetime functions and literals beyond P2a (TIMESTAMP literals, date/timestamp arithmetic, patterns, unit-argument forms)",
+  "task": "P2-T025"
+}
