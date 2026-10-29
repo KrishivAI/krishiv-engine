@@ -126,8 +126,9 @@ def test_shrink_rows_keeps_only_the_rows_that_matter():
 class FakeEngine:
     """Answers ``select count(*) from t`` and a few other shapes from the tables it was set up with."""
 
-    def __init__(self, bug: bool = False):
+    def __init__(self, bug: bool = False, bug_row: int = 13):
         self.bug = bug
+        self.bug_row = bug_row
         self.tables: dict[str, list] = {}
         self.setups = 0
 
@@ -149,7 +150,7 @@ class FakeEngine:
         if "where" in q.sql:
             ks = [k for k in ks if k > 2]
         n = len(ks)
-        if self.bug and 13 in self.tables["t"]:  # wrong answer only when row 13 is present
+        if self.bug and self.bug_row in self.tables["t"]:  # wrong answer only when row 13 is present
             n += 1
         return [(n,)]
 
@@ -204,12 +205,24 @@ def test_minimize_reduces_query_and_data(tmp_path: Path):
 
 
 def test_minimize_errors(tmp_path: Path):
-    o = _oracle(tmp_path)
+    o = mz.Oracle(FakeEngine(), FakeEngine(bug=True, bug_row=4999), tmp_path / "e")
     with pytest.raises(ValueError, match="does not reproduce"):
-        mz.minimize("select count(*) from t", {"t": _table(5000)}, o, seed_rows=10)  # row 13 only past the slice? no
+        mz.minimize("select count(*) from t", {"t": _table(5000)}, o, seed_rows=1, whole_rows=10)
     full = mz.Oracle(FakeEngine(), FakeEngine(), tmp_path / "f")
     with pytest.raises(ValueError, match="full data"):
         mz.minimize("select count(*) from t", {"t": _table(20)}, full, full_data=True)
+
+
+def test_first_slice_escalates_until_the_difference_reproduces(tmp_path: Path):
+    # The bug row sits at index 450: the 5- and 50-row slices (head or strided) miss it, the 500-row head has it.
+    o = mz.Oracle(FakeEngine(), FakeEngine(bug=True, bug_row=450), tmp_path / "g")
+    out = mz._first_slice("select count(*) from t", {"t": _table(5000)}, o, 5, 10)
+    assert out["t"].num_rows == 500
+    # A small table stays whole next to a sliced one.
+    o2 = mz.Oracle(FakeEngine(), FakeEngine(bug=True, bug_row=3), tmp_path / "h")
+    both = mz._first_slice("select count(*) from t", {"t": _table(5000), "dim": _table(8)}, o2, 5, 10)
+    assert both["dim"].num_rows == 8
+    assert both["t"].num_rows == 5
 
 
 def test_minimize_full_data_shrinks_only_the_query(tmp_path: Path):
@@ -240,14 +253,6 @@ def test_write_case(tmp_path: Path):
     assert json.loads((out / "actual.json").read_text()) == "error: boom"
     assert (out / "README.txt").read_text() == "note\n"
     assert "VALUES" in (out / "setup.sql").read_text()
-
-
-def test_head_reads_a_prefix(tmp_path: Path):
-    import pyarrow.parquet as pq
-
-    pq.write_table(_table(1000), tmp_path / "t.parquet", row_group_size=100)
-    assert mz._head(tmp_path / "t.parquet", 250).num_rows == 250
-    assert mz._head(tmp_path / "t.parquet", 5000).num_rows == 1000
 
 
 def test_run_minimize_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

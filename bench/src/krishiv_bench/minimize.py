@@ -40,7 +40,9 @@ from .errors import describe_error
 from .paths import data_root
 
 DEFAULT_SEED_ROWS = 2000
-DEFAULT_MAX_RUNS = 400
+DEFAULT_MAX_RUNS = 1500
+DEFAULT_WHOLE_ROWS = 250_000  # tables up to this size stay whole in the first slice
+ESCALATION = (1, 10, 100)  # the first slice's row count is seed_rows times each, until the difference reproduces
 
 
 # ------------------------------------------------------------------------------------------ SQL text scanning
@@ -293,7 +295,7 @@ def strided_slice(table: pa.Table, rows: int) -> pa.Table:
 def shrink_rows(tables: dict[str, pa.Table], interesting: Callable[[dict[str, pa.Table]], bool]) -> dict[str, pa.Table]:
     """ddmin over the row indices of each table in turn."""
     cur = dict(tables)
-    for name in list(cur):
+    for name in sorted(cur, key=lambda n: -cur[n].num_rows):
         idx = list(range(cur[name].num_rows))
 
         def test(sub: list[int], name: str = name) -> bool:
@@ -370,20 +372,12 @@ def minimize(
     oracle: Oracle,
     seed_rows: int = DEFAULT_SEED_ROWS,
     full_data: bool = False,
+    whole_rows: int = DEFAULT_WHOLE_ROWS,
 ) -> tuple[str, dict[str, pa.Table]]:
     """The minimal ``(sql, tables)`` that still differs; ``ValueError`` when the start does not."""
     used = {n: tables[n] for n in referenced_tables(sql, list(tables))}
     if not full_data:
-        for make in (seed_slice, strided_slice):
-            sliced = {n: make(t, seed_rows) for n, t in used.items()}
-            if oracle.differs(sql, sliced):
-                used = sliced
-                break
-        else:
-            raise ValueError(
-                f"the difference does not reproduce on a {seed_rows}-row slice of each table; "
-                "use --full-data (query reduction only) or a larger --seed-rows"
-            )
+        used = _first_slice(sql, used, oracle, seed_rows, whole_rows)
     elif not oracle.differs(sql, used):
         raise ValueError("the query does not differ on the full data")
     if not full_data:
@@ -393,6 +387,29 @@ def minimize(
     if not full_data:
         used = shrink_rows(used, lambda t: oracle.within_budget() and oracle.differs(sql, t))
     return sql, used
+
+
+def _first_slice(
+    sql: str, used: dict[str, pa.Table], oracle: Oracle, seed_rows: int, whole_rows: int
+) -> dict[str, pa.Table]:
+    """The first slice that still differs: big tables cut to ``seed_rows`` x 1, 10, 100 rows (head, then strided).
+
+    Tables of at most ``whole_rows`` rows stay whole, so joins from a sliced fact table keep their dimension rows.
+    """
+    tried: list[int] = []
+    for factor in ESCALATION:
+        n = seed_rows * factor
+        if tried and all(t.num_rows <= n for t in used.values() if t.num_rows > whole_rows):
+            break  # the previous round already kept every big table whole
+        tried.append(n)
+        for make in (seed_slice, strided_slice):
+            sliced = {name: t if t.num_rows <= whole_rows else make(t, n) for name, t in used.items()}
+            if oracle.differs(sql, sliced):
+                return sliced
+    raise ValueError(
+        f"the difference does not reproduce on slices of up to {tried[-1]} rows of the tables over {whole_rows} rows; "
+        "use --full-data (query reduction only) or a larger --seed-rows"
+    )
 
 
 def sql_literal(v: Any) -> str:
@@ -472,10 +489,9 @@ def run_minimize(
         raise SystemExit(f"no dataset at {root}")
     (q,) = load_queries(suite, "krishiv", [query])
     tables = {}
-    for t in names:
+    for t in referenced_tables(q.sql, names):
         f = root / f"{t}.parquet"
-        src = f if f.is_file() else root / t
-        tables[t] = pq.read_table(src) if full_data or not f.is_file() else _head(f, seed_rows * 50)
+        tables[t] = pq.read_table(f if f.is_file() else root / t)
     kwargs: dict[str, Any] = {"remote": spark_remote} if reference == "spark-connect" else {}
     ref = make_engine(reference, **kwargs)
     krishiv = KrishivEngine(threads=threads, binary=runner)
@@ -500,18 +516,6 @@ def run_minimize(
     write_case(out, sql, small, outcome, note)
     print(f"minimal query ({len(sql)} chars):\n{sql}\n{note}\ncase: {out}")
     return out
-
-
-def _head(path: Path, rows: int) -> pa.Table:
-    """The first ``rows`` rows of a Parquet file without reading the rest."""
-    pf = pq.ParquetFile(path)
-    batches, got = [], 0
-    for b in pf.iter_batches(batch_size=65536):
-        batches.append(b)
-        got += b.num_rows
-        if got >= rows:
-            break
-    return pa.Table.from_batches(batches).slice(0, rows)
 
 
 __all__ = ["Oracle", "candidates", "ddmin", "minimize", "run_minimize", "shrink_query", "shrink_rows"]
