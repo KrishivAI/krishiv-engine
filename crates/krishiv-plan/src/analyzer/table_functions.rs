@@ -7,8 +7,8 @@ use std::sync::Arc;
 use arrow_array::{Int64Array, StringArray};
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{
-    CastInvalidInput, FailedFunctionCall, KrishivInvalidPartitionNumber, NonFoldableArgument,
-    UnexpectedInputType, UnresolvableTableValuedFunction, WrongNumArgsWithoutSuggestion,
+    FailedFunctionCall, KrishivInvalidPartitionNumber, NonFoldableArgument, UnexpectedInputType,
+    UnresolvableTableValuedFunction, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_kernels::cast::{CastMode as KernelMode, CastOptions, FixedOffset, cast};
 use krishiv_types::DataType;
@@ -123,7 +123,7 @@ impl Resolver<'_> {
         let mut values: Vec<i64> = Vec::with_capacity(n);
         for (i, b) in bounds.iter().enumerate() {
             let param = if n == 1 { 1 } else { i };
-            values.push(self.range_arg(b, param, o)?);
+            values.push(self.range_arg(b, param)?);
         }
         let (start, end, step, num_slices) = match &values[..] {
             [end] => (0, *end, 1, None),
@@ -138,14 +138,7 @@ impl Resolver<'_> {
                         o,
                     ));
                 }
-                let num_slices = u32::try_from(*slices).map_err(|_| {
-                    AnalysisError::new(
-                        KrishivInvalidPartitionNumber {
-                            num_partitions: slices.to_string(),
-                        },
-                        o,
-                    )
-                })?;
+                let num_slices = self.slices_to_int(*slices, o)?;
                 (*start, *end, *step, Some(num_slices))
             }
             _ => return Err(super::bind::unsupported("a plan shape", o)),
@@ -161,9 +154,43 @@ impl Resolver<'_> {
         Ok(self.range_leaf(p, start, end, step, num_slices, env))
     }
 
+    /// `numSlices` as Spark's `INT`: a value past `i32::MAX` is a
+    /// `CAST_OVERFLOW` under ANSI, as Spark's cast to `INT` raises it (and
+    /// wraps without ANSI, where a wrapped value that is not positive is
+    /// an invalid partition number).
+    fn slices_to_int(&self, slices: i64, origin: Origin) -> Result<u32, AnalysisError> {
+        let zone = FixedOffset(0);
+        let mode = if self.ctx.conf.ansi {
+            KernelMode::Ansi
+        } else {
+            KernelMode::Legacy
+        };
+        let opts = CastOptions {
+            mode,
+            time_zone: &zone,
+        };
+        let input: arrow_array::ArrayRef = Arc::new(Int64Array::from(vec![slices]));
+        let narrowed = cast(input.as_ref(), &ArrowType::Int32, &opts)
+            .map_err(|e| AnalysisError::new(e, origin))?;
+        let value = narrowed
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .filter(|a| arrow_array::Array::is_valid(*a, 0))
+            .map(|a| a.value(0));
+        match value.and_then(|v| u32::try_from(v).ok()).filter(|v| *v > 0) {
+            Some(v) => Ok(v),
+            None => Err(AnalysisError::new(
+                KrishivInvalidPartitionNumber {
+                    num_partitions: slices.to_string(),
+                },
+                origin,
+            )),
+        }
+    }
+
     /// One `range` argument to a `BIGINT`: Spark's type check, then its
     /// fold and cast. `param` is the parameter position Spark reports.
-    fn range_arg(&self, b: &Bound, param: usize, origin: Origin) -> Result<i64, AnalysisError> {
+    fn range_arg(&self, b: &Bound, param: usize) -> Result<i64, AnalysisError> {
         let zone = self.ctx.conf.session_zone;
         let sql = || format!("\"{}\"", pretty(&b.shown(), zone));
         let required = "\"BIGINT\"".to_owned();
@@ -212,9 +239,7 @@ impl Resolver<'_> {
                 Err(AnalysisError::new(e, b.expr.origin))
             }
             Some(super::Constant::Integral(v) | super::Constant::Fractional(v)) => Ok(v),
-            Some(super::Constant::String(s)) => {
-                self.cast_string_to_long(&s, &b.expr.origin, origin)
-            }
+            Some(super::Constant::String(s)) => self.cast_string_to_long(&s, &b.expr.origin, param),
             Some(_) => Err(unexpected(ty)),
         }
     }
@@ -225,7 +250,7 @@ impl Resolver<'_> {
         &self,
         s: &str,
         at: &Origin,
-        _origin: Origin,
+        param: usize,
     ) -> Result<i64, AnalysisError> {
         let zone = FixedOffset(0);
         let mode = if self.ctx.conf.ansi {
@@ -248,7 +273,7 @@ impl Resolver<'_> {
                     // Rebuild the unexpected-type error without the bound.
                     return Err(AnalysisError::new(
                         UnexpectedInputType {
-                            param_index: "second".to_owned(),
+                            param_index: ordinal(param),
                             function_name: "`range`".to_owned(),
                             required_type: "\"BIGINT\"".to_owned(),
                             input_sql: format!("\"{s}\""),
@@ -265,11 +290,6 @@ impl Resolver<'_> {
             Err(e) => {
                 // The kernels' error already carries Spark's parameters;
                 // a hand-rolled parse would not match its text.
-                let _ = CastInvalidInput {
-                    expression: String::new(),
-                    source_type: String::new(),
-                    target_type: String::new(),
-                };
                 Err(AnalysisError::new(e, *at))
             }
         }
@@ -432,7 +452,7 @@ pub fn range_slice(
 }
 
 /// The number of rows of `range(start, end, step)`.
-fn range_count(start: i64, end: i64, step: i64) -> i128 {
+pub fn range_count(start: i64, end: i64, step: i64) -> i128 {
     if step > 0 {
         if start >= end {
             return 0;
@@ -607,6 +627,54 @@ mod tests {
             vec![lit_int(0), lit_int(10), lit_int(1), lit_int(0)],
         ));
         assert_eq!(class_of(&r), "KRISHIV_INVALID_PARTITION_NUMBER");
+    }
+
+    /// `numSlices` is Spark's `INT`: past `i32::MAX` it overflows the cast
+    /// under ANSI; the largest `INT` is accepted.
+    #[test]
+    fn range_slices_beyond_int_overflow_the_cast() {
+        let long = |v: i64| crate::Expr::new(ExprNode::Literal(Literal::Long(v)));
+        let range = |slices: i64| {
+            run(table_function(
+                "range",
+                vec![lit_int(0), lit_int(10), lit_int(1), long(slices)],
+            ))
+        };
+        assert_eq!(class_of(&range(i64::from(i32::MAX))), "OK");
+        let r = range(i64::from(i32::MAX) + 1);
+        let want = if ResolutionConf::default().ansi {
+            "CAST_OVERFLOW"
+        } else {
+            "KRISHIV_INVALID_PARTITION_NUMBER"
+        };
+        assert_eq!(class_of(&r), want);
+        assert_eq!(
+            class_of(&range(i64::MIN)),
+            "KRISHIV_INVALID_PARTITION_NUMBER"
+        );
+    }
+
+    /// The legacy NULL result of a malformed string argument reports the
+    /// argument's own position.
+    #[test]
+    fn range_string_argument_position_is_reported() {
+        let conf = ResolutionConf {
+            ansi: false,
+            ..ResolutionConf::default()
+        };
+        let plan =
+            Plan::try_new(table_function("range", vec![lit_int(0), lit_string("x")])).unwrap();
+        let r = block_on(
+            DefaultAnalyzer.analyze(&plan, &context(MemoryCatalog::new("spark_catalog"), conf)),
+        );
+        assert_eq!(class_of(&r), "UNEXPECTED_INPUT_TYPE");
+        assert!(
+            params_of(&r)
+                .iter()
+                .any(|(k, v)| k == "paramIndex" && v == "second"),
+            "{:?}",
+            params_of(&r)
+        );
     }
 
     #[test]

@@ -128,7 +128,7 @@ fn range_errors_match_spark() {
     assert_eq!(class_of("SELECT * FROM range('a')"), "CAST_INVALID_INPUT");
     assert_eq!(
         class_of("SELECT * FROM range(0, 10, 1, 5000000000)"),
-        "KRISHIV_INVALID_PARTITION_NUMBER"
+        "CAST_OVERFLOW"
     );
 }
 
@@ -217,4 +217,31 @@ fn sql_keywords_first_rows_match_spark() {
     assert_eq!(keywords[1], ("AFTER".to_owned(), false));
     // All reserved flags are false without enforced keywords.
     assert!(keywords.iter().all(|(_, r)| !r));
+}
+
+/// Two DataFrame-API ranges in one plan are two distinct leaves: the
+/// analyzer gives each its own attribute id, so a join of them (which would
+/// see duplicate ids otherwise) runs and matches by value.
+#[test]
+fn two_dataframe_ranges_join_with_distinct_attributes() {
+    use arrow_array::cast::AsArray as _;
+    use arrow_array::types::Int64Type;
+    use krishiv_session::JoinType;
+    use krishiv_session::functions::col;
+    let session = session();
+    let left = session.range(0, 4, 1, None).alias("l");
+    let right = session.range(2, 6, 1, None).alias("r");
+    let df = left.join(&right, col("l.id").eq(col("r.id")), JoinType::Inner);
+    let mut got = Vec::new();
+    for b in block_on(df.collect()).unwrap() {
+        got.extend(
+            b.column(0)
+                .as_primitive::<Int64Type>()
+                .values()
+                .iter()
+                .copied(),
+        );
+    }
+    got.sort_unstable();
+    assert_eq!(got, vec![2, 3]);
 }

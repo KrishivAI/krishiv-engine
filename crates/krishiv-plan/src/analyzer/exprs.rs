@@ -1665,7 +1665,7 @@ impl Resolver<'_> {
                     if f.distinct {
                         return Err(AnalysisError::new(
                             InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
-                                pretty_name: format!("`{}`", entry.id.name()),
+                                pretty_name: "`cast`".to_owned(),
                                 syntax: "DISTINCT".to_owned(),
                             },
                             e.origin,
@@ -1674,8 +1674,8 @@ impl Resolver<'_> {
                     if f.filter.is_some() {
                         return Err(AnalysisError::new(
                             InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
-                                pretty_name: format!("`{}`", entry.id.name()),
-                                syntax: "FILTER".to_owned(),
+                                pretty_name: "`cast`".to_owned(),
+                                syntax: "FILTER CLAUSE".to_owned(),
                             },
                             e.origin,
                         ));

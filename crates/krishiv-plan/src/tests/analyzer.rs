@@ -1805,7 +1805,7 @@ fn cast_named_functions_reject_distinct_and_filter() {
         summary(&r),
         serde_json::json!([
             "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
-            {"prettyName": "`float`", "syntax": "DISTINCT"}
+            {"prettyName": "`cast`", "syntax": "DISTINCT"}
         ])
     );
     let filtered = Expr::new(ExprNode::Function(crate::FunctionCall {
@@ -1821,7 +1821,7 @@ fn cast_named_functions_reject_distinct_and_filter() {
         summary(&r),
         serde_json::json!([
             "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
-            {"prettyName": "`float`", "syntax": "FILTER"}
+            {"prettyName": "`cast`", "syntax": "FILTER CLAUSE"}
         ])
     );
 }

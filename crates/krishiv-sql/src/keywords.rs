@@ -493,7 +493,6 @@ pub const SQL_KEYWORDS: &[(&str, bool)] = &[
     ("REDUCE", false),
     ("REFERENCES", true),
     ("REFRESH", false),
-    ("REGEXP", false),
     ("RELY", false),
     ("RENAME", false),
     ("REPAIR", false),
@@ -507,7 +506,6 @@ pub const SQL_KEYWORDS: &[(&str, bool)] = &[
     ("RETURNS", false),
     ("REVOKE", false),
     ("RIGHT", true),
-    ("RLIKE", false),
     ("ROLE", false),
     ("ROLES", false),
     ("ROLLBACK", false),
@@ -561,8 +559,6 @@ pub const SQL_KEYWORDS: &[(&str, bool)] = &[
     ("TABLESAMPLE", false),
     ("TARGET", false),
     ("TBLPROPERTIES", false),
-    ("TEMP", false),
-    ("TEMPORARY", false),
     ("TERMINATED", false),
     ("THEN", true),
     ("TIME", true),
@@ -656,6 +652,19 @@ mod tests {
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let keywords = doc["keywords"].as_array().unwrap();
         assert!(keywords.len() > 400);
+        // `sql_keywords()` lists exactly the fixture's listed keywords
+        // (Spark's 423; the alternatives `REGEXP` and `TEMP` lex as
+        // keywords but are not listed).
+        let listed: Vec<&str> = keywords
+            .iter()
+            .filter(|k| k["listed"].as_bool().unwrap())
+            .map(|k| k["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(listed.len(), 423);
+        assert_eq!(
+            SQL_KEYWORDS.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+            listed
+        );
         for k in keywords {
             let text = k["text"].as_str().unwrap();
             let bits = classify(text);

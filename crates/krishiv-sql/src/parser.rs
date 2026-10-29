@@ -1069,15 +1069,21 @@ impl<'s> Parser<'s> {
         if !is_from {
             return;
         }
-        let has_extract = self
-            .toks
-            .iter()
-            .any(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "EXTRACT"));
-        let has_identifier = self
-            .toks
-            .iter()
-            .any(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), "IDENTIFIER"));
-        if has_extract && has_identifier {
+        // The sequence `EXTRACT ( IDENTIFIER (`: the field position of an
+        // `EXTRACT` holds an `IDENTIFIER(...)` call.
+        let word = |i: usize, kw: &str| {
+            self.toks
+                .get(i)
+                .is_some_and(|t| t.kind == TokenKind::Word && is_kw(t.span.text(self.src), kw))
+        };
+        let sym = |i: usize| {
+            self.toks
+                .get(i)
+                .is_some_and(|t| t.kind == TokenKind::Sym(Sym::LParen))
+        };
+        let has_extract_identifier = (0..self.toks.len())
+            .any(|i| word(i, "EXTRACT") && sym(i + 1) && word(i + 2, "IDENTIFIER") && sym(i + 3));
+        if has_extract_identifier {
             self.missing = Some((at, "')'"));
         }
     }

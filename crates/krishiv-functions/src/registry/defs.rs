@@ -893,8 +893,8 @@ pub(super) fn specs() -> Vec<Spec> {
 /// `decimal(10,0)` for `decimal`. One definition per name: kind scalar,
 /// arity exactly 1 from Spark's catalog, any input, result the target
 /// type. The analyzer rewrites the call to a cast during analysis (a call
-/// with `DISTINCT` or `FILTER` stays an ordinary call: it has no cast
-/// form), so they run as [`Execution::Cast`] and are never executed as
+/// with `DISTINCT` or `FILTER` is rejected as unsupported syntax: it has no
+/// cast form), so they run as [`Execution::Cast`] and are never executed as
 /// functions.
 fn casts() -> Vec<Spec> {
     let cast = |name: &'static str, result: Rule| Spec {

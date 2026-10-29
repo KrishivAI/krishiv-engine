@@ -70,10 +70,15 @@ impl crate::operator::Source for Range {
 
     fn global_state(&self, ctx: &TaskContext) -> Result<GlobalState> {
         let config = ctx.query().config();
-        let partitions = match self.num_slices {
+        let wanted = match self.num_slices {
             Some(n) => n.max(1),
             None => u32::try_from(ctx.executor().parallelism().max(1)).unwrap_or(u32::MAX),
         };
+        // Slices beyond the row count are empty: they only cost the
+        // morsel cursor (a seeded one allocates a permutation of them).
+        let rows =
+            krishiv_plan::analyzer::table_functions::range_count(self.start, self.end, self.step);
+        let partitions = u32::try_from(rows.clamp(1, i128::from(wanted))).unwrap_or(wanted);
         Ok(Arc::new(RangeGlobal {
             start: self.start,
             end: self.end,
@@ -279,6 +284,32 @@ mod tests {
             .global_state(&ctx)
             .unwrap_or_else(|e| unreachable!("{e}"));
         assert!(source.max_parallelism(&g) >= 1);
+    }
+
+    /// More slices than rows are clamped to the row count, so a huge
+    /// `numSlices` costs nothing (a seeded cursor would otherwise allocate
+    /// a permutation of every slice) and still returns every row once.
+    #[test]
+    fn range_clamps_slices_to_the_row_count() {
+        let (_root, ctx) = ctx_with(ExecConfig {
+            seed: Some(7),
+            ..ExecConfig::default()
+        });
+        let source = Range::new(0, 5, 1, Some(i32::MAX.cast_unsigned()));
+        let g = source
+            .global_state(&ctx)
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(source.max_parallelism(&g), 5);
+        let mut got = values(&drain(&source, &ctx));
+        got.sort_unstable();
+        assert_eq!(got, vec![0, 1, 2, 3, 4]);
+        // An empty range keeps one (empty) slice.
+        let source = Range::new(5, 5, 1, Some(1_000_000));
+        let g = source
+            .global_state(&ctx)
+            .unwrap_or_else(|e| unreachable!("{e}"));
+        assert_eq!(source.max_parallelism(&g), 1);
+        assert!(drain(&source, &ctx).is_empty());
     }
 
     #[test]

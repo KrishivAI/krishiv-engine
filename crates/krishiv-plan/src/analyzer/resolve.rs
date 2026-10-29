@@ -785,14 +785,35 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
-            PlanNode::Range { output, .. } => {
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                num_slices,
+                output,
+            } => {
+                // A built `Range` (the DataFrame API, Spark Connect) carries
+                // an id of its builder's choosing, which two ranges of one
+                // plan share; the leaf gets this analysis's own fresh id.
+                let col = BoundColumn {
+                    id: self.fresh(),
+                    ..output.clone()
+                };
+                let node = PlanNode::Range {
+                    start: *start,
+                    end: *end,
+                    step: *step,
+                    num_slices: *num_slices,
+                    output: col.clone(),
+                };
                 let qual: Arc<[String]> = Arc::from(Vec::new());
                 let out = vec![Attr {
-                    col: output.clone(),
+                    col,
                     qual,
                     source: None,
                 }];
-                Ok(self.wrap(Arc::clone(p), o.plan_id, out, &[]))
+                let leaf = Arc::new(LogicalPlan::new(node).with_origin(o));
+                Ok(self.wrap(leaf, o.plan_id, out, &[]))
             }
             // Handled in `node`, which never forwards them.
             PlanNode::Read(ReadSource::Table { .. })
