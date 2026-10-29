@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 
@@ -251,8 +252,15 @@ class FakeProc:
 
 
 class FakeCgroup:
-    def __init__(self, peaks: list[int | None], ooms: list[int | None], rss: list[int | None]):
+    def __init__(
+        self,
+        peaks: list[int | None],
+        ooms: list[int | None],
+        rss: list[int | None],
+        hits: list[int | None] | None = None,
+    ):
         self.peaks, self.ooms, self.rsss, self.kills = peaks, ooms, rss, 0
+        self.hits = hits if hits is not None else [0]
 
     @staticmethod
     def _next(xs: list[int | None]) -> int | None:
@@ -263,6 +271,9 @@ class FakeCgroup:
 
     def oom_kills(self):
         return self._next(self.ooms)
+
+    def limit_hits(self):
+        return self._next(self.hits)
 
     def rss(self):
         return self._next(self.rsss)
@@ -282,8 +293,14 @@ class Clock:
         self.t += s
 
 
-def obs(returncode: int | None = 0, timed_out: bool = False, peak_bytes: int = GIB, oom_kills: int = 0) -> Observation:
-    return Observation(returncode, timed_out, peak_bytes, oom_kills, None, 1.0)
+def obs(
+    returncode: int | None = 0,
+    timed_out: bool = False,
+    peak_bytes: int = GIB,
+    oom_kills: int = 0,
+    limit_hits: int = 0,
+) -> Observation:
+    return Observation(returncode, timed_out, peak_bytes, oom_kills, None, 1.0, 0, limit_hits)
 
 
 @pytest.mark.parametrize(
@@ -299,6 +316,10 @@ def obs(returncode: int | None = 0, timed_out: bool = False, peak_bytes: int = G
         ({"returncode": -9, "peak_bytes": CAP}, False, "killed"),  # event missed: SIGKILL with the scope full
         ({"returncode": 137, "peak_bytes": int(0.96 * CAP)}, False, "killed"),
         ({"returncode": -9, "peak_bytes": int(0.5 * CAP)}, False, "failed"),  # SIGKILL from elsewhere
+        # Killed between two polls: the sampled peak stayed low, but an earlier poll saw the scope hit its limit.
+        ({"returncode": -9, "peak_bytes": int(0.5 * CAP), "limit_hits": 3}, False, "killed"),
+        ({"returncode": 1, "peak_bytes": int(0.5 * CAP), "limit_hits": 3}, False, "failed"),  # not a SIGKILL
+        ({"returncode": 0, "limit_hits": 3}, True, "finished"),  # page-cache pressure alone is not a kill
         ({"returncode": -9, "timed_out": True, "oom_kills": 1}, False, "timeout"),
     ],
 )
@@ -343,11 +364,15 @@ def test_cgroup_reads_files_and_survives_removal(tmp_path):
     (tmp_path / "memory.events").write_text("low 0\nhigh 0\nmax 4\noom 0\noom_kill 2\n")
     (tmp_path / "memory.stat").write_text("anon 100\nfile 900\nfile_mapped 20\nshmem 3\n")
     cg = memcap.Cgroup(tmp_path)
-    assert (cg.peak(), cg.oom_kills(), cg.rss()) == (200, 2, 123)
+    assert (cg.peak(), cg.oom_kills(), cg.rss(), cg.limit_hits()) == (200, 2, 123, 4)
     cg.kill_all()
     assert (tmp_path / "cgroup.kill").read_text() == "1"
     gone = memcap.Cgroup(tmp_path / "missing")
-    assert (gone.peak(), gone.oom_kills(), gone.rss()) == (None, None, None)
+    assert (gone.peak(), gone.oom_kills(), gone.rss(), gone.limit_hits()) == (None, None, None, None)
+    (tmp_path / "memory.events").write_text("low 0\nhigh 0\noom 0\n")
+    assert cg.limit_hits() is None  # no `max` line
+    (tmp_path / "memory.events").write_text("max x\n")
+    assert cg.limit_hits() is None  # unparsable
     gone.kill_all()  # no error
 
 
@@ -682,7 +707,16 @@ def _run_in_scope(code: str, cap: int):
 @needs_scope
 def test_real_scope_classifies_a_process_that_exceeds_the_cap_as_killed():
     cap = 96 << 20
-    o, _out, cg = _run_in_scope("b = bytearray(600 << 20)\nfor i in range(0, len(b), 4096): b[i] = 1\n", cap)
+    # Allocate gradually: a single huge allocation can be killed between two monitor polls, before the scope's
+    # peak is ever sampled near the cap.
+    code = (
+        "import time\nchunks = []\n"
+        "for _ in range(150):\n"
+        "    chunks.append(bytearray(4 << 20))\n"
+        "    for i in range(0, 4 << 20, 4096): chunks[-1][i] = 1\n"
+        "    time.sleep(0.005)\n"
+    )
+    o, _out, cg = _run_in_scope(code, cap)
     assert cg is not None
     assert o.returncode in (-9, 137, 1)
     assert classify(o, cap, got_result=False) == "killed"
@@ -713,7 +747,13 @@ def test_real_scope_timeout_kills_the_whole_tree():
     o = monitor(proc, cg, None, 1.0)
     assert o.timed_out
     assert cg is not None
-    assert not (cg.path / "cgroup.procs").exists() or (cg.path / "cgroup.procs").read_text().strip() == ""
+    try:  # the cgroup disappears with its last process: reading it then fails with ENOENT or ENODEV
+        remaining = (cg.path / "cgroup.procs").read_text().strip()
+    except OSError as e:
+        if e.errno not in (errno.ENOENT, errno.ENODEV):
+            raise  # a permission or I/O error says nothing about the processes
+        remaining = ""
+    assert remaining == ""
 
 
 @needs_scope
@@ -848,3 +888,12 @@ def test_timestamp_literal_dialect():
     assert "TIMESTAMP '" not in sql_for("krishiv", "q1_filter_agg")
     for q in QUERIES[1:]:
         assert sql_for("krishiv", q) == SQL[q]
+
+
+def test_monitor_keeps_the_limit_hits_seen_before_the_scope_vanishes():
+    clock = Clock()
+    proc = FakeProc(2, -9)
+    cg = FakeCgroup([10, 20, None], [0, 0, None], [5, 6, None], hits=[0, 3, None])
+    o = monitor(proc, cg, None, None, clock=clock, sleep=clock.sleep)
+    assert o.limit_hits == 3
+    assert classify(o, CAP, got_result=False) == "killed"  # the peak was never sampled near the cap
