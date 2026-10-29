@@ -141,6 +141,9 @@ class FakeEngine:
     def teardown(self):
         self.tables = {}
 
+    def cancel(self):
+        pass
+
     def run(self, q):
         if "boom" in q.sql:
             raise RunnerError("planning failed") if self.bug else ValueError("reference fails")
@@ -409,3 +412,35 @@ def test_the_time_budget_stops_the_shrink_and_keeps_the_best_case(tmp_path: Path
     assert not o.within_budget()
     assert small["t"].num_rows > 1  # the best so far, not minimal
     assert "select count(*) from t" in sql
+
+
+def test_a_timed_out_run_is_not_interesting_and_the_pin_uses_a_long_timeout(tmp_path: Path):
+    import pyarrow.parquet as pq
+
+    from krishiv_bench.adapters.base import Dataset
+
+    seen: list[float | None] = []
+
+    class Slow(FakeEngine):
+        timeout_s = None
+
+        def run(self, q):
+            seen.append(self.timeout_s)
+            if "slow" in q.sql:
+                raise RunnerCrashed("no answer within 30s")
+            if "died" in q.sql:
+                raise RunnerCrashed("runner exited")
+            return super().run(q)
+
+    o = mz.Oracle(FakeEngine(), Slow(bug=True), tmp_path / "s", run_timeout=7)
+    assert o.krishiv.timeout_s == 7
+    out = o.outcome("select slow from t", {"t": _table(20)})
+    assert out["differs"] is False
+    assert out["krishiv"].startswith("timeout")
+    assert o.outcome("select died from t", {"t": _table(20)})["differs"] is True
+    root = tmp_path / "full"
+    root.mkdir()
+    pq.write_table(_table(20), root / "t.parquet")
+    o.pin(Dataset("d", 1, root, ["t"]), "select count(*) from t")
+    assert seen[-1] == mz.PIN_TIMEOUT
+    assert o.krishiv.timeout_s == 7

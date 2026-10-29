@@ -26,6 +26,7 @@ import json
 import re
 import shutil
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -43,6 +44,8 @@ from .paths import data_root
 DEFAULT_SEED_ROWS = 2000
 DEFAULT_MAX_RUNS = 1500
 DEFAULT_MAX_SECONDS = 1200.0
+DEFAULT_RUN_TIMEOUT = 30.0  # seconds per engine run of one candidate
+PIN_TIMEOUT = 900.0  # the pin run on the real dataset
 DEFAULT_WHOLE_ROWS = 250_000  # tables up to this size stay whole in the first slice
 ESCALATION = (1, 10, 100)  # the first slice's row count is seed_rows times each, until the difference reproduces
 
@@ -321,11 +324,15 @@ class Oracle:
         max_runs: int = DEFAULT_MAX_RUNS,
         max_seconds: float = DEFAULT_MAX_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        run_timeout: float = DEFAULT_RUN_TIMEOUT,
     ):
         self.reference, self.krishiv, self.workdir = reference, krishiv, workdir
         self.runs = 0
         self.max_runs = max_runs
         self.clock = clock
+        self.run_timeout = run_timeout
+        if hasattr(krishiv, "timeout_s"):
+            krishiv.timeout_s = run_timeout  # a runaway candidate (a cross join, say) is not interesting
         self.deadline = clock() + max_seconds
         self._data_key: tuple | None = None
         self._sig: str | None = None
@@ -348,7 +355,16 @@ class Oracle:
         self._setup(ds)
         self._data_key = None
         self.runs += 1
-        out = self._compare(sql)
+        short = self.run_timeout
+        self.run_timeout = PIN_TIMEOUT  # the real dataset is big: the short candidate timeout does not apply
+        if hasattr(self.krishiv, "timeout_s"):
+            self.krishiv.timeout_s = PIN_TIMEOUT
+        try:
+            out = self._compare(sql)
+        finally:
+            self.run_timeout = short
+            if hasattr(self.krishiv, "timeout_s"):
+                self.krishiv.timeout_s = short
         if not out["differs"]:
             raise ValueError("the query does not differ from the reference on the dataset")
         self._sig = signature(out)
@@ -376,13 +392,21 @@ class Oracle:
 
     def _compare(self, sql: str) -> dict[str, Any]:
         q = _Q(sql)
+        timer = threading.Timer(self.run_timeout, self.reference.cancel)
+        timer.start()
         try:
             ref_rows: Any = self.reference.run(q)
         except Exception as e:
             return {"differs": False, "reference": f"error: {describe_error(e)}", "krishiv": None}
+        finally:
+            timer.cancel()
         try:
             k_rows: Any = self.krishiv.run(q)
-        except (RunnerError, RunnerCrashed) as e:
+        except RunnerCrashed as e:
+            if "no answer within" in str(e):  # timed out: says nothing about correctness
+                return {"differs": False, "reference": ref_rows, "krishiv": f"timeout: {e}"}
+            return {"differs": True, "reference": ref_rows, "krishiv": f"error: {describe_error(e)}"}
+        except RunnerError as e:
             return {"differs": True, "reference": ref_rows, "krishiv": f"error: {describe_error(e)}"}
         ordered = compare.has_top_level_order_by(sql)
         ok, _ = compare.rows_match(k_rows, ref_rows, ordered, sql=sql)
@@ -568,6 +592,7 @@ def run_minimize(
     whole_rows: int = DEFAULT_WHOLE_ROWS,
     pin: bool = True,
     max_seconds: float = DEFAULT_MAX_SECONDS,
+    run_timeout: float = DEFAULT_RUN_TIMEOUT,
     threads: int = 2,
     spark_remote: str = "sc://127.0.0.1:15012",
 ) -> Path:
@@ -588,10 +613,9 @@ def run_minimize(
     kwargs: dict[str, Any] = {"remote": spark_remote} if reference == "spark-connect" else {}
     ref = make_engine(reference, **kwargs)
     krishiv = KrishivEngine(threads=threads, binary=runner)
-    krishiv.timeout_s = 600
     work = Path(tempfile.mkdtemp(prefix="minimize-"))
     try:
-        oracle = Oracle(ref, krishiv, work / "data", max_runs, max_seconds)
+        oracle = Oracle(ref, krishiv, work / "data", max_runs, max_seconds, run_timeout=run_timeout)
         try:
             if pin:
                 oracle.pin(Dataset(name, sf, root, names), q.sql)
