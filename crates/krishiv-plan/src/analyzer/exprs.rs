@@ -18,7 +18,7 @@ use krishiv_common::error::{
     DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
     FailedToParseTooComplex, InternalError, InvalidAggregateFilterNotBoolean,
-    InvalidExtractBaseFieldType,
+    InvalidExtractBaseFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
     NamedParametersNotSupported, NestedAggregateFunction, RequiredParameterNotFound,
@@ -26,7 +26,7 @@ use krishiv_common::error::{
     UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
-use krishiv_types::DataType;
+use krishiv_types::{DataType, DecimalType};
 use twox_hash::XxHash3_128;
 
 use super::analytics::GroupingFn;
@@ -273,6 +273,28 @@ fn is_builtin_entry(entry: &FunctionEntry) -> bool {
     !matches!(entry.id, FunctionId::Udf { .. })
 }
 
+/// The target type of a cast-named function call (`float(x)`,
+/// `int(x)`, ...), ASCII case-insensitively; `None` for any other
+/// function. Spark analyzes these names as `CAST(x AS target)` (its
+/// `RuntimeReplaceable`): `decimal` is `decimal(10,0)`.
+fn cast_target(name: &str) -> Option<DataType> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "boolean" => DataType::Boolean,
+        "tinyint" => DataType::Byte,
+        "smallint" => DataType::Short,
+        "int" => DataType::Integer,
+        "bigint" => DataType::Long,
+        "float" => DataType::Float,
+        "double" => DataType::Double,
+        "decimal" => DataType::Decimal(DecimalType::USER_DEFAULT),
+        "string" => DataType::String,
+        "binary" => DataType::Binary,
+        "date" => DataType::Date,
+        "timestamp" => DataType::Timestamp,
+        _ => return None,
+    })
+}
+
 /// Whether `t` is a numeric type.
 fn is_conditional_numeric(t: &DataType) -> bool {
     matches!(
@@ -342,9 +364,26 @@ fn bad_cast(
         mode,
     };
     let sql_expr = format!("\"{}\"", pretty(&Expr::new(shown), zone));
-    let src_type = quoted_type(arg.ty.data_type.as_ref());
-    let target_type = quoted_type(Some(to));
-    let error: KrishivError = match bad {
+    let error = cast_mismatch(
+        bad,
+        sql_expr,
+        quoted_type(arg.ty.data_type.as_ref()),
+        quoted_type(Some(to)),
+    );
+    AnalysisError::new(error, origin)
+}
+
+/// Why a cast fails: the error of [`BadCast`], quoting `sql_expr` (the
+/// expression Spark's message names) with the source and target types.
+/// A `CAST` quotes the cast; a cast-named function (`float(x)`, ...)
+/// quotes its argument, as Spark does.
+fn cast_mismatch(
+    bad: BadCast,
+    sql_expr: String,
+    src_type: String,
+    target_type: String,
+) -> KrishivError {
+    match bad {
         BadCast::Without => DatatypeMismatchCastWithoutSuggestion {
             sql_expr,
             src_type,
@@ -366,8 +405,7 @@ fn bad_cast(
             config_val: "'false'".to_owned(),
         }
         .into(),
-    };
-    AnalysisError::new(error, origin)
+    }
 }
 
 /// A bound argument as coercion sees it.
@@ -1523,6 +1561,34 @@ impl Resolver<'_> {
                 {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
+                // A cast-named function (`float(x)`, `int(x)`, ...) is a
+                // cast, never a call: the plan only ever holds the `Cast`
+                // node. `DISTINCT` and `FILTER` have no cast form: Spark
+                // rejects them as unsupported syntax on the function. Only for
+                // built-ins: a qualified session UDF named `int` runs the UDF.
+                if is_builtin_entry(&entry)
+                    && let Some(to) = cast_target(&f.name)
+                {
+                    if f.distinct {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: format!("`{}`", entry.id.name()),
+                                syntax: "DISTINCT".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    if f.filter.is_some() {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: format!("`{}`", entry.id.name()),
+                                syntax: "FILTER".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    return self.cast_named_call(&entry, e, f, kids, to);
+                }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `schema_of_csv(lit)` resolves below to the DDL literal.
                 // The registry lookup is ASCII case-insensitive and
@@ -2635,6 +2701,75 @@ impl Resolver<'_> {
             outer: kids.iter().filter_map(|k| k.outer).min(),
             lateral,
             shown: Some(shown),
+        })
+    }
+
+    /// A cast-named function call (`float(x)`, `int(x)`, ...), rewritten
+    /// during analysis to `CAST(x AS target)` in the session's default
+    /// mode (Spark's `RuntimeReplaceable`): the plan only ever holds the
+    /// `Cast` node, typed by the cast path. The output column is named by
+    /// the argument, and cast errors quote the argument, as Spark does;
+    /// the arity error quotes the call. A pair the cast path does not
+    /// support fails exactly as `CAST(x AS target)` fails, apart from the
+    /// quoted expression.
+    fn cast_named_call(
+        &mut self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+        to: DataType,
+    ) -> Result<Bound, AnalysisError> {
+        let n = f.args.len();
+        // The arity check quotes the call as written, as `typed_call` does.
+        if !entry.arity.accepts(n) {
+            return Err(AnalysisError::new(
+                WrongNumArgsWithoutSuggestion {
+                    function_name: format!("`{}`", entry.id.name()),
+                    expected_num: entry.arity.expected().to_owned(),
+                    actual_num: n.to_string(),
+                    docroot: SPARK_DOC_ROOT.to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        let arg = &kids[0];
+        let mode = if self.ctx.conf.ansi {
+            CastMode::Ansi
+        } else {
+            CastMode::Legacy
+        };
+        if let Err(bad) = coerce::can_cast(arg.ty.data_type.as_ref(), &to, mode) {
+            let error = cast_mismatch(
+                bad,
+                format!("\"{}\"", pretty(&arg.shown(), self.ctx.conf.session_zone)),
+                quoted_type(arg.ty.data_type.as_ref()),
+                quoted_type(Some(&to)),
+            );
+            return Err(AnalysisError::new(error, e.origin));
+        }
+        let nullable = arg.ty.nullable
+            || arg
+                .ty
+                .data_type
+                .as_ref()
+                .is_some_and(|from| coerce::force_nullable(from, &to));
+        let expr = Arc::new(
+            Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&arg.expr),
+                to: to.clone(),
+                mode,
+            })
+            .with_origin(e.origin),
+        );
+        Ok(Bound {
+            expr,
+            ty: arg_type(to, nullable),
+            agg: arg.agg,
+            win: arg.win,
+            outer: arg.outer,
+            lateral: arg.lateral.clone(),
+            shown: Some(arg.shown()),
         })
     }
 

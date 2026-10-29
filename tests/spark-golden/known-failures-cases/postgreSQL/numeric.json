@@ -1,13 +1,5 @@
 {
   "cases": {
-    "cast-matrix": [
-      507,
-      508,
-      509,
-      510,
-      511,
-      512
-    ],
     "depends-on-command": [
       460,
       463,

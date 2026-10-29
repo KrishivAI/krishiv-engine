@@ -30,6 +30,56 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
     ("max_by", "no PySpark function"),
     ("min_by", "no PySpark function"),
     ("some", "no PySpark function"),
+    // The cast-named functions (`float(x)`, `int(x)`, ...): the analyzer
+    // rewrites every call to a `CAST`, so there is no call to send.
+    (
+        "boolean",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "tinyint",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "smallint",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "int",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "bigint",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "float",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "double",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "decimal",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "string",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "binary",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "date",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
+    (
+        "timestamp",
+        "cast-named function; the analyzer rewrites the call to a cast",
+    ),
     (
         "schema_of_csv",
         "PySpark's `options` map parameter has no wrapper support yet; SQL only",

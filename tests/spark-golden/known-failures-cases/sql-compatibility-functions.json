@@ -2,9 +2,7 @@
   "cases": {
     "cast-matrix": [
       8,
-      9,
-      10,
-      11
+      10
     ],
     "depends-on-command": [
       13
