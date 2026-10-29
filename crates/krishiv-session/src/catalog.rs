@@ -19,6 +19,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
+use crate::store::{CatalogStore, InMemoryCatalogStore, Warehouse};
 use arrow_schema::{Schema, SchemaRef};
 use krishiv_common::config::Config;
 use krishiv_common::error::{
@@ -57,6 +58,10 @@ pub(crate) enum TempTable {
     Files {
         source: ReadSource,
         columns: Vec<TableColumn>,
+        /// The columns are a permanent table's own, not inferred: reading
+        /// it lists its files without inferring a schema, and a table with
+        /// no files is empty.
+        known: bool,
     },
     /// A view over a query: the unresolved plan and the output columns it
     /// had when it was created (renamed when the view declares aliases).
@@ -96,6 +101,10 @@ pub(crate) struct SessionCatalog {
     epoch: AtomicU64,
     /// Hidden names handed out for snapshot pins (see [`SessionCatalog::put_view`]).
     hidden: AtomicU64,
+    /// The permanent tables, apart from the temporary views above.
+    pub(crate) store: InMemoryCatalogStore,
+    /// Where managed tables live.
+    pub(crate) warehouse: Warehouse,
 }
 
 impl SessionCatalog {
@@ -191,8 +200,10 @@ impl SessionCatalog {
             .collect()
     }
 
+    /// What a cached analysis depends on: temporary views and permanent
+    /// tables both bump it.
     pub(crate) fn epoch(&self) -> u64 {
-        self.epoch.load(Ordering::Acquire)
+        self.epoch.load(Ordering::Acquire) + self.store.epoch()
     }
 
     /// The entry `name`: case-insensitively unless `case_sensitive`, when
@@ -237,6 +248,8 @@ impl SessionCatalog {
 #[derive(Debug, Clone, PartialEq)]
 enum FilesKey {
     View(String),
+    /// A permanent table, by `namespace.table`.
+    Table(String),
     Read(ReadSource),
 }
 
@@ -291,6 +304,23 @@ impl QueryCatalog {
         }
     }
 
+    /// The entry a scan of `name` (as the analyzer kept it) reads: a
+    /// temporary view or table by its single part, a permanent table by
+    /// `namespace.table`.
+    fn loaded_for(&self, name: &[String]) -> Option<Arc<TempTable>> {
+        self.entry_of(name).map(|(_, t)| t)
+    }
+
+    /// The key and entry a scan of `name` reads: `namespace.table` for a
+    /// permanent table; else the bare name of a temporary entry (a temporary
+    /// view or table is found by its bare name however the scan spells it).
+    fn entry_of(&self, name: &[String]) -> Option<(String, Arc<TempTable>)> {
+        let last = name.last()?.to_lowercase();
+        [entry_key(name)?, last]
+            .into_iter()
+            .find_map(|key| self.loaded(&key).map(|t| (key, t)))
+    }
+
     fn loaded(&self, name: &str) -> Option<Arc<TempTable>> {
         self.loaded
             .lock()
@@ -320,7 +350,14 @@ impl QueryCatalog {
             else {
                 continue;
             };
-            let listing = self.files.listing(format, paths, options).await?;
+            let listing = match &key {
+                FilesKey::Table(_) => {
+                    self.files
+                        .listing_known(format, paths, options, Arc::clone(&table))
+                        .await?
+                }
+                _ => self.files.listing(format, paths, options).await?,
+            };
             let opened = open_table(
                 Arc::clone(&listing.format),
                 self.scans.clone(),
@@ -348,12 +385,16 @@ impl QueryCatalog {
             .filter_map(|scan| {
                 let (key, source) = match &scan.source {
                     ReadSource::Table { name, .. } => {
-                        let last = name.last().map_or("", String::as_str);
-                        let table = self.loaded(last)?;
-                        let TempTable::Files { source, .. } = &*table else {
+                        let (key, table) = self.entry_of(name)?;
+                        let TempTable::Files { source, known, .. } = &*table else {
                             return None;
                         };
-                        (FilesKey::View(last.to_lowercase()), source.clone())
+                        let key = if *known {
+                            FilesKey::Table(key)
+                        } else {
+                            FilesKey::View(key)
+                        };
+                        (key, source.clone())
                     }
                     source @ ReadSource::Files { .. } => {
                         (FilesKey::Read(source.clone()), source.clone())
@@ -725,6 +766,88 @@ fn resolve(
     }
 }
 
+/// The key a query loads an entry under, from a scan's name: a single
+/// part is a temporary entry (or a permanent table found by its bare name);
+/// `namespace.table` (a leading catalog part dropped) a permanent table.
+fn entry_key(name: &[String]) -> Option<String> {
+    match name {
+        [] => None,
+        [one] => Some(one.to_lowercase()),
+        [.., namespace, table] => Some(format!(
+            "{}.{}",
+            namespace.to_lowercase(),
+            table.to_lowercase()
+        )),
+    }
+}
+
+impl QueryCatalog {
+    /// The permanent table `id` as a read of its files with the columns it
+    /// was created with (analysis infers nothing and reads no files), or
+    /// `None` when the store has no such table. The table is kept for the
+    /// query under `namespace.table`, and under its bare name when the
+    /// query wrote it bare.
+    fn load_stored(&self, id: &TableIdent, form: NameForm) -> Option<TableMeta> {
+        let namespace = id.namespace.first()?;
+        let (namespace, name) = if form.case_sensitive {
+            (namespace.clone(), id.name.clone())
+        } else {
+            (namespace.to_lowercase(), id.name.to_lowercase())
+        };
+        let table = self.session.store.table(&namespace, &name)?;
+        let columns: Vec<TableColumn> = table
+            .columns
+            .iter()
+            .map(|c| TableColumn {
+                name: c.name.clone(),
+                data_type: c.data_type.clone(),
+                nullable: c.nullable,
+            })
+            .collect();
+        let entry = Arc::new(TempTable::Files {
+            source: table_source(&table),
+            columns: columns.clone(),
+            known: true,
+        });
+        let mut loaded = self.loaded.lock().unwrap_or_else(PoisonError::into_inner);
+        loaded.insert(format!("{namespace}.{name}"), Arc::clone(&entry));
+        if !form.qualified {
+            loaded.insert(name.clone(), entry);
+        }
+        Some(TableMeta {
+            ident: TableIdent {
+                catalog: CATALOG.to_owned(),
+                namespace: vec![namespace],
+                name,
+            },
+            columns,
+            version: None,
+            kind: TableKind::Table,
+        })
+    }
+}
+
+/// The read of a table's files.
+pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
+    ReadSource::Files {
+        format: table.provider.clone(),
+        paths: vec![krishiv_common::secret::OptionValue::from_user(
+            "path",
+            table.location.display().to_string(),
+        )],
+        options: table
+            .options
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    krishiv_common::secret::OptionValue::from_user(k, v),
+                )
+            })
+            .collect(),
+    }
+}
+
 fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
@@ -760,7 +883,7 @@ impl Catalog for QueryCatalog {
                 resolve(&self.loaded, &self.session, &id.name, form)
             };
             let Some(table) = found else {
-                return Ok(None);
+                return Ok(self.load_stored(id, form));
             };
             let (columns, kind) = match &*table {
                 TempTable::Memory { columns, .. } | TempTable::Files { columns, .. } => {
@@ -816,7 +939,7 @@ impl TableProviderResolver for QueryCatalog {
             ReadSource::Table { name, .. } => {
                 let last = name.last().map_or("", String::as_str);
                 // Analysis loaded every table a scan names.
-                let Some(table) = self.loaded(last) else {
+                let Some(table) = self.loaded_for(name) else {
                     return Err(InternalError {
                         message: format!("the scanned table {last} was not loaded"),
                     }
@@ -826,8 +949,15 @@ impl TableProviderResolver for QueryCatalog {
                     TempTable::Memory { table, .. } => {
                         Ok(Arc::clone(table) as Arc<dyn TableProvider>)
                     }
-                    TempTable::Files { .. } => {
-                        self.files_provider(&FilesKey::View(last.to_lowercase()))
+                    TempTable::Files { known, .. } => {
+                        let key = self
+                            .entry_of(name)
+                            .map_or_else(|| last.to_lowercase(), |(k, _)| k);
+                        self.files_provider(&if *known {
+                            FilesKey::Table(key)
+                        } else {
+                            FilesKey::View(key)
+                        })
                     }
                     // Views are inlined as subqueries before analysis, so
                     // no scan ever reads one.
@@ -1321,6 +1451,7 @@ mod tests {
 
     fn files(col: &str) -> TempTable {
         TempTable::Files {
+            known: false,
             source: ReadSource::Files {
                 format: "parquet".to_owned(),
                 paths: vec![],

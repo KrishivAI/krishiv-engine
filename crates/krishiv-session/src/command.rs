@@ -638,7 +638,7 @@ impl Session {
 
     /// An empty result with no columns, as Spark's `CREATE VIEW`,
     /// `DROP VIEW` and `RESET` return.
-    async fn empty_frame(&self) -> Result<DataFrame, KrishivError> {
+    pub(crate) async fn empty_frame(&self) -> Result<DataFrame, KrishivError> {
         let df = DataFrame::new(
             self.clone(),
             Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),

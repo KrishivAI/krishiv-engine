@@ -1211,6 +1211,7 @@ impl DataFrame {
                 TempTable::Files {
                     source: source.clone(),
                     columns,
+                    known: false,
                 },
             );
             return Ok(());

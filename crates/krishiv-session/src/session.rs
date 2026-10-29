@@ -424,6 +424,11 @@ impl Session {
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
+            Statement::CreateTable(t) => self.exec_create_table(&t, redacted).await,
+            Statement::CreateTableLike(t) => self.exec_create_table_like(&t, redacted).await,
+            Statement::DropTable(d) => self.exec_drop_table(&d).await,
+            Statement::Insert(i) => self.exec_insert(&i).await,
+            Statement::Truncate(t) => self.exec_truncate(&t).await,
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
