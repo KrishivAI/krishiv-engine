@@ -277,7 +277,18 @@ fn collect_in_order(session: &Session, sql: &str) -> Vec<i64> {
 /// load the executor.
 #[test]
 fn range_collects_in_slice_order_under_load() {
-    let session = session();
+    // Eight compute threads whatever the machine: several drivers read the
+    // slices and race, so without the ordered read the rows come back
+    // reordered (on a one-slot executor a single driver would read them
+    // in order by itself).
+    let executor = krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig {
+        compute_threads: 8,
+        io_threads: 1,
+        blocking_threads: 8,
+        io_blocking_threads: 2,
+    })
+    .unwrap();
+    let session = Session::builder().executor(executor).build().unwrap();
     let all: Vec<i64> = (0..64).collect();
     let doubled: Vec<i64> = (0..64).filter(|i| i % 3 != 0).map(|i| i * 2).collect();
     std::thread::scope(|scope| {
