@@ -21,6 +21,14 @@
         "datetime"
       ],
       "order": 400
+    },
+    {
+      "detail": "a timestamp literal in a session time zone|a timestamp literal that needs the query clock|from_json\\(",
+      "order": 500
+    },
+    {
+      "detail": "time zone region id",
+      "order": 710
     }
   ],
   "summary": "datetime functions and literals beyond P2a (TIMESTAMP literals, date/timestamp arithmetic, patterns, unit-argument forms)",

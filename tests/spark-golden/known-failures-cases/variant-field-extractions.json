@@ -1,6 +1,12 @@
 {
   "cases": {
     "depends-on-command": [
+      31
+    ],
+    "sql-commands": [
+      0
+    ],
+    "variant-type": [
       1,
       2,
       3,
@@ -31,7 +37,6 @@
       28,
       29,
       30,
-      31,
       33,
       34,
       35,
@@ -39,9 +44,6 @@
       37,
       38,
       39
-    ],
-    "sql-commands": [
-      0
     ]
   },
   "file": "variant-field-extractions",

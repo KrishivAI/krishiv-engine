@@ -64,6 +64,18 @@ pub const CATEGORIES_DIR_NAME: &str = "known-failures-categories";
 /// The ADR a known divergence must cite.
 pub const DIVERGENCE_ADR: &str = "0023";
 
+impl CategoryKind {
+    /// The kind's name in the baseline file.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Unsupported { .. } => "unsupported",
+            Self::Divergence { .. } => "divergence",
+            Self::Bug { .. } => "bug",
+        }
+    }
+}
+
 /// What a category is, with its mandatory reference.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CategoryKind {
@@ -133,6 +145,27 @@ pub struct Update {
     pub removed: Vec<Drift>,
     /// Failing statements no rule classifies; nothing is written while there are any.
     pub unclassified: Vec<Drift>,
+    /// With `reclassify`: listed statements whose category changed, with the old and the new one.
+    pub moved: Vec<(Drift, String, String)>,
+    /// The moves that also change the kind of category (`unsupported`, `divergence`, `bug`), as
+    /// `(old category, new category)`: a bug re-homed as a divergence deserves a look.
+    pub crossed_kinds: BTreeSet<(String, String)>,
+}
+
+impl Update {
+    /// The moved statements counted per `old -> new` category pair, largest first, one per line.
+    #[must_use]
+    pub fn moved_summary(&self) -> String {
+        let mut pairs: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+        for (_, old, new) in &self.moved {
+            *pairs.entry((old.as_str(), new.as_str())).or_default() += 1;
+        }
+        let mut rows: Vec<_> = pairs.into_iter().collect();
+        rows.sort_by_key(|((old, new), n)| (std::cmp::Reverse(*n), *old, *new));
+        rows.into_iter()
+            .map(|((old, new), n)| format!("  {n:>5}  {old} -> {new}\n"))
+            .collect()
+    }
 }
 
 /// A statement whose outcome disagrees with the baseline.
@@ -708,7 +741,12 @@ impl KnownFailures {
 
     /// [`Self::update`] for a run over `set`: the statements come from the set's files and the
     /// function groups from the Spark function matrix ([`crate::fn_matrix`]).
-    pub fn update_with_set(&mut self, run: &RunResult, set: &GoldenSet) -> Result<Update, String> {
+    pub fn update_with_set(
+        &mut self,
+        run: &RunResult,
+        set: &GoldenSet,
+        reclassify: Option<&str>,
+    ) -> Result<Update, String> {
         let mut statements = BTreeMap::new();
         for pair in &set.pairs {
             statements.insert(
@@ -722,7 +760,7 @@ impl KnownFailures {
             .into_iter()
             .map(|f| (f.name.to_ascii_lowercase(), f.family))
             .collect();
-        Ok(self.update(run, &statements, &families))
+        Ok(self.update(run, &statements, &families, reclassify))
     }
 
     /// The ratchet over the file at `path`: `Ok` with a one-line summary when `run` fails
@@ -752,9 +790,27 @@ impl KnownFailures {
     /// it (only changed files are rewritten; category and case files with
     /// nothing left are deleted); `Err` (and nothing written) when a failure
     /// matches no rule.
-    pub fn update_file(path: &Path, run: &RunResult, set: &GoldenSet) -> Result<String, String> {
+    pub fn update_file(
+        path: &Path,
+        run: &RunResult,
+        set: &GoldenSet,
+        reclassify: Option<&str>,
+    ) -> Result<String, String> {
         let mut known = Self::load(path).map_err(|e| e.to_string())?;
-        let up = known.update_with_set(run, set)?;
+        if let Some(category) = reclassify
+            && !known.categories.contains_key(category)
+        {
+            return Err(format!(
+                "--reclassify: unknown category `{category}` (known: {})",
+                known
+                    .categories
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        let up = known.update_with_set(run, set, reclassify)?;
         if !up.unclassified.is_empty() {
             let mut msg = format!(
                 "{} failure(s) match no rule; add a rule or category under {} (nothing written):\n",
@@ -789,13 +845,26 @@ impl KnownFailures {
             wanted.insert(PathBuf::from(format!("{file}.json")), text);
         }
         crate::manifest_dir::sync_json_dir(&dir, &wanted).map_err(|e| e.to_string())?;
-        Ok(format!(
+        let mut msg = format!(
             "ratchet: {} added, {} removed, {} listed in {}",
             up.added.len(),
             up.removed.len(),
             known.listed(),
             path.display()
-        ))
+        );
+        if let Some(category) = reclassify {
+            msg.push_str(&format!(
+                "\nmoved {} statement(s) out of `{category}`:\n{}",
+                up.moved.len(),
+                up.moved_summary()
+            ));
+            for (old, new) in &up.crossed_kinds {
+                msg.push_str(&format!(
+                    "NOTE: moves from `{old}` to `{new}` change the kind of category; check them\n"
+                ));
+            }
+        }
+        Ok(msg)
     }
 
     /// Bring the baseline in line with `run`: drop the listed statements that pass (or are
@@ -803,11 +872,18 @@ impl KnownFailures {
     /// [`Self::rules`]. `statements` holds each run file's statements (for the rules);
     /// `families` maps function names to their Spark function group. Categories left without
     /// cases are dropped with their rules. Nothing changes while a failure is unclassified.
+    ///
+    /// With `reclassify = Some(category)` the still-failing statements listed under that category
+    /// are classified again by the current rules instead of keeping it. Categories are sticky by
+    /// design (a fix elsewhere must not silently re-home a statement), so this is an explicit run
+    /// (`golden-report --ratchet update --reclassify CATEGORY`), never the default, and it touches
+    /// one category only.
     pub fn update(
         &mut self,
         run: &RunResult,
         statements: &BTreeMap<String, Vec<Statement>>,
         families: &BTreeMap<String, String>,
+        reclassify: Option<&str>,
     ) -> Update {
         let mut up = Update::default();
         let mut next: BTreeMap<String, BTreeMap<u32, String>> = BTreeMap::new();
@@ -830,7 +906,9 @@ impl KnownFailures {
                     }
                     continue;
                 }
-                if let Some(k) = old {
+                if let Some(k) = old
+                    && reclassify != Some(k.as_str())
+                {
                     kept.insert(c.index, k.clone());
                     continue;
                 }
@@ -845,12 +923,22 @@ impl KnownFailures {
                     command: is_command(query),
                     depends: names.mentioned_by(query),
                 };
-                match classify(&self.rules, &failure, families) {
-                    Some(k) => {
+                match (classify(&self.rules, &failure, families), old) {
+                    (Some(k), Some(was)) => {
+                        if k != was {
+                            let kind = |c: &str| self.categories.get(c).map(|c| c.kind.label());
+                            if kind(k) != kind(was) {
+                                up.crossed_kinds.insert((was.clone(), k.to_owned()));
+                            }
+                            up.moved.push((drift(), was.clone(), k.to_owned()));
+                        }
+                        kept.insert(c.index, k.to_owned());
+                    }
+                    (Some(k), None) => {
                         up.added.push((drift(), k.to_owned()));
                         kept.insert(c.index, k.to_owned());
                     }
-                    None => up.unclassified.push(drift()),
+                    (None, _) => up.unclassified.push(drift()),
                 }
             }
             if let Some(l) = listed {
@@ -1180,7 +1268,7 @@ mod tests {
             ),
             ("c".to_owned(), vec![stmt("SELECT 2")]),
         ]);
-        let up = k.update(&run, &statements, &BTreeMap::new());
+        let up = k.update(&run, &statements, &BTreeMap::new(), None);
         assert!(up.unclassified.is_empty());
         assert_eq!(
             up.added
@@ -1207,6 +1295,68 @@ mod tests {
     }
 
     #[test]
+    fn reclassify_rehomes_the_listed_statements_by_the_current_rules() -> R {
+        let mut k = KnownFailures::parse(DOC)?;
+        // a#0 is listed as `ddl` but is a plain query whose failure the `sum` rule now names.
+        let run = RunResult {
+            files: vec![file(
+                "a",
+                vec![case(0, false), case(1, false), case(3, false)],
+            )],
+            ..RunResult::default()
+        };
+        let statements = BTreeMap::from([(
+            "a".to_owned(),
+            vec![
+                stmt("SELECT sum(x) FROM t"),
+                stmt("CREATE VIEW v AS SELECT 1"),
+                stmt("SELECT 2"),
+                stmt("SELECT 3"),
+            ],
+        )]);
+        // Without `reclassify` the categories are kept.
+        let mut sticky = k.clone();
+        let up = sticky.update(&run, &statements, &BTreeMap::new(), None);
+        assert!(up.moved.is_empty());
+        assert_eq!(sticky.cases["a"][&0], "ddl");
+        // With it, a#0 moves to `sum` (rule order: `ddl` needs a command), a#1 stays `ddl`, a#3 stays `sum`.
+        let up = k.update(&run, &statements, &BTreeMap::new(), Some("ddl"));
+        assert_eq!(k.cases["a"][&0], "sum");
+        assert_eq!(k.cases["a"][&1], "ddl");
+        assert_eq!(up.moved.len(), 1);
+        assert_eq!(up.moved[0].1, "ddl");
+        assert_eq!(up.moved[0].2, "sum");
+        assert!(up.added.is_empty());
+        assert_eq!(up.moved_summary(), "      1  ddl -> sum\n");
+        // `ddl` is unsupported and `sum` a bug: the move crosses kinds and is flagged.
+        assert_eq!(
+            up.crossed_kinds.iter().collect::<Vec<_>>(),
+            [&("ddl".to_owned(), "sum".to_owned())]
+        );
+        let fresh = KnownFailures::parse(DOC)?;
+        assert_eq!(fresh.categories["ddl"].kind.label(), "unsupported");
+        assert_eq!(fresh.categories["sum"].kind.label(), "bug");
+        assert_eq!(fresh.categories["text"].kind.label(), "divergence");
+        // A statement no rule classifies blocks the rewrite, as for a new failure.
+        let mut blocked = KnownFailures::parse(DOC)?;
+        let run2 = RunResult {
+            files: vec![FileResult {
+                cases: vec![Case {
+                    index: 0,
+                    result: Some(false),
+                    detail: "something else".into(),
+                    ..Case::default()
+                }],
+                ..file("a", vec![])
+            }],
+            ..RunResult::default()
+        };
+        let up = blocked.update(&run2, &statements, &BTreeMap::new(), Some("ddl"));
+        assert_eq!(up.unclassified.len(), 1);
+        Ok(())
+    }
+
+    #[test]
     fn update_changes_nothing_while_a_failure_is_unclassified() -> R {
         let mut k = KnownFailures::parse(DOC)?;
         let before = k.clone();
@@ -1215,7 +1365,7 @@ mod tests {
         odd.detail = "error X: odd".into();
         run.files = vec![file("a", vec![case(0, false), odd])];
         let statements = BTreeMap::from([("a".to_owned(), vec![stmt("SELECT 1"); 6])]);
-        let up = k.update(&run, &statements, &BTreeMap::new());
+        let up = k.update(&run, &statements, &BTreeMap::new(), None);
         assert_eq!(up.unclassified.len(), 1);
         assert_eq!(up.unclassified[0].index, 5);
         assert_eq!(k, before);
@@ -1242,7 +1392,7 @@ mod tests {
         c.detail =
             "error KRISHIV_UNSUPPORTED_FEATURE: The feature function upper is not supported".into();
         run.files = vec![file("z", vec![c])];
-        let up = k.update_with_set(&run, &set)?;
+        let up = k.update_with_set(&run, &set, None)?;
         assert_eq!(up.added.len(), 1, "{up:?}");
         assert_eq!(up.added[0].1, "sum");
         Ok(())
@@ -1297,7 +1447,7 @@ mod tests {
             ],
             ..RunResult::default()
         };
-        let err = KnownFailures::update_file(&path, &with_odd, &set).unwrap_err();
+        let err = KnownFailures::update_file(&path, &with_odd, &set, None).unwrap_err();
         assert!(err.contains("a#5: error X"), "{err}");
         assert_eq!(std::fs::read_to_string(&path)?, DOC);
         let fewer = RunResult {
@@ -1307,7 +1457,7 @@ mod tests {
             ],
             ..RunResult::default()
         };
-        let msg = KnownFailures::update_file(&path, &fewer, &set)?;
+        let msg = KnownFailures::update_file(&path, &fewer, &set, None)?;
         assert!(msg.contains("0 added, 1 removed, 3 listed"), "{msg}");
         assert!(KnownFailures::check_file(&path, &fewer).is_ok());
         Ok(())
@@ -1533,7 +1683,10 @@ mod tests {
             ],
             ..RunResult::default()
         };
-        KnownFailures::update_file(&path, &fewer, &set)?;
+        let unknown = KnownFailures::update_file(&path, &fewer, &set, Some("nope")).unwrap_err();
+        assert!(unknown.contains("unknown category `nope`"), "{unknown}");
+        assert!(unknown.contains("ddl"), "{unknown}");
+        KnownFailures::update_file(&path, &fewer, &set, None)?;
         // The header holds no cases, categories or rules; each category and each listed file
         // has its own file.
         let header: Value =
@@ -1564,7 +1717,7 @@ mod tests {
                 ))
             })
             .collect::<Result<_, std::io::Error>>()?;
-        KnownFailures::update_file(&path, &fewer, &set)?;
+        KnownFailures::update_file(&path, &fewer, &set, None)?;
         for (name, (bytes, mtime)) in &before {
             let p = Path::new(name);
             assert_eq!(&std::fs::read(p)?, bytes, "{name} was rewritten");
@@ -1582,7 +1735,7 @@ mod tests {
             )],
             ..RunResult::default()
         };
-        KnownFailures::update_file(&path, &without_b, &set)?;
+        KnownFailures::update_file(&path, &without_b, &set, None)?;
         assert!(!categories.join("text.json").exists());
         assert!(categories.join("ddl.json").is_file());
         assert!(!cases.join("b.json").exists());

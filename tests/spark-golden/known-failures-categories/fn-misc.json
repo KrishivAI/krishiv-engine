@@ -11,6 +11,10 @@
         "conditional"
       ],
       "order": 460
+    },
+    {
+      "file": "^random$",
+      "order": 680
     }
   ],
   "summary": "misc functions (typeof, uuid, rand, raise_error, vector, current_*)",

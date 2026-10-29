@@ -1,6 +1,9 @@
 {
   "cases": {
-    "depends-on-command": [
+    "nested-interval-types": [
+      28
+    ],
+    "query-features": [
       18,
       19,
       23,
@@ -8,7 +11,6 @@
       25,
       26,
       27,
-      28,
       29,
       30
     ]

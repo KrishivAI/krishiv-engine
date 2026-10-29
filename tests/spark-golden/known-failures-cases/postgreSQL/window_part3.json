@@ -9,7 +9,9 @@
       18,
       19,
       21,
-      22,
+      22
+    ],
+    "generators": [
       24
     ],
     "sql-commands": [
