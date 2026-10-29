@@ -692,3 +692,23 @@ def test_table_files_handles_every_layout(tmp_path: Path):
     tables, big = mz.load_tables(tmp_path, ["a", "b"], whole_rows=1000, pool_rows=100)
     assert tables["b"].num_rows == 6
     assert big == set()
+
+
+def test_the_cli_passes_minimize_and_ledger_arguments_through(monkeypatch: pytest.MonkeyPatch):
+    from krishiv_bench import cli, ledger
+
+    seen: dict[str, tuple] = {}
+    monkeypatch.setattr(mz, "run_minimize", lambda *a, **k: seen.__setitem__("minimize", (a, k)))
+    monkeypatch.setattr(ledger, "run_ledger", lambda *a, **k: seen.__setitem__("ledger", (a, k)))
+    cli.main(["minimize", "--query", "q07", "--sf", "1", "--seed-rows", "50", "--no-pin", "--full-data"])
+    args, kwargs = seen["minimize"]
+    assert args[:3] == ("tpch", "q07", 1.0)
+    assert 50 in args
+    assert kwargs["pin"] is False
+    assert kwargs["max_seconds"] == 1500
+    assert kwargs["run_timeout"] == 30
+    cli.main(["ledger", "--suite", "clickbench", "--queries", "q01,q02", "--threads", "4"])
+    largs, _ = seen["ledger"]
+    assert largs[0] == "clickbench"
+    assert largs[3] == ["q01", "q02"]
+    assert largs[4] == 4
