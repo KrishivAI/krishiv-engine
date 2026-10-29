@@ -492,3 +492,18 @@ def test_load_rewrites_only_the_tables_that_changed(tmp_path: Path):
     o._load({"t": changed})
     assert not (tmp_path / "d" / "u.parquet").exists()
     assert o.krishiv.tables["t"][-1] == 999
+
+
+def test_ddmin_stops_when_told_to():
+    calls = []
+
+    def test(sub):
+        calls.append(len(sub))
+        return False
+
+    items = list(range(64))
+    assert mz.ddmin(items, test, stop=lambda: len(calls) >= 3) == items
+    assert 3 <= len(calls) <= 4  # checked before each subset
+    assert mz.ddmin(items, test, stop=lambda: True) == items
+    out = mz.shrink_rows({"t": _table(10)}, lambda t: True, stop=lambda: True)
+    assert out["t"].num_rows == 10

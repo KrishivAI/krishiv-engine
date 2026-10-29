@@ -238,14 +238,16 @@ def candidates(sql: str) -> Iterator[str]:
             yield _replace(sql, start, end, c)
 
 
-def ddmin(items: list[Any], test: Callable[[list[Any]], bool]) -> list[Any]:
+def ddmin(items: list[Any], test: Callable[[list[Any]], bool], stop: Callable[[], bool] = lambda: False) -> list[Any]:
     """Zeller's ddmin: a locally minimal sub-list of ``items`` for which ``test`` still holds."""
     n = 2
-    while len(items) >= 2:
+    while len(items) >= 2 and not stop():
         chunk = max(1, len(items) // n)
         subsets = [items[i : i + chunk] for i in range(0, len(items), chunk)]
         reduced = False
         for k, sub in enumerate(subsets):
+            if stop():
+                return items
             comp = [x for j, s in enumerate(subsets) if j != k for x in s]
             if len(subsets) > 2 and comp and test(comp):
                 items, n, reduced = comp, max(n - 1, 2), True
@@ -302,7 +304,11 @@ def strided_slice(table: pa.Table, rows: int) -> pa.Table:
     return table.take(pa.array([int(i * step) for i in range(rows)]))
 
 
-def shrink_rows(tables: dict[str, pa.Table], interesting: Callable[[dict[str, pa.Table]], bool]) -> dict[str, pa.Table]:
+def shrink_rows(
+    tables: dict[str, pa.Table],
+    interesting: Callable[[dict[str, pa.Table]], bool],
+    stop: Callable[[], bool] = lambda: False,
+) -> dict[str, pa.Table]:
     """ddmin over the row indices of each table in turn."""
     cur = dict(tables)
     for name in sorted(cur, key=lambda n: -cur[n].num_rows):
@@ -312,7 +318,7 @@ def shrink_rows(tables: dict[str, pa.Table], interesting: Callable[[dict[str, pa
             cand = {**cur, name: cur[name].take(pa.array(sub, type=pa.int64()))}
             return interesting(cand)
 
-        kept = ddmin(idx, test)
+        kept = ddmin(idx, test, stop)
         cur[name] = cur[name].take(pa.array(kept, type=pa.int64()))
     return cur
 
@@ -481,7 +487,9 @@ def minimize(
     _progress("query shrunk", oracle, used, sql)
     used = {n: used[n] for n in referenced_tables(sql, list(used))}
     if not full_data:
-        used = shrink_rows(used, lambda t: oracle.within_budget() and oracle.differs(sql, t))
+        used = shrink_rows(
+            used, lambda t: oracle.within_budget() and oracle.differs(sql, t), lambda: not oracle.within_budget()
+        )
         _progress("rows shrunk", oracle, used)
         sql = shrink_query(sql, lambda s: oracle.within_budget() and oracle.differs(s, used), oracle.within_budget)
     return sql, used
