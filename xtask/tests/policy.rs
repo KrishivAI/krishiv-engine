@@ -135,7 +135,7 @@ fn ci_policy_wiring() {
     let fuzz_build = job(&ci, "fuzz-build");
     for needle in [
         "    needs: changes\n",
-        "    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push'\n",
+        "    if: needs.changes.outputs.rust == 'true' && github.event_name != 'push' && github.event_name != 'merge_group'\n",
         "        run: cargo \"+$NIGHTLY\" fuzz build --target x86_64-unknown-linux-gnu\n",
     ] {
         // Whole lines: a deeper-indented step-level `if:` or `run:` must not match.
@@ -143,6 +143,54 @@ fn ci_policy_wiring() {
             fuzz_build.lines().any(|line| line == needle.trim_end()),
             "fuzz-build lacks {needle:?}"
         );
+    }
+    // The merge queue runs the build, tests, clippy and the cheap lints; the long checks stay
+    // on pull requests and run on main nightly. Each stays a job that reports (skipped passes).
+    assert!(
+        ci.contains("  schedule:\n    - cron:"),
+        "ci.yml runs on main nightly"
+    );
+    for name in ["miri-kernels", "wheels"] {
+        let body = job(&ci, name);
+        assert!(
+            body.contains("github.event_name != 'merge_group'"),
+            "{name} must not run in the merge queue"
+        );
+    }
+    for name in ["test", "clippy", "fmt", "layering"] {
+        assert!(
+            !job(&ci, name).contains("merge_group"),
+            "{name} must run in the merge queue"
+        );
+    }
+    // The nightly and the push run must not cancel each other, and a nightly failure is reported.
+    assert!(
+        ci.contains("group: ci-${{ github.workflow }}-${{ github.event_name }}-"),
+        "the concurrency group must include the event"
+    );
+    assert!(
+        job(&ci, "nightly-failure-notice").contains(
+            "if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')"
+        ),
+        "the failure notice must run after a failed dependency, on the schedule only"
+    );
+    assert!(job(&ci, "nightly-failure-notice").contains("issues: write"));
+    // A release or a published binary needs the latest nightly run green on its commit.
+    for wf in ["publish-testpypi.yml", "binaries.yml"] {
+        let text = read(&format!(".github/workflows/{wf}"));
+        assert!(
+            text.contains(".github/scripts/require-green-nightly.sh"),
+            "{wf} must require a green nightly run"
+        );
+    }
+    // Diff coverage tests only the packages the PR touches and their dependents.
+    let coverage = read(".github/workflows/coverage.yml");
+    for needle in [
+        "cargo xtask coverage-scope",
+        "steps.scope.outputs.packages",
+        "cargo xtask coverage --no-branch $PACKAGES",
+    ] {
+        assert!(coverage.contains(needle), "coverage.yml lacks {needle:?}");
     }
     // Label-dependent policy lives in its own workflow so label changes never
     // restart (and cancel) the full CI run; the job name is a required check.
