@@ -30,6 +30,21 @@ impl ExecNode for OperatorNode {
     }
 }
 
+/// `inner` with its pipeline run by one driver, so the rows keep their source
+/// order (a `LIMIT` over a `range` takes the first rows, as Spark's limit
+/// takes partitions in order).
+pub(crate) struct OrderedNode {
+    pub(crate) inner: Arc<dyn ExecNode>,
+}
+
+impl ExecNode for OrderedNode {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        Arc::clone(&self.inner).build_pipelines(b)?;
+        b.preserve_order();
+        Ok(())
+    }
+}
+
 /// A pipeline breaker: the sink of its input's pipeline and the source of
 /// the current one; `ordered` keeps its output order (one driver above it).
 pub(crate) struct BreakerNode {

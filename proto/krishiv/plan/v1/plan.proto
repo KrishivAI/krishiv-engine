@@ -112,7 +112,19 @@ message Node {
     ExpandNode expand = 16;
     // feature: window_group_limit
     WindowGroupLimitNode window_group_limit = 17;
+    // feature: range
+    RangeNode range = 18;
   }
+}
+
+// feature: range
+// `range(start, end, step, numSlices)`: one `id BIGINT NOT NULL` column.
+message RangeNode {
+  sint64 start = 1;
+  sint64 end = 2;
+  sint64 step = 3;
+  optional uint32 num_slices = 4;
+  uint64 output = 5;
 }
 
 message Empty {}
@@ -366,6 +378,10 @@ message AggregateExpr {
   // Arrow IPC `Schema` flatbuffer of one field.
   bytes arg_type = 5;
   string name = 6;
+  // A boolean input column the aggregate is restricted to
+  // (`FILTER (WHERE ...)`); absent reads all rows.
+  // feature: aggregate_filter
+  optional uint64 mask = 7;
 }
 
 enum JoinType {

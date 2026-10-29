@@ -47,6 +47,8 @@ pub(super) fn kinds(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Unpivot { .. } => "PlanNode::Unpivot",
         PlanNode::InlineTable { .. } => "PlanNode::InlineTable",
         PlanNode::Window { .. } => "PlanNode::Window",
+        PlanNode::TableFunction { .. } => "PlanNode::TableFunction",
+        PlanNode::Range { .. } => "PlanNode::Range",
     });
     plan.for_each_expr(&mut |e| expr_kinds(e, out));
     plan.for_each_child(&mut |c| kinds(c, out));

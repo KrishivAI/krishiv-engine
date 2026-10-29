@@ -16,7 +16,7 @@ use proptest::prelude::*;
 use serde_json::Value;
 
 use super::depth::{on_small_stack, self_joins};
-use super::dsl::{add, c, count_star, eq, f, gt, int, s, star};
+use super::dsl::{add, c, count_star, date, dec, eq, f, ge, gt, int, le, lt, s, star};
 use super::tpch::QUERIES;
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
@@ -1504,6 +1504,10 @@ impl SqlFrontend for Frontend {
     fn fingerprint(&self) -> u64 {
         7
     }
+
+    fn keywords(&self) -> Vec<(String, bool)> {
+        Vec::new()
+    }
 }
 
 #[test]
@@ -1610,6 +1614,215 @@ fn unsupported_inputs_fail_explicitly() {
     assert!(
         text.contains("The `upper` requires 1 parameters but the actual number is 2"),
         "{text}"
+    );
+}
+
+/// The cast-named functions (`float(x)`, `int(x)`, ...): Spark analyzes
+/// each call as `CAST(x AS target)`, so the analyzer rewrites the call
+/// to a cast during analysis and the plan only ever holds the `Cast`
+/// node. The output column is named by the argument, as Spark names it.
+#[test]
+fn cast_named_functions_rewrite_to_casts() {
+    use krishiv_types::DecimalType;
+
+    let ctx = ctx();
+    let double = |v: f64| Expr::from(Literal::Double(v));
+    let long = |v: i64| Expr::from(Literal::Long(v));
+    let boolean = |v: bool| Expr::from(Literal::Boolean(v));
+    let decimal = |p: u32, s: u32| DataType::Decimal(DecimalType::try_new(p, s).unwrap());
+    // (call, type, output name, nullable).
+    let cases: Vec<(Expr, DataType, &str, bool)> = vec![
+        (
+            f("float", vec![double(15.0)]),
+            DataType::Float,
+            "15.0",
+            false,
+        ),
+        (f("double", vec![s("1.5")]), DataType::Double, "1.5", true),
+        (f("int", vec![s("7")]), DataType::Integer, "7", true),
+        (f("boolean", vec![int(1)]), DataType::Boolean, "1", false),
+        (f("tinyint", vec![long(1)]), DataType::Byte, "1", false),
+        (f("smallint", vec![long(1)]), DataType::Short, "1", false),
+        (
+            f("bigint", vec![boolean(true)]),
+            DataType::Long,
+            "true",
+            false,
+        ),
+        (
+            f("decimal", vec![s("1.234")]),
+            decimal(10, 0),
+            "1.234",
+            true,
+        ),
+        (f("string", vec![int(42)]), DataType::String, "42", false),
+        (f("binary", vec![s("x")]), DataType::Binary, "x", false),
+        (
+            f("date", vec![s("2024-01-02")]),
+            DataType::Date,
+            "2024-01-02",
+            true,
+        ),
+        (
+            f("timestamp", vec![s("2024-01-02 12:34:56")]),
+            DataType::Timestamp,
+            "2024-01-02 12:34:56",
+            true,
+        ),
+        // A cast of a column keeps the column's name.
+        (f("int", vec![c("c")]), DataType::Integer, "c", true),
+        // Names resolve ASCII case-insensitively.
+        (f("FLOAT", vec![int(1)]), DataType::Float, "1", false),
+    ];
+    for (call, data_type, name, nullable) in cases {
+        let plan = LogicalPlan::table(["t"]).project(vec![call]);
+        let a = run(plan, &ctx).unwrap();
+        assert_eq!(a.output.len(), 1);
+        assert_eq!(a.output[0].data_type, data_type);
+        assert_eq!(a.output[0].name, name);
+        assert_eq!(a.output[0].nullable, nullable);
+        // The plan holds a cast, never a function call.
+        let text = a.plan.root().to_string();
+        assert!(text.contains("CAST("), "{text}");
+        assert!(!text.contains("float(") && !text.contains("int("), "{text}");
+    }
+    // Resolving a resolved plan changes nothing.
+    let plan = LogicalPlan::table(["t"]).project(vec![f("int", vec![s("7")])]);
+    let a = run(plan, &ctx).unwrap();
+    let again = block_on(DefaultAnalyzer.analyze(&a.plan, &ctx)).unwrap();
+    assert!(again.plan.structurally_eq(&a.plan));
+}
+
+/// The arity error of a cast-named function quotes the call, with
+/// Spark's `expectedNum` text.
+#[test]
+fn cast_named_functions_check_arity() {
+    let ctx = ctx();
+    for (args, actual) in [(Vec::new(), "0"), (vec![int(1), int(2)], "2")] {
+        let plan = LogicalPlan::table(["t"]).project(vec![f("float", args)]);
+        let err = run(plan, &ctx).unwrap_err();
+        assert_eq!(
+            err.error.error_class().name(),
+            "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
+        );
+        let params = err.error.message_parameters();
+        let get = |k: &str| params.iter().find(|(k2, _)| *k2 == k).unwrap().1.clone();
+        assert_eq!(get("functionName"), "`float`");
+        assert_eq!(get("expectedNum"), "1");
+        assert_eq!(get("actualNum"), actual);
+    }
+}
+
+/// A pair the cast path does not support fails as `CAST(x AS T)` fails,
+/// quoting the argument as Spark does.
+#[test]
+fn cast_named_functions_fail_like_casts() {
+    let ctx = ctx();
+    let binary = Expr::from(Literal::Binary(vec![1]));
+    let plan = LogicalPlan::table(["t"]).project(vec![f("boolean", vec![binary])]);
+    let err = run(plan, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION"
+    );
+    let params = err.error.message_parameters();
+    let get = |k: &str| params.iter().find(|(k2, _)| *k2 == k).unwrap().1.clone();
+    assert_eq!(get("sqlExpr"), "\"X'01'\"");
+    assert_eq!(get("srcType"), "\"BINARY\"");
+    assert_eq!(get("targetType"), "\"BOOLEAN\"");
+    // A suggestion or a config hint fails as `CAST` does, quoting the
+    // argument.
+    let plan = LogicalPlan::table(["t"]).project(vec![f("bigint", vec![date("2024-01-02")])]);
+    let err = run(plan, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "DATATYPE_MISMATCH.CAST_WITH_FUNC_SUGGESTION"
+    );
+    let params = err.error.message_parameters();
+    let get = |k: &str| params.iter().find(|(k2, _)| *k2 == k).unwrap().1.clone();
+    assert_eq!(get("sqlExpr"), "\"CAST(2024-01-02 AS DATE)\"");
+    assert_eq!(get("functionNames"), "`UNIX_DATE`");
+    let plan = LogicalPlan::table(["t"]).project(vec![f("binary", vec![int(1)])]);
+    let err = run(plan, &ctx).unwrap_err();
+    assert_eq!(
+        err.error.error_class().name(),
+        "DATATYPE_MISMATCH.CAST_WITH_CONF_SUGGESTION"
+    );
+    let params = err.error.message_parameters();
+    let get = |k: &str| params.iter().find(|(k2, _)| *k2 == k).unwrap().1.clone();
+    assert_eq!(get("sqlExpr"), "\"1\"");
+    assert_eq!(get("srcType"), "\"INT\"");
+    assert_eq!(get("targetType"), "\"BINARY\"");
+    // Without ANSI the same pair is allowed, as `CAST` allows it.
+    let legacy = context(
+        catalog(),
+        ResolutionConf {
+            ansi: false,
+            ..ResolutionConf::default()
+        },
+    );
+    let plan = LogicalPlan::table(["t"]).project(vec![f("binary", vec![int(1)])]);
+    let a = run(plan, &legacy).unwrap();
+    assert_eq!(a.output[0].data_type, DataType::Binary);
+    assert_eq!(a.output[0].name, "1");
+    // `timestamp_ntz` is not a function.
+    let plan = LogicalPlan::table(["t"]).project(vec![f("timestamp_ntz", vec![int(1)])]);
+    assert_eq!(class(&run(plan, &ctx)), "UNRESOLVED_ROUTINE");
+    // A malformed string analyzes in both modes (it fails at run time):
+    // nullability follows the cast, which may yield NULL.
+    for ansi in [true, false] {
+        let ctx = context(
+            catalog(),
+            ResolutionConf {
+                ansi,
+                ..ResolutionConf::default()
+            },
+        );
+        let plan = LogicalPlan::table(["t"]).project(vec![f("int", vec![s("x")])]);
+        let a = run(plan, &ctx).unwrap();
+        assert_eq!(a.output[0].data_type, DataType::Integer);
+        assert_eq!(a.output[0].name, "x");
+        assert!(a.output[0].nullable);
+    }
+}
+
+/// `DISTINCT` and `FILTER` have no cast form: a cast-named function with
+/// either is unsupported syntax on the function, as for any other
+/// non-aggregate function.
+#[test]
+fn cast_named_functions_reject_distinct_and_filter() {
+    let ctx = ctx();
+    let distinct = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "float".to_owned(),
+        qualifier: Vec::new(),
+        arg_names: Vec::new(),
+        args: vec![Arc::new(c("a"))],
+        distinct: true,
+        filter: None,
+    }));
+    let r = run(LogicalPlan::table(["t"]).project(vec![distinct]), &ctx);
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([
+            "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+            {"prettyName": "`cast`", "syntax": "DISTINCT"}
+        ])
+    );
+    let filtered = Expr::new(ExprNode::Function(crate::FunctionCall {
+        name: "float".to_owned(),
+        qualifier: Vec::new(),
+        arg_names: Vec::new(),
+        args: vec![Arc::new(c("a"))],
+        distinct: false,
+        filter: Some(Arc::new(Literal::Boolean(true).into())),
+    }));
+    let r = run(LogicalPlan::table(["t"]).project(vec![filtered]), &ctx);
+    assert_eq!(
+        summary(&r),
+        serde_json::json!([
+            "INVALID_SQL_SYNTAX.FUNCTION_WITH_UNSUPPORTED_SYNTAX",
+            {"prettyName": "`cast`", "syntax": "FILTER CLAUSE"}
+        ])
     );
 }
 
@@ -4298,4 +4511,133 @@ fn order_by_passes_sort_key_errors_through() {
         text.contains("The `upper` requires 1 parameters but the actual number is 2"),
         "{text}"
     );
+}
+
+/// Spark's strength reduction for an integral expression compared with a
+/// decimal literal (`DecimalPrecisionTypeCoercion.integralAndDecimalLiteral`
+/// in Spark 4.2): the comparison narrows the literal to the `BIGINT` bound
+/// (`floor`/`ceil`), and the output name shows the rewritten comparison.
+/// `select 1 > 0.00001` names its column `(1 > 0)`, as the golden
+/// `operators` statement 55 records.
+#[test]
+fn integral_compared_with_decimal_literal_narrows_to_bigint() {
+    let ctx = ctx();
+    let name = |e: Expr| {
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![e]);
+        run(plan, &ctx).unwrap().output[0].name.clone()
+    };
+    // (expression, Spark 4.2 output name): every comparison direction, the
+    // literal on either side, and negative literals.
+    let cases = [
+        (gt(int(1), dec("0.00001")), "(1 > 0)"),
+        (ge(int(1), dec("0.00001")), "(1 >= 1)"),
+        (lt(int(1), dec("0.00001")), "(1 < 1)"),
+        (le(int(1), dec("0.00001")), "(1 <= 0)"),
+        (gt(dec("0.00001"), int(1)), "(1 > 1)"),
+        (ge(dec("0.00001"), int(1)), "(0 >= 1)"),
+        (lt(dec("0.00001"), int(1)), "(0 < 1)"),
+        (le(dec("0.00001"), int(1)), "(1 <= 1)"),
+        (gt(int(1), dec("-0.00001")), "(1 > -1)"),
+        (ge(int(1), dec("-0.00001")), "(1 >= 0)"),
+        (lt(int(1), dec("-0.00001")), "(1 < 0)"),
+        (le(int(1), dec("-0.00001")), "(1 <= -1)"),
+        (gt(dec("-0.00001"), int(1)), "(0 > 1)"),
+        (ge(dec("-0.00001"), int(1)), "(-1 >= 1)"),
+        (lt(dec("-0.00001"), int(1)), "(-1 < 1)"),
+        (le(dec("-0.00001"), int(1)), "(0 <= 1)"),
+        (gt(long(5), dec("0.5")), "(5 > 0)"),
+    ];
+    for (e, want) in cases {
+        assert_eq!(name(e), want, "want {want}");
+    }
+}
+
+/// A decimal literal outside `BIGINT` range decides an integral comparison
+/// outright (`true`/`false`), as Spark's rule does.
+#[test]
+fn integral_compared_with_huge_decimal_literal_is_decided() {
+    let ctx = ctx();
+    let name = |e: Expr| {
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![e]);
+        run(plan, &ctx).unwrap().output[0].name.clone()
+    };
+    let cases = [
+        (gt(int(1), dec("99999999999999999999.9")), "false"),
+        (ge(int(1), dec("99999999999999999999.9")), "false"),
+        (lt(int(1), dec("99999999999999999999.9")), "true"),
+        (le(int(1), dec("99999999999999999999.9")), "true"),
+        (gt(dec("99999999999999999999.9"), int(1)), "true"),
+        (ge(dec("99999999999999999999.9"), int(1)), "true"),
+        (lt(dec("99999999999999999999.9"), int(1)), "false"),
+        (le(dec("99999999999999999999.9"), int(1)), "false"),
+        (gt(int(1), dec("-99999999999999999999.9")), "true"),
+        (lt(int(1), dec("-99999999999999999999.9")), "false"),
+        (gt(dec("-99999999999999999999.9"), int(1)), "false"),
+        (lt(dec("-99999999999999999999.9"), int(1)), "true"),
+        // The `BIGINT` bounds themselves still narrow instead of deciding.
+        (
+            gt(int(1), dec("9223372036854775807")),
+            "(1 > 9223372036854775807)",
+        ),
+        (
+            lt(int(1), dec("-9223372036854775808")),
+            "(1 < -9223372036854775808)",
+        ),
+        (gt(int(1), dec("9223372036854775807.5")), "false"),
+        (lt(int(1), dec("9223372036854775807.5")), "true"),
+        (gt(int(1), dec("-9223372036854775808.5")), "true"),
+        (lt(int(1), dec("-9223372036854775808.5")), "false"),
+    ];
+    for (e, want) in cases {
+        assert_eq!(name(e), want, "want {want}");
+    }
+}
+
+/// The narrowing fires only for an integral expression against a decimal
+/// literal: `=`, two decimals, floating-point and untyped `NULL` operands
+/// keep their written form (up to the usual implicit casts, which the name
+/// does not show).
+#[test]
+fn non_integral_or_non_literal_comparisons_keep_their_form() {
+    let ctx = ctx();
+    let name = |e: Expr| {
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![e]);
+        run(plan, &ctx).unwrap().output[0].name.clone()
+    };
+    let float = Expr::new(ExprNode::Literal(Literal::Float(0.5)));
+    let cases = [
+        (eq(int(1), dec("0.00001")), "(1 = 0.00001)"),
+        (gt(dec("1.5"), dec("0.00001")), "(1.5 > 0.00001)"),
+        (gt(int(1), float), "(1 > 0.5)"),
+        (gt(int(1), int(2)), "(1 > 2)"),
+        (gt(null(), dec("0.00001")), "(NULL > 0.00001)"),
+    ];
+    for (e, want) in cases {
+        assert_eq!(name(e), want, "want {want}");
+    }
+}
+
+/// Columns narrow like literals do: the rewritten comparison, not the
+/// written one, names the output.
+#[test]
+fn integral_columns_compared_with_decimal_literals_narrow() {
+    let ctx = ctx();
+    let name = |e: Expr| {
+        let plan = LogicalPlan::table(["t"]).project(vec![e]);
+        run(plan, &ctx).unwrap().output[0].name.clone()
+    };
+    let cases = [
+        (gt(c("a"), dec("0.5")), "(a > 0)"),
+        (lt(c("c"), dec("2.5")), "(c < 3)"),
+        (ge(c("a"), dec("-0.5")), "(a >= 0)"),
+    ];
+    for (e, want) in cases {
+        assert_eq!(name(e), want, "want {want}");
+    }
+    // Narrower integral types narrow the same way.
+    let plan = LogicalPlan::table(["n"]).project(vec![gt(c("ti"), dec("0.5"))]);
+    assert_eq!(run(plan, &ctx).unwrap().output[0].name, "(ti > 0)");
+    // The narrowed comparison stays boolean.
+    let plan = LogicalPlan::table(["t"]).project(vec![gt(c("a"), dec("0.5"))]);
+    assert_eq!(datatypes(&run(plan, &ctx).unwrap()), [DataType::Boolean]);
 }

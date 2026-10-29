@@ -306,6 +306,10 @@ impl Planner<'_> {
         Ok(WindowFunction::Aggregate(aggregate_expr(
             function,
             args.to_vec(),
+            // A window applies the call's filter itself (as the
+            // `WindowFunctionPlan`'s own filter column); the accumulator's
+            // mask stays empty.
+            None,
             &input.schema,
             c.output.name.clone(),
         )?))

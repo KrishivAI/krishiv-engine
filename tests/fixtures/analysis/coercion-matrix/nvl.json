@@ -1,0 +1,1366 @@
+{
+  "entries": [
+    {
+      "id": "nvl/ARRAY<INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/INT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/INT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/ARRAY<INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/BIGINT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/BIGINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/BIGINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/FLOAT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/FLOAT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/INT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/INT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/STRING/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRING\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/TINYINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BINARY/TINYINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BINARY), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BINARY), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/BIGINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/BIGINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/FLOAT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/FLOAT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/INT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/INT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/STRING/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRING\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/TINYINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/BOOLEAN/TINYINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS BOOLEAN), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/BIGINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/BIGINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/FLOAT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/FLOAT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/INT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/INT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/TINYINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DATE/TINYINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DATE), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DATE), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/DECIMAL(10,2)/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/DOUBLE/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/FLOAT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/INT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/INT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/INT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/MAP<STRING,INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/SMALLINT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRING/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRING/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRING/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRING), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRING), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRING/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRING), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRING), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRING/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRING/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRING/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRING/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/INT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/INT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/STRUCT<a INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/BIGINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/BIGINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/FLOAT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/FLOAT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/INT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/INT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/TINYINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP/TINYINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/BIGINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/BIGINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/FLOAT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/FLOAT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/INT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/INT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"INT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/TINYINT/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TIMESTAMP_NTZ/TINYINT/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/BINARY/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/BINARY/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/DATE/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/DATE/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "nvl/TINYINT/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(nvl(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`nvl`\", \"sqlExpr\": \"\\\"nvl(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    }
+  ],
+  "form": "nvl",
+  "format_version": 1
+}

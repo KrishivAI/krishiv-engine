@@ -369,6 +369,8 @@ struct DecFold<'a> {
     groups: &'a [u32],
     /// The validity of the value column.
     nulls: Option<&'a NullBuffer>,
+    /// Rows the mask drops (`FILTER (WHERE ...)`); `None` reads all rows.
+    mask: Option<&'a BooleanArray>,
     /// Row weights; `None` for partial states.
     w: Option<&'a Weights>,
     bound: Option<u128>,
@@ -379,6 +381,7 @@ struct DecFold<'a> {
 impl DecFold<'_> {
     fn valid(&self, i: usize) -> bool {
         self.nulls.is_none_or(|n| n.is_valid(i))
+            && self.mask.is_none_or(|m| m.is_valid(i) && m.value(i))
     }
 
     fn fits(&self, s: i128) -> bool {
@@ -1180,7 +1183,9 @@ impl Accumulator {
     }
 
     /// Folds rows of `cols` into `groups` (one group id per row): raw
-    /// arguments, or partial states, per the aggregate's input.
+    /// arguments, or partial states, per the aggregate's input. Raw
+    /// updates skip the rows the mask column drops; merges never see one
+    /// (partial states hold the rows their mask passed).
     pub(crate) fn update(&mut self, groups: &[u32], cols: &[ArrayRef], w: &Weights) -> Result<()> {
         let args: Vec<&ArrayRef> = self
             .expr
@@ -1189,7 +1194,22 @@ impl Accumulator {
             .map(|&i| arg(cols, i))
             .collect::<Result<_>>()?;
         let state = self.expr.input == AggInput::State;
-        self.fold(groups, &args, state, w, None)
+        let mask = if state { None } else { self.mask(cols)? };
+        self.fold(groups, &args, state, w, None, mask)
+    }
+
+    /// The boolean mask column of a raw update, if the aggregate has one.
+    fn mask<'a>(&self, cols: &'a [ArrayRef]) -> Result<Option<&'a BooleanArray>> {
+        let Some(m) = self.expr.mask else {
+            return Ok(None);
+        };
+        let col = cols
+            .get(m)
+            .ok_or_else(|| internal(format!("mask column {m} out of range")))?;
+        col.as_any()
+            .downcast_ref::<BooleanArray>()
+            .ok_or_else(|| internal(format!("mask column {m} is not boolean")))
+            .map(Some)
     }
 
     /// [`update`](Self::update) over raw arguments, keeping the state after
@@ -1224,13 +1244,14 @@ impl Accumulator {
         if self.expr.input == AggInput::State {
             return Err(internal("a running fold over partial states".to_owned()));
         }
-        self.fold(groups, &args, false, &Weights::Const(1), Some(run))
+        self.fold(groups, &args, false, &Weights::Const(1), Some(run), None)
     }
 
     /// Merges partial states (`states`: this aggregate's state columns).
+    /// A mask never reaches a merge: it filtered the rows the states hold.
     pub(crate) fn merge(&mut self, groups: &[u32], states: &[ArrayRef]) -> Result<()> {
         let args: Vec<&ArrayRef> = states.iter().collect();
-        self.fold(groups, &args, true, &Weights::Const(1), None)
+        self.fold(groups, &args, true, &Weights::Const(1), None, None)
     }
 
     fn fold(
@@ -1240,7 +1261,12 @@ impl Accumulator {
         state: bool,
         w: &Weights,
         run: Option<&Running<'_>>,
+        mask: Option<&BooleanArray>,
     ) -> Result<()> {
+        debug_assert!(
+            mask.is_none() || !state,
+            "a merge over partial states carries no mask"
+        );
         let want = if state {
             self.state_len()
         } else {
@@ -1274,6 +1300,8 @@ impl Accumulator {
             args.iter().map(arrow_array::Array::logical_nulls).collect();
         let first = nulls.first().and_then(Option::as_ref);
         let valid = |i: usize| first.is_none_or(|n| n.is_valid(i));
+        // Rows the mask drops (`FILTER (WHERE ...)`); a NULL is not true.
+        let active = |i: usize| mask.is_none_or(|m| m.is_valid(i) && m.value(i));
         // After row `i` of a running fold: the state of its partition's
         // group is copied into the row's snapshot group, if it has one.
         macro_rules! snapshot {
@@ -1323,9 +1351,10 @@ impl Accumulator {
         match (&mut self.kind, state) {
             (Kind::Count(c), false) => {
                 for (i, &g) in groups.iter().enumerate() {
-                    if nulls
-                        .iter()
-                        .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
+                    if active(i)
+                        && nulls
+                            .iter()
+                            .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
                     {
                         let x = &mut c[g as usize];
                         *x = x.wrapping_add(weight(w, i));
@@ -1344,7 +1373,7 @@ impl Accumulator {
                 let a = args[0];
                 let v = ints(a)?;
                 for (i, &g) in groups.iter().enumerate() {
-                    if valid(i) {
+                    if active(i) && valid(i) {
                         let g = g as usize;
                         let wv = if state {
                             Some(v[i])
@@ -1370,7 +1399,7 @@ impl Accumulator {
                 let a = args[0];
                 let v = floats(a)?;
                 for (i, &g) in groups.iter().enumerate() {
-                    if valid(i) {
+                    if active(i) && valid(i) {
                         #[expect(clippy::cast_precision_loss, reason = "a weight scales a double")]
                         let wv = if state { 1.0 } else { weight(w, i) as f64 };
                         sum[g as usize] += v[i] * wv;
@@ -1384,6 +1413,7 @@ impl Accumulator {
                 let f = DecFold {
                     groups,
                     nulls: first,
+                    mask,
                     w: (!state).then_some(w),
                     bound,
                     max_sum,
@@ -1405,7 +1435,7 @@ impl Accumulator {
                             sum[g] += v[i];
                         }
                         count[g] = count[g].wrapping_add(c[i]);
-                    } else if valid(i) {
+                    } else if active(i) && valid(i) {
                         let wt = weight(w, i);
                         #[expect(clippy::cast_precision_loss, reason = "a weight scales a double")]
                         let wv = wt as f64;
@@ -1427,6 +1457,7 @@ impl Accumulator {
                 let f = DecFold {
                     groups,
                     nulls: first,
+                    mask,
                     w: counts.is_none().then_some(w),
                     bound,
                     max_sum,
@@ -1453,7 +1484,10 @@ impl Accumulator {
                         let v = int_like(a)?;
                         for (i, &g) in groups.iter().enumerate() {
                             let g = g as usize;
-                            if valid(i) && (!set[g] || (v[i] > vals[g]) == max && v[i] != vals[g]) {
+                            if active(i)
+                                && valid(i)
+                                && (!set[g] || (v[i] > vals[g]) == max && v[i] != vals[g])
+                            {
                                 vals[g] = v[i];
                                 set[g] = true;
                             }
@@ -1469,7 +1503,7 @@ impl Accumulator {
                             } else {
                                 float_lt(v[i], vals[g])
                             };
-                            if valid(i) && (!set[g] || better) {
+                            if active(i) && valid(i) && (!set[g] || better) {
                                 vals[g] = v[i];
                                 set[g] = true;
                             }
@@ -1482,7 +1516,7 @@ impl Accumulator {
                             let g = g as usize;
                             let cur: &[u8] = &vals[g];
                             let better = if max { v[i] > cur } else { v[i] < cur };
-                            if valid(i) && (!set[g] || better) {
+                            if active(i) && valid(i) && (!set[g] || better) {
                                 *heap = heap.saturating_sub(vals[g].len()) + v[i].len();
                                 vals[g] = v[i].into();
                                 set[g] = true;
@@ -1514,7 +1548,7 @@ impl Accumulator {
                 };
                 let take = |i: usize, g: usize, set: &[bool]| {
                     let present = taken.map_or(valid(i) || !ignore_nulls, |t| t.value(i));
-                    present && (last || !set[g])
+                    active(i) && present && (last || !set[g])
                 };
                 match values {
                     Values::Int(vals) => {
@@ -1571,10 +1605,13 @@ impl Accumulator {
             (Kind::Moments(m), false) => {
                 let cols = args.iter().map(|a| floats(a)).collect::<Result<Vec<_>>>()?;
                 let cols: Vec<&[f64]> = cols.iter().map(AsRef::as_ref).collect();
+                // A row the mask drops (`FILTER (WHERE ...)`) is skipped like
+                // a NULL argument.
                 let all_valid = |i: usize| {
-                    nulls
-                        .iter()
-                        .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
+                    active(i)
+                        && nulls
+                            .iter()
+                            .all(|n| n.as_ref().is_none_or(|n| n.is_valid(i)))
                 };
                 m.update(groups, &cols, all_valid)?;
             }
@@ -1608,7 +1645,7 @@ impl Accumulator {
                 let key_valid = |i: usize| nulls[1].as_ref().is_none_or(|n| n.is_valid(i));
                 for (i, &g) in groups.iter().enumerate() {
                     let g = g as usize;
-                    if key_valid(i) && (!set[g] || keys.beats(g, &y, i, *max)?) {
+                    if active(i) && key_valid(i) && (!set[g] || keys.beats(g, &y, i, *max)?) {
                         keys.put(g, &y, i, heap)?;
                         if valid(i) {
                             values.put(g, &x, i, heap)?;

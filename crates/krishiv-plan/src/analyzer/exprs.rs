@@ -18,7 +18,7 @@ use krishiv_common::error::{
     DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
     FailedToParseTooComplex, InternalError, InvalidAggregateFilterNotBoolean,
-    InvalidExtractBaseFieldType,
+    InvalidExtractBaseFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
     NamedParametersNotSupported, NestedAggregateFunction, RequiredParameterNotFound,
@@ -26,7 +26,7 @@ use krishiv_common::error::{
     UnresolvedColumnWithoutSuggestion, UnresolvedRoutine, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::stack::on_big_stack;
-use krishiv_types::DataType;
+use krishiv_types::{DataType, DecimalType};
 use twox_hash::XxHash3_128;
 
 use super::analytics::GroupingFn;
@@ -273,6 +273,28 @@ fn is_builtin_entry(entry: &FunctionEntry) -> bool {
     !matches!(entry.id, FunctionId::Udf { .. })
 }
 
+/// The target type of a cast-named function call (`float(x)`,
+/// `int(x)`, ...), ASCII case-insensitively; `None` for any other
+/// function. Spark analyzes these names as `CAST(x AS target)` (its
+/// `RuntimeReplaceable`): `decimal` is `decimal(10,0)`.
+fn cast_target(name: &str) -> Option<DataType> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "boolean" => DataType::Boolean,
+        "tinyint" => DataType::Byte,
+        "smallint" => DataType::Short,
+        "int" => DataType::Integer,
+        "bigint" => DataType::Long,
+        "float" => DataType::Float,
+        "double" => DataType::Double,
+        "decimal" => DataType::Decimal(DecimalType::USER_DEFAULT),
+        "string" => DataType::String,
+        "binary" => DataType::Binary,
+        "date" => DataType::Date,
+        "timestamp" => DataType::Timestamp,
+        _ => return None,
+    })
+}
+
 /// Whether `t` is a numeric type.
 fn is_conditional_numeric(t: &DataType) -> bool {
     matches!(
@@ -342,9 +364,26 @@ fn bad_cast(
         mode,
     };
     let sql_expr = format!("\"{}\"", pretty(&Expr::new(shown), zone));
-    let src_type = quoted_type(arg.ty.data_type.as_ref());
-    let target_type = quoted_type(Some(to));
-    let error: KrishivError = match bad {
+    let error = cast_mismatch(
+        bad,
+        sql_expr,
+        quoted_type(arg.ty.data_type.as_ref()),
+        quoted_type(Some(to)),
+    );
+    AnalysisError::new(error, origin)
+}
+
+/// Why a cast fails: the error of [`BadCast`], quoting `sql_expr` (the
+/// expression Spark's message names) with the source and target types.
+/// A `CAST` quotes the cast; a cast-named function (`float(x)`, ...)
+/// quotes its argument, as Spark does.
+fn cast_mismatch(
+    bad: BadCast,
+    sql_expr: String,
+    src_type: String,
+    target_type: String,
+) -> KrishivError {
+    match bad {
         BadCast::Without => DatatypeMismatchCastWithoutSuggestion {
             sql_expr,
             src_type,
@@ -366,8 +405,7 @@ fn bad_cast(
             config_val: "'false'".to_owned(),
         }
         .into(),
-    };
-    AnalysisError::new(error, origin)
+    }
 }
 
 /// A bound argument as coercion sees it.
@@ -625,6 +663,105 @@ enum Step {
     Exit(Arc<Expr>, Ctx),
     /// The first expression's result is the second's (a rewritten call).
     Link(usize, Arc<Expr>, Ctx),
+}
+
+/// What [`strength_reduce_comparison`] decided for an integral expression
+/// compared with a decimal literal.
+enum ComparisonReduction {
+    /// Not an integral-vs-decimal-literal comparison; bind as usual.
+    Keep,
+    /// The decimal literal at `index` becomes the `BIGINT` literal `value`.
+    Narrow { index: usize, value: i64 },
+    /// The literal is outside `BIGINT` range and decides the comparison.
+    Decided(bool),
+}
+
+/// Spark's strength reduction for an integral expression compared with a
+/// decimal literal (`DecimalPrecisionTypeCoercion.integralAndDecimalLiteral`
+/// in Spark 4.2, which runs before the implicit casts are inserted). With
+/// the literal on the right, `i > d` is `i > floor(d)`, `i >= d` is
+/// `i >= ceil(d)`, `i < d` is `i < ceil(d)` and `i <= d` is `i <= floor(d)`;
+/// with the literal on the left the bounds swap sides (`d > i` is
+/// `ceil(d) > i`, `d >= i` is `floor(d) >= i`, `d < i` is `floor(d) < i` and
+/// `d <= i` is `ceil(d) <= i`). A literal below `BIGINT` range or above it
+/// decides the comparison outright. The output name shows the rewritten
+/// comparison (`select 1 > 0.00001` names its column `(1 > 0)`).
+fn strength_reduce_comparison(op: Builtin, left: &Bound, right: &Bound) -> ComparisonReduction {
+    /// The value of a bound decimal literal, if the bound expression is one:
+    /// its unscaled value and scale.
+    fn decimal(b: &Bound) -> Option<(i128, u32)> {
+        // Only a written decimal literal: a session variable binds its value
+        // as a literal too but keeps its name (`shown`), and Spark's rule
+        // matches `DecimalLiteral`, not `VariableReference`.
+        if b.shown.is_some() {
+            return None;
+        }
+        match &b.expr.node {
+            ExprNode::Literal(Literal::Decimal {
+                unscaled,
+                data_type,
+            }) => Some((*unscaled, u32::from(data_type.scale()))),
+            _ => None,
+        }
+    }
+    /// Whether the bound expression is integral, as Spark's
+    /// `IntegralTypeExpression` matches (`BYTE`/`SHORT`/`INT`/`LONG`).
+    fn integral(b: &Bound) -> bool {
+        matches!(
+            b.ty.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long)
+        )
+    }
+    // The decimal literal's side, when the other side is integral. Two
+    // decimal literals never match (Spark widens those instead).
+    let (index, (unscaled, scale)) = match (decimal(left), decimal(right)) {
+        (Some(d), None) if integral(right) => (0, d),
+        (None, Some(d)) if integral(left) => (1, d),
+        _ => return ComparisonReduction::Keep,
+    };
+    // `floor` and `ceil` of the decimal value, exactly: the scale is at most
+    // 38, so `10^scale` fits an `i128`, and the divisions are exact. Any
+    // overflow (unreachable for a decimal literal) keeps the comparison.
+    let Some(pow) = 10i128.checked_pow(scale) else {
+        return ComparisonReduction::Keep;
+    };
+    let floor = unscaled.div_euclid(pow);
+    let Some(ceil) = unscaled
+        .checked_neg()
+        .map(|n| n.div_euclid(pow))
+        .and_then(i128::checked_neg)
+    else {
+        return ComparisonReduction::Keep;
+    };
+    // Spark's `DecimalLiteral.largerThanLargestLong` /
+    // `smallerThanSmallestLong`: exact, as both bounds are integers. A
+    // literal above `BIGINT` range exceeds every integral value, so only
+    // the comparisons that the other side cannot reach fail.
+    let long_max = i128::from(i64::MAX);
+    let long_min = i128::from(i64::MIN);
+    if ceil > long_max {
+        return ComparisonReduction::Decided(matches!(
+            (op, index),
+            (Builtin::Gt | Builtin::GtEq, 0) | (Builtin::Lt | Builtin::LtEq, 1)
+        ));
+    }
+    // A literal below `BIGINT` range is exceeded by every integral value.
+    if floor < long_min {
+        return ComparisonReduction::Decided(matches!(
+            (op, index),
+            (Builtin::Gt | Builtin::GtEq, 1) | (Builtin::Lt | Builtin::LtEq, 0)
+        ));
+    }
+    // The narrowed bound fits a `BIGINT`: `floor`/`ceil` lie between two
+    // consecutive integers around a value within `BIGINT` range.
+    let narrowed = match (op, index) {
+        (Builtin::Gt | Builtin::LtEq, 1) | (Builtin::GtEq | Builtin::Lt, 0) => floor,
+        _ => ceil,
+    };
+    let Ok(value) = i64::try_from(narrowed) else {
+        return ComparisonReduction::Keep;
+    };
+    ComparisonReduction::Narrow { index, value }
 }
 
 impl Resolver<'_> {
@@ -1523,6 +1660,34 @@ impl Resolver<'_> {
                 {
                     return self.conditional_call(which, &entry, e, f, kids);
                 }
+                // A cast-named function (`float(x)`, `int(x)`, ...) is a
+                // cast, never a call: the plan only ever holds the `Cast`
+                // node. `DISTINCT` and `FILTER` have no cast form: Spark
+                // rejects them as unsupported syntax on the function. Only for
+                // built-ins: a qualified session UDF named `int` runs the UDF.
+                if is_builtin_entry(&entry)
+                    && let Some(to) = cast_target(&f.name)
+                {
+                    if f.distinct {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: "`cast`".to_owned(),
+                                syntax: "DISTINCT".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    if f.filter.is_some() {
+                        return Err(AnalysisError::new(
+                            InvalidSqlSyntaxFunctionWithUnsupportedSyntax {
+                                pretty_name: "`cast`".to_owned(),
+                                syntax: "FILTER CLAUSE".to_owned(),
+                            },
+                            e.origin,
+                        ));
+                    }
+                    return self.cast_named_call(&entry, e, f, kids, to);
+                }
                 let (mut call_kids, ty) = self.typed_call(&entry, e, &kids[..n])?;
                 // `schema_of_csv(lit)` resolves below to the DDL literal.
                 // The registry lookup is ASCII case-insensitive and
@@ -1981,6 +2146,51 @@ impl Resolver<'_> {
                 shown: Some(Arc::new(shown.with_origin(origin))),
                 ..both
             });
+        }
+        if matches!(
+            op,
+            Builtin::Gt | Builtin::GtEq | Builtin::Lt | Builtin::LtEq
+        ) && let [a, b] = kids
+        {
+            match strength_reduce_comparison(op, a, b) {
+                ComparisonReduction::Keep => {}
+                ComparisonReduction::Decided(v) => {
+                    let mut lateral: Vec<AttrId> = Vec::new();
+                    for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+                        if !lateral.contains(id) {
+                            lateral.push(*id);
+                        }
+                    }
+                    return Ok(Bound {
+                        shown: None,
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Boolean(v))).with_origin(origin),
+                        ),
+                        ty: arg_type(DataType::Boolean, false),
+                        agg: kids.iter().find_map(|k| k.agg),
+                        win: kids.iter().find_map(|k| k.win),
+                        outer: kids.iter().filter_map(|k| k.outer).min(),
+                        lateral,
+                    });
+                }
+                ComparisonReduction::Narrow { index, value } => {
+                    let mut rewritten = kids.to_vec();
+                    let literal_origin = rewritten[index].expr.origin;
+                    rewritten[index] = Bound {
+                        shown: None,
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Long(value)))
+                                .with_origin(literal_origin),
+                        ),
+                        ty: arg_type(DataType::Long, false),
+                        agg: None,
+                        win: None,
+                        outer: None,
+                        lateral: Vec::new(),
+                    };
+                    return self.operator_call(op, origin, &rewritten);
+                }
+            }
         }
         let args: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let conf = self.ctx.conf;
@@ -2635,6 +2845,75 @@ impl Resolver<'_> {
             outer: kids.iter().filter_map(|k| k.outer).min(),
             lateral,
             shown: Some(shown),
+        })
+    }
+
+    /// A cast-named function call (`float(x)`, `int(x)`, ...), rewritten
+    /// during analysis to `CAST(x AS target)` in the session's default
+    /// mode (Spark's `RuntimeReplaceable`): the plan only ever holds the
+    /// `Cast` node, typed by the cast path. The output column is named by
+    /// the argument, and cast errors quote the argument, as Spark does;
+    /// the arity error quotes the call. A pair the cast path does not
+    /// support fails exactly as `CAST(x AS target)` fails, apart from the
+    /// quoted expression.
+    fn cast_named_call(
+        &mut self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        f: &FunctionCall,
+        kids: &[Bound],
+        to: DataType,
+    ) -> Result<Bound, AnalysisError> {
+        let n = f.args.len();
+        // The arity check quotes the call as written, as `typed_call` does.
+        if !entry.arity.accepts(n) {
+            return Err(AnalysisError::new(
+                WrongNumArgsWithoutSuggestion {
+                    function_name: format!("`{}`", entry.id.name()),
+                    expected_num: entry.arity.expected().to_owned(),
+                    actual_num: n.to_string(),
+                    docroot: SPARK_DOC_ROOT.to_owned(),
+                },
+                e.origin,
+            ));
+        }
+        let arg = &kids[0];
+        let mode = if self.ctx.conf.ansi {
+            CastMode::Ansi
+        } else {
+            CastMode::Legacy
+        };
+        if let Err(bad) = coerce::can_cast(arg.ty.data_type.as_ref(), &to, mode) {
+            let error = cast_mismatch(
+                bad,
+                format!("\"{}\"", pretty(&arg.shown(), self.ctx.conf.session_zone)),
+                quoted_type(arg.ty.data_type.as_ref()),
+                quoted_type(Some(&to)),
+            );
+            return Err(AnalysisError::new(error, e.origin));
+        }
+        let nullable = arg.ty.nullable
+            || arg
+                .ty
+                .data_type
+                .as_ref()
+                .is_some_and(|from| coerce::force_nullable(from, &to));
+        let expr = Arc::new(
+            Expr::new(ExprNode::Cast {
+                expr: Arc::clone(&arg.expr),
+                to: to.clone(),
+                mode,
+            })
+            .with_origin(e.origin),
+        );
+        Ok(Bound {
+            expr,
+            ty: arg_type(to, nullable),
+            agg: arg.agg,
+            win: arg.win,
+            outer: arg.outer,
+            lateral: arg.lateral.clone(),
+            shown: Some(arg.shown()),
         })
     }
 

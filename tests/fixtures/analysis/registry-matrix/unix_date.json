@@ -1,14 +1,6 @@
 {
   "entries": [
     {
-      "id": "unix_date#055bafd9ae9b/ansi_on",
-      "reason": "SELECT unix_date(DATE(\"1970-01-02\")) | KRISHIV_UNSUPPORTED_FEATURE: function DATE"
-    },
-    {
-      "id": "unix_date#055bafd9ae9b/ansi_off",
-      "reason": "SELECT unix_date(DATE(\"1970-01-02\")) | KRISHIV_UNSUPPORTED_FEATURE: function DATE"
-    },
-    {
       "id": "unix_date#188a23a4a56e/ansi_on",
       "reason": "SELECT unix_date(INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
     },

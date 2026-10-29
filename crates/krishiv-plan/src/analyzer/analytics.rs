@@ -447,6 +447,7 @@ impl Resolver<'_> {
                 &items,
                 true,
                 Some(Arc::new(an)),
+                env,
             );
         }
         let Some(gid_col) = gid_col else {
@@ -578,7 +579,7 @@ impl Resolver<'_> {
             }),
         };
         let items = self.rewrite_items(items, &an, env)?;
-        self.build_aggregate(p.origin, &c, group, &items, false, Some(Arc::new(an)))
+        self.build_aggregate(p.origin, &c, group, &items, false, Some(Arc::new(an)), env)
     }
 
     /// The select `items` over the grouping sets: grouping expressions read

@@ -2,19 +2,7 @@
   "entries": [
     {
       "query": "SELECT elt(1, col1, col2) col\nFROM (\n  SELECT\n    encode(string(id), 'utf-8') col1,\n    encode(string(id + 1), 'utf-8') col2\n  FROM range(10)\n)",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
-    },
-    {
-      "query": "SELECT elt(2, col1, col2) col\nFROM (\n  SELECT\n    encode(string(id), 'utf-8') col1,\n    encode(string(id + 1), 'utf-8') col2\n  FROM range(10)\n)",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
-    },
-    {
-      "query": "SELECT elt(2, col1, col2, col3, col4, col5) col\nFROM (\n  SELECT\n    'prefix_' col1,\n    id col2,\n    string(id + 1) col3,\n    encode(string(id + 2), 'utf-8') col4,\n    CAST(id AS DOUBLE) col5\n  FROM range(10)\n)",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
-    },
-    {
-      "query": "SELECT elt(3, col1, col2, col3, col4) col\nFROM (\n  SELECT\n    string(id) col1,\n    string(id + 1) col2,\n    encode(string(id + 2), 'utf-8') col3,\n    encode(string(id + 3), 'utf-8') col4\n  FROM range(10)\n)",
-      "reason": "KRISHIV_UNSUPPORTED_FEATURE: table-valued functions"
+      "reason": "resolves to struct<col:binary>"
     }
   ],
   "file": "typeCoercion/native/elt",

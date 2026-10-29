@@ -55,6 +55,10 @@ def main() -> None:
             "ansi_reserved": token not in ansi,
             "strict_non_reserved": token in strict,
             "non_reserved": token in non,
+            # Spark's `sql_keywords()` lists the keywords of single-text lexer rules; the extra texts of
+            # a rule with alternatives (`RLIKE | REGEXP`, `TEMPORARY | TEMP`) lex as keywords but are
+            # not listed.
+            "listed": len(texts) == 1,
         }
         for token, texts in sorted(tokens.items())
         for text in texts

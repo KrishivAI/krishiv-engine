@@ -36,6 +36,7 @@ fn expr(f: AggregateFunction) -> AggregateExpr {
         args: (0..arity(f)).collect(),
         input: AggInput::Raw,
         arg_type: DataType::Float64,
+        mask: None,
         name: "m".to_owned(),
     }
 }

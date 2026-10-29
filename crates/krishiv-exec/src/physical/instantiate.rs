@@ -70,7 +70,7 @@ use crate::operators::{
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
-use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, SourceNode};
+use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, OrderedNode, SourceNode};
 use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
 use crate::values::{
     BroadcastBuild, LocalValues, Partial, Producer, Publication, Value, ValueService,
@@ -418,6 +418,18 @@ impl Instantiation<'_> {
     fn untagged(&mut self, n: &PhysNode) -> Result<Built> {
         match n {
             PhysNode::Scan(s) => self.scan(s),
+            PhysNode::Range(r) => {
+                let source = Arc::new(crate::operators::Range::new(
+                    r.start,
+                    r.end,
+                    r.step,
+                    r.num_slices,
+                ));
+                Ok(Built {
+                    schema: source.schema(),
+                    node: Arc::new(SourceNode(source)),
+                })
+            }
             PhysNode::OneRow => {
                 let source = one_row()?;
                 Ok(Built {
@@ -464,13 +476,24 @@ impl Instantiation<'_> {
                 offset,
                 limit,
             } => {
+                let ordered = reads_range_in_order(input);
                 let input = self.node(input)?;
                 let op = crate::operators::Limit::with_offset(
                     Arc::clone(&input.schema),
                     *offset,
                     *limit,
                 );
-                Ok(operator(input, op))
+                let built = operator(input, op);
+                // Which rows a parallel limit passes follows the batch
+                // order; a `range` has a defined order, so one driver keeps it.
+                Ok(if ordered {
+                    Built {
+                        schema: built.schema,
+                        node: Arc::new(OrderedNode { inner: built.node }),
+                    }
+                } else {
+                    built
+                })
             }
             PhysNode::Sort { input, keys } => {
                 let buckets = hash_buckets(input, keys);
@@ -797,6 +820,18 @@ impl Instantiation<'_> {
                 probe: probe.node,
             }),
         })
+    }
+}
+
+/// Whether `n` streams a `range` through row-wise nodes only (filters,
+/// projections and limits), so its rows reach a `LIMIT` in a defined order.
+fn reads_range_in_order(n: &PhysNode) -> bool {
+    match n {
+        PhysNode::Range(_) => true,
+        PhysNode::Filter { input, .. }
+        | PhysNode::Project { input, .. }
+        | PhysNode::Limit { input, .. } => reads_range_in_order(input),
+        _ => false,
     }
 }
 

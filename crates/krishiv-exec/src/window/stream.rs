@@ -82,10 +82,12 @@ impl Fold {
                 buf: Vec::new(),
             });
         }
-        // The argument columns are passed as they are, in order.
+        // The argument columns are passed as they are, in order. The window
+        // applies the filter itself; the accumulator never sees it.
         let local = AggregateExpr {
             args: (0..a.args.len()).collect(),
             input: AggInput::Raw,
+            mask: None,
             ..a.clone()
         };
         let mut acc = Accumulator::new(&local, ansi)?;

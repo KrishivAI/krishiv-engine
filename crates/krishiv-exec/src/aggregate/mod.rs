@@ -207,6 +207,11 @@ pub struct AggregateExpr {
     pub arg_type: DataType,
     /// The output column name.
     pub name: String,
+    /// A boolean input column: the aggregate reads only the rows where it
+    /// is true (`FILTER (WHERE ...)`); `None` reads all rows. Set only on
+    /// raw input: partial states are already filtered, so [`merging`](Self::merging)
+    /// clears it. A NULL is not true.
+    pub mask: Option<usize>,
 }
 
 impl AggregateExpr {
@@ -223,6 +228,7 @@ impl AggregateExpr {
             input: AggInput::Raw,
             arg_type,
             name: name.into(),
+            mask: None,
         }
     }
 
@@ -244,6 +250,7 @@ impl AggregateExpr {
                 Field::new("key", key_type, true),
             ])),
             name: name.into(),
+            mask: None,
         }
     }
 
@@ -255,15 +262,19 @@ impl AggregateExpr {
             input: AggInput::Raw,
             arg_type: DataType::Null,
             name: name.into(),
+            mask: None,
         }
     }
 
-    /// The same aggregate reading its state columns at `first..`.
+    /// The same aggregate reading its state columns at `first..`. A mask
+    /// is not carried: the states were built from the rows it passed, and
+    /// the state columns do not hold it.
     pub fn merging(&self, first: usize) -> Self {
         let n = self.state_fields().map_or(0, |f| f.len());
         Self {
             args: (first..first + n).collect(),
             input: AggInput::State,
+            mask: None,
             ..self.clone()
         }
     }
