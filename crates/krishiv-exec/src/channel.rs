@@ -45,6 +45,17 @@ struct State {
     receiver_gone: bool,
     receiver: Option<Waker>,
     senders: Vec<Waker>,
+    /// Batches in `queue` that an ordered release sent (they were held,
+    /// and bounded, before): they do not count against the capacity, so a
+    /// release never stalls the driver whose turn it is.
+    released: usize,
+}
+
+impl State {
+    /// Whether the queue is at capacity, released batches aside.
+    fn full(&self, capacity: usize) -> bool {
+        self.queue.len().saturating_sub(self.released) >= capacity
+    }
 }
 
 /// Shared by the result sink and the stream.
@@ -64,13 +75,23 @@ impl Channel {
 
     /// Accepts `batch`: `Some(full)`, or `None` if the receiver is gone.
     fn send(&self, batch: Batch) -> Option<bool> {
+        self.push(batch, false)
+    }
+
+    /// As [`send`](Self::send), for a batch an ordered release sends.
+    fn send_released(&self, batch: Batch) -> Option<bool> {
+        self.push(batch, true)
+    }
+
+    fn push(&self, batch: Batch, released: bool) -> Option<bool> {
         let (full, waker) = {
             let mut s = lock(&self.state);
             if s.receiver_gone {
                 return None;
             }
             s.queue.push_back(batch);
-            (s.queue.len() >= self.capacity, s.receiver.take())
+            s.released += usize::from(released);
+            (s.full(self.capacity), s.receiver.take())
         };
         if let Some(w) = waker {
             w.wake();
@@ -87,7 +108,7 @@ impl Channel {
     pub(crate) fn space(self: Arc<Self>) -> impl Future<Output = ()> + Send + 'static {
         std::future::poll_fn(move |cx| {
             let mut s = lock(&self.state);
-            if s.receiver_gone || s.queue.len() < self.capacity {
+            if s.receiver_gone || !s.full(self.capacity) {
                 return Poll::Ready(());
             }
             register(&mut s.senders, cx.waker());
@@ -112,6 +133,10 @@ impl Channel {
         let (out, senders) = {
             let mut s = lock(&self.state);
             if let Some(b) = s.queue.pop_front() {
+                // Released batches count down as any batch leaves: either
+                // way the queue is bounded by the capacity plus what the
+                // releases sent.
+                s.released = s.released.saturating_sub(1);
                 // Wake every blocked sender, not one: a woken sender may
                 // have been cancelled (its waker is stale), and waking only
                 // it would strand the others. There are at most as many
@@ -144,6 +169,7 @@ impl Channel {
             let mut s = lock(&self.state);
             s.receiver_gone = true;
             s.queue.clear();
+            s.released = 0;
             std::mem::take(&mut s.senders)
         };
         wake_all(senders);
@@ -219,7 +245,7 @@ impl Order {
             }
             for (partition, batch, bytes) in entry.remove() {
                 // A receiver that is gone takes nothing: the batch is dropped.
-                let _ = channel.send(batch);
+                let _ = channel.send_released(batch);
                 if let Some(t) = self.drivers.get_mut(&partition) {
                     t.held = t.held.saturating_sub(1);
                     if let Some(m) = t.memory.as_mut() {
