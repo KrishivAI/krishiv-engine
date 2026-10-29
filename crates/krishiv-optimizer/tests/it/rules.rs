@@ -147,6 +147,10 @@ const CASES: &[(&str, &str)] = &[
         "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x WHERE a IN (SELECT a FROM u WHERE d = 'z') AND rand() > 0.5",
     ),
     (
+        "push_union_scalar_subquery_stays",
+        "SELECT * FROM (SELECT a FROM t UNION ALL SELECT a FROM u) x WHERE a > (SELECT max(a) FROM u)",
+    ),
+    (
         "push_constant_through_aggregate",
         "SELECT * FROM (SELECT a, 'g' AS k, count(*) AS n FROM t GROUP BY a) x WHERE k = 'h'",
     ),
@@ -161,6 +165,10 @@ const CASES: &[(&str, &str)] = &[
     (
         "inline_cte_nondeterministic_twice",
         "WITH r AS (SELECT a, rand() AS x FROM t) SELECT p.a FROM r p JOIN r q ON p.a = q.a WHERE p.x > 0.5",
+    ),
+    (
+        "inline_cte_keeps_one_inlines_other",
+        "WITH r AS (SELECT a, rand() AS x FROM t), v AS (SELECT a FROM u WHERE d = 'z') SELECT p.a FROM r p JOIN r q ON p.a = q.a JOIN v ON v.a = p.a WHERE p.x > 0.5",
     ),
     (
         "inline_cte_nondeterministic_once",
