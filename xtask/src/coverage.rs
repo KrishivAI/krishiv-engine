@@ -436,7 +436,12 @@ pub fn scope_outputs(scope: &CoverageScope) -> (bool, String, bool) {
 /// Returns an error for bad flags, a git failure or a cargo metadata failure.
 pub fn run_coverage_scope(root: &Path, flags: &[&str]) -> Result<(), String> {
     let args = crate::policy::DiffArgs::parse(flags, root)?;
-    let pkgs = crate::precheck::workspace_packages(args.repo())?;
+    // Cargo reports absolute manifest paths, so a relative `--repo` must be resolved first.
+    let repo = args
+        .repo()
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve --repo {}: {e}", args.repo().display()))?;
+    let pkgs = crate::precheck::workspace_packages(&repo)?;
     let scope = coverage_scope(&args.changed_paths()?, &pkgs);
     let (rust, packages, workspace) = scope_outputs(&scope);
     println!("coverage scope: {scope:?}");

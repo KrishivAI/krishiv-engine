@@ -349,6 +349,23 @@ fn coverage_scope_selects_the_touched_packages_and_their_dependents() {
         scope("o3"),
         "rust=true\npackages=-p a -p b\nworkspace=false\n"
     );
+    // A relative `--repo` selects the same packages (cargo reports absolute manifest paths).
+    let relative = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(dir.parent().unwrap())
+        .args([
+            "coverage-scope",
+            "--repo",
+            dir.file_name().unwrap().to_str().unwrap(),
+            "--base",
+            "main",
+        ])
+        .output()
+        .unwrap();
+    assert!(relative.status.success(), "{relative:?}");
+    assert!(
+        String::from_utf8_lossy(&relative.stdout).contains("packages=-p a -p b"),
+        "{relative:?}"
+    );
 
     // A rename lists the old and the new path; a non-ASCII path stays verbatim.
     git(

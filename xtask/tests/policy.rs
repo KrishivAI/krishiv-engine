@@ -169,9 +169,12 @@ fn ci_policy_wiring() {
         "the concurrency group must include the event"
     );
     assert!(
-        job(&ci, "nightly-failure-notice").contains("github.event_name == 'schedule'")
-            && ci.contains("issues: write")
+        job(&ci, "nightly-failure-notice").contains(
+            "if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')"
+        ),
+        "the failure notice must run after a failed dependency, on the schedule only"
     );
+    assert!(job(&ci, "nightly-failure-notice").contains("issues: write"));
     // A release or a published binary needs the latest nightly run green on its commit.
     for wf in ["publish-testpypi.yml", "binaries.yml"] {
         let text = read(&format!(".github/workflows/{wf}"));
