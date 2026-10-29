@@ -9,10 +9,12 @@ the `SQLQueryTestSuite` golden runner over `tests/spark-golden/<tag>/` (`.sql.ou
 three-number report, exclusion manifest `tests/spark-golden/exclusions.json`; `cargo xtask golden` writes
 `target/golden-report.json`; `--engine sql-parse` measures the `krishiv-sql` parser on the DQL statements,
 `golden::sql_parse`; `--engine session` runs every statement through `krishiv-session`, `golden::session_engine`),
-the frozen statement-level baseline `tests/spark-golden/known-failures.json` (categories and classification rules) with
-one file per golden input file under `tests/spark-golden/known-failures-cases/` (`golden::known_failures`: every failing
-statement with a category — unsupported feature with its plan task, divergence with ADR 0023, or bug with its owner;
-classification rules in the same file, `golden::classify`) and its CI ratchet (test `golden_ratchet`: a newly failing
+the frozen statement-level baseline, one file per key (`golden::known_failures`): `tests/spark-golden/known-failures.json`
+holds only the format version, Spark tag and freeze date; `known-failures-categories/<category>.json` one category
+each (unsupported feature with its plan task, divergence with ADR 0023, or bug with its owner) with the classification
+rules that assign it (`golden::classify`; each rule has an `order`, rules are tried in ascending order across all
+files, so leave gaps); `known-failures-cases/<golden file>.json` one golden input file's failing statements by category.
+Its CI ratchet (test `golden_ratchet`: a newly failing
 statement fails, a listed statement that passes must be removed; refresh with
 `cargo run -p krishiv-testkit --bin golden-report -- --engine session --ratchet update`), the batch == bounded-stream invariant
 harness, a sqllogictest runner over `tests/sqllogictest/`, and the Spark function matrix (P2-T106a):

@@ -1,0 +1,17 @@
+{
+  "category": "depends-on-command",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "depends": true,
+      "order": 50
+    },
+    {
+      "detail": "TABLE_OR_VIEW_NOT_FOUND.*`(tab_renamed)`",
+      "order": 90
+    }
+  ],
+  "summary": "queries that read a table, view, function or variable an earlier command of the file creates (the command failed, so the query fails or reads the shared fixture of the same name)",
+  "task": "P2-T179"
+}

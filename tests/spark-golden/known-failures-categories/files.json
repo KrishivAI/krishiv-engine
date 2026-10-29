@@ -1,0 +1,13 @@
+{
+  "category": "files",
+  "format_version": 1,
+  "kind": "unsupported",
+  "rules": [
+    {
+      "detail": "The feature (glob patterns|reading the subdirectory)",
+      "order": 330
+    }
+  ],
+  "summary": "partitioned and glob reads of directories",
+  "task": "P2-T082b"
+}
