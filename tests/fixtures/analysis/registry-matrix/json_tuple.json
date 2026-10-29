@@ -9,36 +9,12 @@
       "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', 'a', INTERVAL '1-2' YEAR TO MONTH) | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
     },
     {
-      "id": "json_tuple#1da966e4452c/ansi_on",
-      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', 'a', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
-    },
-    {
-      "id": "json_tuple#1da966e4452c/ansi_off",
-      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', 'a', map('a', 1)) | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
-    },
-    {
-      "id": "json_tuple#289b55677379/ansi_on",
-      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', map('a', 1), 'b') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
-    },
-    {
-      "id": "json_tuple#289b55677379/ansi_off",
-      "reason": "SELECT json_tuple('{\"a\":1, \"b\":2}', map('a', 1), 'b') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
-    },
-    {
       "id": "json_tuple#2a3529c4df9b/ansi_on",
       "reason": "SELECT json_tuple(INTERVAL '1-2' YEAR TO MONTH, 'a', 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
     },
     {
       "id": "json_tuple#2a3529c4df9b/ansi_off",
       "reason": "SELECT json_tuple(INTERVAL '1-2' YEAR TO MONTH, 'a', 'b') | parse: KRISHIV_UNSUPPORTED_FEATURE: INTERVAL literals where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
-    },
-    {
-      "id": "json_tuple#37e9c182d502/ansi_on",
-      "reason": "SELECT json_tuple(map('a', 1), 'a', 'b') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
-    },
-    {
-      "id": "json_tuple#37e9c182d502/ansi_off",
-      "reason": "SELECT json_tuple(map('a', 1), 'a', 'b') | KRISHIV_UNSUPPORTED_FEATURE: function map where Spark has DATATYPE_MISMATCH.NON_STRING_TYPE"
     },
     {
       "id": "json_tuple#441f9435da4a/ansi_on",
