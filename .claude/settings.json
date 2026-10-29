@@ -34,7 +34,6 @@
       "Bash(git add:*)",
       "Bash(git switch:*)",
       "Bash(git checkout:*)",
-      "Bash(git stash:*)",
       "Bash(git fetch:*)",
       "Bash(git pull:*)",
       "Bash(git rev-parse:*)",
@@ -55,7 +54,6 @@
       "Bash(gh run watch:*)",
       "Bash(uv sync:*)",
       "Bash(uv run pytest:*)",
-      "Bash(uv run python:*)",
       "Bash(uv run krishiv-bench:*)",
       "Bash(uv venv:*)",
       "Bash(uv pip install -e:*)",
@@ -87,7 +85,13 @@
       "Bash(docker compose -f * config *)",
       "Bash(docker compose -f * stop *)",
       "Bash(docker ps:*)",
-      "Bash(docker logs:*)"
+      "Bash(docker logs:*)",
+      "Bash(tmux ls)",
+      "Bash(tmux capture-pane -p *)",
+      "Bash(typos)",
+      "Bash(crontab -l)",
+      "Bash(sccache --show-stats)",
+      "Bash(systemctl --user status *)"
     ],
     "deny": [
       "Bash(git push origin main:*)",

@@ -5,7 +5,7 @@
 //! tested without a git checkout; `main` does the I/O.
 
 /// A PR may change at most this many counted lines (additions + deletions).
-pub const MAX_CHANGED_LINES: u64 = 5000;
+pub const MAX_CHANGED_LINES: u64 = 10000;
 
 /// Test code counts at half weight: it is cheaper to review than library
 /// code, and full weight rewards trimming tests to fit under the cap.

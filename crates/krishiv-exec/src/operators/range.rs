@@ -84,7 +84,11 @@ impl crate::operator::Source for Range {
             end: self.end,
             step: self.step,
             partitions,
-            cursor: MorselCursor::new(partitions as usize, config.seed),
+            // Slices are claimed in order even under a seed (which permutes
+            // other sources' morsels in tests): a range's slice order is
+            // its row order, which an ordered read (`OrderedNode`: a
+            // `LIMIT` or the result over a range) returns.
+            cursor: MorselCursor::new(partitions as usize, None),
             batch_size: config.batch_size.max(1),
             returned: AtomicU64::new(0),
         }))
@@ -287,8 +291,7 @@ mod tests {
     }
 
     /// More slices than rows are clamped to the row count, so a huge
-    /// `numSlices` costs nothing (a seeded cursor would otherwise allocate
-    /// a permutation of every slice) and still returns every row once.
+    /// `numSlices` costs nothing and still returns every row once.
     #[test]
     fn range_clamps_slices_to_the_row_count() {
         let (_root, ctx) = ctx_with(ExecConfig {
@@ -310,6 +313,20 @@ mod tests {
             .unwrap_or_else(|e| unreachable!("{e}"));
         assert_eq!(source.max_parallelism(&g), 1);
         assert!(drain(&source, &ctx).is_empty());
+    }
+
+    /// One driver reads the slices in order even under a seed: the order
+    /// `OrderedNode` keeps for a `LIMIT` or the result over a range.
+    #[test]
+    fn a_seed_does_not_reorder_the_slices() {
+        for seed in [None, Some(2), Some(7)] {
+            let (_root, ctx) = ctx_with(ExecConfig {
+                seed,
+                ..ExecConfig::default()
+            });
+            let out = drain(&Range::new(0, 8, 1, Some(4)), &ctx);
+            assert_eq!(values(&out), (0..8).collect::<Vec<i64>>(), "seed {seed:?}");
+        }
     }
 
     #[test]
