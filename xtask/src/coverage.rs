@@ -343,8 +343,9 @@ pub enum CoverageScope {
     Packages(Vec<String>),
 }
 
-/// The workflow that runs the gate: a change to it is tested against the whole workspace.
-const COVERAGE_WORKFLOW: &str = ".github/workflows/coverage.yml";
+/// The files that define the gate: a change to one of them is tested against the whole
+/// workspace, as a self-test of the scoping.
+const GATE_FILES: &[&str] = &[".github/workflows/coverage.yml", "xtask/src/coverage.rs"];
 
 /// Whether `path` cannot change what the Rust test suite covers.
 fn is_coverage_neutral(path: &str) -> bool {
@@ -370,11 +371,17 @@ fn is_coverage_neutral(path: &str) -> bool {
 /// and the lock file, toolchain pins, protos, shared test data, `fuzz/`, `ui/`) adds no
 /// executable line of its own and is ignored here. Whether the rest of the workspace still
 /// builds and passes is the job of the `test` and `clippy` checks, not of the coverage gate.
+/// This differs on purpose from `precheck`'s workspace-wide list, which decides what a *test or
+/// lint* run must cover (a manifest change can break any crate); coverage only needs the crates
+/// whose lines changed.
+///
+/// Dependents come from every dependency kind (normal, dev and build), so a change in a crate
+/// that another crate only dev-depends on still runs that crate's tests.
 #[must_use]
 pub fn coverage_scope(paths: &[String], pkgs: &[crate::precheck::Pkg]) -> CoverageScope {
     let mut touched = std::collections::BTreeSet::new();
     for path in paths.iter().map(|p| p.trim()).filter(|p| !p.is_empty()) {
-        if path == COVERAGE_WORKFLOW {
+        if GATE_FILES.contains(&path) {
             return CoverageScope::Workspace;
         }
         if is_coverage_neutral(path) {
@@ -401,13 +408,14 @@ pub fn coverage_scope(paths: &[String], pkgs: &[crate::precheck::Pkg]) -> Covera
     }
 }
 
-/// The `rust` and `packages` outputs of a scope: `packages` is `-p a -p b`, empty for the
-/// whole workspace.
+/// The `rust`, `packages` and `workspace` outputs of a scope: `packages` is `-p a -p b`, empty
+/// for the whole workspace; `workspace` is true only for a whole-workspace run (the only run
+/// that uploads to Codecov, so a partial run never replaces the carried-forward flag).
 #[must_use]
-pub fn scope_outputs(scope: &CoverageScope) -> (bool, String) {
+pub fn scope_outputs(scope: &CoverageScope) -> (bool, String, bool) {
     match scope {
-        CoverageScope::None => (false, String::new()),
-        CoverageScope::Workspace => (true, String::new()),
+        CoverageScope::None => (false, String::new(), false),
+        CoverageScope::Workspace => (true, String::new(), true),
         CoverageScope::Packages(names) => (
             true,
             names
@@ -415,6 +423,7 @@ pub fn scope_outputs(scope: &CoverageScope) -> (bool, String) {
                 .map(|n| format!("-p {n}"))
                 .collect::<Vec<_>>()
                 .join(" "),
+            false,
         ),
     }
 }
@@ -429,10 +438,11 @@ pub fn run_coverage_scope(root: &Path, flags: &[&str]) -> Result<(), String> {
     let args = crate::policy::DiffArgs::parse(flags, root)?;
     let pkgs = crate::precheck::workspace_packages(args.repo())?;
     let scope = coverage_scope(&args.changed_paths()?, &pkgs);
-    let (rust, packages) = scope_outputs(&scope);
+    let (rust, packages, workspace) = scope_outputs(&scope);
     println!("coverage scope: {scope:?}");
     println!("rust={rust}");
     println!("packages={packages}");
+    println!("workspace={workspace}");
     if let Some(path) = std::env::var_os("GITHUB_OUTPUT") {
         use std::io::Write;
         let mut f = std::fs::OpenOptions::new()
@@ -440,7 +450,8 @@ pub fn run_coverage_scope(root: &Path, flags: &[&str]) -> Result<(), String> {
             .create(true)
             .open(path)
             .map_err(|e| format!("cannot open GITHUB_OUTPUT: {e}"))?;
-        writeln!(f, "rust={rust}\npackages={packages}").map_err(|e| e.to_string())?;
+        writeln!(f, "rust={rust}\npackages={packages}\nworkspace={workspace}")
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -973,6 +984,49 @@ mod tests {
     }
 
     #[test]
+    fn the_gate_sources_test_the_whole_workspace() {
+        assert_eq!(
+            super::coverage_scope(&paths(&["xtask/src/coverage.rs"]), &workspace()),
+            super::CoverageScope::Workspace
+        );
+    }
+
+    #[test]
+    fn a_source_change_with_a_root_manifest_change_selects_only_the_source_packages() {
+        let s = super::coverage_scope(
+            &paths(&["Cargo.toml", "crates/krishiv-ui/src/a.rs", "Cargo.lock"]),
+            &workspace(),
+        );
+        assert_eq!(
+            s,
+            super::CoverageScope::Packages(vec!["krishiv-ui".to_owned()])
+        );
+    }
+
+    #[test]
+    fn dev_and_build_dependency_edges_select_their_dependents() {
+        let metadata = r#"{"packages":[
+            {"name":"core","manifest_path":"/r/crates/core/Cargo.toml",
+             "dependencies":[]},
+            {"name":"tester","manifest_path":"/r/crates/tester/Cargo.toml",
+             "dependencies":[{"name":"core","kind":"dev"}]},
+            {"name":"codegen","manifest_path":"/r/crates/codegen/Cargo.toml",
+             "dependencies":[{"name":"core","kind":"build"}]},
+            {"name":"alone","manifest_path":"/r/crates/alone/Cargo.toml",
+             "dependencies":[]}]}"#;
+        let pkgs = crate::precheck::parse_packages(metadata, std::path::Path::new("/r")).unwrap();
+        let s = super::coverage_scope(&paths(&["crates/core/src/lib.rs"]), &pkgs);
+        assert_eq!(
+            s,
+            super::CoverageScope::Packages(vec![
+                "codegen".to_owned(),
+                "core".to_owned(),
+                "tester".to_owned()
+            ])
+        );
+    }
+
+    #[test]
     fn a_nested_package_wins_over_its_parent() {
         let mut ws = workspace();
         ws.push(pkg("inner", "crates/krishiv-ui/inner", &[]));
@@ -984,18 +1038,18 @@ mod tests {
     fn scope_outputs_name_the_packages() {
         assert_eq!(
             super::scope_outputs(&super::CoverageScope::None),
-            (false, String::new())
+            (false, String::new(), false)
         );
         assert_eq!(
             super::scope_outputs(&super::CoverageScope::Workspace),
-            (true, String::new())
+            (true, String::new(), true)
         );
         assert_eq!(
             super::scope_outputs(&super::CoverageScope::Packages(vec![
                 "a".to_owned(),
                 "b".to_owned()
             ])),
-            (true, "-p a -p b".to_owned())
+            (true, "-p a -p b".to_owned(), false)
         );
     }
 }

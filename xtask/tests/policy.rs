@@ -163,6 +163,23 @@ fn ci_policy_wiring() {
             "{name} must run in the merge queue"
         );
     }
+    // The nightly and the push run must not cancel each other, and a nightly failure is reported.
+    assert!(
+        ci.contains("group: ci-${{ github.workflow }}-${{ github.event_name }}-"),
+        "the concurrency group must include the event"
+    );
+    assert!(
+        job(&ci, "nightly-failure-notice").contains("github.event_name == 'schedule'")
+            && ci.contains("issues: write")
+    );
+    // A release or a published binary needs the latest nightly run green on its commit.
+    for wf in ["publish-testpypi.yml", "binaries.yml"] {
+        let text = read(&format!(".github/workflows/{wf}"));
+        assert!(
+            text.contains(".github/scripts/require-green-nightly.sh"),
+            "{wf} must require a green nightly run"
+        );
+    }
     // Diff coverage tests only the packages the PR touches and their dependents.
     let coverage = read(".github/workflows/coverage.yml");
     for needle in [

@@ -21,7 +21,7 @@ on:
     - cron: "20 3 * * *"
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -735,3 +735,55 @@ jobs:
               *) exit 1 ;;
             esac
           done
+
+  # The nightly run is the only place Miri, the fuzz-target build and the wheel matrix see combined
+  # main, so a failure must not go unnoticed: open (or update) one issue, `nightly CI failed`.
+  nightly-failure-notice:
+    needs:
+      - changes
+      - text-lint
+      - python-quality
+      - fmt
+      - clippy
+      - test
+      - deny
+      - machete
+      - hack
+      - layering
+      - connect-protos
+      - plan-protos
+      - fuzz-build
+      - msrv
+      - docs
+      - release-dry-run
+      - miri-kernels
+      - wheels
+      - wheels-targets
+      - wheels-ok
+    if: always() && github.event_name == 'schedule' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - name: Open or update the nightly failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SHA: ${{ github.sha }}
+        run: |
+          title="nightly CI failed"
+          body="The scheduled CI run on main failed at ${SHA}: ${RUN_URL}"
+          n=$(gh issue list --state open --search "\"$title\" in:title" --json number,title \
+            --jq "[.[] | select(.title == \"$title\")][0].number // empty")
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

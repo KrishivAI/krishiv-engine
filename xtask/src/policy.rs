@@ -66,9 +66,12 @@ impl DiffArgs {
     /// # Errors
     /// Returns the git failure message.
     pub fn changed_paths(&self) -> Result<Vec<String>, String> {
+        // NUL-separated and without rename detection: non-ASCII paths stay verbatim, and a rename
+        // lists both its old and new path, so both packages are scoped.
         Ok(self
-            .git(&["diff", "--name-only", &self.range()])?
-            .lines()
+            .git(&["diff", "--name-only", "-z", "--no-renames", &self.range()])?
+            .split('\0')
+            .filter(|p| !p.is_empty())
             .map(str::to_owned)
             .collect())
     }

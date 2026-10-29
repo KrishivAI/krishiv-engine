@@ -154,7 +154,8 @@ jobs:
             || { echo "::error::bench.lcov has no src/krishiv_bench paths"; exit 1; }
           cargo xtask diff-coverage --base "$BASE_SHA" --head "$HEAD_SHA" --lcov "$RUNNER_TEMP/bench.lcov:bench" --fail-under 90
       - name: Upload to Codecov (informational)
-        if: steps.scope.outputs.rust == 'true' && !cancelled()
+        # Only a whole-workspace run uploads: a partial run would replace the carried-forward flag.
+        if: steps.scope.outputs.workspace == 'true' && !cancelled()
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: target/coverage/lcov.info
