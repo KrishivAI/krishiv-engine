@@ -11,9 +11,11 @@ use krishiv_common::error::{
     GroupByPosAggregate, GroupByPosOutOfRange, InvalidLimitLikeExpressionDataType,
     InvalidWhereCondition, JoinConditionIsNotBooleanType, MissingAggregation, MissingGroupBy,
     OrderByPosOutOfRange, QualifyAggregateNotAllowed, QualifyRequiresWindowFunction,
-    StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UnresolvedAllInGroupBy,
-    UnresolvedUsingColumnForJoin, UnsupportedFeatureLateralColumnAliasInAggregateFunc,
-    UnsupportedFeatureLateralColumnAliasInGroupBy,
+    StarGroupByPos, SumOfLimitAndOffsetExceedsMaxInt, TableOrViewNotFound, UdtfAliasNumberMismatch,
+    UnresolvedAllInGroupBy, UnresolvedUsingColumnForJoin,
+    UnsupportedFeatureLateralColumnAliasInAggregateFunc,
+    UnsupportedFeatureLateralColumnAliasInGroupBy, UnsupportedGeneratorMultiGenerator,
+    UnsupportedGeneratorNestedInExpressions,
 };
 
 use super::analytics::Analytics;
@@ -28,6 +30,7 @@ use crate::{
     JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanNode, ReadSource, ResolvedExpr,
     ResolvedFunction, Scan, SortOrder,
 };
+use krishiv_types::DataType;
 
 /// What [`Resolver::group_substitute`] reads and grows: the aggregate, the
 /// attributes it shows, and the output it adds for grouping expressions the
@@ -261,6 +264,9 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let items = self.select_items(c, exprs, env, "Aggregate")?;
+        if items.iter().any(|b| has_generator(&b.expr)) {
+            return self.generator_project(p.origin, c, exprs, &items);
+        }
         if items.iter().any(|b| b.agg.is_some()) {
             return self.build_aggregate(p.origin, c, Vec::new(), &items, true, None);
         }
@@ -268,6 +274,188 @@ impl Resolver<'_> {
             return self.window_project(p.origin, c, &items, &[]);
         }
         Ok(self.lateral_project(p.origin, c, &items, &[]))
+    }
+
+    /// A select list holding a generator call (today only `json_tuple`):
+    /// Spark's `ExtractGenerator` for the one generator this engine
+    /// implements. At most one top-level generator per select list; a
+    /// generator nested in another expression is
+    /// `UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS`, two are
+    /// `UNSUPPORTED_GENERATOR.MULTI_GENERATOR`. The generator computes one
+    /// struct per row in a projection below the select list, and the select
+    /// list reads its fields (so the JSON is parsed once per row, not once
+    /// per field). No generator node remains in the resolved plan.
+    fn generator_project(
+        &mut self,
+        origin: Origin,
+        base: &Rel,
+        exprs: &[Arc<Expr>],
+        items: &[Bound],
+    ) -> Result<Rel, AnalysisError> {
+        let zone = self.ctx.conf.session_zone;
+        let mut top: Vec<(usize, String)> = Vec::new();
+        for (i, b) in items.iter().enumerate() {
+            let inner = trim_alias(&b.expr);
+            if is_generator(inner) {
+                top.push((i, pretty(inner, zone)));
+                continue;
+            }
+            if has_generator(inner) {
+                return Err(AnalysisError::new(
+                    UnsupportedGeneratorNestedInExpressions {
+                        expression: format!("\"{}\"", pretty(inner, zone)),
+                    },
+                    b.expr.origin,
+                ));
+            }
+        }
+        if top.len() > 1 {
+            let generators = top
+                .iter()
+                .map(|(_, sql)| format!("\"{sql}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(AnalysisError::new(
+                UnsupportedGeneratorMultiGenerator {
+                    num: top.len().to_string(),
+                    generators,
+                },
+                origin,
+            ));
+        }
+        let Some((index, _)) = top.first() else {
+            return Err(unsupported("a generator", origin));
+        };
+        let index = *index;
+        if items.iter().any(|b| b.agg.is_some() || b.win.is_some()) {
+            return Err(unsupported(
+                "a generator with aggregate or window expressions in one SELECT list",
+                origin,
+            ));
+        }
+        if items.iter().any(|b| !b.lateral.is_empty()) {
+            return Err(unsupported(
+                "a generator with lateral column aliases in one SELECT list",
+                origin,
+            ));
+        }
+        let ExprNode::Resolved(ResolvedExpr::Function(call)) = &trim_alias(&items[index].expr).node
+        else {
+            return Err(unsupported("a generator", origin));
+        };
+        let outputs = call.args.len() - 1;
+        // An explicit single alias renames the one output column; several
+        // outputs under one name do not match, as Spark's `ResolveGenerate`
+        // reports them. Stars expand the item list, so the alias is matched
+        // by call name rather than by position (as the analyzer matches
+        // `struct` and `named_struct` by name elsewhere).
+        let alias = exprs.iter().find_map(|e| match &e.node {
+            ExprNode::Alias { name, expr } if is_json_tuple_call(expr) => Some(name.clone()),
+            _ => None,
+        });
+        if let Some(name) = &alias
+            && outputs != 1
+        {
+            return Err(AnalysisError::new(
+                UdtfAliasNumberMismatch {
+                    aliases_size: outputs.to_string(),
+                    aliases_names: name.clone(),
+                },
+                items[index].expr.origin,
+            ));
+        }
+        // The generator computes one struct per row under a fresh
+        // attribute; the select list reads one field per output column.
+        // The computation is an ordinary scalar call of the same kernel:
+        // the rewrite leaves no generator node in the resolved plan, so
+        // the executor, the optimizer and the plan codec all see plain
+        // scalar expressions.
+        if !matches!(&call.data_type, DataType::Struct(_)) {
+            return Err(unsupported(
+                format!("a generator of {}", call.data_type),
+                items[index].expr.origin,
+            ));
+        }
+        let data_type = call.data_type.clone();
+        let compute_call = ResolvedFunction {
+            kind: FunctionKind::Scalar,
+            ..call.clone()
+        };
+        let compute_expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(compute_call)))
+                .with_origin(items[index].expr.origin),
+        );
+        let compute_ty = ArgType {
+            data_type: Some(data_type),
+            nullable: call.nullable,
+        };
+        let compute = self.attr("json_tuple", &compute_ty);
+        let inner_expr = Arc::new(
+            Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: compute_expr,
+                output: compute.clone(),
+            }))
+            .with_origin(items[index].expr.origin),
+        );
+        let mut inner_exprs: Vec<Arc<Expr>> = base
+            .out
+            .iter()
+            .map(|a| col_expr(&a.col, Origin::UNKNOWN))
+            .collect();
+        inner_exprs.push(inner_expr);
+        let mut inner_out = base.out.to_vec();
+        inner_out.push(Attr {
+            col: compute.clone(),
+            qual: no_qual(),
+            source: None,
+        });
+        let inner = self.projection(Origin::UNKNOWN, base, inner_exprs, inner_out);
+        let mut outer_exprs = Vec::with_capacity(items.len() + outputs - 1);
+        let mut outer_out = Vec::with_capacity(items.len() + outputs - 1);
+        let compute_ref = col_expr(&compute, items[index].expr.origin);
+        for (i, b) in items.iter().enumerate() {
+            if i != index {
+                outer_exprs.push(Arc::clone(&b.expr));
+                outer_out.push(out_attr(b, &inner.out));
+                continue;
+            }
+            for n in 0..outputs {
+                let name = match &alias {
+                    Some(name) => name.clone(),
+                    None => format!("c{n}"),
+                };
+                let output = self.attr(
+                    &name,
+                    &ArgType {
+                        data_type: Some(DataType::String),
+                        nullable: true,
+                    },
+                );
+                let field = Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                        base: Arc::clone(&compute_ref),
+                        ordinal: n,
+                        name: format!("c{n}"),
+                        data_type: DataType::String,
+                        nullable: true,
+                    }))
+                    .with_origin(b.expr.origin),
+                );
+                outer_exprs.push(Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                        expr: field,
+                        output: output.clone(),
+                    }))
+                    .with_origin(b.expr.origin),
+                ));
+                outer_out.push(Attr {
+                    col: output,
+                    qual: no_qual(),
+                    source: None,
+                });
+            }
+        }
+        Ok(self.projection(origin, &inner, outer_exprs, outer_out))
     }
 
     /// A select list: stars expanded, every item named. A name the input
@@ -2425,6 +2613,50 @@ fn out_attr(b: &Bound, scope: &[Attr]) -> Attr {
             source: None,
         },
     }
+}
+
+/// A select-list item with its top-level alias removed (Spark's
+/// `CleanupAliases.trimNonTopLevelAliases` for one level: the analyzer
+/// never nests aliases).
+fn trim_alias(e: &Arc<Expr>) -> &Arc<Expr> {
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => expr,
+        _ => e,
+    }
+}
+
+/// Whether `e` is a generator call (today only `json_tuple`).
+fn is_generator(e: &Arc<Expr>) -> bool {
+    matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Generator)
+}
+
+/// Whether unresolved `e` is a direct `json_tuple(...)` call, with or
+/// without a single `AS name` alias (ASCII case-insensitive, as registry
+/// lookup is).
+fn is_json_tuple_call(e: &Arc<Expr>) -> bool {
+    match &e.node {
+        ExprNode::Function(f) => f.name.eq_ignore_ascii_case("json_tuple"),
+        ExprNode::Alias { expr, .. } => is_json_tuple_call(expr),
+        _ => false,
+    }
+}
+
+/// Whether `e` holds a generator call anywhere inside (subquery plans
+/// resolve on their own; [`Expr::for_each_child`] does not enter them).
+/// Expressions are DAGs, so shared nodes are visited once.
+fn has_generator(e: &Arc<Expr>) -> bool {
+    let mut seen: HashSet<*const ()> = HashSet::new();
+    let mut stack = vec![Arc::clone(e)];
+    while let Some(x) = stack.pop() {
+        if !seen.insert(Arc::as_ptr(&x).cast::<()>()) {
+            continue;
+        }
+        if is_generator(&x) {
+            return true;
+        }
+        x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
+    }
+    false
 }
 
 /// Spark's `DATATYPE_MISMATCH.FILTER_NOT_BOOLEAN`.
