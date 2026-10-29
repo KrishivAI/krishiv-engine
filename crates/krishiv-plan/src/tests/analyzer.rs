@@ -16,7 +16,7 @@ use proptest::prelude::*;
 use serde_json::Value;
 
 use super::depth::{on_small_stack, self_joins};
-use super::dsl::{add, c, count_star, date, eq, f, gt, int, s, star};
+use super::dsl::{add, c, count_star, date, dec, eq, f, ge, gt, int, le, lt, s, star};
 use super::tpch::QUERIES;
 use crate::analyzer::testing::{block_on, context};
 use crate::analyzer::{
@@ -4511,4 +4511,133 @@ fn order_by_passes_sort_key_errors_through() {
         text.contains("The `upper` requires 1 parameters but the actual number is 2"),
         "{text}"
     );
+}
+
+/// Spark's strength reduction for an integral expression compared with a
+/// decimal literal (`DecimalPrecisionTypeCoercion.integralAndDecimalLiteral`
+/// in Spark 4.2): the comparison narrows the literal to the `BIGINT` bound
+/// (`floor`/`ceil`), and the output name shows the rewritten comparison.
+/// `select 1 > 0.00001` names its column `(1 > 0)`, as the golden
+/// `operators` statement 55 records.
+#[test]
+fn integral_compared_with_decimal_literal_narrows_to_bigint() {
+    let ctx = ctx();
+    let name = |e: Expr| {
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![e]);
+        run(plan, &ctx).unwrap().output[0].name.clone()
+    };
+    // (expression, Spark 4.2 output name): every comparison direction, the
+    // literal on either side, and negative literals.
+    let cases = [
+        (gt(int(1), dec("0.00001")), "(1 > 0)"),
+        (ge(int(1), dec("0.00001")), "(1 >= 1)"),
+        (lt(int(1), dec("0.00001")), "(1 < 1)"),
+        (le(int(1), dec("0.00001")), "(1 <= 0)"),
+        (gt(dec("0.00001"), int(1)), "(1 > 1)"),
+        (ge(dec("0.00001"), int(1)), "(0 >= 1)"),
+        (lt(dec("0.00001"), int(1)), "(0 < 1)"),
+        (le(dec("0.00001"), int(1)), "(1 <= 1)"),
+        (gt(int(1), dec("-0.00001")), "(1 > -1)"),
+        (ge(int(1), dec("-0.00001")), "(1 >= 0)"),
+        (lt(int(1), dec("-0.00001")), "(1 < 0)"),
+        (le(int(1), dec("-0.00001")), "(1 <= -1)"),
+        (gt(dec("-0.00001"), int(1)), "(0 > 1)"),
+        (ge(dec("-0.00001"), int(1)), "(-1 >= 1)"),
+        (lt(dec("-0.00001"), int(1)), "(-1 < 1)"),
+        (le(dec("-0.00001"), int(1)), "(0 <= 1)"),
+        (gt(long(5), dec("0.5")), "(5 > 0)"),
+    ];
+    for (e, want) in cases {
+        assert_eq!(name(e), want, "want {want}");
+    }
+}
+
+/// A decimal literal outside `BIGINT` range decides an integral comparison
+/// outright (`true`/`false`), as Spark's rule does.
+#[test]
+fn integral_compared_with_huge_decimal_literal_is_decided() {
+    let ctx = ctx();
+    let name = |e: Expr| {
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![e]);
+        run(plan, &ctx).unwrap().output[0].name.clone()
+    };
+    let cases = [
+        (gt(int(1), dec("99999999999999999999.9")), "false"),
+        (ge(int(1), dec("99999999999999999999.9")), "false"),
+        (lt(int(1), dec("99999999999999999999.9")), "true"),
+        (le(int(1), dec("99999999999999999999.9")), "true"),
+        (gt(dec("99999999999999999999.9"), int(1)), "true"),
+        (ge(dec("99999999999999999999.9"), int(1)), "true"),
+        (lt(dec("99999999999999999999.9"), int(1)), "false"),
+        (le(dec("99999999999999999999.9"), int(1)), "false"),
+        (gt(int(1), dec("-99999999999999999999.9")), "true"),
+        (lt(int(1), dec("-99999999999999999999.9")), "false"),
+        (gt(dec("-99999999999999999999.9"), int(1)), "false"),
+        (lt(dec("-99999999999999999999.9"), int(1)), "true"),
+        // The `BIGINT` bounds themselves still narrow instead of deciding.
+        (
+            gt(int(1), dec("9223372036854775807")),
+            "(1 > 9223372036854775807)",
+        ),
+        (
+            lt(int(1), dec("-9223372036854775808")),
+            "(1 < -9223372036854775808)",
+        ),
+        (gt(int(1), dec("9223372036854775807.5")), "false"),
+        (lt(int(1), dec("9223372036854775807.5")), "true"),
+        (gt(int(1), dec("-9223372036854775808.5")), "true"),
+        (lt(int(1), dec("-9223372036854775808.5")), "false"),
+    ];
+    for (e, want) in cases {
+        assert_eq!(name(e), want, "want {want}");
+    }
+}
+
+/// The narrowing fires only for an integral expression against a decimal
+/// literal: `=`, two decimals, floating-point and untyped `NULL` operands
+/// keep their written form (up to the usual implicit casts, which the name
+/// does not show).
+#[test]
+fn non_integral_or_non_literal_comparisons_keep_their_form() {
+    let ctx = ctx();
+    let name = |e: Expr| {
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![e]);
+        run(plan, &ctx).unwrap().output[0].name.clone()
+    };
+    let float = Expr::new(ExprNode::Literal(Literal::Float(0.5)));
+    let cases = [
+        (eq(int(1), dec("0.00001")), "(1 = 0.00001)"),
+        (gt(dec("1.5"), dec("0.00001")), "(1.5 > 0.00001)"),
+        (gt(int(1), float), "(1 > 0.5)"),
+        (gt(int(1), int(2)), "(1 > 2)"),
+        (gt(null(), dec("0.00001")), "(NULL > 0.00001)"),
+    ];
+    for (e, want) in cases {
+        assert_eq!(name(e), want, "want {want}");
+    }
+}
+
+/// Columns narrow like literals do: the rewritten comparison, not the
+/// written one, names the output.
+#[test]
+fn integral_columns_compared_with_decimal_literals_narrow() {
+    let ctx = ctx();
+    let name = |e: Expr| {
+        let plan = LogicalPlan::table(["t"]).project(vec![e]);
+        run(plan, &ctx).unwrap().output[0].name.clone()
+    };
+    let cases = [
+        (gt(c("a"), dec("0.5")), "(a > 0)"),
+        (lt(c("c"), dec("2.5")), "(c < 3)"),
+        (ge(c("a"), dec("-0.5")), "(a >= 0)"),
+    ];
+    for (e, want) in cases {
+        assert_eq!(name(e), want, "want {want}");
+    }
+    // Narrower integral types narrow the same way.
+    let plan = LogicalPlan::table(["n"]).project(vec![gt(c("ti"), dec("0.5"))]);
+    assert_eq!(run(plan, &ctx).unwrap().output[0].name, "(ti > 0)");
+    // The narrowed comparison stays boolean.
+    let plan = LogicalPlan::table(["t"]).project(vec![gt(c("a"), dec("0.5"))]);
+    assert_eq!(datatypes(&run(plan, &ctx).unwrap()), [DataType::Boolean]);
 }

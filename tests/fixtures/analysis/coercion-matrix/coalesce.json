@@ -1,0 +1,678 @@
+{
+  "entries": [
+    {
+      "id": "coalesce/ARRAY<INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/INT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/INT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/ARRAY<INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS ARRAY<INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"ARRAY<INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/BIGINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BIGINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BIGINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BIGINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BIGINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BIGINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BIGINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BIGINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BINARY/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BINARY/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BINARY/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BINARY/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BINARY/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BINARY/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BINARY\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BINARY), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BOOLEAN/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BOOLEAN/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BOOLEAN/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BOOLEAN/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BOOLEAN/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/BOOLEAN/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"BOOLEAN\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS BOOLEAN), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DATE/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DATE/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DATE/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DATE/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DATE/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DATE/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DATE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DATE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DECIMAL(10,2)/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DECIMAL(10,2)/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DECIMAL(10,2)/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DECIMAL(10,2)/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DECIMAL(10,2)/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DECIMAL(10,2)/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DECIMAL(10,2)\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DECIMAL(10,2)), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DOUBLE/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DOUBLE/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DOUBLE/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DOUBLE/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DOUBLE/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/DOUBLE/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"DOUBLE\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS DOUBLE), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/FLOAT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/FLOAT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/FLOAT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/FLOAT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/FLOAT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/FLOAT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"FLOAT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS FLOAT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/INT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/INT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/INT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/INT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS INT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/INT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/INT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS INT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"INT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS INT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/INT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/INT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/MAP<STRING,INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS MAP<STRING,INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS MAP<STRING, INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"MAP<STRING, INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/SMALLINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/SMALLINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/SMALLINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/SMALLINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/SMALLINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/SMALLINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"SMALLINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS SMALLINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRING/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRING/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRING/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRING/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRING/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRING/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRING), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/BIGINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/BIGINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BIGINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BIGINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BIGINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BIGINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/BINARY/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/BINARY/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BINARY))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BINARY))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BINARY\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BINARY))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/BOOLEAN/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/BOOLEAN/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS BOOLEAN))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS BOOLEAN))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"BOOLEAN\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS BOOLEAN))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/DATE/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/DATE/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DATE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DATE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DATE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DATE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/DECIMAL(10,2)/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/DECIMAL(10,2)/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DECIMAL(10,2)))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DECIMAL(10,2)))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DECIMAL(10,2)\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DECIMAL(10,2)))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/DOUBLE/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/DOUBLE/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS DOUBLE))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS DOUBLE))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"DOUBLE\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS DOUBLE))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/FLOAT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/FLOAT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS FLOAT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS FLOAT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"FLOAT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS FLOAT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/INT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/INT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS INT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS INT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"INT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS INT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/SMALLINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/SMALLINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS SMALLINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS SMALLINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"SMALLINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS SMALLINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/STRING/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/STRING/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS STRING))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS STRING))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"STRING\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS STRING))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/TIMESTAMP/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/TIMESTAMP/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/TIMESTAMP_NTZ/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TIMESTAMP_NTZ))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TIMESTAMP_NTZ))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TIMESTAMP_NTZ\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TIMESTAMP_NTZ))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/TINYINT/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/STRUCT<a INT>/TINYINT/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS STRUCT<a INT>), CAST(NULL AS TINYINT))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS STRUCT<a: INT>), CAST(NULL AS TINYINT))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRUCT<a: INT>\\\" or \\\"TINYINT\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(NULL, CAST(NULL AS TINYINT))\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP_NTZ/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP_NTZ/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP_NTZ/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TIMESTAMP_NTZ/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TIMESTAMP_NTZ\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TIMESTAMP_NTZ), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TINYINT/ARRAY<INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TINYINT/ARRAY<INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS ARRAY<INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"ARRAY<INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TINYINT/MAP<STRING,INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TINYINT/MAP<STRING,INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING,INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS MAP<STRING, INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"MAP<STRING, INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TINYINT/STRUCT<a INT>/ansi_off",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    },
+    {
+      "id": "coalesce/TINYINT/STRUCT<a INT>/ansi_on",
+      "reason": "SELECT typeof(coalesce(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a INT>))) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), CAST(NULL AS STRUCT<a: INT>))\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"TINYINT\\\" or \\\"STRUCT<a: INT>\\\")\", \"functionName\": \"`coalesce`\", \"sqlExpr\": \"\\\"coalesce(CAST(NULL AS TINYINT), NULL)\\\"\"}"
+    }
+  ],
+  "form": "coalesce",
+  "format_version": 1
+}

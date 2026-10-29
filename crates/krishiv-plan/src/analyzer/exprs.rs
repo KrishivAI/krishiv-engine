@@ -665,6 +665,99 @@ enum Step {
     Link(usize, Arc<Expr>, Ctx),
 }
 
+/// What [`strength_reduce_comparison`] decided for an integral expression
+/// compared with a decimal literal.
+enum ComparisonReduction {
+    /// Not an integral-vs-decimal-literal comparison; bind as usual.
+    Keep,
+    /// The decimal literal at `index` becomes the `BIGINT` literal `value`.
+    Narrow { index: usize, value: i64 },
+    /// The literal is outside `BIGINT` range and decides the comparison.
+    Decided(bool),
+}
+
+/// Spark's strength reduction for an integral expression compared with a
+/// decimal literal (`DecimalPrecisionTypeCoercion.integralAndDecimalLiteral`
+/// in Spark 4.2, which runs before the implicit casts are inserted). With
+/// the literal on the right, `i > d` is `i > floor(d)`, `i >= d` is
+/// `i >= ceil(d)`, `i < d` is `i < ceil(d)` and `i <= d` is `i <= floor(d)`;
+/// with the literal on the left the bounds swap sides (`d > i` is
+/// `ceil(d) > i`, `d >= i` is `floor(d) >= i`, `d < i` is `floor(d) < i` and
+/// `d <= i` is `ceil(d) <= i`). A literal below `BIGINT` range or above it
+/// decides the comparison outright. The output name shows the rewritten
+/// comparison (`select 1 > 0.00001` names its column `(1 > 0)`).
+fn strength_reduce_comparison(op: Builtin, left: &Bound, right: &Bound) -> ComparisonReduction {
+    /// The value of a bound decimal literal, if the bound expression is one:
+    /// its unscaled value and scale.
+    fn decimal(b: &Bound) -> Option<(i128, u32)> {
+        match &b.expr.node {
+            ExprNode::Literal(Literal::Decimal {
+                unscaled,
+                data_type,
+            }) => Some((*unscaled, u32::from(data_type.scale()))),
+            _ => None,
+        }
+    }
+    /// Whether the bound expression is integral, as Spark's
+    /// `IntegralTypeExpression` matches (`BYTE`/`SHORT`/`INT`/`LONG`).
+    fn integral(b: &Bound) -> bool {
+        matches!(
+            b.ty.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long)
+        )
+    }
+    // The decimal literal's side, when the other side is integral. Two
+    // decimal literals never match (Spark widens those instead).
+    let (index, (unscaled, scale)) = match (decimal(left), decimal(right)) {
+        (Some(d), None) if integral(right) => (0, d),
+        (None, Some(d)) if integral(left) => (1, d),
+        _ => return ComparisonReduction::Keep,
+    };
+    // `floor` and `ceil` of the decimal value, exactly: the scale is at most
+    // 38, so `10^scale` fits an `i128`, and the divisions are exact. Any
+    // overflow (unreachable for a decimal literal) keeps the comparison.
+    let Some(pow) = 10i128.checked_pow(scale) else {
+        return ComparisonReduction::Keep;
+    };
+    let floor = unscaled.div_euclid(pow);
+    let Some(ceil) = unscaled
+        .checked_neg()
+        .map(|n| n.div_euclid(pow))
+        .and_then(i128::checked_neg)
+    else {
+        return ComparisonReduction::Keep;
+    };
+    // Spark's `DecimalLiteral.largerThanLargestLong` /
+    // `smallerThanSmallestLong`: exact, as both bounds are integers. A
+    // literal above `BIGINT` range exceeds every integral value, so only
+    // the comparisons that the other side cannot reach fail.
+    let long_max = i128::from(i64::MAX);
+    let long_min = i128::from(i64::MIN);
+    if ceil > long_max {
+        return ComparisonReduction::Decided(matches!(
+            (op, index),
+            (Builtin::Gt | Builtin::GtEq, 0) | (Builtin::Lt | Builtin::LtEq, 1)
+        ));
+    }
+    // A literal below `BIGINT` range is exceeded by every integral value.
+    if floor < long_min {
+        return ComparisonReduction::Decided(matches!(
+            (op, index),
+            (Builtin::Gt | Builtin::GtEq, 1) | (Builtin::Lt | Builtin::LtEq, 0)
+        ));
+    }
+    // The narrowed bound fits a `BIGINT`: `floor`/`ceil` lie between two
+    // consecutive integers around a value within `BIGINT` range.
+    let narrowed = match (op, index) {
+        (Builtin::Gt | Builtin::LtEq, 1) | (Builtin::GtEq | Builtin::Lt, 0) => floor,
+        _ => ceil,
+    };
+    let Ok(value) = i64::try_from(narrowed) else {
+        return ComparisonReduction::Keep;
+    };
+    ComparisonReduction::Narrow { index, value }
+}
+
 impl Resolver<'_> {
     /// Binds `e` in `cx`, post-order with an explicit stack; a node shared
     /// within the expression is bound once.
@@ -2047,6 +2140,51 @@ impl Resolver<'_> {
                 shown: Some(Arc::new(shown.with_origin(origin))),
                 ..both
             });
+        }
+        if matches!(
+            op,
+            Builtin::Gt | Builtin::GtEq | Builtin::Lt | Builtin::LtEq
+        ) && let [a, b] = kids
+        {
+            match strength_reduce_comparison(op, a, b) {
+                ComparisonReduction::Keep => {}
+                ComparisonReduction::Decided(v) => {
+                    let mut lateral: Vec<AttrId> = Vec::new();
+                    for id in kids.iter().flat_map(|k| k.lateral.iter()) {
+                        if !lateral.contains(id) {
+                            lateral.push(*id);
+                        }
+                    }
+                    return Ok(Bound {
+                        shown: None,
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Boolean(v))).with_origin(origin),
+                        ),
+                        ty: arg_type(DataType::Boolean, false),
+                        agg: kids.iter().find_map(|k| k.agg),
+                        win: kids.iter().find_map(|k| k.win),
+                        outer: kids.iter().filter_map(|k| k.outer).min(),
+                        lateral,
+                    });
+                }
+                ComparisonReduction::Narrow { index, value } => {
+                    let mut rewritten = kids.to_vec();
+                    let literal_origin = rewritten[index].expr.origin;
+                    rewritten[index] = Bound {
+                        shown: None,
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Long(value)))
+                                .with_origin(literal_origin),
+                        ),
+                        ty: arg_type(DataType::Long, false),
+                        agg: None,
+                        win: None,
+                        outer: None,
+                        lateral: Vec::new(),
+                    };
+                    return self.operator_call(op, origin, &rewritten);
+                }
+            }
         }
         let args: Vec<Arg<'_>> = kids.iter().map(arg_of).collect();
         let conf = self.ctx.conf;

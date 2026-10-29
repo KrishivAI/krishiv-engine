@@ -1,0 +1,22 @@
+{
+  "entries": [
+    {
+      "id": "spot/0/ansi_off",
+      "reason": "SELECT typeof('1' + 1) | KRISHIV_UNSUPPORTED_FEATURE {\"feature\": \"implicit string casts with spark.sql.ansi.enabled off\"} where Spark resolves to double"
+    },
+    {
+      "id": "spot/3/ansi_off",
+      "reason": "SELECT typeof('1' * '2') | DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE {\"actualDataType\": \"\\\"STRING\\\"\", \"inputType\": \"\\\"NUMERIC\\\"\", \"sqlExpr\": \"\\\"(1 * 2)\\\"\"} where Spark resolves to double"
+    },
+    {
+      "id": "spot/4/ansi_off",
+      "reason": "SELECT typeof(greatest('1', 2)) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(1, 2)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(1, 2)\\\"\"}"
+    },
+    {
+      "id": "spot/4/ansi_on",
+      "reason": "SELECT typeof(greatest('1', 2)) | DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"(\\\"STRING\\\" or \\\"INT\\\")\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(1, 2)\\\"\"} where Spark has DATATYPE_MISMATCH.DATA_DIFF_TYPES {\"dataType\": \"[\\\"STRING\\\", \\\"INT\\\"]\", \"functionName\": \"`greatest`\", \"sqlExpr\": \"\\\"greatest(1, 2)\\\"\"}"
+    }
+  ],
+  "form": "spot",
+  "format_version": 1
+}
