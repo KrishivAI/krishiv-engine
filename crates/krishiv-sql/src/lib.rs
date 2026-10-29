@@ -91,6 +91,11 @@ pub struct ParserOptions {
     /// `spark.sql.legacy.interval.enabled`: an interval literal may mix
     /// year-month and day-time fields.
     pub legacy_interval: bool,
+    /// `spark.sql.legacy.consecutiveStringLiterals.enabled`: doubled quotes
+    /// inside string literals are dropped (`'a''b'` is `ab`), instead of
+    /// read as one quote character (`a'b`). Adjacent literals concatenate
+    /// either way.
+    pub consecutive_string_literals: bool,
     /// `spark.sql.timestampType = TIMESTAMP_NTZ`: a `TIMESTAMP '...'`
     /// literal without a zone is a `TIMESTAMP_NTZ`.
     pub timestamp_ntz: bool,
@@ -126,6 +131,10 @@ impl ParserOptions {
             legacy_bang_equals_not: on("spark.sql.legacy.bangEqualsNot", false),
             legacy_identifier_clause: on("spark.sql.legacy.identifierClause", false),
             legacy_interval: on("spark.sql.legacy.interval.enabled", false),
+            consecutive_string_literals: on(
+                "spark.sql.legacy.consecutiveStringLiterals.enabled",
+                false,
+            ),
             timestamp_ntz: conf("spark.sql.timestampType")
                 .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ")),
             max_buckets: conf("spark.sql.sources.bucketing.maxBuckets")

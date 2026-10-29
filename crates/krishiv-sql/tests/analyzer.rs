@@ -665,6 +665,13 @@ fn sql_text_in_plans_goes_through_the_front_end() {
         },
     };
     assert_ne!(ansi.fingerprint(), Frontend::default().fingerprint());
+    let consecutive = Frontend {
+        options: ParserOptions {
+            consecutive_string_literals: true,
+            ..ParserOptions::default()
+        },
+    };
+    assert_ne!(consecutive.fingerprint(), Frontend::default().fingerprint());
 }
 
 /// A correlation key column met twice is one grouping key: every

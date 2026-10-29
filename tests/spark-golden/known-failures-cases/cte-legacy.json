@@ -1,18 +1,7 @@
 {
   "cases": {
-    "legacy-configs": [
-      4,
-      6,
-      7,
-      8,
-      12,
-      13,
-      14,
-      15,
-      17,
-      18,
-      19,
-      21
+    "subqueries": [
+      4
     ]
   },
   "file": "cte-legacy",
