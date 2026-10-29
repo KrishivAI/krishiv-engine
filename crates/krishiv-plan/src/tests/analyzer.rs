@@ -4299,3 +4299,61 @@ fn order_by_passes_sort_key_errors_through() {
         "{text}"
     );
 }
+
+/// `TIME`, `GEOMETRY` and `GEOGRAPHY` have no evaluation yet: a plan that
+/// holds one anywhere (a cast, a typed `NULL`, a scanned column) is refused
+/// with `KRISHIV_UNSUPPORTED_FEATURE` naming the type, at the expression.
+#[test]
+fn types_without_evaluation_are_refused() {
+    use krishiv_types::Srid;
+    let refused = |plan: LogicalPlan, ctx: &AnalysisContext| {
+        let e = run(plan, ctx).err().unwrap();
+        assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        e.error.message_parameters()[0].1.clone()
+    };
+    let one_row = || LogicalPlan::new(PlanNode::OneRowRelation);
+    let time = DataType::Time { precision: 3 };
+    let cast = Expr::from(Literal::Null(None)).cast(time.clone());
+    let origin = Origin::plan(PlanId(9));
+    let e = run(one_row().project(vec![cast.with_origin(origin)]), &ctx())
+        .err()
+        .unwrap();
+    assert_eq!(e.origin, origin);
+    assert_eq!(e.error.message_parameters()[0].1, "the TIME data type");
+    let typed_null = Expr::from(Literal::Null(Some(DataType::Geometry { srid: Srid::Any })));
+    assert_eq!(
+        refused(one_row().project(vec![typed_null]), &ctx()),
+        "the GEOMETRY data type"
+    );
+    // Nested below a cast to another type, it is still found.
+    let nested = Expr::from(Literal::Null(None))
+        .cast(time)
+        .cast(DataType::String);
+    assert_eq!(
+        refused(one_row().project(vec![nested]), &ctx()),
+        "the TIME data type"
+    );
+    // A scanned column, even when the query does not select it.
+    let geo = TableColumn {
+        name: "g".to_owned(),
+        data_type: DataType::Geography {
+            srid: Srid::Fixed(4326),
+        },
+        nullable: true,
+    };
+    let x = TableColumn {
+        name: "x".to_owned(),
+        data_type: DataType::Integer,
+        nullable: true,
+    };
+    let cat =
+        MemoryCatalog::new("spark_catalog").with_table(&["default"], "geo", vec![x, geo], None);
+    let geo_ctx = context(cat, ResolutionConf::default());
+    assert_eq!(
+        refused(LogicalPlan::table(["geo"]).project(vec![c("x")]), &geo_ctx),
+        "the GEOGRAPHY data type"
+    );
+    // The same shapes over evaluable types resolve.
+    let fine = Expr::from(Literal::Null(None)).cast(DataType::Date);
+    assert!(run(one_row().project(vec![fine]), &ctx()).is_ok());
+}

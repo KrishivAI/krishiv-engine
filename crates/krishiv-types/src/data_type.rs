@@ -14,8 +14,11 @@ use crate::nested::{ArrayType, MapType, StructType};
 /// A Spark SQL data type.
 ///
 /// Covers void (the type of a bare `NULL`), boolean, integral, floating-point, string, binary, decimal, date,
-/// timestamp and the nested array, map and struct types. Interval, char/varchar and variant types are not
-/// represented yet; parsing them yields `KRISHIV_UNSUPPORTED_FEATURE`.
+/// timestamp, time, geometry and geography types and the nested array, map and struct types. Interval, char/varchar
+/// and variant types are not represented yet; parsing them yields `KRISHIV_UNSUPPORTED_FEATURE`.
+///
+/// Build `Time`, `Geometry` and `Geography` with [`Self::time`],
+/// [`Self::geometry`] and [`Self::geography`], which check Spark's bounds.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DataType {
@@ -48,12 +51,90 @@ pub enum DataType {
     Timestamp,
     /// `TIMESTAMP_NTZ`: microseconds since the epoch, no time zone.
     TimestampNtz,
+    /// `TIME(p)`: nanoseconds since midnight, `0 ≤ p ≤ 6` fractional
+    /// digits of seconds. The precision is part of the type only: as in
+    /// Spark, a value may carry more digits than `p`.
+    Time {
+        /// Fractional digits of seconds, at most [`Self::TIME_MAX_PRECISION`].
+        precision: u8,
+    },
+    /// `GEOMETRY(srid)`: a spatial value in a Cartesian reference system.
+    Geometry {
+        /// The spatial reference of every value, or [`Srid::Any`].
+        srid: Srid,
+    },
+    /// `GEOGRAPHY(srid)`: a spatial value in a geographic reference system.
+    Geography {
+        /// The spatial reference of every value, or [`Srid::Any`].
+        srid: Srid,
+    },
     /// `ARRAY<element>`.
     Array(Arc<ArrayType>),
     /// `MAP<key, value>`.
     Map(Arc<MapType>),
     /// `STRUCT<name: type, ...>`.
     Struct(StructType),
+}
+
+/// The spatial reference of a geometry or geography type: one SRID for
+/// every value, or `ANY` (each value carries its own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Srid {
+    /// Every value has this SRID.
+    Fixed(i32),
+    /// Values may have different SRIDs (Spark's `GEOMETRY(ANY)`).
+    Any,
+}
+
+impl Srid {
+    /// The integer Spark uses for [`Srid::Any`] where an SRID is an
+    /// integer (Spark Connect types and Arrow field metadata).
+    pub const MIXED: i32 = -1;
+
+    /// The SRID as Spark Connect and Arrow metadata write it:
+    /// [`Self::MIXED`] for `ANY`.
+    pub const fn to_i32(self) -> i32 {
+        match self {
+            Self::Fixed(srid) => srid,
+            Self::Any => Self::MIXED,
+        }
+    }
+
+    /// The inverse of [`Self::to_i32`].
+    pub const fn from_i32(srid: i32) -> Self {
+        if srid == Self::MIXED {
+            Self::Any
+        } else {
+            Self::Fixed(srid)
+        }
+    }
+
+    /// The coordinate reference system Spark names a fixed SRID with in
+    /// its JSON schemas and file metadata, if Spark supports the SRID:
+    /// `SRID:0`, `EPSG:3857` and `OGC:CRS84` (4326). `geographic` limits
+    /// the answer to geographic reference systems (4326 only).
+    pub fn crs(srid: i32, geographic: bool) -> Option<&'static str> {
+        // Spark 4.2's supported reference systems: (SRID, CRS, geographic).
+        const SYSTEMS: [(i32, &str, bool); 3] = [
+            (0, "SRID:0", false),
+            (3857, "EPSG:3857", false),
+            (4326, "OGC:CRS84", true),
+        ];
+        SYSTEMS
+            .iter()
+            .find(|(s, _, g)| *s == srid && (*g || !geographic))
+            .map(|(_, crs, _)| *crs)
+    }
+}
+
+impl fmt::Display for Srid {
+    /// `ANY` renders as Spark's `simpleString` does, in lower case.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Fixed(srid) => write!(f, "{srid}"),
+            Self::Any => f.write_str("any"),
+        }
+    }
 }
 
 impl DataType {
@@ -66,6 +147,39 @@ impl DataType {
     /// Spark's default `spark.sql.debug.maxToStringFields`: a struct's
     /// `simpleString` lists at most this many fields.
     pub const MAX_TO_STRING_FIELDS: usize = 25;
+
+    /// Spark's `TimeType.MAX_PRECISION`.
+    pub const TIME_MAX_PRECISION: u8 = 6;
+    /// Spark's default precision of `TIME` (`TimeType.DEFAULT_PRECISION`).
+    pub const TIME_DEFAULT_PRECISION: u8 = 6;
+
+    /// `TIME(precision)`.
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_TIME_PRECISION` when `precision > 6`.
+    pub fn time(precision: u32) -> Result<Self> {
+        match u8::try_from(precision) {
+            Ok(p) if p <= Self::TIME_MAX_PRECISION => Ok(Self::Time { precision: p }),
+            _ => Err(error::time_precision(&precision.to_string())),
+        }
+    }
+
+    /// `GEOMETRY(srid)`.
+    ///
+    /// # Errors
+    /// `ST_INVALID_SRID_VALUE` for an SRID Spark does not support (see
+    /// [`Srid::crs`]).
+    pub fn geometry(srid: Srid) -> Result<Self> {
+        check_srid(srid, false).map(|srid| Self::Geometry { srid })
+    }
+
+    /// `GEOGRAPHY(srid)`.
+    ///
+    /// # Errors
+    /// `ST_INVALID_SRID_VALUE` for any SRID other than 4326.
+    pub fn geography(srid: Srid) -> Result<Self> {
+        check_srid(srid, true).map(|srid| Self::Geography { srid })
+    }
 
     /// Spark's `DataType.simpleString`, e.g. `int`, `decimal(10,2)`,
     /// `struct<a:int>` (at most [`Self::MAX_TO_STRING_FIELDS`] fields of a
@@ -94,7 +208,10 @@ impl DataType {
             Self::Short => "short".to_owned(),
             Self::Integer => "integer".to_owned(),
             Self::Long => "long".to_owned(),
-            Self::Decimal(_) => self.atomic_simple_string(),
+            Self::Decimal(_)
+            | Self::Time { .. }
+            | Self::Geometry { .. }
+            | Self::Geography { .. } => self.atomic_simple_string(),
             other => other.keyword().to_owned(),
         }
     }
@@ -103,6 +220,9 @@ impl DataType {
     fn atomic_simple_string(&self) -> String {
         match self {
             Self::Decimal(d) => format!("decimal({},{})", d.precision, d.scale),
+            Self::Time { precision } => format!("time({precision})"),
+            Self::Geometry { srid } => format!("geometry({srid})"),
+            Self::Geography { srid } => format!("geography({srid})"),
             other => other.keyword().to_owned(),
         }
     }
@@ -192,6 +312,9 @@ impl DataType {
             Self::Date => "date",
             Self::Timestamp => "timestamp",
             Self::TimestampNtz => "timestamp_ntz",
+            Self::Time { .. } => "time",
+            Self::Geometry { .. } => "geometry",
+            Self::Geography { .. } => "geography",
             Self::Array(_) => "array",
             Self::Map(_) => "map",
             Self::Struct(_) => "struct",
@@ -220,6 +343,15 @@ pub(crate) fn quote_if_needed(name: &str) -> String {
         name.to_owned()
     } else {
         format!("`{}`", name.replace('`', "``"))
+    }
+}
+
+fn check_srid(srid: Srid, geographic: bool) -> Result<Srid> {
+    match srid {
+        Srid::Fixed(s) if Srid::crs(s, geographic).is_none() => {
+            Err(error::invalid_srid(&s.to_string()))
+        }
+        _ => Ok(srid),
     }
 }
 

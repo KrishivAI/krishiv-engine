@@ -878,9 +878,10 @@ pub struct UdfFunction {
 pub struct DataType {
     #[prost(enumeration = "data_type::Kind", tag = "1")]
     pub kind: i32,
-    /// `KIND_DECIMAL` only.
+    /// `KIND_DECIMAL` and `KIND_TIME` only.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
+    /// `KIND_DECIMAL` only.
     #[prost(uint32, tag = "3")]
     pub scale: u32,
     /// feature: nested_types
@@ -888,6 +889,10 @@ pub struct DataType {
     /// (`DataType.json`), which keeps nullability and field metadata.
     #[prost(string, tag = "4")]
     pub json: ::prost::alloc::string::String,
+    /// feature: geo_types
+    /// `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.
+    #[prost(int32, tag = "5")]
+    pub srid: i32,
 }
 /// Nested message and enum types in `DataType`.
 pub mod data_type {
@@ -921,6 +926,12 @@ pub mod data_type {
         TimestampNtz = 14,
         /// feature: nested_types
         Nested = 15,
+        /// feature: time_type
+        Time = 16,
+        /// feature: geo_types
+        Geometry = 17,
+        /// feature: geo_types
+        Geography = 18,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -945,6 +956,9 @@ pub mod data_type {
                 Self::Timestamp => "KIND_TIMESTAMP",
                 Self::TimestampNtz => "KIND_TIMESTAMP_NTZ",
                 Self::Nested => "KIND_NESTED",
+                Self::Time => "KIND_TIME",
+                Self::Geometry => "KIND_GEOMETRY",
+                Self::Geography => "KIND_GEOGRAPHY",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -966,6 +980,9 @@ pub mod data_type {
                 "KIND_TIMESTAMP" => Some(Self::Timestamp),
                 "KIND_TIMESTAMP_NTZ" => Some(Self::TimestampNtz),
                 "KIND_NESTED" => Some(Self::Nested),
+                "KIND_TIME" => Some(Self::Time),
+                "KIND_GEOMETRY" => Some(Self::Geometry),
+                "KIND_GEOGRAPHY" => Some(Self::Geography),
                 _ => None,
             }
         }

@@ -6,8 +6,8 @@ use krishiv_common::error::ErrorClass;
 
 use crate::arrow::{SPARK_METADATA_KEY, SPARK_TYPE_METADATA_KEY, normalize_ingest_type};
 use crate::{
-    ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, StructField, StructType,
-    parse_data_type,
+    ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, Srid, StructField,
+    StructType, parse_data_type,
 };
 
 fn dec(p: u32, s: u32) -> DataType {
@@ -20,10 +20,22 @@ fn dec(p: u32, s: u32) -> DataType {
 /// One instance of every in-scope type, decimals at the storage boundary.
 fn all_types() -> Vec<DataType> {
     "boolean tinyint smallint int bigint float double string binary decimal(0,0) decimal(10,2) \
-     decimal(18,18) decimal(19,0) decimal(38,38) date timestamp timestamp_ntz"
+     decimal(18,18) decimal(19,0) decimal(38,38) date timestamp timestamp_ntz time(0) time(3) \
+     time(6) geometry(0) geometry(3857) geometry(4326) geometry(any) geography(4326) geography(any)"
         .split(' ')
         .map(|s| parse_data_type(s).unwrap_or_else(|e| panic!("{s}: {e}")))
         .collect()
+}
+
+/// Types whose canonical Arrow type alone reads back as another type.
+fn needs_tag(t: &DataType) -> bool {
+    *t == dec(0, 0)
+        || matches!(
+            t,
+            DataType::Time { precision: 0..=5 }
+                | DataType::Geometry { .. }
+                | DataType::Geography { .. }
+        )
 }
 
 #[test]
@@ -32,7 +44,8 @@ fn spark_to_arrow_to_spark_round_trips_every_type() {
         let field = t.to_arrow_field("c", true);
         assert_eq!(DataType::from_arrow_field(&field).as_ref(), Ok(&t), "{t}");
         assert!(t.is_valid_storage(&t.to_arrow()), "{t}");
-        if t != dec(0, 0) {
+        assert_eq!(field.metadata().is_empty(), !needs_tag(&t), "{t}");
+        if !needs_tag(&t) {
             assert_eq!(DataType::from_arrow(&t.to_arrow()), Ok(t.clone()), "{t}");
             assert!(field.metadata().is_empty(), "{t}");
         }
@@ -58,10 +71,229 @@ fn canonical_arrow_types() {
         (DataType::Date, ArrowType::Date32),
         (DataType::Timestamp, ts(Some("UTC"))),
         (DataType::TimestampNtz, ts(None)),
+        (
+            DataType::Time { precision: 2 },
+            ArrowType::Time64(TimeUnit::Nanosecond),
+        ),
     ];
     for (t, arrow) in cases {
         assert_eq!(t.to_arrow(), arrow, "{t}");
     }
+    let spatial = ArrowType::Struct(
+        vec![
+            Field::new("srid", ArrowType::Int32, false),
+            Field::new("wkb", ArrowType::BinaryView, false),
+        ]
+        .into(),
+    );
+    for srid in [Srid::Fixed(0), Srid::Any] {
+        assert_eq!(DataType::Geometry { srid }.to_arrow(), spatial);
+        assert_eq!(DataType::Geography { srid }.to_arrow(), spatial);
+    }
+}
+
+#[test]
+fn time_arrow_mapping() {
+    let ns = ArrowType::Time64(TimeUnit::Nanosecond);
+    assert_eq!(
+        DataType::from_arrow(&ns),
+        Ok(DataType::Time { precision: 6 })
+    );
+    // Any precision is stored as nanoseconds; other units are not a time.
+    assert!(DataType::Time { precision: 0 }.is_valid_storage(&ns));
+    for a in [
+        ArrowType::Time64(TimeUnit::Microsecond),
+        ArrowType::Time32(TimeUnit::Millisecond),
+        ArrowType::Time32(TimeUnit::Second),
+    ] {
+        assert!(!DataType::Time { precision: 6 }.is_valid_storage(&a), "{a}");
+        let e = DataType::from_arrow(&a).map_err(|e| e.error_class());
+        assert_eq!(e, Err(ErrorClass::KrishivUnsupportedFeature), "{a}");
+    }
+    let field = DataType::Time { precision: 3 }.to_arrow_field("t", false);
+    assert_eq!(
+        field
+            .metadata()
+            .get(SPARK_TYPE_METADATA_KEY)
+            .map(String::as_str),
+        Some("time(3)")
+    );
+}
+
+#[test]
+fn spatial_fields_need_their_tag() {
+    let g = DataType::Geometry { srid: Srid::Any };
+    let field = g.to_arrow_field("g", true);
+    assert_eq!(
+        field
+            .metadata()
+            .get(SPARK_TYPE_METADATA_KEY)
+            .map(String::as_str),
+        Some("geometry(any)")
+    );
+    // An untagged struct is not a spatial type: it reads as a plain struct.
+    let plain = DataType::from_arrow(field.data_type()).unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(plain, g);
+    assert_eq!(plain.simple_string(), "struct<srid:int,wkb:binary>");
+    let binary_child = ArrowType::Struct(
+        vec![
+            Field::new("srid", ArrowType::Int32, false),
+            Field::new("wkb", ArrowType::Binary, false),
+        ]
+        .into(),
+    );
+    assert!(!g.is_valid_storage(&binary_child));
+    assert!(!g.is_valid_storage(&ArrowType::BinaryView));
+    let retagged =
+        Field::new("g", ArrowType::BinaryView, true).with_metadata(field.metadata().clone());
+    assert_eq!(
+        DataType::from_arrow_field(&retagged).map_err(|e| e.error_class()),
+        Err(ErrorClass::KrishivUnsupportedFeature)
+    );
+}
+
+#[test]
+fn time_precision_bounds_follow_spark() {
+    for p in 0..=6 {
+        let t = DataType::time(p);
+        assert_eq!(
+            t.as_ref().map(DataType::simple_string),
+            Ok(format!("time({p})"))
+        );
+    }
+    let e = DataType::time(7).err();
+    assert_eq!(
+        e.map(|e| e.to_string()).as_deref(),
+        Some(
+            "[UNSUPPORTED_TIME_PRECISION] The seconds precision 7 of the TIME data type is out \
+             of the supported range [0, 6]. SQLSTATE: 0A001"
+        )
+    );
+    assert!(DataType::time(u32::MAX).is_err());
+    assert_eq!(parse_data_type("time"), Ok(DataType::Time { precision: 6 }));
+    assert_eq!(
+        parse_data_type("time(2) without time zone"),
+        Ok(DataType::Time { precision: 2 })
+    );
+}
+
+#[test]
+fn srids_follow_spark() {
+    assert_eq!(
+        DataType::geometry(Srid::Fixed(3857)),
+        Ok(DataType::Geometry {
+            srid: Srid::Fixed(3857)
+        })
+    );
+    assert!(DataType::geography(Srid::Any).is_ok());
+    for (srid, geographic) in [
+        (1, false),
+        (-1, false),
+        (0, true),
+        (3857, true),
+        (9999, true),
+    ] {
+        let t = if geographic {
+            DataType::geography(Srid::Fixed(srid))
+        } else {
+            DataType::geometry(Srid::Fixed(srid))
+        };
+        let e = t.err();
+        assert_eq!(
+            e.as_ref()
+                .map(krishiv_common::error::KrishivError::error_class),
+            Some(ErrorClass::StInvalidSridValue),
+            "{srid}"
+        );
+        assert_eq!(
+            e.map(|e| e.message_parameters().to_vec()),
+            Some(vec![("srid", srid.to_string())])
+        );
+    }
+    assert_eq!(Srid::crs(0, false), Some("SRID:0"));
+    assert_eq!(Srid::crs(3857, false), Some("EPSG:3857"));
+    assert_eq!(Srid::crs(4326, false), Some("OGC:CRS84"));
+    assert_eq!(Srid::crs(4326, true), Some("OGC:CRS84"));
+    assert_eq!(Srid::crs(3857, true), None);
+    for s in [Srid::Any, Srid::Fixed(0), Srid::Fixed(4326)] {
+        assert_eq!(Srid::from_i32(s.to_i32()), s);
+    }
+    assert_eq!(Srid::Any.to_i32(), -1);
+    // `ANY` must close the argument list and end the type.
+    for s in ["geometry(any", "geometry(any,1)", "geography(any) int"] {
+        let e = parse_data_type(s).map_err(|e| e.error_class());
+        assert_eq!(e, Err(ErrorClass::ParseSyntaxError), "{s}");
+    }
+}
+
+#[test]
+fn time_and_spatial_types_round_trip_through_json() {
+    // Spark's JSON names from the type-string fixture.
+    let cases = [
+        (DataType::Time { precision: 0 }, "\"time(0)\""),
+        (DataType::Time { precision: 6 }, "\"time(6)\""),
+        (
+            DataType::Geometry {
+                srid: Srid::Fixed(0),
+            },
+            "\"geometry(SRID:0)\"",
+        ),
+        (
+            DataType::Geometry {
+                srid: Srid::Fixed(3857),
+            },
+            "\"geometry(EPSG:3857)\"",
+        ),
+        (
+            DataType::Geometry {
+                srid: Srid::Fixed(4326),
+            },
+            "\"geometry(OGC:CRS84)\"",
+        ),
+        (
+            DataType::Geometry { srid: Srid::Any },
+            "\"geometry(SRID:ANY)\"",
+        ),
+        (
+            DataType::Geography {
+                srid: Srid::Fixed(4326),
+            },
+            "\"geography(OGC:CRS84, SPHERICAL)\"",
+        ),
+        (
+            DataType::Geography { srid: Srid::Any },
+            "\"geography(SRID:ANY, SPHERICAL)\"",
+        ),
+    ];
+    for (t, json) in cases {
+        assert_eq!(t.json(), json, "{t}");
+        assert_eq!(DataType::from_json(&t.json()).as_ref(), Ok(&t), "{t}");
+    }
+    // Nested under arrays, maps and structs too.
+    let nested: DataType = ArrayType::new(
+        MapType::new(
+            DataType::Time { precision: 3 },
+            DataType::Geometry { srid: Srid::Any },
+            true,
+        )
+        .into(),
+        true,
+    )
+    .into();
+    assert_eq!(DataType::from_json(&nested.json()).as_ref(), Ok(&nested));
+    let class = |s: &str| DataType::from_json(s).map_err(|e| e.error_class());
+    assert_eq!(
+        class("\"time(7)\""),
+        Err(ErrorClass::UnsupportedTimePrecision)
+    );
+    assert_eq!(
+        class("\"geography(SRID:0, SPHERICAL)\""),
+        Err(ErrorClass::StInvalidSridValue)
+    );
+    assert_eq!(
+        class("\"geometry(SRID:1)\""),
+        Err(ErrorClass::InvalidJsonDataType)
+    );
 }
 
 #[test]
@@ -286,7 +518,8 @@ fn every_type_prints_and_reparses() {
 #[test]
 fn parser_never_panics_on_token_soup() {
     let pieces: Vec<&str> = "int|decimal|timestamp|with|local|time|zone|(|)|,|38|39|-|1.5|`|<|>|\
-         array|string|collate| |é|\u{0}|999999999999|\t|dec|numeric|without|:|struct"
+         array|string|collate| |é|\u{0}|999999999999|\t|dec|numeric|without|:|struct|geometry|\
+         geography|any|4326|3857|0|6|7"
         .split('|')
         .collect();
     // Deterministic xorshift generator: the same inputs on every run.

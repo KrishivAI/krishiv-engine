@@ -885,25 +885,29 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
             ..pb::DataType::default()
         });
     }
-    let (kind, precision, scale) = match t {
-        DataType::Null => (Kind::Null, 0, 0),
-        DataType::Boolean => (Kind::Boolean, 0, 0),
-        DataType::Byte => (Kind::Byte, 0, 0),
-        DataType::Short => (Kind::Short, 0, 0),
-        DataType::Integer => (Kind::Integer, 0, 0),
-        DataType::Long => (Kind::Long, 0, 0),
-        DataType::Float => (Kind::Float, 0, 0),
-        DataType::Double => (Kind::Double, 0, 0),
-        DataType::String => (Kind::String, 0, 0),
-        DataType::Binary => (Kind::Binary, 0, 0),
+    let (kind, precision, scale, srid) = match t {
+        DataType::Null => (Kind::Null, 0, 0, 0),
+        DataType::Boolean => (Kind::Boolean, 0, 0, 0),
+        DataType::Byte => (Kind::Byte, 0, 0, 0),
+        DataType::Short => (Kind::Short, 0, 0, 0),
+        DataType::Integer => (Kind::Integer, 0, 0, 0),
+        DataType::Long => (Kind::Long, 0, 0, 0),
+        DataType::Float => (Kind::Float, 0, 0, 0),
+        DataType::Double => (Kind::Double, 0, 0, 0),
+        DataType::String => (Kind::String, 0, 0, 0),
+        DataType::Binary => (Kind::Binary, 0, 0, 0),
         DataType::Decimal(d) => (
             Kind::Decimal,
             u32::from(d.precision()),
             u32::from(d.scale()),
+            0,
         ),
-        DataType::Date => (Kind::Date, 0, 0),
-        DataType::Timestamp => (Kind::Timestamp, 0, 0),
-        DataType::TimestampNtz => (Kind::TimestampNtz, 0, 0),
+        DataType::Date => (Kind::Date, 0, 0, 0),
+        DataType::Timestamp => (Kind::Timestamp, 0, 0, 0),
+        DataType::TimestampNtz => (Kind::TimestampNtz, 0, 0, 0),
+        DataType::Time { precision } => (Kind::Time, u32::from(*precision), 0, 0),
+        DataType::Geometry { srid } => (Kind::Geometry, 0, 0, srid.to_i32()),
+        DataType::Geography { srid } => (Kind::Geography, 0, 0, srid.to_i32()),
         _ => {
             return Err(CodecError::Unsupported(
                 "a Spark type this version does not know".to_owned(),
@@ -914,6 +918,7 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         kind: kind as i32,
         precision,
         scale,
+        srid,
         json: String::new(),
     })
 }

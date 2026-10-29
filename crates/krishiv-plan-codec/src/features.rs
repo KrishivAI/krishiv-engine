@@ -119,6 +119,7 @@ macro_rules! registry {
 registry! {
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
     (expand, Expand, 5, Semantic, "The `Expand` node and its `NullOf` project item (ROLLUP, CUBE, GROUPING SETS)."),
+    (geo_types, GeoTypes, POST_MIGRATION_READER_VERSION, Semantic, "The `GEOMETRY` and `GEOGRAPHY` types, with their SRID."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
@@ -129,6 +130,7 @@ registry! {
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
     (rust_udf, RustUdf, POST_MIGRATION_READER_VERSION, Semantic, "A call of a session-registered native Rust UDF (`UdfFunction`, by name and version)."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
+    (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (window, Window, 4, Semantic, "The `Window` node and its functions."),
     (window_frame_offsets, WindowFrameOffsets, POST_MIGRATION_READER_VERSION, Semantic, "`ROWS` window frame bounds at an offset from the current row (`n PRECEDING`, `n FOLLOWING`)."),
     (window_group_limit, WindowGroupLimit, POST_MIGRATION_READER_VERSION, Optimization, "The `WindowGroupLimit` node (the rows of each partition within a rank)."),
@@ -282,7 +284,15 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         // (variant, char/varchar, intervals) must look through them: its
         // arm walks the element, key, value and field types, so that
         // `array<variant>` needs it too.
-        Construct::Type(t) => t.is_nested().then_some(Feature::NestedTypes),
+        Construct::Type(t) => match t {
+            DataType::Time { .. } => Some(Feature::TimeType),
+            DataType::Geometry { .. } | DataType::Geography { .. } => Some(Feature::GeoTypes),
+            // Every other type is in the baseline or under `NestedTypes`.
+            // `DataType` is non-exhaustive, so this arm cannot list them: a
+            // type added later fails to encode (`encode::spark_type`) until
+            // it is mapped there, and classified here.
+            _ => t.is_nested().then_some(Feature::NestedTypes),
+        },
         Construct::ArrowType(t) => arrow_nested(t).then_some(Feature::NestedTypes),
         Construct::Expr(e) => match &e.node {
             ExprNode::Resolved(ResolvedExpr::Field { .. }) => Some(Feature::StructField),

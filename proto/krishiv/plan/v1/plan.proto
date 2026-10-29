@@ -708,15 +708,25 @@ message DataType {
     KIND_TIMESTAMP_NTZ = 14;
     // feature: nested_types
     KIND_NESTED = 15;
+    // feature: time_type
+    KIND_TIME = 16;
+    // feature: geo_types
+    KIND_GEOMETRY = 17;
+    // feature: geo_types
+    KIND_GEOGRAPHY = 18;
   }
   Kind kind = 1;
-  // `KIND_DECIMAL` only.
+  // `KIND_DECIMAL` and `KIND_TIME` only.
   uint32 precision = 2;
+  // `KIND_DECIMAL` only.
   uint32 scale = 3;
   // feature: nested_types
   // `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
   // (`DataType.json`), which keeps nullability and field metadata.
   string json = 4;
+  // feature: geo_types
+  // `KIND_GEOMETRY` and `KIND_GEOGRAPHY` only: the SRID, -1 for `ANY`.
+  int32 srid = 5;
 }
 
 enum YearMonthField {

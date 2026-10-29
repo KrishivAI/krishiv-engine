@@ -3,7 +3,8 @@
 //!
 //! Follows Spark's `dataType` grammar for the types in [`DataType`]: a type
 //! name, optionally followed by `(` integer `,` ... `)`, plus the multi-word
-//! forms `TIMESTAMP WITH LOCAL TIME ZONE` and `TIMESTAMP WITHOUT TIME ZONE`.
+//! forms `TIMESTAMP WITH LOCAL TIME ZONE`, `TIMESTAMP WITHOUT TIME ZONE` and
+//! `TIME[(p)] WITHOUT TIME ZONE`, and `GEOMETRY(ANY)` / `GEOGRAPHY(ANY)`.
 //! The lexer follows Spark's: case-insensitive keywords, Unicode whitespace,
 //! `--` and nested `/* */` comments, backquoted identifiers and numeric
 //! literal tokens, string literals (for field comments), and Spark's
@@ -17,14 +18,14 @@
 //! `INCOMPLETE_TYPE_DEFINITION.*`, and a single token after a complete
 //! complex type is "extra input".
 //!
-//! Interval, char/varchar, variant, time and collated string types are
+//! Interval, char/varchar, variant and collated string types are
 //! recognized and rejected with `KRISHIV_UNSUPPORTED_FEATURE`.
 
 use krishiv_common::error::ErrorClass;
 
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
-use crate::{DataType, DecimalType};
+use crate::{DataType, DecimalType, Srid};
 
 /// Parses a Spark DDL type string such as `int`, `DECIMAL(10, 2)` or
 /// `timestamp_ntz`.
@@ -461,8 +462,21 @@ impl<'a> Parser<'a> {
                     return Ok(DataType::TimestampNtz);
                 }
             }
+            if matches!(lower.as_str(), "geometry" | "geography") && self.any_srid()? {
+                if let Some(tok) = self.peek() {
+                    return Err(error::extra_input(&format!("'{}'", tok.raw)));
+                }
+                return Ok(if lower == "geometry" {
+                    DataType::Geometry { srid: Srid::Any }
+                } else {
+                    DataType::Geography { srid: Srid::Any }
+                });
+            }
         }
         let args = self.type_arguments()?;
+        if !quoted && lower == "time" && self.peek().is_some_and(|t| t.is_keyword("without")) {
+            self.time_without_time_zone()?;
+        }
         if depth == 0
             && let Some(tok) = self.peek()
         {
@@ -619,11 +633,50 @@ impl<'a> Parser<'a> {
             "interval" => "interval data types",
             "char" | "character" | "varchar" => "char/varchar data types",
             "variant" => "the variant data type",
-            "time" => "the time data type",
             "string" if self.peek().is_some_and(|t| t.is_keyword("collate")) => "collated strings",
             _ => return None,
         };
         Some(format!("{what} (\"{}\")", lower.to_ascii_uppercase()))
+    }
+
+    /// `WITHOUT TIME ZONE` after `TIME[(p)]`, at `WITHOUT`. As in Spark, a
+    /// `WITHOUT` that no `TIME` follows is extra input, and a missing
+    /// `ZONE` is reported as missing.
+    fn time_without_time_zone(&mut self) -> Result<()> {
+        let without = self.next();
+        if !self.peek().is_some_and(|t| t.is_keyword("time")) {
+            let raw = without.map_or("", |t| t.raw);
+            return Err(error::extra_input(&format!("'{raw}'")));
+        }
+        self.next();
+        match self.next() {
+            Some(t) if t.is_keyword("zone") => Ok(()),
+            Some(t) => Err(t.syntax_error()),
+            None => Err(error::missing("end of input", "'ZONE'")),
+        }
+    }
+
+    /// After `GEOMETRY` or `GEOGRAPHY`: consumes `( ANY )` and returns
+    /// true, or consumes nothing when an integer list follows. Spark
+    /// reports any other argument at the `(`.
+    fn any_srid(&mut self) -> Result<bool> {
+        let Some(open) = self.peek().filter(|t| t.kind == Kind::Punct('(')).cloned() else {
+            return Ok(false);
+        };
+        match self.tokens.get(self.pos + 1) {
+            Some(t) if t.kind == Kind::Integer => Ok(false),
+            Some(t)
+                if t.is_keyword("any")
+                    && self
+                        .tokens
+                        .get(self.pos + 2)
+                        .is_some_and(|t| t.kind == Kind::Punct(')')) =>
+            {
+                self.pos += 3;
+                Ok(true)
+            }
+            _ => Err(open.syntax_error()),
+        }
     }
 
     /// `( INTEGER (, INTEGER)* )`, if present.
@@ -666,18 +719,38 @@ fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
         ("decimal" | "dec" | "numeric", []) => DataType::Decimal(DecimalType::USER_DEFAULT),
         ("decimal" | "dec" | "numeric", [p]) => return Some(decimal(p, "0")),
         ("decimal" | "dec" | "numeric", [p, s]) => return Some(decimal(p, s)),
+        ("time", []) => DataType::Time {
+            precision: DataType::TIME_DEFAULT_PRECISION,
+        },
+        ("time", [p]) => {
+            return Some(match p.parse::<u32>() {
+                Ok(p) => DataType::time(p),
+                Err(_) => Err(error::time_precision(&digits(p))),
+            });
+        }
+        ("geometry" | "geography", [srid]) => {
+            return Some(match srid.parse::<i32>() {
+                Ok(s) if lower == "geometry" => DataType::geometry(Srid::Fixed(s)),
+                Ok(s) => DataType::geography(Srid::Fixed(s)),
+                Err(_) => Err(error::invalid_srid(&digits(srid))),
+            });
+        }
         _ => return None,
     };
     Some(Ok(t))
 }
 
+/// Digits as written, without leading zeros.
+fn digits(s: &str) -> String {
+    match s.trim_start_matches('0') {
+        "" => "0".to_owned(),
+        d => d.to_owned(),
+    }
+}
+
 /// Values too large for `u32` (Spark: an unclassified number format error)
 /// are reported with the digits as written, without leading zeros.
 fn decimal(precision: &str, scale: &str) -> Result<DataType> {
-    let digits = |s: &'_ str| match s.trim_start_matches('0') {
-        "" => "0".to_owned(),
-        d => d.to_owned(),
-    };
     match (precision.parse::<u32>(), scale.parse::<u32>()) {
         (Ok(p), Ok(s)) => DecimalType::try_new(p, s).map(DataType::Decimal),
         (Ok(_), Err(_)) => Err(error::scale_exceeds_precision(

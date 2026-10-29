@@ -1783,6 +1783,8 @@ dependencies = [
 name = "krishiv-connect"
 version = "0.1.0-alpha"
 dependencies = [
+ "arrow-array",
+ "arrow-schema",
  "insta",
  "krishiv-common",
  "krishiv-plan",

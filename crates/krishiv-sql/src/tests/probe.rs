@@ -193,11 +193,16 @@ fn agrees_with_spark_on_the_type_string_fixture() {
                 }
             }
             Some("UNCLASSIFIED") => {
-                let class = ours.unwrap_err().error.error_class();
+                let class = match ours {
+                    Err(e) => e.error.error_class(),
+                    Ok(t) => t.to_data_type().unwrap_err().error_class(),
+                };
                 assert!(
                     [
                         ErrorClass::DecimalPrecisionExceedsMaxPrecision,
-                        ErrorClass::LegacyErrorTemp1228
+                        ErrorClass::LegacyErrorTemp1228,
+                        ErrorClass::UnsupportedTimePrecision,
+                        ErrorClass::StInvalidSridValue,
                     ]
                     .contains(&class),
                     "{ddl}: {class:?}"
@@ -211,7 +216,14 @@ fn agrees_with_spark_on_the_type_string_fixture() {
                 assert_eq!(e.error.error_class(), ErrorClass::ParseSyntaxError, "{ddl}");
             }
             Some(_) => {
-                let e = ours.unwrap_err();
+                let e = match ours {
+                    Err(e) => e,
+                    // A spatial reference is checked when the type resolves.
+                    Ok(t) => ParseError {
+                        error: t.to_data_type().unwrap_err(),
+                        span: Span::new(0, 0),
+                    },
+                };
                 assert!(same_error(ddl, &e, case, None), "{ddl}: {}", e.error);
             }
         }

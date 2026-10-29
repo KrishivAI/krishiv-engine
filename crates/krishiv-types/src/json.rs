@@ -12,7 +12,7 @@ use serde_json::{Map, Value};
 
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
-use crate::{DataType, DecimalType};
+use crate::{DataType, DecimalType, Srid};
 
 impl DataType {
     /// Spark's `DataType.json`: compact, keys in Spark's order.
@@ -51,6 +51,18 @@ impl DataType {
                     out.push('}');
                 }
                 out.push_str("]}");
+            }
+            Self::Time { precision } => {
+                write_string(&format!("time({precision})"), out);
+            }
+            Self::Geometry { srid } => {
+                write_string(&format!("geometry({})", json_srid(*srid, false)), out);
+            }
+            Self::Geography { srid } => {
+                write_string(
+                    &format!("geography({}, SPHERICAL)", json_srid(*srid, true)),
+                    out,
+                );
             }
             atomic => write_string(&atomic.type_name(), out),
         }
@@ -143,8 +155,10 @@ fn struct_field(v: &Value, depth: usize) -> Result<StructField> {
     Ok(StructField::new(name, data_type, nullable).with_metadata(metadata))
 }
 
-/// Spark's `nameToType`: the `typeName` of an atomic type, or `decimal`
-/// (`decimal(10,0)`); `None` for a name that is no type.
+/// Spark's `nameToType`: the `typeName` of an atomic type, `decimal`
+/// (`decimal(10,0)`), `time(p)` and the spatial JSON names (`geometry` by
+/// reference system, `geography` by reference system plus `SPHERICAL`);
+/// `None` for a name that is no type.
 fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
     let atomic = [
         DataType::Null,
@@ -185,11 +199,123 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
             _ => Err(error::precision_exceeds_max(p)),
         });
     }
+    if let Some(t) = time_from_name(name) {
+        return Some(t);
+    }
+    if let Some(t) = geometry_from_name(name) {
+        return Some(t);
+    }
+    if let Some(t) = geography_from_name(name) {
+        return Some(t);
+    }
     // A Spark type Krishiv does not have yet (`char(3)`, `variant`, ...).
     match crate::parse_data_type(name) {
         Err(e) if e.error_class() == ErrorClass::KrishivUnsupportedFeature => Some(Err(e)),
         _ => None,
     }
+}
+
+/// The reference-system name Spark's JSON form of a spatial type uses, from
+/// the type-string fixture (`SRID:0`, `EPSG:3857`, `OGC:CRS84`, `SRID:ANY`).
+/// A fixed SRID Spark does not support cannot occur in a validated type;
+/// it falls back to the integer so `json` never panics.
+fn json_srid(srid: Srid, geographic: bool) -> String {
+    match srid {
+        Srid::Any => "SRID:ANY".to_owned(),
+        Srid::Fixed(s) => Srid::crs(s, geographic)
+            .map(str::to_owned)
+            .unwrap_or_else(|| s.to_string()),
+    }
+}
+
+/// The inverse of [`json_srid`]: `None` for a name that is no reference
+/// system.
+fn crs_to_srid(name: &str) -> Option<Srid> {
+    match name {
+        "SRID:0" => Some(Srid::Fixed(0)),
+        "EPSG:3857" => Some(Srid::Fixed(3857)),
+        "OGC:CRS84" => Some(Srid::Fixed(4326)),
+        "SRID:ANY" => Some(Srid::Any),
+        _ => None,
+    }
+}
+
+/// Digits as written, without leading zeros (as in `ddl`).
+fn json_digits(s: &str) -> String {
+    match s.trim_start_matches('0') {
+        "" => "0".to_owned(),
+        d => d.to_owned(),
+    }
+}
+
+/// `time(p)` in Spark's JSON form; `None` when `name` is no time name.
+/// A numeric precision that overflows `u32` is `UNSUPPORTED_TIME_PRECISION`,
+/// as in Spark's DDL path.
+fn time_from_name(name: &str) -> Option<Result<DataType>> {
+    let inner = name.strip_prefix("time(")?.strip_suffix(')')?.trim();
+    if inner.is_empty() || !inner.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(match inner.parse::<u32>() {
+        Ok(p) => DataType::time(p),
+        Err(_) => Err(error::time_precision(&json_digits(inner))),
+    })
+}
+
+/// `geometry(...)` in Spark's JSON form (`geometry(SRID:0)`,
+/// `geometry(OGC:CRS84)`, `geometry(SRID:ANY)`), or the DDL form
+/// (`geometry(0)`, `geometry(any)`); `None` when `name` is no geometry name.
+fn geometry_from_name(name: &str) -> Option<Result<DataType>> {
+    let inner = name.strip_prefix("geometry(")?.strip_suffix(')')?.trim();
+    if let Some(srid) = crs_to_srid(inner) {
+        return Some(DataType::geometry(srid));
+    }
+    if inner.eq_ignore_ascii_case("any") {
+        return Some(DataType::geometry(Srid::Any));
+    }
+    if !inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit()) {
+        return Some(match inner.parse::<i32>() {
+            Ok(s) => DataType::geometry(Srid::Fixed(s)),
+            Err(_) => Err(error::invalid_srid(&json_digits(inner))),
+        });
+    }
+    // A signed integer (DDL would reject `+`/`-` with a syntax error at the
+    // `(`, but JSON only ever carries what `json` wrote).
+    if let Some(rest) = inner.strip_prefix('-')
+        && !rest.is_empty()
+        && rest.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Some(match inner.parse::<i32>() {
+            Ok(s) => DataType::geometry(Srid::Fixed(s)),
+            Err(_) => Err(error::invalid_srid(&format!("-{}", json_digits(rest)))),
+        });
+    }
+    None
+}
+
+/// `geography(...)` in Spark's JSON form (`geography(OGC:CRS84, SPHERICAL)`,
+/// `geography(SRID:ANY, SPHERICAL)`), or the DDL form (`geography(4326)`,
+/// `geography(any)`); `None` when `name` is no geography name.
+fn geography_from_name(name: &str) -> Option<Result<DataType>> {
+    let inner = name.strip_prefix("geography(")?.strip_suffix(')')?;
+    if let Some((crs, shape)) = inner.split_once(',') {
+        if shape.trim() != "SPHERICAL" {
+            return None;
+        }
+        let srid = crs_to_srid(crs.trim())?;
+        return Some(DataType::geography(srid));
+    }
+    let inner = inner.trim();
+    if inner.eq_ignore_ascii_case("any") {
+        return Some(DataType::geography(Srid::Any));
+    }
+    if !inner.is_empty() && inner.bytes().all(|b| b.is_ascii_digit()) {
+        return Some(match inner.parse::<i32>() {
+            Ok(s) => DataType::geography(Srid::Fixed(s)),
+            Err(_) => Err(error::invalid_srid(&json_digits(inner))),
+        });
+    }
+    None
 }
 
 /// A JSON string as json4s writes it: `"`, `\` and control characters
