@@ -187,7 +187,7 @@ fn struct_field_names_follow_case_sensitivity() {
     s.conf().set("spark.sql.caseSensitive", "true").unwrap();
     assert_eq!(
         error(&s, "SELECT named_struct('A', 1).a"),
-        ErrorClass::UnresolvedColumnWithSuggestion
+        ErrorClass::FieldNotFound
     );
     assert_eq!(rows(&s, "SELECT named_struct('A', 1).A"), ["1"]);
 }
@@ -226,7 +226,7 @@ fn struct_errors_name_their_classes() {
     );
     assert_eq!(
         error(&s, "SELECT named_struct('a', 1).b"),
-        ErrorClass::UnresolvedColumnWithSuggestion
+        ErrorClass::FieldNotFound
     );
 }
 
@@ -395,7 +395,7 @@ fn column_get_field_reads_by_name() {
     // Missing fields and non-structs fail as the SQL path fails.
     assert_eq!(
         column_error(&df, col("r").get_field("zzz")),
-        ErrorClass::UnresolvedColumnWithSuggestion
+        ErrorClass::FieldNotFound
     );
     assert_eq!(
         column_error(&df, col("x").get_field("a")),
@@ -412,7 +412,7 @@ fn column_get_field_follows_case_sensitivity() {
     s.conf().set("spark.sql.caseSensitive", "true").unwrap();
     assert_eq!(
         column_error(&df, col("r").get_field("a")),
-        ErrorClass::UnresolvedColumnWithSuggestion
+        ErrorClass::FieldNotFound
     );
     assert_eq!(collected(&df.select([col("r").get_field("A")])), ["1"]);
 }
@@ -675,6 +675,22 @@ fn min_and_max_over_structs() {
         ),
         ["{\"a\":1,\"b\":null}|{\"a\":1,\"b\":\"x\"}"]
     );
+    // Field by field with NULLs first (Spark 4.2.0): a NULL first field is
+    // the smallest, whatever the later fields hold.
+    assert_eq!(
+        rows_all(
+            &s,
+            "SELECT MAX(c), MIN(c) FROM VALUES (named_struct('a', 1, 'b', 'x')), (named_struct('a', 1, 'b', CAST(NULL AS STRING))), (named_struct('a', CAST(NULL AS INT), 'b', 'z')), (CAST(NULL AS STRUCT<a: INT, b: STRING>)) AS t(c)"
+        ),
+        ["{\"a\":1,\"b\":\"x\"}|{\"a\":null,\"b\":\"z\"}"]
+    );
+    assert_eq!(
+        rows_all(
+            &s,
+            "SELECT MAX(c), MIN(c) FROM VALUES (named_struct('a', 2, 'b', 1)), (named_struct('a', 2, 'b', CAST(NULL AS INT))) AS t(c)"
+        ),
+        ["{\"a\":2,\"b\":1}|{\"a\":2,\"b\":null}"]
+    );
     // Only NULL structs: NULL.
     assert_eq!(
         rows_all(
@@ -768,5 +784,47 @@ fn min_and_max_over_structs_in_windows() {
             "1|3|{\"a\":2}",
             "2|1|NULL",
         ]
+    );
+}
+
+/// `withField` and `dropFields` read a dotted name as a path into nested
+/// structs, a NULL parent stays NULL, a missing parent is `FIELD_NOT_FOUND`,
+/// and dropping every field of a nested struct is `CANNOT_DROP_ALL_FIELDS`
+/// (all against Spark 4.2.0 through Connect).
+#[test]
+fn column_struct_updates_follow_dotted_paths() {
+    let s = session();
+    let df = block_on(s.sql(
+        "SELECT named_struct('a', named_struct('b', 1, 'c', 2), 'd', 3) AS n, \
+         named_struct('a', CAST(NULL AS STRUCT<b: INT, c: INT>), 'd', 3) AS m",
+    ))
+    .unwrap();
+    let one = |c: Column| collected(&df.select([c]));
+    assert_eq!(
+        one(col("n").with_field("a.b", lit(9))),
+        ["{\"a\":{\"b\":9,\"c\":2},\"d\":3}"]
+    );
+    assert_eq!(
+        one(col("n").with_field("a.z", lit(1))),
+        ["{\"a\":{\"b\":1,\"c\":2,\"z\":1},\"d\":3}"]
+    );
+    assert_eq!(
+        one(col("n").drop_fields(vec!["a.b".to_owned()])),
+        ["{\"a\":{\"c\":2},\"d\":3}"]
+    );
+    assert_eq!(
+        one(col("m").with_field("a.b", lit(1))),
+        ["{\"a\":null,\"d\":3}"]
+    );
+    assert_eq!(
+        column_error(&df, col("n").with_field("x.y", lit(1))),
+        ErrorClass::FieldNotFound
+    );
+    assert_eq!(
+        column_error(
+            &df,
+            col("n").drop_fields(vec!["a.b".to_owned(), "a.c".to_owned()])
+        ),
+        ErrorClass::DatatypeMismatchCannotDropAllFields
     );
 }

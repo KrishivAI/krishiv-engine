@@ -17,7 +17,7 @@ use krishiv_common::error::{
     DatatypeMismatchMapConcatDiffTypes, DatatypeMismatchNonFoldableInput,
     DatatypeMismatchUnexpectedInputType, DuplicateRoutineParameterAssignmentBothPositionalAndNamed,
     DuplicateRoutineParameterAssignmentDoubleNamedArgumentReference, ExceptOverlappingColumns,
-    FailedToParseTooComplex, InternalError, InvalidAggregateFilterNotBoolean,
+    FailedToParseTooComplex, FieldNotFound, InternalError, InvalidAggregateFilterNotBoolean,
     InvalidExtractBaseFieldType, InvalidSqlSyntaxFunctionWithUnsupportedSyntax,
     InvalidSubqueryExpressionScalarSubqueryReturnMoreThanOneOutputColumn,
     InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature,
@@ -3985,25 +3985,26 @@ fn is_deterministic(e: &Expr) -> bool {
     !nondeterministic
 }
 
-/// `UNRESOLVED_COLUMN` for a struct field `parts` names below a struct
-/// with `fields` (Spark's `GetStructField` by an unknown name): the full
-/// path as the object, up to five of the struct's fields as the proposal.
+/// `FIELD_NOT_FOUND` for a struct field `parts` names below a struct with
+/// `fields` (Spark's `GetStructField` by an unknown name, checked against
+/// Spark 4.2.0 for `s.f`, `(s).f`, nested paths and `Column.getField`): the
+/// missing name, and every field of the struct.
 fn unresolved_field(
     parts: &[String],
     fields: &krishiv_types::StructType,
     origin: Origin,
 ) -> AnalysisError {
-    let proposal = fields
+    let name = parts.last().map_or_else(String::new, |n| format!("`{n}`"));
+    let list = fields
         .fields()
         .iter()
-        .take(5)
-        .map(|f| quoted(std::slice::from_ref(&f.name().to_owned())))
+        .map(|f| format!("`{}`", f.name()))
         .collect::<Vec<_>>()
         .join(", ");
     AnalysisError::new(
-        UnresolvedColumnWithSuggestion {
-            object_name: quoted(parts),
-            proposal,
+        FieldNotFound {
+            field_name: name,
+            fields: list,
         },
         origin,
     )

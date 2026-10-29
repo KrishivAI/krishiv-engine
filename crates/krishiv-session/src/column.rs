@@ -273,7 +273,9 @@ impl Column {
     /// The struct with the field `name` added or replaced by `value`, as
     /// PySpark's `Column.withField`: a match (per
     /// `spark.sql.caseSensitive`) is replaced in place, else the field is
-    /// appended last. The name is plain, never a dotted path.
+    /// appended last. A dotted name is a path into nested structs (Spark
+    /// Connect reads it so): `withField("a.b", v)` updates `b` inside `a`,
+    /// a NULL `a` stays NULL, and a missing `a` is `FIELD_NOT_FOUND`.
     ///
     /// ```
     /// # use krishiv_session::functions::{col, lit};
@@ -281,18 +283,14 @@ impl Column {
     /// ```
     #[must_use]
     pub fn with_field(self, name: &str, value: Self) -> Self {
-        Self::new(Expr::new(ExprNode::UpdateFields {
-            base: Arc::new(self.expr),
-            ops: vec![FieldOp::With {
-                name: name.to_owned(),
-                value: Arc::new(value.expr),
-            }],
-        }))
+        let parts: Vec<&str> = name.split('.').collect();
+        Self::new(with_path(self.expr, &parts, value.expr))
     }
 
     /// The struct without the named fields, as PySpark's
     /// `Column.dropFields`: every match (per `spark.sql.caseSensitive`) is
-    /// removed, names that match nothing are ignored.
+    /// removed, names that match nothing are ignored. A dotted name is a
+    /// path into nested structs, applied one name after the other.
     ///
     /// ```
     /// # use krishiv_session::functions::col;
@@ -300,13 +298,20 @@ impl Column {
     /// ```
     #[must_use]
     pub fn drop_fields(self, names: Vec<String>) -> Self {
-        Self::new(Expr::new(ExprNode::UpdateFields {
-            base: Arc::new(self.expr),
-            ops: names
-                .into_iter()
-                .map(|name| FieldOp::Drop { name })
-                .collect(),
-        }))
+        if names.iter().all(|n| !n.contains('.')) {
+            return Self::new(Expr::new(ExprNode::UpdateFields {
+                base: Arc::new(self.expr),
+                ops: names
+                    .into_iter()
+                    .map(|name| FieldOp::Drop { name })
+                    .collect(),
+            }));
+        }
+        let expr = names.iter().fold(self.expr, |acc, name| {
+            let parts: Vec<&str> = name.split('.').collect();
+            drop_path(acc, &parts)
+        });
+        Self::new(expr)
     }
 
     /// Ascending, nulls first (Spark's default), for `order_by`.
@@ -448,6 +453,53 @@ impl ops::Not for Column {
     fn not(self) -> Column {
         Column::call(Builtin::Not, vec![self])
     }
+}
+
+/// `base` with the field at `parts` set to `value`: one update for a plain
+/// name, else an update of the first part whose value is the nested update
+/// of that field.
+fn with_path(base: Expr, parts: &[&str], value: Expr) -> Expr {
+    let (first, rest) = parts.split_first().map_or(("", &[][..]), |(f, r)| (*f, r));
+    let new_value = if rest.is_empty() {
+        value
+    } else {
+        let inner = Expr::new(ExprNode::Field {
+            base: Arc::new(base.clone()),
+            name: first.to_owned(),
+        });
+        with_path(inner, rest, value)
+    };
+    Expr::new(ExprNode::UpdateFields {
+        base: Arc::new(base),
+        ops: vec![FieldOp::With {
+            name: first.to_owned(),
+            value: Arc::new(new_value),
+        }],
+    })
+}
+
+/// `base` without the field at `parts` (a nested path updates its parent).
+fn drop_path(base: Expr, parts: &[&str]) -> Expr {
+    let (first, rest) = parts.split_first().map_or(("", &[][..]), |(f, r)| (*f, r));
+    if rest.is_empty() {
+        return Expr::new(ExprNode::UpdateFields {
+            base: Arc::new(base),
+            ops: vec![FieldOp::Drop {
+                name: first.to_owned(),
+            }],
+        });
+    }
+    let inner = Expr::new(ExprNode::Field {
+        base: Arc::new(base.clone()),
+        name: first.to_owned(),
+    });
+    Expr::new(ExprNode::UpdateFields {
+        base: Arc::new(base),
+        ops: vec![FieldOp::With {
+            name: first.to_owned(),
+            value: Arc::new(drop_path(inner, rest)),
+        }],
+    })
 }
 
 #[cfg(test)]
