@@ -313,7 +313,15 @@ pub fn instantiate_task(
                 plan.schema().fields()
             )));
         }
-        Ok(built.node)
+        // A `range` streamed to the result through row-wise nodes only
+        // returns its rows in slice order, as Spark collects partitions in
+        // order: one driver keeps it (several would hand their batches to
+        // the result in completion order).
+        Ok(if reads_range_in_order(plan.root()) {
+            Arc::new(OrderedNode { inner: built.node })
+        } else {
+            built.node
+        })
     };
     // Instantiation recurses once per node, as planning does.
     krishiv_common::stack::on_big_stack(run)
@@ -824,7 +832,8 @@ impl Instantiation<'_> {
 }
 
 /// Whether `n` streams a `range` through row-wise nodes only (filters,
-/// projections and limits), so its rows reach a `LIMIT` in a defined order.
+/// projections and limits), so its rows reach a `LIMIT` or the result in a
+/// defined order.
 fn reads_range_in_order(n: &PhysNode) -> bool {
     match n {
         PhysNode::Range(_) => true,
