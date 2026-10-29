@@ -4302,7 +4302,8 @@ fn order_by_passes_sort_key_errors_through() {
 
 /// `TIME`, `GEOMETRY` and `GEOGRAPHY` have no evaluation yet: a plan that
 /// holds one anywhere (a cast, a typed `NULL`, a scanned column) is refused
-/// with `KRISHIV_UNSUPPORTED_FEATURE` naming the type, at the expression.
+/// with `KRISHIV_UNSUPPORTED_FEATURE` naming the type (`UNSUPPORTED_TIME_TYPE`
+/// for `TIME`), at the expression.
 #[test]
 fn types_without_evaluation_are_refused() {
     use krishiv_types::Srid;
@@ -4319,7 +4320,9 @@ fn types_without_evaluation_are_refused() {
         .err()
         .unwrap();
     assert_eq!(e.origin, origin);
-    assert_eq!(e.error.message_parameters()[0].1, "the TIME data type");
+    // `TIME` is its own class: Spark rejects it while
+    // `spark.sql.timeType.enabled` is false (the default).
+    assert_eq!(e.error.error_class(), ErrorClass::UnsupportedTimeType);
     let typed_null = Expr::from(Literal::Null(Some(DataType::Geometry { srid: Srid::Any })));
     assert_eq!(
         refused(one_row().project(vec![typed_null]), &ctx()),
@@ -4329,10 +4332,8 @@ fn types_without_evaluation_are_refused() {
     let nested = Expr::from(Literal::Null(None))
         .cast(time)
         .cast(DataType::String);
-    assert_eq!(
-        refused(one_row().project(vec![nested]), &ctx()),
-        "the TIME data type"
-    );
+    let e = run(one_row().project(vec![nested]), &ctx()).err().unwrap();
+    assert_eq!(e.error.error_class(), ErrorClass::UnsupportedTimeType);
     // A scanned column, even when the query does not select it.
     let geo = TableColumn {
         name: "g".to_owned(),
