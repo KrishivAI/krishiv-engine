@@ -233,6 +233,7 @@ class KrishivEngine(Engine):
 
     # ------------------------------------------------------------------ Engine
     def setup(self, dataset: Dataset) -> None:
+        self._tmp.mkdir(parents=True, exist_ok=True)  # `teardown()` removes it; setup may run again
         self._dataset = dataset
         self._start()
 
