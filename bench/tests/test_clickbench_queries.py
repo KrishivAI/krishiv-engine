@@ -218,3 +218,70 @@ def _pop(outcomes: list):
     if isinstance(o, Exception):
         raise o
     return o
+
+
+Q29 = (
+    "SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '\\1') AS k, AVG(STRLEN(Referer)) AS l, "
+    "COUNT(*) AS c, MIN(Referer) FROM hits WHERE Referer <> '' GROUP BY k HAVING COUNT(*) > 100000 "
+    "ORDER BY l DESC LIMIT 25;"
+)
+
+
+def test_q29_regex_is_written_in_each_engine_dialect():
+    # Spark SQL reads '\1' as the string "1" and '\.' as "."; its group reference is $1 (Spark 4.2.0 oracle).
+    spark = cq.adapt(Q29, "q29", engine="krishiv")
+    assert spark.startswith(r"SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '$1') AS k")
+    assert cq.adapt(Q29, "q29", engine="sail") == spark
+    re2 = cq.adapt(Q29, "q29", engine="duckdb")
+    assert re2.startswith(f"SELECT {cq.REGEX_Q29['re2']} AS k")
+    assert cq.adapt(Q29, "q29", engine="polars") == re2
+    assert "AVG(length(Referer))" in spark  # the generic rules still apply
+    assert "AVG(length(Referer))" in re2
+    # ClickHouse's upstream q29 is its own dialect: untouched; any other query is untouched too.
+    ch = "SELECT REGEXP_REPLACE(Referer, '^https?://(?:www\\.)?([^/]+)/.*$', '\\1') AS k FROM hits;"
+    assert cq.adapt(ch, "q29", engine="clickhouse") == ch
+    assert cq.adapt(Q29, "q28", engine="krishiv") == cq.adapt(Q29, "q28")
+
+
+def test_q29_rewrite_refuses_a_changed_upstream_text():
+    with pytest.raises(ValueError, match="update REGEX_Q29"):
+        cq.adapt("SELECT REGEXP_REPLACE(Referer, 'x', 'y') FROM hits;", "q29", engine="krishiv")
+
+
+def test_load_passes_the_engine_to_the_q29_rewrite(data_dir):
+    lines = ["SELECT 1 FROM t LIMIT 1;"] * 28 + [Q29] + ["SELECT 1 FROM t LIMIT 1;"] * 14
+    data, pins = _file(lines)
+    k = cq.load("krishiv", lambda url: data, pins, COMMIT)
+    d = cq.load("duckdb", lambda url: data, pins, COMMIT)
+    assert "'$1'" in k["q29"]
+    assert cq.REGEX_Q29["re2"] in d["q29"]
+
+
+# Spark 4.2.0 (oracle) on these values for the q29 Spark text: Java's `.` stops at every line terminator, and `$`
+# also matches before one final terminator, which the replacement keeps.
+Q29_SPARK_ANSWERS = [
+    ("https://www.example.com/a/b", "example.com"),
+    ("http://wwwxfoo.org/x", "wwwxfoo.org"),
+    ("plain", "plain"),
+    ("http://nopath.com", "http://nopath.com"),
+    ("http://cr.net/a\rb", "http://cr.net/a\rb"),
+    ("http://a.com/b\n", "a.com\n"),
+    ("http://a.com/b\nc", "http://a.com/b\nc"),
+    ("http://a.com/b\r\n", "a.com\r\n"),
+    ("http://a.com/b\u0085", "a.com\u0085"),
+    ("http://a.com/b\u0085c", "http://a.com/b\u0085c"),
+    ("http://a.com/b\u2028", "a.com\u2028"),
+    ("http://a.com/b\u2028c", "http://a.com/b\u2028c"),
+    ("http://a.com/b\n\n", "http://a.com/b\n\n"),
+    ("http://a.com/b\u2029", "a.com\u2029"),
+]
+
+
+def test_q29_re2_pattern_gives_spark_answers_in_duckdb():
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute("CREATE TABLE hits (i INT, Referer VARCHAR)")
+    con.executemany("INSERT INTO hits VALUES (?, ?)", [(i, v) for i, (v, _) in enumerate(Q29_SPARK_ANSWERS)])
+    got = [r[0] for r in con.execute(f"SELECT {cq.REGEX_Q29['re2']} FROM hits ORDER BY i").fetchall()]
+    assert got == [want for _, want in Q29_SPARK_ANSWERS]

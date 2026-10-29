@@ -313,7 +313,15 @@ pub fn instantiate_task(
                 plan.schema().fields()
             )));
         }
-        Ok(built.node)
+        // A `range` streamed to the result through row-wise nodes only
+        // returns its rows in slice order, as Spark collects partitions in
+        // order: one driver keeps it (several would hand their batches to
+        // the result in completion order).
+        Ok(if reads_range_in_order(plan.root()) {
+            Arc::new(OrderedNode { inner: built.node })
+        } else {
+            built.node
+        })
     };
     // Instantiation recurses once per node, as planning does.
     krishiv_common::stack::on_big_stack(run)
@@ -824,7 +832,8 @@ impl Instantiation<'_> {
 }
 
 /// Whether `n` streams a `range` through row-wise nodes only (filters,
-/// projections and limits), so its rows reach a `LIMIT` in a defined order.
+/// projections and limits), so its rows reach a `LIMIT` or the result in a
+/// defined order.
 fn reads_range_in_order(n: &PhysNode) -> bool {
     match n {
         PhysNode::Range(_) => true,
@@ -1188,6 +1197,54 @@ mod tests {
 
     use super::Unbuilt;
     use crate::pipeline::{ExecNode as _, PipelineBuilder};
+
+    /// The pipelines `root` instantiates to, one `(preserve_order)` per pipeline.
+    fn driver_orders(root: crate::physical::PhysNode) -> Vec<bool> {
+        use arrow_schema::{DataType, Field, Schema};
+
+        let plan = crate::physical::PhysicalPlan::new(
+            root,
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)])),
+            crate::planner::ExplainNode::leaf("Range", ""),
+            crate::physical::ExprEnv {
+                ansi: true,
+                legacy_statistical_aggregate: false,
+                zone: Some(0),
+                query_start_micros: 0,
+                user: Arc::from("u"),
+                map_key_dedup_last_win: false,
+            },
+        );
+        let worker = super::WorkerContext::new(Arc::new(crate::planner::MemoryTables::new()));
+        let node = super::instantiate(&plan, &worker).unwrap();
+        let mut b = PipelineBuilder::new(Arc::new(crate::testing::Count::default()));
+        node.build_pipelines(&mut b).unwrap();
+        let (pipelines, _) = b.finish().unwrap();
+        pipelines.iter().map(|p| p.preserve_order).collect()
+    }
+
+    fn range(num_slices: u32) -> crate::physical::PhysNode {
+        crate::physical::PhysNode::Range(crate::physical::RangeNode {
+            start: 0,
+            end: 64,
+            step: 1,
+            num_slices: Some(num_slices),
+            output: krishiv_plan::AttrId(0),
+        })
+    }
+
+    /// A multi-slice range streamed to the result runs on one driver, so its
+    /// batches reach the result in slice order whatever the scheduling.
+    #[test]
+    fn a_range_streamed_to_the_result_keeps_one_driver() {
+        assert_eq!(driver_orders(range(8)), [true]);
+        let limited = crate::physical::PhysNode::Limit {
+            input: Box::new(range(8)),
+            offset: 0,
+            limit: 5,
+        };
+        assert_eq!(driver_orders(limited), [true]);
+    }
 
     #[test]
     fn a_validation_input_never_runs() {
