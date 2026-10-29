@@ -61,6 +61,27 @@ impl DiffArgs {
         self.git(&["diff", "-U0", "--no-color", &self.range()])
     }
 
+    /// `git diff --name-only` of the range, one repository-relative path per entry.
+    ///
+    /// # Errors
+    /// Returns the git failure message.
+    pub fn changed_paths(&self) -> Result<Vec<String>, String> {
+        // NUL-separated and without rename detection: non-ASCII paths stay verbatim, and a rename
+        // lists both its old and new path, so both packages are scoped.
+        Ok(self
+            .git(&["diff", "--name-only", "-z", "--no-renames", &self.range()])?
+            .split('\0')
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect())
+    }
+
+    /// The repository the range is taken in.
+    #[must_use]
+    pub fn repo(&self) -> &Path {
+        &self.repo
+    }
+
     fn range(&self) -> String {
         format!("{}...{}", self.base, self.head)
     }

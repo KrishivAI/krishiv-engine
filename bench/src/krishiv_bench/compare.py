@@ -335,6 +335,48 @@ def _norm(expr: str) -> str:
     return re.sub(r"\s+", "", expr).lower().replace('"', "")
 
 
+# Words that can end a select expression and so are never an implicit alias (``x IS NULL``, ``CASE ... END``).
+_NOT_ALIAS = frozenset(
+    {"all", "and", "asc", "between", "desc", "distinct", "else", "end", "false", "from", "in", "is", "like", "not"}
+    | {"null", "or", "then", "true", "when"}
+)
+# Words after which the next word is an operand, never an alias (``a OR b``, ``NOT flag``, ``a LIKE b``,
+# ``s COLLATE UTF8_LCASE``).
+_OPERATOR_WORDS = frozenset(
+    {"and", "or", "not", "like", "ilike", "rlike", "regexp", "is", "in", "between", "from", "when", "then", "else"}
+    | {"case", "distinct", "interval", "div", "escape", "collate"}
+)
+# Interval units: ``d + INTERVAL '30' DAY`` ends in a unit, not an alias.
+_INTERVAL_UNITS = frozenset(
+    u + s
+    for u in ("year", "quarter", "month", "week", "day", "hour", "minute", "second", "millisecond", "microsecond")
+    for s in ("", "s")
+)
+
+
+def _implicit_alias(item: str) -> tuple[str, str] | None:
+    """(alias, normalised expression) of ``expr alias`` (an alias without ``AS``), None when the item has none.
+
+    The expression must end in a word character, ``)``, ``]`` or a quote, not in a number (``INTERVAL 1 DAY``) or an
+    operator word (``a OR b``, ``NOT flag``), and the alias must not be an interval unit (``INTERVAL '30' DAY``):
+    a doubtful item gets no alias, so an ORDER BY key naming it is not derived and the comparison falls back to whole
+    rows rather than trusting a wrong key.
+    """
+    m = re.fullmatch(r"(.*[\w)\]\"'])\s+(\"[^\"]+\"|[A-Za-z_]\w*)\s*", item, re.S)
+    if not m:
+        return None
+    alias, expr = m.group(2).lower(), m.group(1)
+    before = re.search(r"([A-Za-z_]\w*)$", expr)
+    if (
+        alias in _NOT_ALIAS
+        or alias in _INTERVAL_UNITS
+        or (before and before.group(1).lower() in _OPERATOR_WORDS)
+        or re.search(r"(?:^|[^\w.])[\d.]+$", expr)
+    ):
+        return None
+    return _norm(m.group(2)), _norm(expr)
+
+
 def _select_names(sql: str, masked: str) -> list[tuple[str | None, str]] | None:
     """(output name, normalised expression) per column of the first top-level SELECT; None if not derivable."""
     m = re.search(r"\bselect\b(?:\s+(?:distinct|all)\b)?", masked, re.I)
@@ -350,6 +392,10 @@ def _select_names(sql: str, masked: str) -> list[tuple[str | None, str]] | None:
         alias = re.search(r"\bas\s+(\"[^\"]+\"|[A-Za-z_]\w*)\s*$", item, re.I)
         if alias:
             out.append((_norm(alias.group(1)), _norm(item[: alias.start()])))
+            continue
+        implicit = _implicit_alias(item)
+        if implicit:
+            out.append(implicit)
             continue
         col = re.fullmatch(r"(?:\w+\.)*(\w+)", item)
         out.append((col.group(1).lower() if col else None, _norm(item)))
@@ -379,6 +425,7 @@ def derive_sort_keys(sql: str) -> list[int] | None:
     stop = ob.end() + tail_end.start() if tail_end else len(masked)
     keys: list[int] = []
     for item in _split_commas(sql[ob.end() : stop], masked[ob.end() : stop]):
+        item = item.strip().removesuffix(";")  # the statement's terminator ends the last key
         item = re.sub(r"(?:\s+(?:asc|desc))?(?:\s+nulls\s+(?:first|last))?\s*$", "", item, flags=re.I).strip()
         if not item:
             return None
@@ -398,19 +445,23 @@ def derive_sort_keys(sql: str) -> list[int] | None:
 def _key_index(n: str, names: list[tuple[str | None, str]]) -> int | None:
     """The select-list position an ORDER BY item (normalised) refers to, None when it is not one unambiguous column.
 
-    The item's text equal to a select expression wins (``b.id`` is the column selected as ``b.id``, not an earlier
-    ``a.id``). An unqualified item is an output name and must be unique. A qualified item with no such expression
-    matches only a lone bare column of that name (``select id from b order by b.id``): a qualified key can name
-    another table's column or a base column the output alias hides, so it never matches by its last part alone.
+    An unqualified item names an output column first, as in Spark (``SELECT y x, x z ... ORDER BY x`` sorts by the
+    first column); it must be unique. Otherwise the item's text equal to a select expression wins (``b.id`` is the
+    column selected as ``b.id``, not an earlier ``a.id``). A qualified item with no such expression matches only a
+    lone bare column of that name (``select id from b order by b.id``): a qualified key can name another table's
+    column or a base column the output alias hides, so it never matches by its last part alone.
     """
+    if "." not in n:
+        named = [i for i, (name, _) in enumerate(names) if name == n]
+        if named:
+            return named[0] if len(named) == 1 else None
     exact = [i for i, (_, expr) in enumerate(names) if expr == n]
     if exact:
         return exact[0]
     if "." not in n:
-        named = [i for i, (name, _) in enumerate(names) if name == n]
-    else:
-        last = n.rsplit(".", 1)[-1]
-        named = [i for i, (name, expr) in enumerate(names) if name == last and expr == name]
+        return None
+    last = n.rsplit(".", 1)[-1]
+    named = [i for i, (name, expr) in enumerate(names) if name == last and expr == name]
     return named[0] if len(named) == 1 else None
 
 

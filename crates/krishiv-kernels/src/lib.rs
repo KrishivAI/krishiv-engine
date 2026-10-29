@@ -54,6 +54,7 @@ pub mod map;
 pub mod math;
 pub mod number_format;
 pub mod ops;
+pub mod order;
 pub mod policy;
 pub mod reference;
 pub mod specialize;
