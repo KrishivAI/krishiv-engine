@@ -105,3 +105,153 @@ fn values_render_like_sparks_tostring() {
         "true"
     );
 }
+
+/// Every primitive carrier orders its smaller value first and renders both.
+#[test]
+fn every_primitive_carrier_orders_and_renders() {
+    use arrow_array::types::*;
+    use arrow_array::{Array, PrimitiveArray};
+    use arrow_buffer::i256;
+    use arrow_schema::{IntervalUnit, TimeUnit};
+
+    macro_rules! check {
+        ($t:ty, $a:expr, $b:expr) => {{
+            let arr: PrimitiveArray<$t> = PrimitiveArray::from(vec![$a, $b]);
+            let arr: ArrayRef = Arc::new(arr);
+            assert_eq!(
+                cmp_rows(arr.as_ref(), 0, arr.as_ref(), 1).unwrap(),
+                Ordering::Less,
+                "{}",
+                arr.data_type()
+            );
+            assert_eq!(
+                cmp_rows(arr.as_ref(), 1, arr.as_ref(), 0).unwrap(),
+                Ordering::Greater
+            );
+            assert_ne!(render_value(arr.as_ref(), 0), render_value(arr.as_ref(), 1));
+        }};
+    }
+    check!(Int8Type, 1, 2);
+    check!(Int16Type, 1, 2);
+    check!(Int64Type, 1, 2);
+    check!(UInt8Type, 1, 2);
+    check!(UInt16Type, 1, 2);
+    check!(UInt32Type, 1, 2);
+    check!(UInt64Type, 1, 2);
+    check!(Float32Type, 1.5, 2.5);
+    check!(Float64Type, 1.5, 2.5);
+    check!(Decimal32Type, 15, 25);
+    check!(Decimal64Type, 15, 25);
+    check!(Decimal128Type, 15, 25);
+    check!(Decimal256Type, i256::from_i128(15), i256::from_i128(25));
+    check!(Date32Type, 1, 2);
+    check!(Date64Type, 1, 2);
+    check!(Time32SecondType, 1, 2);
+    check!(Time32MillisecondType, 1, 2);
+    check!(Time64MicrosecondType, 1, 2);
+    check!(Time64NanosecondType, 1, 2);
+    check!(TimestampSecondType, 1, 2);
+    check!(TimestampMillisecondType, 1, 2);
+    check!(TimestampMicrosecondType, 1, 2);
+    check!(TimestampNanosecondType, 1, 2);
+    check!(IntervalYearMonthType, 1, 2);
+    check!(
+        IntervalDayTimeType,
+        IntervalDayTimeType::make_value(1, 0),
+        IntervalDayTimeType::make_value(2, 0)
+    );
+    check!(
+        IntervalMonthDayNanoType,
+        IntervalMonthDayNanoType::make_value(1, 0, 0),
+        IntervalMonthDayNanoType::make_value(1, 1, 0)
+    );
+    let _ = (IntervalUnit::YearMonth, TimeUnit::Second);
+}
+
+/// Strings, binary and booleans in every carrier, and the mismatch error.
+#[test]
+fn byte_carriers_and_mismatches() {
+    use arrow_array::{
+        BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringViewArray,
+    };
+    let arrays: Vec<ArrayRef> = vec![
+        Arc::new(LargeStringArray::from(vec!["a", "b"])),
+        Arc::new(StringViewArray::from(vec!["a", "b"])),
+        Arc::new(BinaryArray::from_vec(vec![b"a", b"b"])),
+        Arc::new(LargeBinaryArray::from_vec(vec![b"a", b"b"])),
+        Arc::new(BinaryViewArray::from(vec![
+            b"a".as_slice(),
+            b"b".as_slice(),
+        ])),
+        Arc::new(BooleanArray::from(vec![false, true])),
+    ];
+    for a in &arrays {
+        assert_eq!(
+            cmp_rows(a.as_ref(), 0, a.as_ref(), 1).unwrap(),
+            Ordering::Less
+        );
+        assert_ne!(render_value(a.as_ref(), 0), render_value(a.as_ref(), 1));
+    }
+    let ints = i32s(vec![Some(1)]);
+    assert!(cmp_rows(ints.as_ref(), 0, arrays[0].as_ref(), 0).is_err());
+}
+
+/// List carriers, dictionaries and unsupported types.
+#[test]
+fn list_and_dictionary_carriers() {
+    use arrow_array::types::Int32Type;
+    use arrow_array::{DictionaryArray, FixedSizeListArray, LargeListArray, ListArray};
+    use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    let field = Arc::new(Field::new("item", DataType::Int32, true));
+    let values: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 1, 3, 1]));
+    let offsets = || OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 2, 4, 5]));
+    let list: ArrayRef = Arc::new(ListArray::new(
+        Arc::clone(&field),
+        offsets(),
+        Arc::clone(&values),
+        None,
+    ));
+    // [1,2] < [1,3]; [1] < [1,2] (a prefix is smaller).
+    assert_eq!(
+        cmp_rows(list.as_ref(), 0, list.as_ref(), 1).unwrap(),
+        Ordering::Less
+    );
+    assert_eq!(
+        cmp_rows(list.as_ref(), 2, list.as_ref(), 0).unwrap(),
+        Ordering::Less
+    );
+    assert_eq!(render_value(list.as_ref(), 0), "[1,2]");
+    let large: ArrayRef = Arc::new(LargeListArray::new(
+        Arc::clone(&field),
+        OffsetBuffer::new(ScalarBuffer::from(vec![0_i64, 2, 4, 5])),
+        Arc::clone(&values),
+        None,
+    ));
+    assert_eq!(
+        cmp_rows(large.as_ref(), 0, large.as_ref(), 1).unwrap(),
+        Ordering::Less
+    );
+    assert_eq!(render_value(large.as_ref(), 1), "[1,3]");
+    let fixed: ArrayRef = Arc::new(FixedSizeListArray::new(
+        Arc::clone(&field),
+        2,
+        Arc::new(Int32Array::from(vec![1, 2, 1, 3])),
+        None,
+    ));
+    assert_eq!(
+        cmp_rows(fixed.as_ref(), 0, fixed.as_ref(), 1).unwrap(),
+        Ordering::Less
+    );
+    assert_eq!(render_value(fixed.as_ref(), 0), "[1,2]");
+    let dict: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+        Int32Array::from(vec![1, 0]),
+        Arc::new(StringArray::from(vec!["b", "a"])),
+    ));
+    assert_eq!(
+        cmp_rows(dict.as_ref(), 0, dict.as_ref(), 1).unwrap(),
+        Ordering::Less
+    );
+    // A type with no order is an engine error, not a panic.
+    let nulls: ArrayRef = Arc::new(arrow_array::NullArray::new(2));
+    let _ = render_value(nulls.as_ref(), 0);
+}

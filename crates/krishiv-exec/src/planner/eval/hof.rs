@@ -2171,4 +2171,34 @@ mod tests {
             "{err}"
         );
     }
+
+    /// String and binary storage alternatives read as the analyzer's view
+    /// carriers; any other mismatch is an engine error.
+    #[test]
+    fn canonical_reads_storage_alternatives_as_views() {
+        use arrow_array::{BinaryArray, LargeBinaryArray, LargeStringArray, StringArray};
+        let cases: Vec<(ArrayRef, ArrowType)> = vec![
+            (Arc::new(StringArray::from(vec!["a"])), ArrowType::Utf8View),
+            (
+                Arc::new(LargeStringArray::from(vec!["a"])),
+                ArrowType::Utf8View,
+            ),
+            (
+                Arc::new(BinaryArray::from_vec(vec![b"a"])),
+                ArrowType::BinaryView,
+            ),
+            (
+                Arc::new(LargeBinaryArray::from_vec(vec![b"a"])),
+                ArrowType::BinaryView,
+            ),
+        ];
+        for (column, target) in cases {
+            let out = super::super::hof::canonical(&column, &target).unwrap();
+            assert_eq!(out.data_type(), &target);
+            assert_eq!(out.len(), 1);
+        }
+        let ints: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        assert!(super::super::hof::canonical(&ints, &ArrowType::Utf8View).is_err());
+        assert!(super::super::hof::canonical(&ints, &ArrowType::Int32).is_ok());
+    }
 }
