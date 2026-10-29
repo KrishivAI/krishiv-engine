@@ -289,16 +289,24 @@ fn run(
         let root = t.once("Prune", &root, |r| Ok(prune::prune(r)))?;
         let mut root = batch(root, "Tidy", &mut t)?;
         // Tidying can fold a filter to a constant and leave columns unread
-        // (a `false` that reached a filter on `b` frees `b`): prune and tidy
-        // again until neither changes the plan, so the result is a fixed point.
+        // (a `false` that reached a filter on `b` frees `b`): prune again and,
+        // only when that removed something, tidy again, until the plan is a
+        // fixed point. Pruning returns the same relation when it removes
+        // nothing, and so does a tidy batch that changes nothing, so the
+        // common case costs one extra prune and no comparison; a prune that
+        // rebuilds without removing anything stops after one more tidy.
         for round in 2..=MAX_ITERATIONS {
             let pruned = prune::prune(&root);
             t.step("Prune", round, "Prune", &root, &pruned);
-            let tidied = batch(pruned, "Tidy", &mut t)?;
-            if same_plan(&tidied, &root) {
+            if Arc::ptr_eq(&pruned, &root) {
                 break;
             }
+            let tidied = batch(Arc::clone(&pruned), "Tidy", &mut t)?;
+            let settled = Arc::ptr_eq(&tidied, &pruned);
             root = tidied;
+            if settled {
+                break;
+            }
         }
         Ok((root, t.steps))
     };
@@ -312,20 +320,6 @@ fn run(
     match Plan::try_new(root) {
         Ok(p) => Ok((p, steps)),
         Err(_) => Ok((plan.clone(), Vec::new())),
-    }
-}
-
-/// Whether `a` and `b` are the same plan: the same relation, or equal
-/// structurally (a rewrite may rebuild a relation it does not change). A
-/// plan the IR does not accept (too deep) counts as the same: the loop
-/// stops, and the caller falls back to the unoptimised plan anyway.
-fn same_plan(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
-    if Arc::ptr_eq(a, b) {
-        return true;
-    }
-    match (Plan::try_new(Arc::clone(a)), Plan::try_new(Arc::clone(b))) {
-        (Ok(x), Ok(y)) => x.structurally_eq(&y),
-        _ => true,
     }
 }
 
