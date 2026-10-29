@@ -3,6 +3,11 @@
 //! validation Spark's `ST_GeomFromWKB` / `ST_GeogFromWKB` apply, and the
 //! re-encoding `ST_AsBinary` does.
 //!
+//! This is a library only for now: no SQL function calls it yet, so
+//! `ST_GeomFromWKB` and `ST_GeogFromWKB` do not raise `WKB_PARSE_ERROR`
+//! from SQL (the `st-functions` golden statements stay in the `time-geo-types`
+//! known-failure category, P2-T181, until the functions are registered).
+//!
 //! The input is ISO WKB: the seven OGC geometry types (point to geometry
 //! collection) in XY, XYZ (type + 1000), XYM (+ 2000) or XYZM (+ 3000),
 //! either byte order, which may change from one nested geometry to the

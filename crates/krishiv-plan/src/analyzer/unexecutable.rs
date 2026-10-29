@@ -18,11 +18,16 @@ use crate::{ExprNode, Literal, LogicalPlan, PlanNode, ResolvedExpr};
 const TIME: &str = "the TIME data type";
 
 fn feature(t: &DataType) -> Option<&'static str> {
-    match t {
-        DataType::Time { .. } => Some(TIME),
-        DataType::Geometry { .. } => Some("the GEOMETRY data type"),
-        DataType::Geography { .. } => Some("the GEOGRAPHY data type"),
-        _ => None,
+    // The first unevaluable type in the type or inside it (an array
+    // element, a map key or value, a struct field).
+    if t.any_type(&|x| matches!(x, DataType::Time { .. })) {
+        Some(TIME)
+    } else if t.any_type(&|x| matches!(x, DataType::Geometry { .. })) {
+        Some("the GEOMETRY data type")
+    } else if t.any_type(&|x| matches!(x, DataType::Geography { .. })) {
+        Some("the GEOGRAPHY data type")
+    } else {
+        None
     }
 }
 

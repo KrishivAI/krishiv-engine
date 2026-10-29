@@ -879,3 +879,48 @@ fn type_parameters_are_checked_on_decode() {
     });
     corrupt(&srid_on_int, "a type parameter on a type that has none");
 }
+
+/// A time inside an array is a time plan: the header names `time_type`
+/// (beside `nested_types`), so a reader without it refuses the plan as
+/// unsupported rather than misreading the nested type as corrupt.
+#[test]
+fn a_time_inside_a_nested_type_needs_time_type() {
+    use krishiv_plan::{Expr, ExprNode, Literal};
+    use krishiv_types::{ArrayType, DataType, MapType, StructField, StructType};
+    let time = DataType::Time { precision: 3 };
+    for nested in [
+        DataType::Array(ArrayType::new(time.clone(), true).into()),
+        DataType::Map(MapType::new(DataType::String, time.clone(), true).into()),
+        DataType::Struct(StructType::new([StructField::new("t", time, true)])),
+    ] {
+        let plan = plan_of(PhysNode::Project {
+            input: Box::new(PhysNode::OneRow),
+            layout: Vec::new(),
+            items: vec![krishiv_exec::physical::ProjectItemPlan::Expr {
+                name: "x".to_owned(),
+                expr: std::sync::Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(
+                    nested.clone(),
+                ))))),
+            }],
+            nullable: None,
+            subqueries: Vec::new(),
+        });
+        let features = plan_features(&plan);
+        assert!(features.contains(&Feature::TimeType), "{nested:?}");
+        let bytes = encode(&plan).unwrap();
+        let older = ReaderFeatures::only(
+            Feature::ALL
+                .iter()
+                .copied()
+                .filter(|f| *f != Feature::TimeType),
+        );
+        assert_eq!(
+            decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+            CodecError::UnsupportedFeatures {
+                missing: vec!["time_type".to_owned()]
+            },
+            "{nested:?}"
+        );
+        assert_eq!(decode(&bytes).unwrap(), plan);
+    }
+}

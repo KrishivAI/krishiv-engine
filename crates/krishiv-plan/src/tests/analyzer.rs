@@ -4359,6 +4359,42 @@ fn types_without_evaluation_are_refused() {
     assert!(run(one_row().project(vec![fine]), &ctx()).is_ok());
 }
 
+/// The refusal looks inside nested types: a `TIME` array element, map value
+/// or struct field is `UNSUPPORTED_TIME_TYPE` too (Spark rejects the type
+/// where it parses it), and a spatial field is the unevaluable-type error.
+#[test]
+fn time_and_geometry_inside_nested_types_are_refused() {
+    use krishiv_types::{ArrayType, MapType, Srid, StructField, StructType};
+    let ctx = ctx();
+    let time = DataType::time(3).unwrap();
+    let geometry = DataType::Geometry {
+        srid: Srid::Fixed(0),
+    };
+    let cast_null = |to: DataType| {
+        let e = Expr::from(Literal::Null(None)).cast(to);
+        run(LogicalPlan::table(["t"]).project(vec![e]), &ctx)
+            .err()
+            .unwrap()
+    };
+    for nested in [
+        DataType::Array(ArrayType::new(time.clone(), true).into()),
+        DataType::Map(MapType::new(DataType::String, time.clone(), true).into()),
+        DataType::Struct(StructType::new([StructField::new("a", time, true)])),
+    ] {
+        assert_eq!(
+            cast_null(nested).error.error_class(),
+            ErrorClass::UnsupportedTimeType
+        );
+    }
+    let in_struct = DataType::Struct(StructType::new([StructField::new("a", geometry, true)]));
+    let typed_null = Expr::new(ExprNode::Literal(Literal::Null(Some(in_struct))));
+    let e = run(LogicalPlan::table(["t"]).project(vec![typed_null]), &ctx)
+        .err()
+        .unwrap();
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(e.error.message_parameters()[0].1, "the GEOMETRY data type");
+}
+
 /// Spark 4.2 rejects the `TIME` type with `UNSUPPORTED_TIME_TYPE` while
 /// `spark.sql.timeType.enabled` is false (its default), before any cast is
 /// checked: the same class for a cast of a column and a typed `NULL`.

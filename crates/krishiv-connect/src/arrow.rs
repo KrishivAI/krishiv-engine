@@ -67,21 +67,28 @@ pub fn spatial_column(column: &ArrayRef, data_type: &DataType) -> Result<ArrayRe
         .downcast_ref::<StructArray>()
         .filter(|s| s.num_columns() == 2)
         .ok_or_else(|| internal("that is not a two-field struct"))?;
+    // Where the struct itself is null (an outer join pads with null
+    // structs, whose children Arrow leaves as arbitrary placeholders), the
+    // children are not read: only the rows the struct holds are checked.
+    let valid = |i: usize| input.nulls().is_none_or(|n| n.is_valid(i));
     let srid = input.column(0);
-    if srid.data_type() != &ArrowType::Int32 || srid.null_count() != 0 {
+    let srid_ok = srid.data_type() == &ArrowType::Int32
+        && (srid.null_count() == 0 || (0..input.len()).all(|i| !valid(i) || srid.is_valid(i)));
+    if !srid_ok {
         return Err(internal("without a non-null Int32 SRID"));
     }
     let wkb = input
         .column(1)
         .as_any()
         .downcast_ref::<BinaryViewArray>()
-        .filter(|w| w.null_count() == 0)
+        .filter(|w| w.null_count() == 0 || (0..input.len()).all(|i| !valid(i) || w.is_valid(i)))
         .ok_or_else(|| internal("without non-null WKB views"))?;
     // `Binary` has 32-bit offsets: a batch is split before it gets here.
     let bytes: usize = wkb.iter().map(|v| v.map_or(0, <[u8]>::len)).sum();
     if i32::try_from(bytes).is_err() {
         return Err(internal("with more than 2 GiB of WKB in one batch"));
     }
+    // A null child under a null struct becomes an empty placeholder.
     let wkb: BinaryArray = wkb.iter().map(|v| Some(v.unwrap_or_default())).collect();
     let out = StructArray::try_new(
         children,

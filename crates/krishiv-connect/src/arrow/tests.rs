@@ -109,6 +109,47 @@ fn spatial_columns_convert_to_the_connect_form() {
     assert_eq!(wkb.null_count(), 0);
 }
 
+/// An outer join pads with null structs whose children are null too: the
+/// children of a null struct row are not read, only valid rows are checked.
+#[test]
+fn null_children_under_a_null_struct_row_convert() {
+    let t = DataType::Geometry { srid: Srid::Any };
+    let fields = vec![
+        Field::new("srid", ArrowType::Int32, true),
+        Field::new("wkb", ArrowType::BinaryView, true),
+    ];
+    let srid: ArrayRef = Arc::new(Int32Array::from(vec![Some(0), None, Some(3857)]));
+    let wkb: ArrayRef = Arc::new(BinaryViewArray::from(vec![Some(POINT), None, Some(POINT)]));
+    let nulls = Some(vec![true, false, true].into());
+    let padded = StructArray::try_new(fields.into(), vec![srid, wkb], nulls).unwrap();
+    let out = spatial_column(&(Arc::new(padded) as ArrayRef), &t).unwrap();
+    let out = out.as_any().downcast_ref::<StructArray>().unwrap();
+    assert!(out.is_valid(0) && out.is_null(1) && out.is_valid(2));
+    let wkb = out
+        .column(1)
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .unwrap();
+    assert_eq!(
+        (wkb.value(0), wkb.value(1), wkb.value(2)),
+        (POINT, &b""[..], POINT)
+    );
+    // A valid row with a null child is still an engine error.
+    let fields = vec![
+        Field::new("srid", ArrowType::Int32, true),
+        Field::new("wkb", ArrowType::BinaryView, true),
+    ];
+    let srid: ArrayRef = Arc::new(Int32Array::from(vec![Some(0)]));
+    let wkb: ArrayRef = Arc::new(BinaryViewArray::from(vec![None::<&[u8]>]));
+    let bad = StructArray::try_new(fields.into(), vec![srid, wkb], None).unwrap();
+    assert_eq!(
+        spatial_column(&(Arc::new(bad) as ArrayRef), &t)
+            .unwrap_err()
+            .error_class(),
+        ErrorClass::InternalError
+    );
+}
+
 #[test]
 fn a_column_that_is_not_spatial_is_an_engine_error() {
     let g = DataType::Geography {

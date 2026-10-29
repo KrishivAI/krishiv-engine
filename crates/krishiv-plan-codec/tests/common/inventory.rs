@@ -1195,7 +1195,23 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
             conjuncts: vec![call(Builtin::IsNull, vec![geometry], DataType::Boolean)],
         }),
     });
+    // A time inside an array, a map and a struct: the nested type needs
+    // `time_type` as well as `nested_types`.
+    let time3 = DataType::Time { precision: 3 };
+    let nested_times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![ProjectItemPlan::Expr {
+            name: "times".to_owned(),
+            expr: lit(Literal::Null(Some(DataType::Array(
+                krishiv_types::ArrayType::new(time3, true).into(),
+            )))),
+        }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
     vec![
+        ("time_nested", nested_times),
         ("time_project", times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
